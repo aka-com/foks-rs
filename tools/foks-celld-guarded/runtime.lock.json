@@ -1,0 +1,155 @@
+{
+  "format": 1,
+  "profile": "a1-library-identity",
+  "target": "aarch64-apple-darwin",
+  "foks_baseline": "cc7777864c1eb1752e28425d9f6f5dcf2d15b352",
+  "upstream": {
+    "version": "0.6.2",
+    "commit": "90b43017241f81189453d326d05948f388b34652",
+    "tree": "8f52d32fd372bbc5d396fd73b47fc653ec78d5ee",
+    "archive_url": "https://api.github.com/repos/denoland/celld/tarball/90b43017241f81189453d326d05948f388b34652",
+    "archive_bytes": 1641375,
+    "archive_sha256": "9f0c391ee9b592e1c384dc696a8a3bb307b06f5d5dc57950cdff7573fa18b206",
+    "archive_root": "denoland-celld-90b4301",
+    "files": 279,
+    "directories": 49,
+    "payload_bytes": 6326405,
+    "file_mode": 436,
+    "directory_mode": 509,
+    "inventory_sha256": "8ea2a3ea73908bd1780b90e6701d636e29cf340e9b8a0b09e53bcc99a6cb28b0",
+    "cargo_lock_sha256": "d6a17422788aa910ba76bed9cf59ac15767f93fe107ebdb336954d0e9efe052b"
+  },
+  "patch_series_sha256": "2cae2b737e3b22ea5c69cb1b7284d4a9810f83d169d550ad73898af77e275e66",
+  "toolchain": {
+    "channel": "1.95.0",
+    "host": "aarch64-apple-darwin",
+    "rustc_commit": "59807616e1fa2540724bfbac14d7976d7e4a3860",
+    "llvm": "22.1.2",
+    "files": {
+      "bin/rustc": "b829b733131d4e1673eeebd1f34d06ae1e9ff4977b051313cf42e2a9e79ecf1c",
+      "bin/cargo": "c512bff73c86143b557463f021d0c3d5b0490d97d65040ba59ea2b3427784758",
+      "lib/librustc_driver-eea6b8737cd03a8e.dylib": "d41766d9ed6e9c7959eeb7678b9a6bb301f70948664cd39a8a0d2d83ad23d54e",
+      "bin/cargo-clippy": "2ea40177fa3012adef8b57c093ce114ace8030cc51958571cfb1a09f88efd641",
+      "bin/clippy-driver": "5c769ecd068eed4aeec1265fd8777c4d2227ec1bb4b7775c800ec2961e2b8307"
+    }
+  },
+  "v8": {
+    "version": "152.1.0",
+    "crate_checksum": "eb60870e5cff45e02719ab782f1c67507d33c4ef184755656bcc11a9795ccf83",
+    "source_commit": "8149304f6924411df09a1917cd6de0fc90fa7fec",
+    "build_rs_sha256": "daebca36604ff3e03b6a123bf9b78fad7233c6b03c0fbc1bcda3983aada91c4d",
+    "cargo_toml_orig_sha256": "cf9f467f738dfda05e33395d4eb9ad614e39ad72dddfb2cbeee3e9f540c97200",
+    "archive": {
+      "name": "librusty_v8_release_aarch64-apple-darwin.a.gz",
+      "bytes": 40641117,
+      "sha256": "7317c9c45d9ee3166f1ad1abd5704a2617882dc0e56d3e6f452ad409e86ce9b4"
+    },
+    "binding": {
+      "name": "src_binding_release_aarch64-apple-darwin.rs",
+      "bytes": 40056,
+      "sha256": "b9d5652ebca515eb2bf4c2ee4a6551b2567117b5aa720f430d2032616dd7e3b5"
+    },
+    "release_base": "https://github.com/denoland/rusty_v8/releases/download/v152.1.0/",
+    "features": [
+      "default",
+      "use_custom_libcxx"
+    ],
+    "expanded_maximum_bytes": 536870912
+  },
+  "registry_engines": {
+    "rusqlite": {
+      "version": "0.31.0",
+      "checksum": "b838eba278d213a8beaf485bd313fd580ca4505a00d5871caeb1457c55322cae"
+    },
+    "libsqlite3-sys": {
+      "version": "0.28.0",
+      "checksum": "0c10584274047cb335c23d3e61bcef8e323adae7c5c8c760540f73610177fc3f"
+    },
+    "v8": {
+      "version": "152.1.0",
+      "checksum": "eb60870e5cff45e02719ab782f1c67507d33c4ef184755656bcc11a9795ccf83"
+    },
+    "sqlite-vec": {
+      "version": "0.1.9",
+      "checksum": "d0ba424237a9a5db2f6071f193319e2b6a32f7f3961debb2fbbfe67067abce3f"
+    }
+  },
+  "build": {
+    "profile": "dev",
+    "debug": 0,
+    "incremental": false,
+    "v8_opt_level": 1,
+    "jobs": 2,
+    "timeout_seconds": 1800,
+    "identity_timeout_seconds": 30,
+    "term_grace_seconds": 3,
+    "kill_grace_seconds": 3,
+    "minimum_free_bytes": 6442450944,
+    "free_floor_bytes": 2147483648,
+    "maximum_target_bytes": 4294967296,
+    "maximum_command_log_bytes": 134217728
+  },
+  "cargo_config_sha256": [
+    "f727a8aca8728ea53823d61cf4e797ec2cb716bab5b3c1c67d7c7d8ead8df347"
+  ],
+  "sdk": {
+    "version": "26.5",
+    "path": "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+    "cc": "/Library/Developer/CommandLineTools/usr/bin/clang",
+    "cxx": "/Library/Developer/CommandLineTools/usr/bin/clang++"
+  },
+  "foks_additional_versions": {
+    "baseline_lock": "tools/foks-hosted-transport-check/Cargo.lock",
+    "baseline_lock_sha256": "b012709ac33093d0d0a5116af4693207e794c44ca67bd02662ccefea5a6d1013",
+    "allowed": [
+      {
+        "name": "block-buffer",
+        "version": "0.12.1",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
+      },
+      {
+        "name": "const-oid",
+        "version": "0.10.2",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
+      },
+      {
+        "name": "crypto-common",
+        "version": "0.2.2",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
+      },
+      {
+        "name": "digest",
+        "version": "0.11.3",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
+      },
+      {
+        "name": "sha2",
+        "version": "0.11.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
+      },
+      {
+        "name": "syn",
+        "version": "3.0.4",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "e6275cddf4610d1775e6d1fe9469b2e77d0f39fd98fb7450901b821e0c53649f"
+      },
+      {
+        "name": "thiserror",
+        "version": "2.0.20",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"
+      },
+      {
+        "name": "thiserror-impl",
+        "version": "2.0.20",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
+      }
+    ]
+  }
+}

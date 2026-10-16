@@ -1,0 +1,45 @@
+[workspace]
+resolver = "2"
+exclude = [
+    "runtime/source",
+    "runtime/source/crates/celld",
+    "runtime/source/crates/logic",
+    "runtime/source/crates/ltx",
+]
+
+[package]
+name = "foks-celld-guarded"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.95"
+publish = false
+
+[dependencies]
+celld = { path = "runtime/source/crates/celld" }
+foks-hosted-transport = { path = "../../crates/foks-hosted-transport", default-features = false, features = ["qualification"] }
+foks-metadata-core = { path = "../../crates/foks-metadata-core", default-features = false, features = ["owned-list"] }
+rusqlite = "=0.31.0"
+v8 = "=152.1.0"
+tikv-jemallocator = { version = "=0.6.1", features = ["background_threads", "stats"] }
+serde_json = "=1.0.151"
+sha2 = "=0.10.9"
+
+[profile.dev]
+debug = 0
+incremental = false
+
+[profile.dev.package.v8]
+opt-level = 1
+
+[profile.dev.package."sha2:0.10.9"]
+opt-level = 3
+
+[profile.dev.package.rsa]
+opt-level = 3
+
+[profile.test]
+debug = 0
+incremental = false
+
+[profile.test.package.v8]
+opt-level = 1

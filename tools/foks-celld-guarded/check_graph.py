@@ -1,0 +1,306 @@
+#!/usr/bin/env python3
+"""Target-bound A1 engine and SQLite-free FOKS subclosure qualification.
+
+collect is an explicit, locked/offline Cargo operation after source/lock review.
+verify only reads saved evidence and current inputs; it never resolves a graph.
+"""
+import argparse
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parent
+spec = importlib.util.spec_from_file_location("celld_preparation", ROOT / "prepare-runtime.py")
+preparation = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(preparation)
+FIXTURE = "foks-celld-guarded"
+TARGET = "aarch64-apple-darwin"
+FORBIDDEN = {"foks-server", "foks-server-db", "foks-server-testkit"}
+SQLITE = {"rusqlite", "libsqlite3-sys", "sqlite-vec"}
+SOURCE_PATHS = (".gitignore", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "runtime.lock.json", "upstream-tree.json", "prepare-runtime.py", "test_prepare_runtime.py", "check_graph.py", "test_check_graph.py", "patches/series.json", "src/main.rs")
+
+
+def fail(message):
+    raise ValueError(message)
+
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def commands(root, toolchain):
+    shared = ["--locked", "--offline", "--manifest-path", str(root / "Cargo.toml"), "--no-default-features"]
+    cargo = str(toolchain / "bin/cargo")
+    return {
+        "metadata": preparation.network_command([cargo, "metadata", *shared, "--format-version", "1", "--filter-platform", TARGET]),
+        "tree": preparation.network_command([cargo, "tree", *shared, "--target", TARGET, "--edges", "normal,build,features"]),
+    }
+
+
+def graph_report(metadata, pins):
+    if pins.get("target") != TARGET or pins.get("profile") != "a1-library-identity":
+        fail("missing or unexpected target/profile")
+    if not isinstance(metadata, dict) or metadata.get("version") != 1:
+        fail("unsupported metadata format")
+    resolve = metadata.get("resolve")
+    if not isinstance(resolve, dict) or not isinstance(resolve.get("root"), str):
+        fail("missing resolved package root")
+    packages = {}
+    for package in metadata.get("packages", []):
+        if not isinstance(package, dict) or any(not isinstance(package.get(field), str) for field in ("id", "name", "version", "manifest_path")):
+            fail("malformed package identity")
+        if "source" not in package or package["source"] not in (None, preparation.CRATES_IO):
+            fail("missing or unreviewed package source")
+        if package["id"] in packages:
+            fail("duplicate package identity")
+        packages[package["id"]] = package
+    nodes = {}
+    for node in resolve.get("nodes", []):
+        if not isinstance(node, dict) or not isinstance(node.get("id"), str) or node["id"] in nodes:
+            fail("malformed or duplicate resolved node")
+        nodes[node["id"]] = node
+    root = resolve["root"]
+    if packages.get(root, {}).get("name") != FIXTURE:
+        fail("unexpected executable root")
+    if metadata.get("workspace_members") != [root]:
+        fail("workspace must contain only the selected harness root")
+
+    def closure(start):
+        reached = set()
+        pending = list(start)
+        while pending:
+            current = pending.pop()
+            if current in reached:
+                continue
+            if current not in packages or current not in nodes:
+                fail("missing reachable package/node")
+            reached.add(current)
+            node = nodes[current]
+            features = node.get("features")
+            if not isinstance(features, list) or any(not isinstance(value, str) for value in features) or len(features) != len(set(features)):
+                fail("missing or malformed active features")
+            dependencies = node.get("deps")
+            if not isinstance(dependencies, list):
+                fail("missing dependency edge inventory")
+            for dependency in dependencies:
+                if not isinstance(dependency, dict) or not isinstance(dependency.get("pkg"), str):
+                    fail("malformed dependency edge")
+                kinds = dependency.get("dep_kinds")
+                if not isinstance(kinds, list) or not kinds:
+                    fail("unclassified dependency edge")
+                production = False
+                for kind in kinds:
+                    if not isinstance(kind, dict) or "kind" not in kind or "target" not in kind:
+                        fail("missing dependency kind/target")
+                    if kind["kind"] not in (None, "build", "dev"):
+                        fail("unknown dependency kind")
+                    if kind["target"] is not None and (not isinstance(kind["target"], str) or not kind["target"]):
+                        fail("ambiguous dependency target")
+                    # Cargo's recorded filter selects the platform. Present
+                    # normal/build edges must never be skipped by a cfg guess.
+                    production |= kind["kind"] in (None, "build")
+                if production:
+                    pending.append(dependency["pkg"])
+        return reached
+
+    reached = closure([root])
+    by_name = {}
+    for identity in reached:
+        package = packages[identity]
+        by_name.setdefault(package["name"], []).append(identity)
+        name = package["name"]
+        if name in FORBIDDEN:
+            fail("forbidden full native FOKS dependency: " + name)
+        if "sqlite" in name.lower() and name not in SQLITE:
+            fail("unreviewed SQLite provider: " + name)
+        if package.get("links") == "sqlite3" and name != "libsqlite3-sys":
+            fail("alternate SQLite native link provider")
+
+    def exact(name, features=None, version=None):
+        identities = by_name.get(name)
+        if not identities or len(identities) != 1:
+            fail("missing or ambiguous contract package: " + name)
+        identity = identities[0]
+        if features is not None and set(nodes[identity]["features"]) != set(features):
+            fail("unexpected active features: " + name)
+        if version is not None and packages[identity]["version"] != version:
+            fail("unexpected engine/package version: " + name)
+        return identity
+
+    exact(FIXTURE, [])
+    exact("celld", [], pins["upstream"]["version"])
+    core = exact("foks-metadata-core", ["owned-list"])
+    transport = exact("foks-hosted-transport", ["qualification"])
+    exact("v8", pins["v8"]["features"], pins["v8"]["version"])
+    for name, expected in pins["registry_engines"].items():
+        identity = exact(name, version=expected["version"])
+        if packages[identity]["source"] != preparation.CRATES_IO:
+            fail("engine is not the pinned registry source")
+    if not {"backup", "bundled", "hooks", "serialize"}.issubset(set(nodes[exact("rusqlite")]["features"])):
+        fail("missing upstream SQLite construction features")
+    if packages[exact("libsqlite3-sys")].get("links") != "sqlite3":
+        fail("missing actual SQLite native link provider")
+    fokscore = closure([core, transport])
+    for identity in fokscore:
+        name = packages[identity]["name"]
+        if name in FORBIDDEN or "sqlite" in name.lower() or packages[identity].get("links") == "sqlite3":
+            fail("SQLite/native dependency in FOKS transport/core subclosure")
+    if "tokio" not in {packages[identity]["name"] for identity in fokscore}:
+        fail("missing actual transport runtime dependency")
+    inventory = [{"id": identity, "name": packages[identity]["name"], "version": packages[identity]["version"], "source": packages[identity]["source"], "features": sorted(nodes[identity]["features"])} for identity in sorted(reached)]
+    return {"format": 1, "target": TARGET, "profile": pins["profile"], "packages": inventory, "foks_subclosure": sorted(fokscore)}
+
+
+def regular_files(directory):
+    directory = Path(directory)
+    for path in sorted(directory.rglob("*")):
+        if path.is_symlink():
+            fail("symlink in local source inventory")
+        if path.is_file():
+            yield path
+
+
+def candidate_inputs(root):
+    """Snapshot before Cargo; the selected local subset must already be bound."""
+    repo = root.parents[1]
+    paths = {repo / "Cargo.toml", *(root / name for name in SOURCE_PATHS)}
+    paths.add(repo / preparation.load_pins(root)["foks_additional_versions"]["baseline_lock"])
+    for directory in (repo / "crates").iterdir():
+        if directory.is_dir() and (directory / "Cargo.toml").is_file():
+            paths.update(regular_files(directory))
+    paths.update(regular_files(root / "runtime/source"))
+    paths.update(Path(path) for path in preparation.config_inputs(root))
+    return {str(path): preparation.file_hash(path) for path in sorted(paths)}
+
+
+def selected_inputs(metadata, reached, root):
+    repo = root.parents[1]
+    paths = {repo / "Cargo.toml", *(root / name for name in SOURCE_PATHS), root / "runtime/source/Cargo.toml", root / "runtime/source/Cargo.lock"}
+    paths.add(repo / preparation.load_pins(root)["foks_additional_versions"]["baseline_lock"])
+    for package in metadata["packages"]:
+        if package["id"] not in reached or package["source"] is not None:
+            continue
+        manifest = Path(package["manifest_path"]).resolve()
+        directory = manifest.parent
+        if manifest.name != "Cargo.toml" or not directory.is_relative_to(repo):
+            fail("local package escapes reviewed repository")
+        if directory == root:
+            continue
+        if directory.is_relative_to(root / "runtime/source/crates"):
+            paths.update(regular_files(root / "runtime/source"))
+        elif directory.parent == repo / "crates":
+            paths.update(regular_files(directory))
+        else:
+            fail("unreviewed local package directory")
+    paths.update(Path(path) for path in preparation.config_inputs(root))
+    return {str(path): preparation.file_hash(path) for path in sorted(paths)}
+
+
+def verify(directory, root=ROOT):
+    directory = Path(directory).resolve()
+    evidence = preparation.read_json(directory / "evidence.json", 16 * 1024 * 1024)
+    pins = preparation.load_pins(root)
+    if evidence.get("format") != 1 or evidence.get("target") != TARGET or evidence.get("profile") != pins["profile"] or evidence.get("manifest") != str(root / "Cargo.toml") or evidence.get("cwd") != str(root):
+        fail("evidence target/profile/working-directory mismatch")
+    toolchain, environment = preparation.controlled_environment(root)
+    selected_commands = commands(root, toolchain)
+    captured = evidence.get("commands")
+    if not isinstance(captured, dict) or set(captured) != set(selected_commands):
+        fail("missing command provenance")
+    for name, argv in selected_commands.items():
+        command = captured[name]
+        if not isinstance(command, dict) or command.get("argv") != argv or command.get("cwd") != str(root) or command.get("exit_code") != 0 or command.get("reason") != "completed" or command.get("cleanup_established") is not True:
+            fail("command did not complete with exact selected target/features")
+        for stream in ("stdout", "stderr"):
+            if command.get(stream + "_sha256") != preparation.file_hash(directory / (name + "." + stream)):
+                fail("command output hash mismatch")
+    tools = evidence.get("tools")
+    if not isinstance(tools, dict) or tools.get("environment") != environment or tools.get("cargo_configs") != preparation.config_inputs(root):
+        fail("toolchain environment/config evidence changed")
+    for name, argv in preparation.identity_commands(root, toolchain).items():
+        record = tools.get(name)
+        if not isinstance(record, dict) or record.get("exit_code") != 0 or record.get("cleanup_established") is not True or record.get("argv") != preparation.network_command(argv) or record.get("cwd") != str(root):
+            fail("missing actual tool identity evidence")
+        for stream in ("stdout", "stderr"):
+            if record.get(stream + "_sha256") != preparation.file_hash(directory / (name + "." + stream)):
+                fail("tool identity output changed")
+    compiler = (directory / "rustc-version.stdout").read_text()
+    if "commit-hash: " + pins["toolchain"]["rustc_commit"] not in compiler.splitlines():
+        fail("wrong actual compiler commit")
+    if not isinstance(tools.get("native_tools"), dict) or set(tools["native_tools"]) != set(preparation.native_tool_paths(root)):
+        fail("native compiler/linker/SDK input inventory incomplete or unexpected")
+    if any(preparation.file_hash(path) != expected for path, expected in tools["native_tools"].items()):
+        fail("native compiler/linker/SDK inputs changed")
+    metadata = preparation.read_json(directory / "metadata.stdout", 32 * 1024 * 1024)
+    report = graph_report(metadata, pins)
+    reached = {package["id"] for package in report["packages"]}
+    current = selected_inputs(metadata, reached, root)
+    if evidence.get("inputs") != current:
+        fail("local manifest/lock/source inputs changed or incomplete")
+    if evidence.get("source") != preparation.verify_source(root):
+        fail("prepared runtime source changed")
+    if evidence.get("lock_delta") != preparation.compare_locks(root):
+        fail("lock delta changed")
+    if evidence.get("upstream_edges") != preparation.upstream_edges(metadata, reached, root):
+        fail("selected upstream dependency provenance changed")
+    if evidence.get("registry_inputs") != preparation.registry_inputs(metadata, reached, root):
+        fail("registry manifest/build/MSRV inputs changed")
+    report["lock_delta"] = evidence["lock_delta"]
+    report["upstream_edges"] = evidence["upstream_edges"]
+    report["registry_inputs"] = evidence["registry_inputs"]
+    report["evidence_sha256"] = preparation.file_hash(directory / "evidence.json")
+    report["metadata_sha256"] = preparation.file_hash(directory / "metadata.stdout")
+    report["local_inputs_sha256"] = digest(json.dumps(current, sort_keys=True).encode())
+    return report
+
+
+def collect(directory, root=ROOT):
+    directory = Path(directory).resolve()
+    directory.mkdir(parents=True, exist_ok=False)
+    pins = preparation.load_pins(root)
+    source = preparation.verify_source(root)
+    lock_delta = preparation.compare_locks(root)
+    toolchain, environment = preparation.controlled_environment(root)
+    before = candidate_inputs(root)
+    evidence = {"format": 1, "target": TARGET, "profile": pins["profile"], "manifest": str(root / "Cargo.toml"), "cwd": str(root), "source": source, "lock_delta": lock_delta, "commands": {}}
+    with preparation.BuildSlot(root) as slot:
+        try:
+            evidence["tools"] = preparation.tool_identity(root, directory, slot, environment, toolchain)
+            for name, argv in commands(root, toolchain).items():
+                evidence["commands"][name] = preparation.run_owned(argv, root, environment, directory, name, slot, 120)
+                preparation.write_json(directory / "evidence.json", evidence)
+            metadata = preparation.read_json(directory / "metadata.stdout", 32 * 1024 * 1024)
+            report = graph_report(metadata, pins)
+            reached = {package["id"] for package in report["packages"]}
+            current = selected_inputs(metadata, reached, root)
+            if any(before.get(path) != value for path, value in current.items()):
+                fail("local input changed during graph collection")
+            evidence["inputs"] = current
+            evidence["upstream_edges"] = preparation.upstream_edges(metadata, reached, root)
+            evidence["registry_inputs"] = preparation.registry_inputs(metadata, reached, root)
+        finally:
+            preparation.write_json(directory / "evidence.json", evidence)
+    report = verify(directory, root)
+    preparation.write_json(directory / "report.json", report)
+    return report
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="operation", required=True)
+    for name in ("collect", "verify"):
+        sub.add_parser(name).add_argument("directory", type=Path)
+    args = parser.parse_args()
+    try:
+        report = collect(args.directory) if args.operation == "collect" else verify(args.directory)
+        print(json.dumps(report, indent=2))
+    except (ValueError, OSError, TypeError, KeyError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["tools/foks-celld-guarded/runtime/source"]
 members = [
     "crates/foks-agent",
     "crates/foks-agent-client",
