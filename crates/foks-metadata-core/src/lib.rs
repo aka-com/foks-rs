@@ -14,6 +14,7 @@ pub mod native;
 pub mod page;
 pub mod page_catalog;
 pub mod personal;
+pub mod read_context;
 pub mod read_schema;
 pub mod read_token;
 #[cfg(target_arch = "wasm32")]
