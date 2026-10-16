@@ -5,6 +5,10 @@
 pub(crate) mod catalog;
 mod generations;
 mod list;
+#[cfg(feature = "list-allocation-qualification")]
+pub(crate) fn list_decoded_size() -> usize {
+    std::mem::size_of::<list::Decoded>()
+}
 pub use generations::current_key_generations;
 pub use list::{read_personal_list, ListCursor, ListRequest};
 

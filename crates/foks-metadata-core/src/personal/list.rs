@@ -54,7 +54,7 @@ struct Position {
     mac: [u8; 32],
     time: u64,
 }
-struct Decoded {
+pub(super) struct Decoded {
     entry: KvDirent,
     small: Option<KvSmallFileBox>,
 }
@@ -199,28 +199,41 @@ pub fn read_personal_list(
     now_micros: u64,
     maximum_directory_bytes: usize,
 ) -> Result<Vec<u8>> {
+    #[cfg(feature = "list-allocation-qualification")]
+    let _entry_phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Entry);
     recheck_current_credential(sql, credential, now_micros)?;
     require_personal_profile(sql, credential)?;
-    let key = read_list_parent_key(
-        sql,
-        credential.uid(),
-        &request.parent,
-        maximum_directory_bytes,
-    )?;
-    require_key(
-        sql,
-        credential,
-        KeyRequirement {
-            key,
-            access: KeyAccess::Read,
-        },
-    )?;
+    let key = {
+        #[cfg(feature = "list-allocation-qualification")]
+        let _phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Parent);
+        read_list_parent_key(
+            sql,
+            credential.uid(),
+            &request.parent,
+            maximum_directory_bytes,
+        )?
+    };
+    {
+        #[cfg(feature = "list-allocation-qualification")]
+        let _phase =
+            crate::allocation_trace::phase(crate::allocation_trace::Phase::ParentAuthorization);
+        require_key(
+            sql,
+            credential,
+            KeyRequirement {
+                key,
+                access: KeyAccess::Read,
+            },
+        )?;
+    }
     let mut encoder = ListEncoder::new(request.count)?;
     let mut count = 0;
     let mut after = None;
     loop {
         let limit = (request.count - count)
             .min(usize::from(P::ListInitial.spec().effective_rows()?).min(15));
+        #[cfg(feature = "list-allocation-qualification")]
+        let _page_phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Page);
         let (statement, p) = parameters(credential.uid(), request, after, limit)?;
         let page = sql.query_page(statement, &p)?;
         charge(limit * std::mem::size_of::<Decoded>())?;
@@ -228,6 +241,8 @@ pub fn read_personal_list(
         let mut failure = None;
         let mut rows = 0;
         for row in page.rows() {
+            #[cfg(feature = "list-allocation-qualification")]
+            let _phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Decode);
             rows += 1;
             if rows > limit {
                 return Err(PersonalError::Corrupt);
@@ -261,6 +276,8 @@ pub fn read_personal_list(
         }
         let mut generations = [None; 15];
         for (index, batch) in roles[..role_count].chunks(7).enumerate() {
+            #[cfg(feature = "list-allocation-qualification")]
+            let _phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Roles);
             let values = current_key_generations(sql, credential.uid(), batch)?;
             generations[index * 7..index * 7 + values.len()].copy_from_slice(&values);
         }
@@ -274,6 +291,8 @@ pub fn read_personal_list(
                 role_index += 1;
                 small.key.generation > 0 && current.is_some_and(|g| small.key.generation <= g)
             });
+            #[cfg(feature = "list-allocation-qualification")]
+            let _phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Append);
             encoder.append(&row.entry, small)?;
             count += 1;
         }
@@ -284,7 +303,11 @@ pub fn read_personal_list(
         // final encoder allocation; output buffers retain their own admission.
         drop(decoded);
         drop(page);
+        #[cfg(feature = "list-allocation-qualification")]
+        drop(_page_phase);
         if count == request.count || rows < limit {
+            #[cfg(feature = "list-allocation-qualification")]
+            let _phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Finish);
             return encoder.finish(count < request.count).map_err(Into::into);
         }
     }

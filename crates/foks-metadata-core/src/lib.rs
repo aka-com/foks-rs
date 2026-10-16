@@ -4,6 +4,8 @@
 //! durable-outcome state machines; it is not real FOKS authentication, a production
 //! backend, a distributed deadline guarantee, or a qualified recovery deployment.
 
+#[cfg(feature = "list-allocation-qualification")]
+pub mod allocation_trace;
 pub mod authority;
 pub mod catalog;
 pub mod directory;

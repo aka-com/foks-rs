@@ -115,9 +115,11 @@ impl ListEncoder {
         )?;
         charge(length)?;
         let mut output = Vec::new();
-        output
-            .try_reserve_exact(length)
-            .map_err(|_| Error::Bounds)?;
+        output.try_reserve_exact(length).map_err(|_| {
+            #[cfg(feature = "list-allocation-qualification")]
+            crate::allocation_trace::allocator_failed();
+            crate::Error::Bounds
+        })?;
         output.push(0x93);
         prefix(&mut output, self.count);
         output.extend_from_slice(&self.entries);
@@ -143,10 +145,16 @@ fn grow(buffer: &mut Vec<u8>, needed: usize, maximum: usize) -> Result<()> {
     }
     // Reserve the whole new allocation before reallocating; admission still
     // owns the old one. reserve_exact avoids unaccounted Vec geometric growth.
+    #[cfg(feature = "list-allocation-qualification")]
+    let _phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Growth);
     charge(capacity)?;
     buffer
         .try_reserve_exact(capacity - buffer.len())
-        .map_err(|_| Error::Bounds)
+        .map_err(|_| {
+            #[cfg(feature = "list-allocation-qualification")]
+            crate::allocation_trace::allocator_failed();
+            crate::Error::Bounds
+        })
 }
 
 fn encoded_length(
@@ -428,5 +436,75 @@ mod tests {
                 length <= MAX_LIST_BYTES - overhead
             );
         }
+    }
+}
+
+#[cfg(all(test, feature = "list-allocation-qualification"))]
+mod trace_tests {
+    use super::*;
+    use foks_proto::{KvDirectoryStatus, KvNodeId, Role, RoleAndGeneration, SecretBox};
+    use foks_snowpack::{with_allocation_budget, AllocationBudget};
+    use std::sync::{Arc, Mutex};
+    struct Trace(Mutex<Vec<usize>>);
+    impl AllocationBudget for Trace {
+        fn reserve(&self, b: usize) -> bool {
+            self.0.lock().unwrap().push(b);
+            true
+        }
+    }
+    #[test]
+    fn growth_events_match_private_capacity_observation_and_finish_exactly() {
+        let d = KvDirent::new(
+            [0; 16],
+            [0; 16],
+            KvNodeId([3; 17]),
+            1,
+            1,
+            Role::OWNER,
+            [0; 32],
+            SecretBox {
+                nonce: [0; 16],
+                ciphertext: vec![7; 100],
+            },
+            KvDirectoryStatus::Active,
+            [0; 32],
+            0,
+        )
+        .unwrap();
+        let small = KvSmallFileBox {
+            key: RoleAndGeneration {
+                role: Role::OWNER,
+                generation: 1,
+            },
+            ciphertext: vec![8; 1000],
+        };
+        let mut encoder = ListEncoder::new(40).unwrap();
+        for _ in 0..40 {
+            let before = (encoder.entries.capacity(), encoder.extended.capacity());
+            let r = Arc::new(Trace(Mutex::new(Vec::with_capacity(8))));
+            with_allocation_budget(r.clone(), || encoder.append(&d, Some(&small))).unwrap();
+            let after = (encoder.entries.capacity(), encoder.extended.capacity());
+            let events = r.0.lock().unwrap();
+            let mut suffix = Vec::new();
+            if after.0 > before.0 {
+                suffix.push(after.0);
+            }
+            if after.1 > before.1 {
+                suffix.push(after.1);
+            }
+            assert!(events.ends_with(&suffix));
+            assert_eq!(events.len(), 4 + suffix.len());
+        }
+        let expected = encoded_length(
+            encoder.count,
+            encoder.extended_count,
+            encoder.entries.len(),
+            encoder.extended.len(),
+        )
+        .unwrap();
+        let r = Arc::new(Trace(Mutex::new(Vec::with_capacity(1))));
+        let bytes = with_allocation_budget(r.clone(), || encoder.finish(false)).unwrap();
+        assert_eq!(bytes.len(), expected);
+        assert_eq!(*r.0.lock().unwrap(), [expected]);
     }
 }

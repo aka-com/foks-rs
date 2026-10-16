@@ -1,6 +1,8 @@
 //! Minimal audited ABI; buffers are owned initialized Vecs, never constructed
 //! from foreign pointers. JS may access their published memory ranges only
 //! synchronously while an exported call/import is active.
+#[cfg(feature = "list-allocation-qualification")]
+mod list_charge;
 use crate::{wire, Error, Result, Sql, Statement, Value, MAX_INPUT_BYTES, MAX_SQL_CALLS};
 use std::cell::RefCell;
 
