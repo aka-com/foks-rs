@@ -17,7 +17,6 @@ pub extern "C" fn read_token_clear() {
     SETUP.with(|value| value.borrow_mut().zeroize());
     super::INPUT.with(|value| value.borrow_mut().zeroize());
     crate::scalar::response::clear_idle();
-    super::PAGE_RESPONSE.with(|value| value.borrow_mut().zeroize());
     super::OUTPUT.with(|value| value.borrow_mut().zeroize());
 }
 #[no_mangle]

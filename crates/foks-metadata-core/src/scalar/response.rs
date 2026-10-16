@@ -9,6 +9,7 @@ pub(crate) enum Phase {
     Idle,
     Scalar,
     Domain,
+    Page,
 }
 struct State {
     epoch: u64,
@@ -60,17 +61,6 @@ pub(crate) fn input_output_allowed() -> bool {
                 && s.buffer.is_none()
                 && s.failure.is_none())
         {
-            true
-        } else {
-            s.fail(Error::Storage);
-            false
-        }
-    })
-}
-pub(crate) fn page_response_allowed() -> bool {
-    STATE.with(|state| {
-        let mut s = state.borrow_mut();
-        if s.depth == 1 && s.phase == Phase::Idle && s.failure.is_none() {
             true
         } else {
             s.fail(Error::Storage);
@@ -167,10 +157,15 @@ impl Scope {
                 && state.buffer.is_none()
                 && !state.attempted
                 && state.failure.is_none()
-                && (state.phase == Phase::Idle
-                    || (state.phase == Phase::Domain
-                        && state.depth == 2
-                        && phase == Phase::Scalar));
+                && if phase == Phase::Page {
+                    (state.depth == 1 && state.phase == Phase::Idle)
+                        || (state.depth == 2 && state.phase == Phase::Domain)
+                } else {
+                    state.phase == Phase::Idle
+                        || (state.phase == Phase::Domain
+                            && state.depth == 2
+                            && phase == Phase::Scalar)
+                };
             if !valid {
                 state.fail(Error::Storage);
                 return Err(Error::Storage);
@@ -225,10 +220,53 @@ impl Drop for Scope {
 /// Returns a live initialized range for this import only. No borrow survives the
 /// admission callback; the epoch/phase are checked again before installing it.
 pub(crate) fn allocate(length: usize) -> Option<*mut u8> {
+    allocate_kind(DeliveryKind::Scalar, length)
+}
+pub(crate) fn allocate_page(length: usize) -> Option<*mut u8> {
+    allocate_kind(DeliveryKind::Page, length)
+}
+#[derive(Clone, Copy)]
+enum DeliveryKind {
+    Scalar,
+    Page,
+}
+impl DeliveryKind {
+    fn accepts_phase(self, phase: Phase) -> bool {
+        match self {
+            Self::Scalar => matches!(phase, Phase::Scalar | Phase::Domain),
+            Self::Page => phase == Phase::Page,
+        }
+    }
+    fn accepts_length(self, length: usize) -> bool {
+        match self {
+            Self::Scalar => length <= MAX_BYTES,
+            Self::Page => {
+                (crate::page::HEADER_BYTES..=crate::page::MAX_PAGE_BYTES).contains(&length)
+            }
+        }
+    }
+}
+fn allocate_kind(kind: DeliveryKind, length: usize) -> Option<*mut u8> {
+    allocate_kind_with(
+        kind,
+        length,
+        |bytes, length| bytes.try_reserve_exact(length).map_err(|_| ()),
+        || {
+            #[cfg(feature = "list-allocation-qualification")]
+            crate::allocation_trace::allocator_failed();
+        },
+    )
+}
+fn allocate_kind_with(
+    kind: DeliveryKind,
+    length: usize,
+    reserve: impl FnOnce(&mut Vec<u8>, usize) -> std::result::Result<(), ()>,
+    allocation_failed: impl FnOnce(),
+) -> Option<*mut u8> {
     let coordinate = STATE.with(|state| {
         let mut state = state.borrow_mut();
         if state.depth == 0
-            || state.phase == Phase::Idle
+            || !kind.accepts_phase(state.phase)
             || state.attempted
             || state.buffer.is_some()
             || state.failure.is_some()
@@ -237,16 +275,19 @@ pub(crate) fn allocate(length: usize) -> Option<*mut u8> {
             return None;
         }
         state.attempted = true;
-        if length > MAX_BYTES {
+        if !kind.accepts_length(length) {
             state.fail(Error::Bounds);
             return None;
         }
         Some((state.epoch, state.depth, state.phase))
     })?;
+    if length != 0 && crate::page::charge(length).is_err() {
+        fail(Error::Bounds);
+        return None;
+    }
     let mut bytes = Vec::new();
-    if (length != 0 && crate::page::charge(length).is_err())
-        || bytes.try_reserve_exact(length).is_err()
-    {
+    if reserve(&mut bytes, length).is_err() {
+        allocation_failed();
         fail(Error::Bounds);
         return None;
     }

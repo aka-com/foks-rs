@@ -10,7 +10,6 @@ use std::cell::RefCell;
 thread_local! {
     static INPUT: RefCell<Vec<u8>>=const {RefCell::new(Vec::new())};
     static OUTPUT: RefCell<Vec<u8>>=const {RefCell::new(Vec::new())};
-    static PAGE_RESPONSE: RefCell<Vec<u8>>=const {RefCell::new(Vec::new())};
 }
 
 #[link(wasm_import_module = "foks")]
@@ -77,7 +76,6 @@ pub extern "C" fn page_input_alloc(length: u32) -> u32 {
     }
     INPUT.with(|b| b.borrow_mut().clear());
     OUTPUT.with(|b| b.borrow_mut().clear());
-    PAGE_RESPONSE.with(|b| b.borrow_mut().clear());
     if length < crate::page::HEADER_BYTES as u32
         || length as usize > crate::page::MAX_PARAMETER_BYTES
     {
@@ -91,21 +89,7 @@ pub extern "C" fn page_input_alloc(length: u32) -> u32 {
 
 #[no_mangle]
 pub extern "C" fn page_response_alloc(length: u32) -> u32 {
-    if !response::page_response_allowed() {
-        return 0;
-    }
-    PAGE_RESPONSE.with(|b| b.borrow_mut().clear());
-    if length < crate::page::HEADER_BYTES as u32 || length as usize > crate::page::MAX_PAGE_BYTES {
-        return 0;
-    }
-    if crate::page::charge(length as usize).is_err() {
-        return 0;
-    }
-    PAGE_RESPONSE.with(|b| {
-        let mut bytes = b.borrow_mut();
-        *bytes = vec![0; length as usize];
-        bytes.as_mut_ptr() as u32
-    })
+    response::allocate_page(length as usize).map_or(0, |pointer| pointer as u32)
 }
 
 /// Private fixture entry only. It has no personal-authority or production route.
@@ -242,27 +226,36 @@ impl Sql for Host {
         statement: crate::page_catalog::PageStatement,
         parameters: &[Value],
     ) -> Result<crate::page::PageBuffer> {
-        let spec = statement.spec();
-        let encoded = crate::page::encode_parameters(&spec, parameters)?;
-        self.calls += 1;
-        if self.calls > MAX_SQL_CALLS {
-            return Err(Error::Bounds);
+        let result = (|| {
+            let spec = statement.spec();
+            let encoded = crate::page::encode_parameters(&spec, parameters)?;
+            self.calls += 1;
+            if self.calls > MAX_SQL_CALLS {
+                return Err(Error::Bounds);
+            }
+            let scope = response::Scope::begin(response::Phase::Page)?;
+            // SAFETY: owned parameters remain live through this synchronous
+            // import. No RefCell borrow crosses it. The matching allocator owns
+            // one initialized response and the host refreshes views after growth.
+            let failed =
+                unsafe { sql_page(statement as u32, encoded.as_ptr(), encoded.len() as u32) };
+            drop(encoded);
+            let bytes = scope.finish(failed != 0)?;
+            // Ownership moves, not copies. The caller retains the original
+            // allowance until this PageBuffer (and every borrowed row) is gone.
+            let page =
+                crate::page::PageBuffer::decode(bytes, &spec, crate::page::EnvelopeKind::Rows)?;
+            if page.len() > usize::from(spec.requested_rows(parameters)?) {
+                return Err(Error::Bounds);
+            }
+            Ok(page)
+        })();
+        if let Err(error) = &result {
+            response::fail(error.clone());
         }
-        PAGE_RESPONSE.with(|b| b.borrow_mut().clear());
-        // SAFETY: immutable owned parameters remain live through the synchronous
-        // import. No RefCell borrow crosses it. The host writes only to its
-        // separately allocated PAGE_RESPONSE and reacquires views after growth.
-        let failed = unsafe { sql_page(statement as u32, encoded.as_ptr(), encoded.len() as u32) };
-        if failed != 0 {
-            return Err(Error::Storage);
-        }
-        let bytes = PAGE_RESPONSE.with(|b| std::mem::take(&mut *b.borrow_mut()));
-        let page = crate::page::PageBuffer::decode(bytes, &spec, crate::page::EnvelopeKind::Rows)?;
-        if page.len() > usize::from(spec.requested_rows(parameters)?) {
-            return Err(Error::Bounds);
-        }
-        Ok(page)
+        result
     }
+
     fn query(&mut self, s: Statement, p: &[Value]) -> Result<Option<Vec<Value>>> {
         let result = self
             .invoke(s, p, false)

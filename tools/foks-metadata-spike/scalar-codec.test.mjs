@@ -22,6 +22,7 @@ class ScalarKernel extends Kernel {
     if(this.mode==='reentry'){assert.equal(this.invokeExport('run'),1);return 0;}
     if(this.mode==='setup'){assert.equal(this.invokeExport('read_token_setup_alloc',48),0);return 0;}
     if(this.mode==='pure'){assert.equal(this.invokeExport('small_box_ciphertext_length'),1);return 0;}
+    if(this.mode==='wrong-page'){assert.equal(this.invokeExport('page_response_alloc',24),0);return 0;}
     if(this.mode==='getter'){assert.equal(this.invokeExport('output_length'),0);return 0;}
     if(this.mode==='returned-error')return 1;
     if(this.mode==='throw')throw new KernelError('conflict');
@@ -47,7 +48,7 @@ test('actual Wasm scalar codec preserves exact existing JSON and large/small val
 });
 
 test('missing malformed refused duplicate and forbidden helper replies cannot publish success',()=>{
-  for(const mode of ['missing','malformed','oversize','duplicate','reentry','setup','pure','getter','returned-error']){
+  for(const mode of ['missing','malformed','oversize','duplicate','reentry','setup','pure','getter','wrong-page','returned-error']){
     const kernel=new ScalarKernel(mode);
     assert.throws(()=>kernel.run(command()),error=>error instanceof KernelError&&error.code===(mode==='oversize'?'bounds':'storage'),mode);
     assert.equal(kernel.poisoned,false,mode); // normal Rust failure unwound scopes
