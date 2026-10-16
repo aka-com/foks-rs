@@ -12,8 +12,8 @@
 @import '../features/first-run/first-run.css' layer(features.first-run);
 @import '../features/settings/settings.css' layer(features.settings);
 @import '../features/files/files.css' layer(features.files);
-@import '../screens/chat.css' layer(features.chat);
-@import '../screens/chat-picker.css' layer(features.chat);
+@import '../features/chat/chat.css' layer(features.chat);
+@import '../features/chat/chat-picker.css' layer(features.chat);
 /* teams.css precedes team-info.css in their sublayer, so the team details
    panel's rules win a specificity tie with the team rules. */
 @import '../features/teams/teams.css' layer(features.teams);

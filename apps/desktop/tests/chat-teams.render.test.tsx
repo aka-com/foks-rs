@@ -112,7 +112,7 @@ async function mount(
   /** Also mount the navigation rail, which draws the Chat unread count. */
   rail = false,
 ) {
-  const { ChatTab } = await import('../src/screens/chat-tab');
+  const { ChatTab } = await import('../src/features/chat/chat-tab');
   const { Sidebar } = await import('../src/shell/sidebar');
   const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
@@ -810,7 +810,10 @@ test('unfinished work sits behind a header chip and keeps the composer', async (
     null,
   );
   // The list is bounded and scrolls inside the popover.
-  const css = await readSource('../src/screens/chat.css', import.meta.url);
+  const css = await readSource(
+    '../src/features/chat/chat.css',
+    import.meta.url,
+  );
   const rule = /\.chat-unsent-list \{([^}]*)\}/.exec(css)?.[1] ?? '';
   assert.match(rule, /overflow:\s*auto/);
   assert.match(rule, /max-height:/);
@@ -3290,7 +3293,7 @@ test('New channel opens the Create channel sheet on the open team', async () => 
 
 test('the Create channel sheet selects the only team with chat when no team is open', async () => {
   const snapshot = await snapshotWithChat(['personal']);
-  const { NewChatSheet } = await import('../src/screens/chat-new');
+  const { NewChatSheet } = await import('../src/features/chat/chat-new');
   const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const { mockBridge } = await import('../src/mock/mock-bridge');

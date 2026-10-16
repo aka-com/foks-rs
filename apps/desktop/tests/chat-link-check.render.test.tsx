@@ -199,7 +199,10 @@ test('a long destination host wraps instead of overflowing the message list', as
   // jsdom does not lay out, so the rule is read from the stylesheet: a
   // nowrap host wider than the column would scroll its registrable name out
   // of view (bank.example.<long label>.evil.example).
-  const css = await readSource('../src/screens/chat.css', import.meta.url);
+  const css = await readSource(
+    '../src/features/chat/chat.css',
+    import.meta.url,
+  );
   const rule = /\.chat-link-host\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
   assert.match(rule, /display: inline-block;/);
   assert.doesNotMatch(rule, /white-space/);

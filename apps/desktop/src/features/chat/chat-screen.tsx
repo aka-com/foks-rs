@@ -1,25 +1,29 @@
-import { ChatThread } from '../chat/chat-thread';
-import { channelAudience, directUser } from '../chat/audience';
-import { ChatConversationProvider } from '../chat/conversation-provider';
-import { chatMentions, mentionKey } from '../chat/mentions';
-import { useComposerAutofocus } from '../chat/use-composer-autofocus';
-import { ChatAlerts, failureAlert, type ChatAlert } from '../chat/chat-alerts';
-import { UnsentChip } from '../chat/unsent-chip';
-import { ThreadHeader } from '../chat/thread-header';
+import { ChatThread } from '../../chat/chat-thread';
+import { channelAudience, directUser } from '../../chat/audience';
+import { ChatConversationProvider } from '../../chat/conversation-provider';
+import { chatMentions, mentionKey } from '../../chat/mentions';
+import { useComposerAutofocus } from '../../chat/use-composer-autofocus';
+import {
+  ChatAlerts,
+  failureAlert,
+  type ChatAlert,
+} from '../../chat/chat-alerts';
+import { UnsentChip } from '../../chat/unsent-chip';
+import { ThreadHeader } from '../../chat/thread-header';
 import {
   channelTitle,
   listChannels,
   messageClock,
   openChannel,
   partyNames,
-} from '../chat/presentation';
-import { chatDiagnostic } from '../chat/diagnostic';
-import { useOptionalToast } from '../../kit/toasts';
+} from '../../chat/presentation';
+import { chatDiagnostic } from '../../chat/diagnostic';
+import { useOptionalToast } from '../../../kit/toasts';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode, Ref } from 'react';
-import { Button, Icon, Notice } from '../components';
-import type { Bridge } from '../bridge';
-import type { ChatAction, ChatReply } from '../chat-contract';
+import { Button, Icon, Notice } from '../../components';
+import type { Bridge } from '../../bridge';
+import type { ChatAction, ChatReply } from '../../chat-contract';
 import {
   chatAvailable,
   groupDetailFailure,
@@ -29,13 +33,13 @@ import {
   storeDescription,
   storeDescriptionState,
   storeOf,
-} from '../model';
-import type { AgentSnapshot, AvailabilityOptions, StoreRef } from '../model';
-import type { Location } from '../location';
-import { useChatConversation } from '../chat/use-chat-conversation';
-import { lastPosition } from '../chat/snapshots';
-import { useChatSendService } from '../chat/send-provider';
-import { cancelled } from '../chat/errors';
+} from '../../model';
+import type { AgentSnapshot, AvailabilityOptions, StoreRef } from '../../model';
+import type { Location } from '../../location';
+import { useChatConversation } from '../../chat/use-chat-conversation';
+import { lastPosition } from '../../chat/snapshots';
+import { useChatSendService } from '../../chat/send-provider';
+import { cancelled } from '../../chat/errors';
 import { chatTeams } from './chat-teams';
 
 const systemAccessNow = () => Date.now() / 1000;

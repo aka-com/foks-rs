@@ -52,7 +52,7 @@ import type {
 import { markProfileRostersStale } from '../../data/roster-staleness';
 import { PageHeader } from '../../shell/page-header';
 import { useShellServices, useShellSnapshot } from '../../shell-services';
-import { NewChatSheet } from '../../screens/chat-new';
+import { NewChatSheet } from '../chat';
 import {
   ChannelsTab,
   FilesTab,

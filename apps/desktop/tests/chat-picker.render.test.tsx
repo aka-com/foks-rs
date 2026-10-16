@@ -21,7 +21,7 @@ test.afterEach(() => ui.cleanup());
 
 test('the creation form reserves vertical focus-ring clearance inside the scrolling sheet body', async () => {
   const css = await readSource(
-    '../src/screens/chat-picker.css',
+    '../src/features/chat/chat-picker.css',
     import.meta.url,
   );
   assert.match(css, /\.chat-create\s*\{[^}]*padding-block: 4px;/);
@@ -41,11 +41,11 @@ async function mount(override?: (base: Bridge) => Bridge, tabbed = false) {
   };
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
-  const { NewChatSheet } = await import('../src/screens/chat-new');
+  const { NewChatSheet } = await import('../src/features/chat/chat-new');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const locations = await import('../src/location');
   const { NavigationGuardProvider } = await import('../src/navigation-guard');
-  const { ChatTab } = await import('../src/screens/chat-tab');
+  const { ChatTab } = await import('../src/features/chat/chat-tab');
   const { ChannelCreationCompletions } =
     await import('../src/chat/channel-creation-provider');
   const navigation = new locations.LocationStore();

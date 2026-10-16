@@ -1,4 +1,4 @@
-import { useChannelCreation } from '../chat/channel-creation-provider';
+import { useChannelCreation } from '../../chat/channel-creation-provider';
 /**
  * New channel opens a channel-creation form directly.
  *
@@ -29,37 +29,41 @@ import {
   RadioGroup,
   SectionLabel,
   SheetDialog,
-} from '../components';
-import type { Bridge } from '../bridge';
+} from '../../components';
+import type { Bridge } from '../../bridge';
 
 import {
   CHAT_DESCRIPTION_MAX_CHARS,
   CHAT_DESCRIPTION_MIN_CHARS,
   CHAT_NAME_MAX_CHARS,
   CHAT_NAME_MIN_CHARS,
-} from '../chat-limits';
-import type { NavigationGuard } from '../location';
-import { useNavigationGuard, useTabSheetState } from '../navigation-guard';
-import type { ChatScope } from '../chat-contract';
-import { sameScope } from '../chat/client';
-import { chatAvailable, serverDisplayLabel, storeDescription } from '../model';
+} from '../../chat-limits';
+import type { NavigationGuard } from '../../location';
+import { useNavigationGuard, useTabSheetState } from '../../navigation-guard';
+import type { ChatScope } from '../../chat-contract';
+import { sameScope } from '../../chat/client';
+import {
+  chatAvailable,
+  serverDisplayLabel,
+  storeDescription,
+} from '../../model';
 import type {
   AgentSnapshot,
   AvailabilityOptions,
   StoreRef,
   TeamStore,
-} from '../model';
-import { failure } from '../chat/actions';
-import { useChatInbox } from '../chat/inbox-provider';
+} from '../../model';
+import { failure } from '../../chat/actions';
+import { useChatInbox } from '../../chat/inbox-provider';
 import {
   channelDescriptionProblem,
   channelNameProblem,
   listChannels,
   lowercaseChatText,
   normalizeChannelName,
-} from '../chat/presentation';
+} from '../../chat/presentation';
 import { chatTeams, noChatReason, noChatTeams } from './chat-teams';
-import { GroupMark } from '../components/group-mark';
+import { GroupMark } from '../../components/group-mark';
 
 const fieldText = (value: string): string =>
   lowercaseChatText(value.replace(/\r\n?|\n/g, ' '));

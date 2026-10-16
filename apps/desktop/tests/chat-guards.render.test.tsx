@@ -122,7 +122,7 @@ async function setup(
     includeHousehold?: boolean;
   } = {},
 ): Promise<Harness> {
-  const { ChatTab } = await import('../src/screens/chat-tab');
+  const { ChatTab } = await import('../src/features/chat/chat-tab');
   const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
   const locations = await import('../src/location');
   const { NavigationGuardProvider, NavigationPrompt } =

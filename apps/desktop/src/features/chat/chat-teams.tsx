@@ -1,5 +1,5 @@
-import { inventoryReadiness } from '../model';
-import { CollectionStatus } from '../components/collection-status';
+import { inventoryReadiness } from '../../model';
+import { CollectionStatus } from '../../components/collection-status';
 /**
  * The Chat tab's inbox column: every team with chat, at once.
  *
@@ -28,17 +28,17 @@ import {
   useSyncExternalStore,
 } from 'react';
 import type { ReactNode } from 'react';
-import { Icon, MenuItem, SectionLabel } from '../components';
+import { Icon, MenuItem, SectionLabel } from '../../components';
 import {
   anyDialogOpen,
   ContextMenu,
   Menu,
   Popover,
-} from '../../kit/overlay-primitives';
-import { useOptionalToast } from '../../kit/toasts';
-import { normalizeCommandError } from '../bridge';
-import { chatErrorText } from '../chat/error-copy';
-import { useChannelCreation } from '../chat/channel-creation-provider';
+} from '../../../kit/overlay-primitives';
+import { useOptionalToast } from '../../../kit/toasts';
+import { normalizeCommandError } from '../../bridge';
+import { chatErrorText } from '../../chat/error-copy';
+import { useChannelCreation } from '../../chat/channel-creation-provider';
 import {
   chatAvailable,
   partiesOf,
@@ -48,14 +48,14 @@ import {
   teamCaption,
   storeDescription,
   storeNavigationOrder,
-} from '../model';
+} from '../../model';
 import type {
   AgentSnapshot,
   AvailabilityOptions,
   Server,
   StoreRef,
   TeamStore,
-} from '../model';
+} from '../../model';
 import {
   channelLabel,
   channelMeta,
@@ -66,9 +66,9 @@ import {
   partyNames,
   previewLine,
   previewTime,
-} from '../chat/presentation';
-import type { ListedChannel } from '../chat/presentation';
-import { useChatInbox } from '../chat/inbox-provider';
+} from '../../chat/presentation';
+import type { ListedChannel } from '../../chat/presentation';
+import { useChatInbox } from '../../chat/inbox-provider';
 import {
   alertChoice,
   alertsUnavailableReason,
@@ -76,18 +76,18 @@ import {
   storedAlertMode,
   teamKey,
   teamMuted,
-} from '../chat/local-contract';
-import type { AlertChoice, LocalAction } from '../chat/local-contract';
+} from '../../chat/local-contract';
+import type { AlertChoice, LocalAction } from '../../chat/local-contract';
 import {
   ALERT_TITLES,
   MENTIONS_DETAIL,
   useLocalAlerts,
-} from '../chat/notification-provider';
-import type { TeamInbox } from '../chat/inbox-service';
-import { useChatSendService } from '../chat/send-provider';
-import { markChannelRead } from '../chat/mark-read';
-import { lastPosition } from '../chat/snapshots';
-import { teamUnread } from '../chat/unread';
+} from '../../chat/notification-provider';
+import type { TeamInbox } from '../../chat/inbox-service';
+import { useChatSendService } from '../../chat/send-provider';
+import { markChannelRead } from '../../chat/mark-read';
+import { lastPosition } from '../../chat/snapshots';
+import { teamUnread } from '../../chat/unread';
 import {
   rememberChannelPreviews,
   rememberChannelSort,
@@ -95,11 +95,11 @@ import {
   storedChannelPreviews,
   storedChannelSort,
   storedFoldedTeams,
-} from '../sidebar-prefs';
-import type { ChannelSort } from '../sidebar-prefs';
-import { matchesShortcut } from '../shortcuts';
-import { GroupMark } from '../components/group-mark';
-import { manageReason } from '../model/group-model';
+} from '../../sidebar-prefs';
+import type { ChannelSort } from '../../sidebar-prefs';
+import { matchesShortcut } from '../../shortcuts';
+import { GroupMark } from '../../components/group-mark';
+import { manageReason } from '../../model/group-model';
 
 /** The server a store belongs to, whatever its state. */
 function serverFor(

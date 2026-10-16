@@ -22,7 +22,7 @@ function deferred() {
 }
 async function setup(override?: (base: Bridge) => Bridge) {
   const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
-  const { ChatTab } = await import('../src/screens/chat-tab');
+  const { ChatTab } = await import('../src/features/chat/chat-tab');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const { FIXTURE } = await import('../src/mock/fixture');
   const { mockBridge } = await import('../src/mock/mock-bridge');

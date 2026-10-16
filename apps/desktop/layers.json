@@ -28,7 +28,6 @@
         "src/platform",
         "src/resources",
         "src/scheduling",
-        "src/screens",
         "src/shell"
       ]
     },
@@ -42,7 +41,6 @@
         "src/components",
         "src/features",
         "src/mock",
-        "src/screens",
         "src/shell"
       ],
       "except": ["src/chat/local-contract.ts"]
@@ -64,34 +62,20 @@
         "src/components",
         "src/features",
         "src/mock",
-        "src/screens",
         "src/shell"
       ]
     },
     {
       "name": "mock",
-      "description": "The mock bridge and fixture depend on no feature, view, shell or application module.",
+      "description": "The mock bridge and fixture depend on no component, feature, shell or application module.",
       "paths": ["src/mock"],
-      "forbid": [
-        "src/app",
-        "src/components",
-        "src/features",
-        "src/screens",
-        "src/shell"
-      ]
+      "forbid": ["src/app", "src/components", "src/features", "src/shell"]
     },
     {
       "name": "components",
-      "description": "Shared components depend on no feature, screen, chat, shell, application or mock module.",
+      "description": "Shared components depend on no feature, chat, shell, application or mock module.",
       "paths": ["src/components"],
-      "forbid": [
-        "src/app",
-        "src/chat",
-        "src/features",
-        "src/mock",
-        "src/screens",
-        "src/shell"
-      ]
+      "forbid": ["src/app", "src/chat", "src/features", "src/mock", "src/shell"]
     },
     {
       "name": "shell",
@@ -101,8 +85,8 @@
     },
     {
       "name": "features",
-      "description": "Feature folders, the remaining screens and chat depend on no application or mock module.",
-      "paths": ["src/chat", "src/features", "src/screens"],
+      "description": "Feature folders and chat depend on no application or mock module.",
+      "paths": ["src/chat", "src/features"],
       "forbid": ["src/app", "src/mock"]
     },
     {

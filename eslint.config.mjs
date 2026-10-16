@@ -9,7 +9,7 @@ import reactHooks from 'eslint-plugin-react-hooks';
  * The desktop's import layers, from apps/desktop/layers.json: each layer's
  * folders may not import from the folders it forbids. A relative specifier is
  * matched when the forbidden folder follows its leading `../` segments, so
- * `../../screens/x` from src/data/ is reported and `../chat-contract` is not.
+ * `../../features/x` from src/data/ is reported and `../chat-contract` is not.
  * Its `features` entry names the folder whose subfolders are features: a
  * module outside a feature, other than in the composition root, names the
  * feature by its folder alone, so the import resolves to the feature's
@@ -242,7 +242,7 @@ export default tseslint.config(
     // The rest of the desktop source is not yet held to this rule.
     files: [
       'apps/desktop/src/chat/**/*.{ts,tsx}',
-      'apps/desktop/src/screens/chat-*.{ts,tsx}',
+      'apps/desktop/src/features/chat/**/*.{ts,tsx}',
     ],
     rules: {
       'react-hooks/refs': 'error',

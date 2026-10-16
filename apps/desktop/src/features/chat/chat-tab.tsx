@@ -1,5 +1,5 @@
-import { inventoryReadiness } from '../model';
-import { CollectionStatus } from '../components/collection-status';
+import { inventoryReadiness } from '../../model';
+import { CollectionStatus } from '../../components/collection-status';
 /**
  * The Chat tab: the inbox column beside one conversation.
  *
@@ -14,25 +14,25 @@ import { CollectionStatus } from '../components/collection-status';
 
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Button, Icon, PANE_SIZES, usePaneResize } from '../components';
-import { chatAvailable, storeOf } from '../model';
+import { Button, Icon, PANE_SIZES, usePaneResize } from '../../components';
+import { chatAvailable, storeOf } from '../../model';
 import type {
   AgentSnapshot,
   AvailabilityOptions,
   StoreRef,
   TeamStore,
-} from '../model';
-import type { Bridge } from '../bridge';
-import type { Location, NavigateOptions } from '../location';
-import { rememberChatLocation, rememberedChatRef } from '../location';
-import { useSidebarInbox } from '../chat/inbox-provider';
-import { useArrivalAnnouncement } from '../chat/arrival-announcer';
-import { listChannels, openChannel } from '../chat/presentation';
+} from '../../model';
+import type { Bridge } from '../../bridge';
+import type { Location, NavigateOptions } from '../../location';
+import { rememberChatLocation, rememberedChatRef } from '../../location';
+import { useSidebarInbox } from '../../chat/inbox-provider';
+import { useArrivalAnnouncement } from '../../chat/arrival-announcer';
+import { listChannels, openChannel } from '../../chat/presentation';
 import { ChatScreen } from './chat-screen';
 import { ChannelInfoPanel } from './chat-info';
 import { NewChatSheet } from './chat-new';
-import { useTabSheetState } from '../navigation-guard';
-import { ChannelCreationCompletions } from '../chat/channel-creation-provider';
+import { useTabSheetState } from '../../navigation-guard';
+import { ChannelCreationCompletions } from '../../chat/channel-creation-provider';
 import {
   ChatTeamColumn,
   chatTeams,

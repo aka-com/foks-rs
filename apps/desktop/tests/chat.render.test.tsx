@@ -31,11 +31,11 @@ async function setup(
   incrementalHistory = false,
   adjust: (snapshot: AgentSnapshot) => AgentSnapshot = (snapshot) => snapshot,
 ) {
-  const { ChatTeamColumn } = await import('../src/screens/chat-teams');
+  const { ChatTeamColumn } = await import('../src/features/chat/chat-teams');
   const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
   // The tab is what the shell renders: the team column and, beside it, the
   // conversation of the team the location names.
-  const { ChatTab } = await import('../src/screens/chat-tab');
+  const { ChatTab } = await import('../src/features/chat/chat-tab');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const { FIXTURE } = await import('../src/mock/fixture');
   const { mockBridge } = await import('../src/mock/mock-bridge');
@@ -2946,7 +2946,10 @@ test('deduplicated alerts retain severity and distinct recovery actions without 
 });
 
 test('chat alert margins are shared across severity and viewport sizes', async () => {
-  const css = await readSource('../src/screens/chat.css', import.meta.url);
+  const css = await readSource(
+    '../src/features/chat/chat.css',
+    import.meta.url,
+  );
   assert.match(
     css,
     /\.chat-conversation > \.chat-status\s*\{[^}]*margin: 12px 20px 0;/,

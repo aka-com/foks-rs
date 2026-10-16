@@ -11,14 +11,14 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react';
-import { Button, Chip, Icon } from '../components';
+import { Button, Chip, Icon } from '../../components';
 import {
   ChannelMuteSetting,
   NotificationSettings,
   useLocalAlerts,
-} from '../chat/notification-provider';
-import { teamMuted } from '../chat/local-contract';
-import { channelLabel } from '../chat/presentation';
+} from '../../chat/notification-provider';
+import { teamMuted } from '../../chat/local-contract';
+import { channelLabel } from '../../chat/presentation';
 import {
   channelAudience,
   channelRoles,
@@ -26,7 +26,7 @@ import {
   everyoneReads,
   roleAudience,
   type ChannelReader,
-} from '../chat/audience';
+} from '../../chat/audience';
 import {
   groupDetailFailure,
   hue,
@@ -35,10 +35,10 @@ import {
   partyName,
   plural,
   roleName,
-} from '../model';
-import type { AgentSnapshot, Party, TeamStore } from '../model';
-import type { ChatChannel, ChatScope } from '../chat-contract';
-import type { Location } from '../location';
+} from '../../model';
+import type { AgentSnapshot, Party, TeamStore } from '../../model';
+import type { ChatChannel, ChatScope } from '../../chat-contract';
+import type { Location } from '../../location';
 
 /** Maximum number of member avatars. */
 const MARKS = 3;
