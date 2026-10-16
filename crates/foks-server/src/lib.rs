@@ -17,8 +17,8 @@ pub use chunk_collection::{collect_chunk_store, ChunkCollectionReport};
 pub use chunk_ledger::{inventory_chunk_store, ChunkCapacityConfig};
 pub mod chunks;
 mod config;
-mod diagnostics;
 mod deadline;
+mod diagnostics;
 mod entropy;
 mod error;
 mod fault;
@@ -63,6 +63,9 @@ pub use standalone::{
 pub use writer::{DatabaseWriterGuard, GuardedDatabase, Writer, WriterHandle, WriterMetrics};
 
 pub mod web_admin;
+
+#[cfg(feature = "celld-proof")]
+pub mod hosted_personal;
 
 #[cfg(feature = "celld-proof")]
 pub mod proof;

@@ -38,6 +38,7 @@ rusqlite = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 
 [dev-dependencies]
+foks-metadata-core = { workspace = true, features = ["native"] }
 foks-desktop = { path = "../foks-desktop", default-features = false }
 foks-agent-client = { workspace = true }
 foks-agent-proto = { workspace = true }

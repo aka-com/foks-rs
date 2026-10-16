@@ -9,6 +9,7 @@ pub mod catalog;
 mod dirents;
 #[cfg(feature = "native")]
 pub mod native;
+pub mod personal;
 #[cfg(target_arch = "wasm32")]
 mod wasm;
 pub mod wire;

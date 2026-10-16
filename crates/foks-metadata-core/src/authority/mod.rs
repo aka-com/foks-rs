@@ -1,6 +1,11 @@
 //! Private authority qualification kernel. Caller and time are trusted host inputs,
 //! not public FOKS claims. The host owns the outer transaction and durable sync.
 pub(crate) mod catalog;
+mod personal;
+pub use personal::{
+    read_point as read_personal_point, run as run_personal, ErrorPayload as PersonalErrorPayload,
+    Invocation as PersonalInvocation, PointInvocation as PersonalPointInvocation,
+};
 
 use crate::{wire, Error, Result, Sql, Statement as S, Value as V};
 use serde::{Deserialize, Serialize};
@@ -267,7 +272,7 @@ fn controller(caller: &Caller) -> Result<()> {
 }
 // Fixture policy: an enabled principal has namespace aggregate-read access.
 // Its role separately controls PutDirents. This is not FOKS credential/team auth.
-fn principal(sql: &mut impl Sql, caller: &Caller) -> Result<Principal> {
+fn fixture_principal(sql: &mut impl Sql, caller: &Caller) -> Result<Principal> {
     let Caller::Frontend { principal: id } = caller else {
         return Err(Error::Permission);
     };
@@ -285,6 +290,34 @@ fn principal(sql: &mut impl Sql, caller: &Caller) -> Result<Principal> {
     };
     validate_principal(&p)?;
     Ok(p)
+}
+// Only these crate-owned adapters may choose a resolution policy. Public
+// personal invocations contain neither a fixture selector nor asserted identity.
+trait Resolver {
+    type Failure: From<Error>;
+    fn resolve(
+        &mut self,
+        sql: &mut impl Sql,
+        caller: &Caller,
+    ) -> std::result::Result<Principal, Self::Failure>;
+    fn authorize_domain(
+        &mut self,
+        sql: &mut impl Sql,
+        command: &wire::Command,
+    ) -> std::result::Result<(), Self::Failure>;
+    fn context_digest(&self) -> Option<[u8; 32]> {
+        None
+    }
+}
+struct FixtureResolver;
+impl Resolver for FixtureResolver {
+    type Failure = Error;
+    fn resolve(&mut self, sql: &mut impl Sql, caller: &Caller) -> Result<Principal> {
+        fixture_principal(sql, caller)
+    }
+    fn authorize_domain(&mut self, _sql: &mut impl Sql, _command: &wire::Command) -> Result<()> {
+        Ok(())
+    }
 }
 fn validate_principal(p: &Principal) -> Result<()> {
     if p.namespace.len() != 33 || p.role.len() > 64 {
@@ -324,10 +357,16 @@ fn domain(active: &Activation, intent: &Intent, p: &Principal) -> Result<wire::C
         _ => Err(Error::Permission),
     }
 }
-fn binding(f: &Fence, intent: &Intent, p: &Principal, c: &wire::Command) -> Result<[u8; 32]> {
+fn binding(
+    f: &Fence,
+    intent: &Intent,
+    p: &Principal,
+    c: &wire::Command,
+    context: Option<[u8; 32]>,
+) -> Result<[u8; 32]> {
     // Versioned typed serialization fixes field order and rejects unknown fields.
     // The raw command's whitespace/member order is not part of intent identity.
-    Ok(Sha256::digest(encoded(&(
+    let base = encoded(&(
         1u32,
         &f.identity,
         &f.activation,
@@ -339,8 +378,11 @@ fn binding(f: &Fence, intent: &Intent, p: &Principal, c: &wire::Command) -> Resu
         p.id,
         &p.namespace,
         c,
-    ))?)
-    .into())
+    ))?;
+    Ok(match context {
+        None => Sha256::digest(base).into(),
+        Some(context) => Sha256::digest(encoded(&(2u32, base, context))?).into(),
+    })
 }
 struct Stored {
     digest: [u8; 32],
@@ -410,6 +452,14 @@ fn finish(
 /// All errors require rollback of the host-owned outer transaction. An Ok reply
 /// is publishable only after host COMMIT and durable sync; it is not a receipt yet.
 pub fn run(sql: &mut impl Sql, invocation: Invocation) -> Result<Reply> {
+    run_resolved(sql, invocation, &mut FixtureResolver)
+}
+
+fn run_resolved<R: Resolver>(
+    sql: &mut impl Sql,
+    invocation: Invocation,
+    resolver: &mut R,
+) -> std::result::Result<Reply, R::Failure> {
     let Invocation {
         caller,
         now,
@@ -417,7 +467,7 @@ pub fn run(sql: &mut impl Sql, invocation: Invocation) -> Result<Reply> {
         request,
     } = invocation;
     if now.0 < 0 || deadline.0 <= now.0 || deadline.0.checked_sub(now.0).is_none_or(|n| n > 15000) {
-        return Err(Error::Expired);
+        return Err(Error::Expired.into());
     }
     if let Request::Initialize {
         identity,
@@ -435,10 +485,10 @@ pub fn run(sql: &mut impl Sql, invocation: Invocation) -> Result<Reply> {
             || max_bytes.0 < INTENT_CHARGE
             || max_bytes.0 > 1048576
         {
-            return Err(Error::Bounds);
+            return Err(Error::Bounds.into());
         }
         if sql.query(S::AuthorityState, &[])?.is_some() {
-            return Err(Error::Conflict);
+            return Err(Error::Conflict.into());
         }
         sql.execute(
             S::AuthorityInitialize,
@@ -455,7 +505,7 @@ pub fn run(sql: &mut impl Sql, invocation: Invocation) -> Result<Reply> {
     }
     let s = load(sql)?;
     if now.0 < s.clock {
-        return Err(Error::Expired);
+        return Err(Error::Expired.into());
     }
     // This floor is fixture-authoritative time, not a claim about host clock sync.
     sql.execute(S::AuthorityClock, &[V::Integer(now.0)])?;
@@ -464,7 +514,7 @@ pub fn run(sql: &mut impl Sql, invocation: Invocation) -> Result<Reply> {
         Request::Inspect { fence: f } => {
             fence(&s, &f)?;
             if !matches!(caller, Caller::Controller {}) {
-                principal(sql, &caller)?;
+                resolver.resolve(sql, &caller)?;
             }
             Ok(state_reply(&s))
         }
@@ -477,7 +527,7 @@ pub fn run(sql: &mut impl Sql, invocation: Invocation) -> Result<Reply> {
             s.epoch.checked_add(1).ok_or(Error::IntegerRange)?;
             s.revision.checked_add(1).ok_or(Error::IntegerRange)?;
             if new_owner == s.owner {
-                return Err(Error::Conflict);
+                return Err(Error::Conflict.into());
             }
             if sql.execute(
                 S::AuthorityPromote,
@@ -488,7 +538,7 @@ pub fn run(sql: &mut impl Sql, invocation: Invocation) -> Result<Reply> {
                 ],
             )? != 1
             {
-                return Err(Error::Conflict);
+                return Err(Error::Conflict.into());
             }
             Ok(state_reply(&load(sql)?))
         }
@@ -512,7 +562,7 @@ pub fn run(sql: &mut impl Sql, invocation: Invocation) -> Result<Reply> {
                 || (active.key_generation == s.activation.key_generation
                     && active.key_digest != s.activation.key_digest)
             {
-                return Err(Error::Conflict);
+                return Err(Error::Conflict.into());
             }
             s.revision.checked_add(1).ok_or(Error::IntegerRange)?;
             sql.execute(S::AuthorityActivate, &[json(&active)?])?;
@@ -541,11 +591,11 @@ pub fn run(sql: &mut impl Sql, invocation: Invocation) -> Result<Reply> {
         }
         Request::Register { fence: f, intent } => {
             fence(&s, &f)?;
-            let p = principal(sql, &caller)?;
+            let p = resolver.resolve(sql, &caller)?;
             let c = domain(&s.activation, &intent, &p)?;
-            let digest = binding(&f, &intent, &p, &c)?;
+            let digest = binding(&f, &intent, &p, &c, resolver.context_digest())?;
             if intent.epoch.0 != s.epoch {
-                return Err(Error::Permission);
+                return Err(Error::Permission.into());
             }
             if let Some(row) = stored(sql, intent.epoch, intent.sequence)? {
                 match_stored(&row, &digest, &p)?;
@@ -555,6 +605,7 @@ pub fn run(sql: &mut impl Sql, invocation: Invocation) -> Result<Reply> {
                 return Ok(Reply::RetiredUnknown);
             }
             revision(&s, intent.revision)?;
+            resolver.authorize_domain(sql, &c)?;
             // Invocation clocks are milliseconds; FOKS dirent creation time is
             // microseconds. Known exact registrations returned above, preserving
             // their original bound time rather than resampling it on retry.
@@ -565,24 +616,24 @@ pub fn run(sql: &mut impl Sql, invocation: Invocation) -> Result<Reply> {
             {
                 let micros = now.0.checked_mul(1000).ok_or(Error::IntegerRange)?;
                 if *created != u64::try_from(micros).map_err(|_| Error::IntegerRange)? {
-                    return Err(Error::Invalid("normalization time"));
+                    return Err(Error::Invalid("normalization time").into());
                 }
             }
             if intent.expires.0 <= now.0 || intent.expires.0 > deadline.0 {
-                return Err(Error::Expired);
+                return Err(Error::Expired.into());
             }
             if intent.sequence.0 != s.high_water.checked_add(1).ok_or(Error::IntegerRange)? {
-                return Err(Error::Conflict);
+                return Err(Error::Conflict.into());
             }
             if s.rows >= s.max_rows || s.reserved > s.max_bytes - INTENT_CHARGE {
-                return Err(Error::Quota);
+                return Err(Error::Quota.into());
             }
             if sql.execute(
                 S::AuthorityAllocate,
                 &[V::Integer(intent.sequence.0), V::Integer(s.high_water)],
             )? != 1
             {
-                return Err(Error::Conflict);
+                return Err(Error::Conflict.into());
             }
             sql.execute(
                 S::AuthorityRegister,
@@ -600,11 +651,11 @@ pub fn run(sql: &mut impl Sql, invocation: Invocation) -> Result<Reply> {
         }
         Request::Execute { fence: f, intent } => {
             fence(&s, &f)?;
-            let p = principal(sql, &caller)?;
+            let p = resolver.resolve(sql, &caller)?;
             let c = domain(&s.activation, &intent, &p)?;
-            let digest = binding(&f, &intent, &p, &c)?;
+            let digest = binding(&f, &intent, &p, &c, resolver.context_digest())?;
             if intent.epoch.0 != s.epoch {
-                return Err(Error::Permission);
+                return Err(Error::Permission.into());
             }
             let Some(row) = stored(sql, intent.epoch, intent.sequence)? else {
                 return Ok(Reply::RetiredUnknown);
@@ -614,9 +665,10 @@ pub fn run(sql: &mut impl Sql, invocation: Invocation) -> Result<Reply> {
                 return Ok(Reply::Outcome { outcome });
             }
             if row.expires <= now.0 {
-                return Err(Error::Expired);
+                return Err(Error::Expired.into());
             }
             revision(&s, Number(row.revision))?;
+            resolver.authorize_domain(sql, &c)?;
             let result = sql.domain(&encoded(&c)?);
             let (reply, error) = match result {
                 Ok(reply) => (Some(reply), None),
@@ -625,7 +677,7 @@ pub fn run(sql: &mut impl Sql, invocation: Invocation) -> Result<Reply> {
                 }
                 // Bounds/cancellation/corruption/host errors are not a durable
                 // public rejection. Preserve ambiguity and roll back everything.
-                Err(error) => return Err(error),
+                Err(error) => return Err(error.into()),
             };
             let revision = Number(bump(sql, &s)?);
             finish(
@@ -639,6 +691,7 @@ pub fn run(sql: &mut impl Sql, invocation: Invocation) -> Result<Reply> {
                     error,
                 },
             )
+            .map_err(Into::into)
         }
         Request::Resolve {
             fence: f,
@@ -647,9 +700,9 @@ pub fn run(sql: &mut impl Sql, invocation: Invocation) -> Result<Reply> {
             digest,
         } => {
             fence(&s, &f)?;
-            let p = principal(sql, &caller)?;
+            let p = resolver.resolve(sql, &caller)?;
             if epoch.0 < 1 || epoch.0 > s.epoch || sequence.0 < 1 {
-                return Err(Error::Bounds);
+                return Err(Error::Bounds.into());
             }
             let Some(row) = stored(sql, epoch, sequence)? else {
                 return Ok(Reply::RetiredUnknown);
@@ -671,7 +724,8 @@ pub fn run(sql: &mut impl Sql, invocation: Invocation) -> Result<Reply> {
                         reply: None,
                         error: Some("not_executed".into()),
                     },
-                );
+                )
+                .map_err(Into::into);
             }
             Ok(Reply::Pending)
         }
@@ -681,7 +735,7 @@ pub fn run(sql: &mut impl Sql, invocation: Invocation) -> Result<Reply> {
         } => {
             fence(&s, &f)?;
             revision(&s, r)?;
-            let p = principal(sql, &caller)?;
+            let p = resolver.resolve(sql, &caller)?;
             let values = sql
                 .query(S::Usage, &[V::Blob(p.namespace)])?
                 .ok_or(Error::Conflict)?;
@@ -696,7 +750,7 @@ pub fn run(sql: &mut impl Sql, invocation: Invocation) -> Result<Reply> {
         } => {
             fence(&s, &f)?;
             revision(&s, r)?;
-            principal(sql, &caller)?;
+            resolver.resolve(sql, &caller)?;
             Ok(Reply::Observation {
                 revision: r,
                 values: vec![],
@@ -706,7 +760,7 @@ pub fn run(sql: &mut impl Sql, invocation: Invocation) -> Result<Reply> {
             controller(&caller)?;
             fence(&s, &f)?;
             if limit.0 < 1 || limit.0 > MAX_PRUNE {
-                return Err(Error::Bounds);
+                return Err(Error::Bounds.into());
             }
             let outcome = Outcome {
                 revision: Number(s.revision),
@@ -731,7 +785,7 @@ pub fn run(sql: &mut impl Sql, invocation: Invocation) -> Result<Reply> {
             controller(&caller)?;
             fence(&s, &f)?;
             if limit.0 < 1 || limit.0 > MAX_PRUNE {
-                return Err(Error::Bounds);
+                return Err(Error::Bounds.into());
             }
             let n = sql.execute(S::AuthorityPrune, &[V::Integer(limit.0)])?;
             Ok(Reply::Pruned {

@@ -1213,6 +1213,34 @@ fn key_generations(
     Ok(generations)
 }
 
+/// Qualification oracle: retain the native whole-history authority computation
+/// while comparing the hosted scalar key decisions. Booleans deliberately do
+/// not invent route-specific error precedence or replace public dispatch.
+#[cfg(feature = "celld-proof")]
+pub(crate) fn qualify_personal_key_requirements(
+    principal: &Principal,
+    reader: &foks_server_db::ReadDatabase,
+    clock: &Arc<dyn foks_server_db::Clock>,
+    requirements: &[foks_metadata_core::personal::KeyRequirement],
+) -> Result<Vec<bool>, RpcStatus> {
+    use foks_metadata_core::personal::KeyAccess;
+
+    principal.require_ordinary_device()?;
+    let argument = encode(&Value::Array(vec![Value::Array(vec![
+        Value::Unsigned(0),
+        Value::Variant(None),
+    ])]))
+    .map_err(|_| RpcStatus::TransactionRetry)?;
+    let authority = resolve_authority(&argument, principal, reader, clock)?;
+    Ok(requirements
+        .iter()
+        .map(|requirement| match requirement.access {
+            KeyAccess::Read => authority.require_read_key(requirement.key).is_ok(),
+            KeyAccess::Write => authority.can_write_key(requirement.key),
+        })
+        .collect())
+}
+
 fn kv_write_is_current(
     database: &mut foks_server_db::Database,
     authority: &KvAuthority,
