@@ -1,5 +1,8 @@
 //! Real Request pools and native SQL, without a factory/route or readiness claim.
 use super::*;
+use foks_hosted_transport::memory::test_support::{
+    self, snapshot, try_hold, Capacities, PressurePool,
+};
 #[path = "../../../../foks-server-db/tests/common/mod.rs"]
 mod common;
 use foks_metadata_core::{
@@ -20,14 +23,16 @@ const UID: [u8; 33] = [1; 33];
 const DEVICE: [u8; 33] = [4; 33];
 const ROOT: [u8; 16] = [0x51; 16];
 fn pools() -> Arc<Pools> {
-    Arc::new(Pools {
-        working: Arc::new(Semaphore::new(CAPACITY)),
-        output: Arc::new(Semaphore::new(CAPACITY)),
-        small: Arc::new(Semaphore::new(0)),
-        control: Arc::new(Semaphore::new(4096)),
-        bulk: Arc::new(Semaphore::new(4)),
+    test_support::pools(Capacities {
+        working: CAPACITY,
+        output: CAPACITY,
+        small: 0,
+        control: 4096,
+        bulk: 4,
     })
+    .unwrap()
 }
+
 fn peer() -> PeerCertificate {
     PeerCertificate::from_frontend_parts(vec![0x30, 0], vec![7], [4; 32], 1000).unwrap()
 }
@@ -131,11 +136,11 @@ impl Sql for Observe<'_> {
             s,
             PageStatement::ListInitial | PageStatement::ListMacContinue
         );
-        let before = self.pools.working.available_permits();
+        let before = snapshot(&self.pools).working;
         let result = self.sql.query_page(s, p);
         if list {
             assert_eq!(
-                self.pools.working.available_permits(),
+                snapshot(&self.pools).working,
                 before,
                 "page SQL consumes local credits only"
             );
@@ -148,12 +153,13 @@ impl Sql for Observe<'_> {
 fn read(
     fixture: &common::TestDatabase,
     owner: &Arc<Request>,
+    pools: &Arc<Pools>,
 ) -> (OwnedListBytes, usize, [usize; 32]) {
     let connection = Connection::open(&fixture.path).unwrap();
     let transaction = connection.unchecked_transaction().unwrap();
     let mut sql = Observe {
         sql: NativeSql::new(&transaction).unwrap(),
-        pools: owner.pools.clone(),
+        pools: pools.clone(),
         list_pages: 0,
         before: [0; 32],
     };
@@ -185,7 +191,7 @@ fn actual_multi_page_list_and_frame_use_original_pools_and_restore_ambient() {
     let owner = a.request(None);
     let ambient = b.request(None);
     ambient.fail();
-    let (raw, pages, before) = ambient.sync(|| read(&fixture, &owner));
+    let (raw, pages, before) = ambient.sync(|| read(&fixture, &owner, &a));
     assert_eq!(pages, 5);
     assert!(CAPACITY - before[0] > 10 * 1024 * 1024);
     for pair in before[..pages].windows(2) {
@@ -195,8 +201,8 @@ fn actual_multi_page_list_and_frame_use_original_pools_and_restore_ambient() {
             "no second page workspace reservation"
         );
     }
-    assert_eq!(b.working.available_permits(), CAPACITY);
-    assert_eq!(b.output.available_permits(), CAPACITY);
+    assert_eq!(snapshot(&b).working, CAPACITY);
+    assert_eq!(snapshot(&b).output, CAPACITY);
     let expected = foks_rpc::encode_success_response_at(raw.as_bytes(), 256).unwrap();
     let length = raw.len();
     let frame = ambient.sync(|| {
@@ -207,46 +213,42 @@ fn actual_multi_page_list_and_frame_use_original_pools_and_restore_ambient() {
     });
     assert_eq!(frame.as_bytes(), expected);
     assert!(!frame.is_empty());
-    assert_eq!(a.output.available_permits(), CAPACITY - 2 * (length + 128));
-    assert_eq!(b.working.available_permits(), CAPACITY - 11);
-    assert_eq!(b.output.available_permits(), CAPACITY - 2 * (1 + 128));
+    assert_eq!(snapshot(&a).output, CAPACITY - 2 * (length + 128));
+    assert_eq!(snapshot(&b).working, CAPACITY - 11);
+    assert_eq!(snapshot(&b).output, CAPACITY - 2 * (1 + 128));
     let weak = Arc::downgrade(&owner);
     drop(owner);
     assert!(weak.upgrade().is_some());
     drop(frame);
     assert!(weak.upgrade().is_none());
-    assert_eq!(a.working.available_permits(), CAPACITY);
-    assert_eq!(a.output.available_permits(), CAPACITY);
+    assert_eq!(snapshot(&a).working, CAPACITY);
+    assert_eq!(snapshot(&a).output, CAPACITY);
 }
 #[test]
 fn output_refusal_and_sticky_owner_preserve_working_and_control_policy() {
     let fixture = fixture(0);
     let a = pools();
     let owner = a.request(None);
-    let (raw, pages, _) = read(&fixture, &owner);
+    let (raw, pages, _) = read(&fixture, &owner, &a);
     assert_eq!(pages, 1);
     assert!(!raw.is_empty());
-    let held = a.working.available_permits();
-    let exhausted = a
-        .output
-        .clone()
-        .try_acquire_many_owned(CAPACITY as u32)
-        .unwrap();
+    let held = snapshot(&a).working;
+    let exhausted = try_hold(&a, PressurePool::Output, CAPACITY).unwrap();
     assert!(
         matches!(frame_owned_list(raw,0),Err(foks_rpc::Error::Io(ref error)) if error.kind()==std::io::ErrorKind::WouldBlock)
     );
     assert!(owner.failed());
-    assert_eq!(a.working.available_permits(), held);
+    assert_eq!(snapshot(&a).working, held);
     assert!(!owner.reserve_retained(1));
     assert!(foks_rpc::ResponseAllocationBudget::reserve(
         &*owner, 7, true
     ));
     assert!(owner.failed());
-    assert_eq!(a.control.available_permits(), 4096 - 7);
+    assert_eq!(snapshot(&a).control, 4096 - 7);
     drop(exhausted);
     drop(owner);
-    assert_eq!(a.working.available_permits(), CAPACITY);
-    assert_eq!(a.control.available_permits(), 4096);
+    assert_eq!(snapshot(&a).working, CAPACITY);
+    assert_eq!(snapshot(&a).control, 4096);
 }
 #[test]
 fn workspace_refusal_precedes_list_sql_and_preserves_domain_error() {
@@ -265,11 +267,12 @@ fn workspace_refusal_precedes_list_sql_and_preserves_domain_error() {
         .sync(|| authenticate_peer(&mut sql, &peer(), 200))
         .unwrap();
     // Leave room for parent/entry work, but not the reviewed >10MiB workspace.
-    let held = a
-        .working
-        .clone()
-        .try_acquire_many_owned((a.working.available_permits() - 1024 * 1024) as u32)
-        .unwrap();
+    let held = try_hold(
+        &a,
+        PressurePool::Working,
+        snapshot(&a).working - 1024 * 1024,
+    )
+    .unwrap();
     let result = read_personal_list_owned(
         &mut sql,
         &current,
@@ -314,7 +317,7 @@ fn detached_worker_and_unwrapped_result_retain_exact_request_until_final_bytes_d
     let a = pools();
     let owner = a.request(None);
     let weak = Arc::downgrade(&owner);
-    let (raw, _, _) = read(&fixture, &owner);
+    let (raw, _, _) = read(&fixture, &owner, &a);
     let (arrived, ready) = std::sync::mpsc::channel();
     let (release, wait) = std::sync::mpsc::channel();
     let work = owner.sync(|| {
@@ -331,16 +334,16 @@ fn detached_worker_and_unwrapped_result_retain_exact_request_until_final_bytes_d
         .unwrap();
     drop(owner);
     assert!(weak.upgrade().is_some());
-    assert!(a.working.available_permits() < CAPACITY);
+    assert!(snapshot(&a).working < CAPACITY);
     release.send(()).unwrap();
     let raw = thread.join().unwrap().into_inner();
     assert!(weak.upgrade().is_some());
     let frame = frame_owned_list(raw, 0).unwrap();
-    assert!(a.output.available_permits() < CAPACITY);
+    assert!(snapshot(&a).output < CAPACITY);
     drop(frame);
     assert!(weak.upgrade().is_none());
-    assert_eq!(a.working.available_permits(), CAPACITY);
-    assert_eq!(a.output.available_permits(), CAPACITY);
+    assert_eq!(snapshot(&a).working, CAPACITY);
+    assert_eq!(snapshot(&a).output, CAPACITY);
 }
 
 #[tokio::test]
@@ -350,7 +353,7 @@ async fn blocked_physical_writer_keeps_frame_owner_after_waiter_is_gone() {
     let a = pools();
     let owner = a.request(None);
     let weak = Arc::downgrade(&owner);
-    let (raw, _, _) = read(&fixture, &owner);
+    let (raw, _, _) = read(&fixture, &owner, &a);
     let frame = frame_owned_list(raw, 0).unwrap();
     let expected = frame.as_bytes().to_vec();
     let (mut writer, mut reader) = tokio::io::duplex(1);
@@ -371,8 +374,8 @@ async fn blocked_physical_writer_keeps_frame_owner_after_waiter_is_gone() {
     // A one-byte pipe cannot accept the remaining frame without this reader.
     assert!(!task.is_finished());
     assert!(weak.upgrade().is_some());
-    assert!(a.working.available_permits() < CAPACITY);
-    assert!(a.output.available_permits() < CAPACITY);
+    assert!(snapshot(&a).working < CAPACITY);
+    assert!(snapshot(&a).output < CAPACITY);
     let mut actual = first.to_vec();
     tokio::time::timeout(
         std::time::Duration::from_secs(5),
@@ -384,8 +387,8 @@ async fn blocked_physical_writer_keeps_frame_owner_after_waiter_is_gone() {
     task.await.unwrap();
     assert_eq!(actual, expected);
     assert!(weak.upgrade().is_none());
-    assert_eq!(a.working.available_permits(), CAPACITY);
-    assert_eq!(a.output.available_permits(), CAPACITY);
+    assert_eq!(snapshot(&a).working, CAPACITY);
+    assert_eq!(snapshot(&a).output, CAPACITY);
 }
 
 #[test]
@@ -446,10 +449,10 @@ fn pre_page_error_and_panic_restore_both_hooks_with_original_failure_provenance(
         // injected SQL charge and must also belong to the captured owner A.
         let entry_copies =
             current.owner_id().len() + current.uid().len() + current.credential_id().len();
-        assert_eq!(a.working.available_permits(), CAPACITY - entry_copies - 17);
-        assert_eq!(a.output.available_permits(), CAPACITY);
-        assert_eq!(b.working.available_permits(), CAPACITY - 11);
-        assert_eq!(b.output.available_permits(), CAPACITY - 2 * (1 + 128));
+        assert_eq!(snapshot(&a).working, CAPACITY - entry_copies - 17);
+        assert_eq!(snapshot(&a).output, CAPACITY);
+        assert_eq!(snapshot(&b).working, CAPACITY - 11);
+        assert_eq!(snapshot(&b).output, CAPACITY - 2 * (1 + 128));
         assert!(!ambient.failed());
     }
 }

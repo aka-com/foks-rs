@@ -6,9 +6,10 @@ license.workspace = true
 description = "Standalone single-host FOKS v0.1.9 server"
 
 [features]
-celld-proof = ["foks-metadata-core/native"]
+celld-proof = ["foks-metadata-core/native", "foks-hosted-transport/qualification"]
 
 [dependencies]
+foks-hosted-transport = { workspace = true }
 nix = { version = "0.30", default-features = false, features = ["time", "fs", "dir"] }
 base64 = { workspace = true }
 foks-oidc = { workspace = true }
@@ -52,6 +53,7 @@ x509-parser = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+foks-hosted-transport = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["test-util"] }
 foks-metadata-core = { workspace = true, features = ["native"] }
 foks-oidc = { workspace = true, features = ["test-support"] }

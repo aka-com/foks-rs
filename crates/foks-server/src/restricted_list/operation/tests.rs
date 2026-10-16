@@ -69,7 +69,7 @@ impl Clock for FailClock {
     }
 }
 fn run(fixture: &Fixture, call: DecodedCall, clock: &dyn Clock) -> Result<Pending> {
-    let pools = crate::net::memory::Pools::new(Default::default());
+    let pools = crate::net::memory::pools(Default::default()).unwrap();
     let owner = fixture.owner(&pools);
     let peer = fixture.peer(&pools);
     let memory = pools.admitted_request(None).unwrap();
@@ -474,7 +474,7 @@ async fn aborted_waiter_retains_original_memory_execution_and_physical_owner_unt
         }
     }
     let fixture = Fixture::new(true, Role::OWNER, 2);
-    let pools = crate::net::memory::Pools::new(Default::default());
+    let pools = crate::net::memory::pools(Default::default()).unwrap();
     let owner = fixture.owner(&pools);
     let path = std::path::PathBuf::from(owner.connection.path().unwrap());
     let peer = fixture.peer(&pools);
@@ -563,7 +563,7 @@ enum OutputFinish {
 }
 async fn physical_output_case(fixture: &Fixture, at_flush: bool, finish: OutputFinish) {
     use std::{future::Future as _, task::Poll};
-    let pools = crate::net::memory::Pools::new(Default::default());
+    let pools = crate::net::memory::pools(Default::default()).unwrap();
     let owner = fixture.owner(&pools);
     let path = std::path::PathBuf::from(owner.connection.path().unwrap());
     let peer = fixture.peer(&pools);
@@ -712,7 +712,7 @@ fn source_control_layouts_name_actual_nonadditive_owners_and_target_bounds() {
 #[test]
 fn refused_unstarted_task_keeps_whole_work_owned_until_its_capture_is_dropped() {
     let fixture = Fixture::new(true, Role::OWNER, 1);
-    let pools = crate::net::memory::Pools::new(Default::default());
+    let pools = crate::net::memory::pools(Default::default()).unwrap();
     let owner = fixture.owner(&pools);
     let path = std::path::PathBuf::from(owner.connection.path().unwrap());
     let peer = fixture.peer(&pools);

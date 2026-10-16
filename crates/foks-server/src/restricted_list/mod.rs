@@ -35,7 +35,8 @@ pub struct CertificateQualification {
 #[cfg(feature = "celld-proof")]
 impl CertificateParserQualification {
     pub fn new(maximum_der: usize) -> Result<Self, &'static str> {
-        let owner = Pools::new(crate::SessionLimits::default())
+        let owner = crate::net::memory::pools(crate::SessionLimits::default())
+            .map_err(|_| "certificate allocation admission")?
             .admitted_request(None)
             .map_err(|_| "certificate allocation admission")?;
         let workspace = CertificateWorkspace::new(owner, maximum_der)

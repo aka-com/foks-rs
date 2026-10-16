@@ -76,7 +76,9 @@ impl OperationControl {
 
 #[cfg(test)]
 pub(super) fn test_memory() -> Arc<Request> {
-    crate::net::memory::Pools::new(crate::SessionLimits::default()).request(None)
+    crate::net::memory::pools(crate::SessionLimits::default())
+        .unwrap()
+        .request(None)
 }
 
 #[cfg(test)]

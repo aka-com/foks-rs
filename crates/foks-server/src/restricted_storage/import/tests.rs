@@ -902,7 +902,9 @@ fn certificate_workspace() -> (
     Arc<crate::net::memory::Request>,
     list::certificate::CertificateWorkspace,
 ) {
-    let owner = crate::net::memory::Pools::new(Default::default()).request(None);
+    let owner = crate::net::memory::pools(Default::default())
+        .unwrap()
+        .request(None);
     let workspace = list::certificate::CertificateWorkspace::new(Arc::clone(&owner), 4096).unwrap();
     (owner, workspace)
 }

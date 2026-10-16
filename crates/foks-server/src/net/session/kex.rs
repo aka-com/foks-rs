@@ -111,7 +111,10 @@ impl Relay {
                     })
                     .map(|queued| {
                         if crate::net::memory::current().is_some_and(|memory| {
-                            !memory.admit_working(queued.encoded_bytes, false)
+                            !memory.admit_working(
+                                queued.encoded_bytes,
+                                crate::net::memory::Workload::Ordinary,
+                            )
                         }) {
                             return Err(RpcStatus::RateLimited);
                         }

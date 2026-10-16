@@ -52,6 +52,15 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+impl From<foks_hosted_transport::Error> for Error {
+    fn from(error: foks_hosted_transport::Error) -> Self {
+        match error {
+            foks_hosted_transport::Error::Config(message) => Self::Config(message),
+            foks_hosted_transport::Error::Io(error) => Self::Io(error),
+        }
+    }
+}
+
 /// Preserve authentication and Merkle failures across queued mutation boundaries.
 pub(crate) fn mutation_failure_status(error: &Error) -> Option<foks_rpc::RpcStatus> {
     match error {
@@ -70,6 +79,36 @@ pub(crate) fn mutation_failure_status(error: &Error) -> Option<foks_rpc::RpcStat
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shared_transport_conversion_keeps_existing_variants_and_io_details() {
+        let config: super::Error =
+            foks_hosted_transport::Error::Config("request deadline overflows monotonic clock")
+                .into();
+        assert!(matches!(
+            config,
+            super::Error::Config("request deadline overflows monotonic clock")
+        ));
+        assert_eq!(
+            config.to_string(),
+            "invalid server configuration: request deadline overflows monotonic clock"
+        );
+        let io: super::Error = foks_hosted_transport::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "original socket failure",
+        ))
+        .into();
+        assert_eq!(io.to_string(), "server I/O failed: original socket failure");
+        assert!(
+            matches!(io, super::Error::Io(error) if error.kind() == std::io::ErrorKind::BrokenPipe && error.to_string() == "original socket failure")
+        );
+        let deadline = crate::deadline::Deadline::after(std::time::Duration::ZERO).unwrap();
+        crate::deadline::scope(Some(deadline), || {
+            assert!(
+                matches!(crate::deadline::check(), Err(super::Error::Io(error)) if error.kind() == std::io::ErrorKind::TimedOut)
+            );
+        });
+        assert!(crate::deadline::check().is_ok());
+    }
     #[test]
     fn epoch_limit_maps_to_explicit_verification_status() {
         let error = super::Error::Merkle(foks_merkle_store::Error::EpochLimitExceeded {
