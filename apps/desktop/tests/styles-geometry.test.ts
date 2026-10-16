@@ -282,6 +282,17 @@ test('team rules live in the teams sheet, under the team details panel', async (
   assert.ok(teams < teamInfo, 'team-info.css is imported before teams.css');
 });
 
+test('a loading pane placed directly in the shell grid spans every track', async () => {
+  // First-run setup's Suspense fallback is a child of `.app`, whose first
+  // track is the rail's auto-width column; without the span the pane, and its
+  // spinner, sit in that column at the window's left edge.
+  const shell = await readFile(SHELL, 'utf8');
+  assert.equal(
+    declarations(blockAfter(shell, '.app > .app-loading')).get('grid-column'),
+    '1 / -1',
+  );
+});
+
 test('only the entry point imports a stylesheet', async () => {
   // A stylesheet imported by a component sits outside the cascade layers and
   // outranks every layered rule; it also stops node from loading the module

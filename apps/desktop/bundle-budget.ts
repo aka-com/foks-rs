@@ -15,11 +15,13 @@
 import type { Plugin } from 'vite';
 
 /**
- * The budget in bytes of minified JavaScript. The startup JavaScript was about
- * 880 kB when the budget was set; before the deferred screens were split out,
- * one 1,332 kB chunk held the whole app.
+ * The budget in bytes of minified JavaScript. The startup JavaScript was
+ * 879,447 bytes when the budget was set; before the deferred screens were split
+ * out, one 1,332 kB chunk held the whole app. The headroom is smaller than the
+ * Settings account page and its device sheets, about 63 kB, so a static import
+ * that puts that page back in the startup graph fails the build.
  */
-export const STARTUP_BUDGET_BYTES = 960_000;
+export const STARTUP_BUDGET_BYTES = 900_000;
 
 /** The part of a Rollup/Rolldown output bundle the budget reads. */
 export type BundleEntries = Readonly<

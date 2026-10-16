@@ -70,8 +70,8 @@ export function ScreenRouter({
       { kind: 'store', ref: item.store },
       { store: item.store, path: item.path },
     );
-  // Every screen but Files loads its chunk on first use; the fallback fills
-  // the content pane until it has.
+  // The screens in deferred-screens.tsx load their chunks on first use; the
+  // fallback fills the content pane until they have.
   const screen = listsItems(here) ? (
     <ItemsScreen
       state={state}

@@ -358,11 +358,19 @@ test('every chat module is reachable from the application entry point', async ()
   );
 });
 
+/**
+ * Modules that only deferred screens render, which the startup graph must not
+ * reach either. The shell's rail once imported its notice count from the
+ * account page, which put that page and its device sheets in the startup
+ * chunk.
+ */
+const SCREEN_ONLY_MODULES = ['features/settings/account/account-section.tsx'];
+
 test('the startup module graph statically imports no screen the shell loads on demand', async () => {
   // src/app/deferred-screens.tsx loads each of these by dynamic import, so the
   // build puts it in a chunk of its own. A static import of one from anywhere
   // the entry point reaches puts it, and what it imports, back in the
-  // startup chunk without failing the build.
+  // startup chunk; only the budget in bundle-budget.ts limits how much.
   const files = await sources(root);
   const known = new Set(files);
   const deferredScreens = join(root, 'app', 'deferred-screens.tsx');
@@ -388,8 +396,10 @@ test('the startup module graph statically imports no screen the shell loads on d
     reached.add(file);
     pending.push(...(await resolved(file, imports(file))));
   }
+  const screenOnly = SCREEN_ONLY_MODULES.map((path) => join(root, path));
+  for (const file of screenOnly) assert.ok(known.has(file), `${file} exists`);
   assert.deepEqual(
-    deferred
+    [...deferred, ...screenOnly]
       .filter((file) => reached.has(file))
       .map((file) => relative(root, file)),
     [],

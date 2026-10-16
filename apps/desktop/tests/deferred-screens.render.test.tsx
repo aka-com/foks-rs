@@ -1,8 +1,8 @@
 /**
  * The screens the shell loads on demand: the loading pane while a screen's
  * module loads, one load however often the screen renders or is preloaded, a
- * synchronous render once loaded, and a failed load reaching the screen's
- * error boundary.
+ * synchronous render once loaded, a failed load reaching the screen's error
+ * boundary, and the preload that a mounted screen router schedules.
  */
 
 import assert from 'node:assert/strict';
@@ -134,4 +134,130 @@ test('a failed module load reaches the error boundary rather than retrying', asy
   } finally {
     console.error = consoleError;
   }
+});
+
+/**
+ * Replaces `name` on the window for the length of `body`, restoring the
+ * original property, or its absence, afterwards.
+ */
+async function withWindowProperty(
+  name: string,
+  value: unknown,
+  body: () => Promise<void>,
+): Promise<void> {
+  const original = Object.getOwnPropertyDescriptor(window, name);
+  Object.defineProperty(window, name, { configurable: true, value });
+  try {
+    await body();
+  } finally {
+    if (original) Object.defineProperty(window, name, original);
+    else Reflect.deleteProperty(window, name);
+  }
+}
+
+/** A timer or idle-callback scheduler that records its calls and runs none. */
+function recordingScheduler() {
+  const scheduled: { callback: () => void; option: unknown }[] = [];
+  const cancelled: number[] = [];
+  return {
+    scheduled,
+    cancelled,
+    schedule: (callback: () => void, option: unknown) =>
+      scheduled.push({ callback, option }),
+    cancel: (handle: number) => cancelled.push(handle),
+  };
+}
+
+type Scheduler = ReturnType<typeof recordingScheduler>;
+
+/** Runs `body` in a webview without `requestIdleCallback`, as WebKitGTK is. */
+function withTimers(timers: Scheduler, body: () => Promise<void>) {
+  return withWindowProperty('requestIdleCallback', undefined, () =>
+    withWindowProperty('setTimeout', timers.schedule, () =>
+      withWindowProperty('clearTimeout', timers.cancel, body),
+    ),
+  );
+}
+
+/** Runs `body` in a webview with `requestIdleCallback`. */
+function withIdleCallbacks(idle: Scheduler, body: () => Promise<void>) {
+  return withWindowProperty('requestIdleCallback', idle.schedule, () =>
+    withWindowProperty('cancelIdleCallback', idle.cancel, body),
+  );
+}
+
+function Preloading({ preload }: { preload: () => Promise<unknown> }) {
+  deferred.useIdlePreload(preload);
+  return null;
+}
+
+test('without requestIdleCallback the preload starts after the fixed delay, once', async () => {
+  const timers = recordingScheduler();
+  let starts = 0;
+  const preload = () => {
+    starts++;
+    return Promise.resolve();
+  };
+  await withTimers(timers, async () => {
+    const rendered = ui.render(<Preloading preload={preload} />);
+    assert.equal(starts, 0, 'the preload waits for the delay');
+    assert.equal(timers.scheduled.length, 1);
+    assert.equal(timers.scheduled[0].option, deferred.PRELOAD_DELAY_MS);
+    timers.scheduled[0].callback();
+    assert.equal(starts, 1);
+    rendered.rerender(<Preloading preload={preload} />);
+    assert.equal(timers.scheduled.length, 1, 'a rerender schedules nothing');
+    rendered.unmount();
+  });
+});
+
+test('with requestIdleCallback the preload runs in an idle period bounded by the delay', async () => {
+  const idle = recordingScheduler();
+  let starts = 0;
+  const preload = () => {
+    starts++;
+    return Promise.resolve();
+  };
+  await withIdleCallbacks(idle, async () => {
+    const rendered = ui.render(<Preloading preload={preload} />);
+    assert.equal(starts, 0);
+    assert.deepEqual(
+      idle.scheduled.map((call) => call.option),
+      [{ timeout: deferred.PRELOAD_DELAY_MS }],
+    );
+    idle.scheduled[0].callback();
+    assert.equal(starts, 1);
+    rendered.unmount();
+  });
+});
+
+test('unmounting before the delay cancels the preload', async () => {
+  const timers = recordingScheduler();
+  const idle = recordingScheduler();
+  const preload = () => Promise.reject(new Error('not expected'));
+  await withTimers(timers, async () => {
+    ui.render(<Preloading preload={preload} />).unmount();
+    assert.deepEqual(timers.cancelled, [1]);
+  });
+  await withIdleCallbacks(idle, async () => {
+    ui.render(<Preloading preload={preload} />).unmount();
+    assert.deepEqual(idle.cancelled, [1]);
+  });
+});
+
+test('a failed preload is swallowed; the render that needs the screen reports it', async () => {
+  const timers = recordingScheduler();
+  let rejected = false;
+  const preload = () =>
+    Promise.reject(new Error('chunk unavailable')).finally(() => {
+      rejected = true;
+    });
+  await withTimers(timers, async () => {
+    const rendered = ui.render(<Preloading preload={preload} />);
+    timers.scheduled[0].callback();
+    // An unhandled rejection would fail the test run.
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(rejected);
+    rendered.unmount();
+  });
 });

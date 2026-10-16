@@ -34,7 +34,9 @@ export function deferredScreen<P extends object>(
   let loaded: ComponentType<P> | undefined;
   let pending: Promise<ComponentType<P>> | undefined;
   // A failed load stays failed, as with React.lazy: the render that reads it
-  // throws to the screen's error boundary instead of retrying in a loop.
+  // throws to the screen's error boundary instead of retrying in a loop. The
+  // boundary's Reload page remounts the screen, which reads the same failed
+  // load, so only reloading the webview retries the import.
   const preload = () =>
     (pending ??= load().then((screen) => (loaded = screen)));
   function Deferred(props: P): ReactNode {
@@ -90,7 +92,7 @@ export async function preloadFirstRun(): Promise<void> {
  * callback waits when it has. WebKitGTK, which hosts the app on Linux, does
  * not provide `requestIdleCallback`.
  */
-const PRELOAD_DELAY_MS = 1000;
+export const PRELOAD_DELAY_MS = 1000;
 
 /**
  * Preloads the vault screens once the calling component has mounted, in an
@@ -100,16 +102,26 @@ const PRELOAD_DELAY_MS = 1000;
  * render that needs it.
  */
 export function usePreloadVaultScreens(): void {
+  useIdlePreload(preloadVaultScreens);
+}
+
+/**
+ * Calls `preload` once after the calling component mounts, as
+ * {@link usePreloadVaultScreens} describes, and cancels the call if the
+ * component unmounts first. `preload` is read on mount only.
+ */
+export function useIdlePreload(preload: () => Promise<unknown>): void {
   useEffect(() => {
-    const preload = () => void preloadVaultScreens().catch(() => undefined);
+    const start = () => void preload().catch(() => undefined);
     if (typeof window.requestIdleCallback === 'function') {
-      const handle = window.requestIdleCallback(preload, {
+      const handle = window.requestIdleCallback(start, {
         timeout: PRELOAD_DELAY_MS,
       });
       return () => window.cancelIdleCallback(handle);
     }
-    const handle = window.setTimeout(preload, PRELOAD_DELAY_MS);
+    const handle = window.setTimeout(start, PRELOAD_DELAY_MS);
     return () => window.clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- read on mount only
   }, []);
 }
 
