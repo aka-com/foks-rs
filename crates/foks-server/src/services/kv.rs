@@ -1070,30 +1070,14 @@ fn resolve_authority(
     reader: &dyn KvContextRead,
     clock: &Arc<dyn foks_server_db::Clock>,
 ) -> Result<KvAuthority, RpcStatus> {
-    let Value::Array(fields) = decode(argument).map_err(bad_arguments)? else {
-        return Err(bad_arguments("KV argument is not a struct"));
-    };
-    let first = fields
-        .first()
-        .ok_or_else(|| bad_arguments("KV argument has no authentication"))?;
-    let Value::Array(first_fields) = first else {
-        return Err(bad_arguments("KV authentication is not a struct"));
-    };
-    let auth = if matches!(first_fields.first(), Some(Value::Unsigned(0 | 1))) {
-        first
-    } else {
-        first_fields
-            .first()
-            .ok_or_else(|| bad_arguments("KV request header has no authentication"))?
-    };
-    let Value::Array(auth) = auth else {
-        return Err(bad_arguments("KV authentication is not a struct"));
-    };
+    // Keep the complete decoded argument alive through authority SQL. Variant
+    // classification intentionally follows the original fallible clock read.
+    let auth = foks_rpc::arguments::KvAuthorityArgument::decode(argument)?;
     let now = clock
         .now_micros()
         .map_err(|_| RpcStatus::TransactionRetry)?;
-    match auth.as_slice() {
-        [Value::Unsigned(0), Value::Variant(None)] => {
+    match auth.classify()? {
+        foks_rpc::arguments::KvAuthoritySelection::Personal => {
             if reader
                 .active_credential_owner(principal.uid(), principal.device_id())
                 .map_err(|_| RpcStatus::TransactionRetry)?
@@ -1127,14 +1111,7 @@ fn resolve_authority(
                 clock: Arc::clone(clock),
             })
         }
-        [Value::Unsigned(1), Value::Variant(Some((tag, token)))] if tag == b"1" => {
-            let Value::Binary(token) = token.as_ref() else {
-                return Err(bad_arguments("team KV token is not binary"));
-            };
-            let token: [u8; 16] = token
-                .as_slice()
-                .try_into()
-                .map_err(|_| bad_arguments("team KV token has the wrong width"))?;
+        foks_rpc::arguments::KvAuthoritySelection::Team(token) => {
             let token_hash = crate::auth::team::token_hash(&token);
             let authority = reader
                 .resolve_team_view_token(&token_hash, now)
@@ -1162,7 +1139,6 @@ fn resolve_authority(
                 clock: Arc::clone(clock),
             })
         }
-        _ => Err(bad_arguments("unsupported KV authentication")),
     }
 }
 

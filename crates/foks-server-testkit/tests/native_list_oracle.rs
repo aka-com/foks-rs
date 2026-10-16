@@ -6,7 +6,15 @@ use foks_server::{hosted_personal, hosted_personal::QualificationError};
 use foks_server_db::Clock;
 use foks_server_testkit::{TestAccountSpec, TestClient, TestEnvironment};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
-use std::{io::Cursor, io::Write, sync::Arc, time::Duration};
+use std::{
+    io::Cursor,
+    io::Write,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 struct FixedClock(u64);
 impl Clock for FixedClock {
@@ -203,7 +211,81 @@ fn native_list_oracle_matches_raw_authenticated_rpc_bytes_and_errors() {
     else {
         panic!("encoded List argument must be a struct")
     };
+    // Both native direct and request-header forms use the same authority parser.
+    let mut wrapped = fields.clone();
+    wrapped[0] = foks_snowpack::Value::Array(vec![wrapped[0].clone(), foks_snowpack::Value::Null]);
+    assert!(compare(
+        foks_rpc::encode_call(
+            call.protocol_id(),
+            call.method_position(),
+            &foks_snowpack::encode(&foks_snowpack::Value::Array(wrapped)).unwrap(),
+            sequence
+        )
+        .unwrap()
+    )
+    .is_ok());
+    sequence += 1;
+    for wrapped in [false, true] {
+        let team = foks_snowpack::Value::Array(vec![
+            foks_snowpack::Value::Unsigned(1),
+            foks_snowpack::Value::Variant(Some((
+                b"1".to_vec(),
+                Box::new(foks_snowpack::Value::Binary(vec![0x57; 16])),
+            ))),
+        ]);
+        let mut changed = fields.clone();
+        changed[0] = if wrapped {
+            foks_snowpack::Value::Array(vec![team, foks_snowpack::Value::Null])
+        } else {
+            team
+        };
+        // A well-shaped unknown team token reaches team SQL; it is not personal.
+        assert_eq!(
+            compare(
+                foks_rpc::encode_call(
+                    call.protocol_id(),
+                    call.method_position(),
+                    &foks_snowpack::encode(&foks_snowpack::Value::Array(changed)).unwrap(),
+                    sequence
+                )
+                .unwrap()
+            ),
+            Err(RpcStatus::Expired)
+        );
+        sequence += 1;
+    }
     let mut malformed = Vec::new();
+    for (token, message) in [
+        (foks_snowpack::Value::Null, "team KV token is not binary"),
+        (
+            foks_snowpack::Value::Binary(vec![0; 15]),
+            "team KV token has the wrong width",
+        ),
+        (
+            foks_snowpack::Value::Binary(vec![0; 17]),
+            "team KV token has the wrong width",
+        ),
+    ] {
+        for wrapped in [false, true] {
+            let auth = foks_snowpack::Value::Array(vec![
+                foks_snowpack::Value::Unsigned(1),
+                foks_snowpack::Value::Variant(Some((b"1".to_vec(), Box::new(token.clone())))),
+            ]);
+            let mut changed = fields.clone();
+            changed[0] = if wrapped {
+                foks_snowpack::Value::Array(vec![auth, foks_snowpack::Value::Null])
+            } else {
+                auth
+            };
+            changed[2] = foks_snowpack::Value::Null;
+            malformed.push((changed, message));
+        }
+    }
+    let mut changed = fields.clone();
+    changed[0] = foks_snowpack::Value::Null;
+    changed[2] = foks_snowpack::Value::Null;
+    malformed.push((changed, "KV authentication is not a struct"));
+
     let mut changed = fields.clone();
     changed[2] = foks_snowpack::Value::Null;
     malformed.push((changed, "KV pagination is not a struct"));
@@ -266,6 +348,89 @@ fn native_list_oracle_matches_raw_authenticated_rpc_bytes_and_errors() {
             Err(RpcStatus::BadArguments(message.into()))
         );
         sequence += 1;
+    }
+    // The first clock sample authenticates the certificate in the oracle. The
+    // second is the real resolve_authority boundary; failures there must beat
+    // variant/token errors but not earlier shape/decode failures.
+    struct FailingAuthorityClock {
+        calls: AtomicUsize,
+        now: u64,
+    }
+    impl Clock for FailingAuthorityClock {
+        fn now_micros(&self) -> foks_server_db::Result<u64> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Ok(self.now)
+            } else {
+                Err(foks_server_db::Error::Invalid(
+                    "injected authority clock failure",
+                ))
+            }
+        }
+    }
+    let bad = |message: &str| RpcStatus::BadArguments(message.to_owned());
+    let post_clock = [
+        foks_snowpack::Value::Array(vec![
+            foks_snowpack::Value::Unsigned(0),
+            foks_snowpack::Value::Null,
+        ]),
+        foks_snowpack::Value::Array(vec![
+            foks_snowpack::Value::Unsigned(1),
+            foks_snowpack::Value::Variant(Some((
+                b"1".to_vec(),
+                Box::new(foks_snowpack::Value::Null),
+            ))),
+        ]),
+        foks_snowpack::Value::Array(vec![
+            foks_snowpack::Value::Unsigned(1),
+            foks_snowpack::Value::Variant(Some((
+                b"1".to_vec(),
+                Box::new(foks_snowpack::Value::Binary(vec![0; 15])),
+            ))),
+        ]),
+    ];
+    let mut clock_cases = vec![
+        (
+            foks_snowpack::Value::Null,
+            1,
+            bad("KV argument is not a struct"),
+        ),
+        (
+            foks_snowpack::Value::Array(vec![foks_snowpack::Value::Null]),
+            1,
+            bad("KV authentication is not a struct"),
+        ),
+    ];
+    for auth in post_clock {
+        for wrapped in [false, true] {
+            let auth = if wrapped {
+                foks_snowpack::Value::Array(vec![auth.clone(), foks_snowpack::Value::Null])
+            } else {
+                auth.clone()
+            };
+            clock_cases.push((
+                foks_snowpack::Value::Array(vec![auth, foks_snowpack::Value::Null]),
+                2,
+                RpcStatus::TransactionRetry,
+            ));
+        }
+    }
+    for (argument, count, expected) in clock_cases {
+        let observed = Arc::new(FailingAuthorityClock {
+            calls: AtomicUsize::new(0),
+            now: environment.advance_clock(0),
+        });
+        let clock: Arc<dyn Clock> = observed.clone();
+        assert_eq!(
+            hosted_personal::native_list(
+                &certificate,
+                &reader,
+                &clock,
+                &foks_snowpack::encode(&argument).unwrap()
+            )
+            .unwrap(),
+            Err(expected)
+        );
+        assert_eq!(observed.calls.load(Ordering::SeqCst), count);
     }
     drop(tls);
     // Certificate failures are outer qualification errors, not invented List statuses.
