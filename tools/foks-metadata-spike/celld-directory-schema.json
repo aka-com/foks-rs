@@ -1,0 +1,42 @@
+[
+  {
+    "kind": "table",
+    "sql": "CREATE TABLE _cf_ALARM (scope TEXT PRIMARY KEY, at_ms INTEGER, retry INTEGER DEFAULT 0, counted_retry INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 0)"
+  },
+  {
+    "kind": "table",
+    "sql": "CREATE TABLE _cf_FACETS (scope TEXT NOT NULL, path TEXT NOT NULL, image BLOB NOT NULL, PRIMARY KEY(scope,path)) WITHOUT ROWID"
+  },
+  {
+    "kind": "table",
+    "sql": "CREATE TABLE _cf_KV (scope TEXT, k TEXT, v TEXT, PRIMARY KEY(scope,k))"
+  },
+  {
+    "kind": "table",
+    "sql": "CREATE TABLE _cf_METADATA (scope TEXT PRIMARY KEY, actor_name TEXT)"
+  },
+  {
+    "kind": "table",
+    "sql": "CREATE TABLE _cf_WAKE (\n           scope TEXT PRIMARY KEY, epoch TEXT NOT NULL CHECK(length(epoch)=16),\n           sequence INTEGER NOT NULL CHECK(typeof(sequence)='integer' AND sequence>=0),\n           at_ms INTEGER\n         )"
+  },
+  {
+    "kind": "table",
+    "sql": "CREATE TABLE _litestream_lock (id INTEGER)"
+  },
+  {
+    "kind": "table",
+    "sql": "CREATE TABLE _litestream_seq (id INTEGER PRIMARY KEY, seq INTEGER)"
+  },
+  {
+    "kind": "trigger",
+    "sql": "CREATE TRIGGER _cf_WAKE_delete AFTER DELETE ON _cf_ALARM BEGIN\n               UPDATE _cf_WAKE SET sequence=sequence+1,at_ms=NULL WHERE scope=OLD.scope;\n             END"
+  },
+  {
+    "kind": "trigger",
+    "sql": "CREATE TRIGGER _cf_WAKE_insert AFTER INSERT ON _cf_ALARM BEGIN\n               UPDATE _cf_WAKE SET sequence=sequence+1,at_ms=NEW.at_ms WHERE scope=NEW.scope;\n             END"
+  },
+  {
+    "kind": "trigger",
+    "sql": "CREATE TRIGGER _cf_WAKE_update AFTER UPDATE OF at_ms,generation ON _cf_ALARM BEGIN\n               UPDATE _cf_WAKE SET sequence=sequence+1,at_ms=NEW.at_ms WHERE scope=NEW.scope;\n             END"
+  }
+]
