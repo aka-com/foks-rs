@@ -135,6 +135,10 @@ pub struct ChunkNamespaceLease {
 
 /// Exact immutable object publication and bounded, integrity-checked retrieval.
 pub trait ChunkStore: Send + Sync {
+    /// Conservative provenance only; it never grants collection authority.
+    fn publication_policy(&self) -> foks_server_db::ChunkPublicationPolicy {
+        foks_server_db::ChunkPublicationPolicy::Unknown
+    }
     /// Canonical non-secret placement descriptor; credentials/timeouts are excluded.
     fn locator(&self) -> Result<String>;
     /// None means no qualified local deletion. Custom wrappers must forward the
@@ -287,6 +291,9 @@ fn check_marker_size(bytes: &[u8]) -> Result<()> {
 }
 
 impl ChunkStore for FilesystemChunks {
+    fn publication_policy(&self) -> foks_server_db::ChunkPublicationPolicy {
+        foks_server_db::ChunkPublicationPolicy::SynchronousFilesystemV1
+    }
     fn namespace_lease(&self, exclusive: bool) -> Result<Option<ChunkNamespaceLease>> {
         self.recheck()?;
         let mut options = std::fs::OpenOptions::new();
@@ -680,6 +687,12 @@ async fn read_remote_marker(
 }
 
 impl ChunkStore for S3Chunks {
+    fn publication_policy(&self) -> foks_server_db::ChunkPublicationPolicy {
+        // object_store retries can leave an earlier physical PUT outstanding.
+        // A later conditional-write conflict plus successful GET proves presence
+        // only. Keep this policy unqualified even when put_object returns Ok.
+        foks_server_db::ChunkPublicationPolicy::RetryingS3V1
+    }
     fn namespace_is_empty(&self) -> Result<bool> {
         self.empty()
     }
@@ -790,6 +803,10 @@ mod tests {
     fn filesystem_incarnations_and_idempotent_delete_never_reuse_digest_keys() {
         let directory = tempfile::tempdir().unwrap();
         let store = FilesystemChunks::open(directory.path()).unwrap();
+        assert_eq!(
+            store.publication_policy(),
+            foks_server_db::ChunkPublicationPolicy::SynchronousFilesystemV1
+        );
         let bytes = b"same canonical encrypted upload";
         let digest = chunk_digest(bytes);
         let object = |id: u8| ChunkObject {
@@ -822,6 +839,10 @@ mod tests {
         }
         let remote = MockS3::start();
         let remote = remote.store();
+        assert_eq!(
+            remote.publication_policy(),
+            foks_server_db::ChunkPublicationPolicy::RetryingS3V1
+        );
         assert!(!remote.supports_collection());
         assert!(remote.delete_object(&new).is_err());
         remote.put_object(&new, bytes).unwrap();
@@ -1069,6 +1090,8 @@ secret_access_key = "not-accepted"
         gets: AtomicUsize,
         conditional: AtomicUsize,
         reject_put: AtomicBool,
+        defer_first_put: AtomicBool,
+        pending_put: Mutex<Option<(String, Vec<u8>)>>,
         redirect: AtomicBool,
         redirect_port: AtomicUsize,
         slow: AtomicBool,
@@ -1227,7 +1250,12 @@ secret_access_key = "not-accepted"
                 if conditional {
                     state.conditional.fetch_add(1, Ordering::AcqRel);
                 }
-                if state.reject_put.load(Ordering::Acquire) {
+                if state.defer_first_put.swap(false, Ordering::AcqRel) {
+                    // Model a gateway replying while accepted backend work is
+                    // still queued. Its later execution is controlled by the test.
+                    *state.pending_put.lock().unwrap() = Some((path, body));
+                    ("503 Service Unavailable", Vec::new())
+                } else if state.reject_put.load(Ordering::Acquire) {
                     ("403 Forbidden", Vec::new())
                 } else if !conditional {
                     ("400 Bad Request", Vec::new())
@@ -1258,6 +1286,36 @@ secret_access_key = "not-accepted"
         let header = format!("HTTP/1.1 {status}\r\nContent-Length: {response_length}\r\nETag: \"test-etag\"\r\nLast-Modified: Sun, 06 Nov 1994 08:49:37 GMT\r\nConnection: close\r\n\r\n");
         let _ = stream.write_all(header.as_bytes());
         let _ = stream.write_all(&response);
+    }
+
+    #[test]
+    fn successful_s3_retry_and_get_do_not_certify_earlier_put_termination() {
+        let mock = MockS3::start();
+        let store = mock.store();
+        mock.state.defer_first_put.store(true, Ordering::Release);
+        let payload = b"accepted backend work can outlive the gateway reply";
+        let object = ChunkObject::legacy(chunk_digest(payload), payload.len() as u64);
+        store.put_object(&object, payload).unwrap();
+        assert_eq!(mock.state.puts.load(Ordering::Acquire), 2);
+        assert!(mock.state.pending_put.lock().unwrap().is_some());
+        assert_eq!(store.get_object(&object).unwrap(), payload);
+        assert!(mock.state.pending_put.lock().unwrap().is_some());
+        assert_eq!(
+            store.publication_policy(),
+            foks_server_db::ChunkPublicationPolicy::RetryingS3V1
+        );
+        assert!(!store.supports_collection());
+        assert!(store.delete_object(&object).is_err());
+        let (path, body) = mock.state.pending_put.lock().unwrap().take().unwrap();
+        // Release the delayed conditional PUT only after the retry and GET have
+        // succeeded. Existing data makes it a no-op, never a reason to delete.
+        mock.state
+            .objects
+            .lock()
+            .unwrap()
+            .entry(path)
+            .or_insert(body);
+        assert_eq!(store.get_object(&object).unwrap(), payload);
     }
 
     #[test]

@@ -857,6 +857,7 @@ fn inventory_chunk_store(path: PathBuf, restart: bool) -> Result<(), Box<dyn std
         },
     )?;
     println!("inventory_complete={} present_bytes={} reserved_bytes={} uncertain_bytes={} objects={} unresolved_attempts={} admission_rejections={} orphan_objects={} orphan_bytes={} unknown_objects={} unknown_bytes={} missing_objects={} missing_referenced_objects={} oldest_attempt_micros={:?}",usage.inventory_complete,usage.present_bytes,usage.reserved_bytes,usage.uncertain_bytes,usage.objects,usage.unresolved_attempts,usage.admission_rejections,usage.orphan_objects,usage.orphan_bytes,usage.unknown_objects,usage.unknown_bytes,usage.missing_objects,usage.missing_referenced_objects,usage.oldest_attempt_micros);
+    println!("unknown_publication_attempts={} retrying_remote_publications={} acknowledged_remote_publications={} remote_termination_qualified=false",usage.unknown_publication_attempts,usage.retrying_remote_publications,usage.acknowledged_remote_publications);
     Ok(())
 }
 
@@ -882,6 +883,7 @@ fn collect_chunk_store(
         dry_run,
     )?;
     println!("report_only={} backend_qualified={} ledger_candidates={} deleted_objects={} deleted_bytes={} charged_objects={} deleting_objects={} deleting_bytes={} tombstones={} unresolved_attempts={} unknown_objects={}",report.report_only,report.backend_qualified,report.eligible_objects,report.deleted_objects,report.deleted_bytes,report.usage.objects,report.usage.deleting_objects,report.usage.deleting_bytes,report.usage.tombstones,report.usage.unresolved_attempts,report.usage.unknown_objects);
+    println!("unknown_publication_attempts={} retrying_remote_publications={} acknowledged_remote_publications={} remote_termination_qualified=false",report.usage.unknown_publication_attempts,report.usage.retrying_remote_publications,report.usage.acknowledged_remote_publications);
     Ok(())
 }
 

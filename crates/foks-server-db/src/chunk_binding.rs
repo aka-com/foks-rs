@@ -426,7 +426,11 @@ mod tests {
             .prepare_chunk_storage_binding(&[4; 16], "local", false)
             .unwrap();
         db.activate_chunk_storage_binding(&original).unwrap();
-        db.connection.execute_batch("ALTER TABLE chunk_storage_binding DROP COLUMN authority_identity; PRAGMA user_version=53").unwrap();
+        db.connection.execute_batch("DROP TRIGGER chunk_attempt_policy_immutable;
+            DROP INDEX chunk_attempts_publication_policy;
+            ALTER TABLE chunk_object_attempts DROP COLUMN publication_policy;
+            ALTER TABLE chunk_storage_binding DROP COLUMN authority_identity;
+            PRAGMA user_version=53").unwrap();
         drop(db);
         let mut db = Database::open(dir.path().join("db"), crate::Config::default()).unwrap();
         let migrated = db
