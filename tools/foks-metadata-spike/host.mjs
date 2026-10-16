@@ -40,15 +40,20 @@ export class Kernel {
   constructor(module,catalog,storage) {
     this.storage=storage;
     this.catalog=new Map(catalog.map(spec=>[spec.id,spec]));
-    this.instance=new WebAssembly.Instance(module,{foks:{sql:(...args)=>this.sql(...args)}});
+    this.instance=new WebAssembly.Instance(module,{foks:{sql:(...args)=>this.sql(...args),domain:(...args)=>this.domain(...args)}});
+    this.running=false;this.domainActive=false;
   }
   range(pointer,length,maximum) {
     const memory=this.instance.exports.memory.buffer;
     if(!Number.isInteger(pointer)||!Number.isInteger(length)||pointer<0||length<0||length>maximum||pointer+length>memory.byteLength)throw new Error('memory range');
     return new Uint8Array(memory,pointer,length);
   }
+  admit() {
+    if(++this.calls>2048)throw new KernelError('bounds');
+    if(Date.now()>=this.deadline)throw new KernelError('expired');
+  }
   sql(id,pointer,length,write) {
-    if(++this.calls>2048 || Date.now()>this.deadline)throw new Error('host deadline/call bound');
+    this.admit();
     const spec=this.catalog.get(id);
     if(!spec || Number(spec.write)!==write)throw new Error('statement ID');
     const values=JSON.parse(decoder.decode(this.range(pointer,length,65536)));
@@ -70,8 +75,11 @@ export class Kernel {
       if(!first.done && !rows.next().done)throw new Error('row bound');
     }
     // Injected failures are qualification-only, after a real SQL statement.
-    if(this.failAfter===this.calls)throw new Error('injected host failure');
-    if(this.trapAfter===this.calls)this.instance.exports.trap();
+    if(this.failAfter===this.calls||this.failStatement===id)throw new Error('injected host failure');
+    if(this.trapAfter===this.calls||this.trapStatement===id)this.instance.exports.trap();
+    return this.respond(result);
+  }
+  respond(result) {
     const bytes=encoder.encode(JSON.stringify(result));
     if(bytes.length>65536)throw new Error('SQL reply bound');
     const destination=this.instance.exports.response_alloc(bytes.length);
@@ -79,20 +87,63 @@ export class Kernel {
     this.range(destination,bytes.length,65536).set(bytes);
     return 0;
   }
-  // The caller must execute this synchronous method inside transactionSync and
-  // let all throws escape it. It may release result only after COMMIT + sync.
-  run(command,{failAfter=0,trapAfter=0,deadline=Date.now()+1000}={}) {
+  domain(pointer,length) {
+    if(!this.running||!this.authority||this.domainActive)throw new Error('domain entry guard');
+    // Copy before input_alloc can grow memory. The outer Rust input is owned,
+    // and no Rust RefCell buffer borrow survives this synchronous import.
+    const command=decoder.decode(new Uint8Array(this.range(pointer,length,MAX_INPUT)));
+    this.domainActive=true;
+    let rejection;
+    try {
+      this.admit(); // logical SAVEPOINT charge, matching NativeSql
+      let result;
+      try {
+        const reply=this.storage.transactionSync(()=>this.invoke(command,false,code=>{
+          // Only a decoded nonzero domain export status creates this token.
+          // Exceptions from imported SQL, even KernelError instances, bypass
+          // the status factory and can never become durable rejections.
+          if(['conflict','permission','quota'].includes(code)) {
+            rejection={code};return rejection;
+          }
+          return new KernelError(code);
+        }));
+        this.admit(); // logical RELEASE charge before successful return
+        result={success:reply};
+      } catch(error) {
+        if(!rejection||error!==rejection)throw error;
+        this.admit(); // logical ROLLBACK charge
+        this.admit(); // logical RELEASE charge
+        result={rejected:rejection.code};
+      }
+      // invoke copied nested OUTPUT before this allocation touches RESPONSE.
+      return this.respond(result);
+    } finally {this.domainActive=false;}
+  }
+  invoke(command,authority,statusError=code=>new KernelError(code)) {
     if(typeof command!=='string'||command.length>MAX_INPUT)throw new Error('input bound');
     const bytes=encoder.encode(command);
     if(bytes.length>MAX_INPUT)throw new Error('input byte bound');
-    this.calls=0;this.failAfter=failAfter;this.trapAfter=trapAfter;this.deadline=deadline;
     const pointer=this.instance.exports.input_alloc(bytes.length);
     if(!pointer)throw new Error('input allocation');
     this.range(pointer,bytes.length,MAX_INPUT).set(bytes);
-    const status=this.instance.exports.run();
+    const status=authority ? this.instance.exports.run_authority() : this.instance.exports.run();
     const result=JSON.parse(decoder.decode(this.range(this.instance.exports.output_pointer(),this.instance.exports.output_length(),65536)));
-    if(status!==0)throw new KernelError(result);
+    if(status!==0)throw statusError(result);
     return result;
+  }
+  // Only this outer entry resets controls. Domain reentry inherits all limits.
+  // The caller must let all errors escape its transactionSync and await sync.
+  run(command,{failAfter=0,trapAfter=0,failStatement=0,trapStatement=0,deadline=Date.now()+1000,authority=false}={}) {
+    if(this.running)throw new Error('outer entry guard');
+    this.running=true;
+    this.calls=0;this.failAfter=failAfter;this.trapAfter=trapAfter;
+    this.failStatement=failStatement;this.trapStatement=trapStatement;
+    this.deadline=deadline;this.authority=authority;
+    try {
+      if(Date.now()>=this.deadline)throw new KernelError('expired');
+      return this.invoke(command,authority);
+    }
+    finally {this.running=false;}
   }
 }
 export class KernelError extends Error {constructor(code){super(code);this.code=code;}}

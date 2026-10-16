@@ -1,8 +1,10 @@
 //! Qualification kernel, not an enabled server backend. The host owns one SQL
 //! transaction, must roll it back on *any* error/trap, and proves durability only
-//! after COMMIT. No authentication, ownership or durable-outcome claim is made
-//! by this first boundary spike.
+//! after COMMIT. The private authority fixture adds owner/principal-binding and
+//! durable-outcome state machines; it is not real FOKS authentication, a production
+//! backend, a distributed deadline guarantee, or a qualified recovery deployment.
 
+pub mod authority;
 pub mod catalog;
 mod dirents;
 #[cfg(feature = "native")]
@@ -27,6 +29,7 @@ pub enum Error {
     Quota,
     Bounds,
     Storage,
+    Expired,
 }
 
 impl Error {
@@ -39,6 +42,7 @@ impl Error {
             Self::Quota => "quota",
             Self::Bounds => "bounds",
             Self::Storage => "storage",
+            Self::Expired => "expired",
         }
     }
 }
@@ -50,6 +54,26 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub trait Sql {
     fn query(&mut self, statement: Statement, parameters: &[Value]) -> Result<Option<Vec<Value>>>;
     fn execute(&mut self, statement: Statement, parameters: &[Value]) -> Result<u64>;
+
+    /// Run only the shared domain kernel in a nested rollback scope. Hosts with
+    /// callback-only transaction APIs override this operation, never the kernel.
+    /// All non-domain errors must escape the host-owned outer transaction.
+    fn domain(&mut self, input: &[u8]) -> Result<wire::Reply>
+    where
+        Self: Sized,
+    {
+        self.execute(Statement::AuthoritySavepoint, &[])?;
+        let result = wire::run(self, input);
+        match &result {
+            Ok(_) => {}
+            Err(Error::Conflict | Error::Permission | Error::Quota) => {
+                self.execute(Statement::AuthorityRollback, &[])?;
+            }
+            Err(_) => return result,
+        }
+        self.execute(Statement::AuthorityRelease, &[])?;
+        result
+    }
 }
 
 pub(crate) fn integer(value: u64) -> Result<Value> {

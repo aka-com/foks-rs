@@ -13,6 +13,7 @@ thread_local! {
 #[link(wasm_import_module = "foks")]
 extern "C" {
     fn sql(statement: u32, parameters: *const u8, length: u32, write: u32) -> u32;
+    fn domain(input: *const u8, length: u32) -> u32;
 }
 
 #[no_mangle]
@@ -94,6 +95,40 @@ impl Sql for Host {
         let value: Value = self.invoke(s, p, true)?;
         crate::unsigned(&value)
     }
+    fn domain(&mut self, input: &[u8]) -> Result<wire::Reply> {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "snake_case", deny_unknown_fields)]
+        enum DomainResult {
+            Success(wire::Reply),
+            Rejected(Rejection),
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum Rejection {
+            Conflict,
+            Permission,
+            Quota,
+        }
+        if input.len() > MAX_INPUT_BYTES {
+            return Err(Error::Bounds);
+        }
+        RESPONSE.with(|b| b.borrow_mut().clear());
+        // SAFETY: input is an owned immutable domain serialization. JS copies it
+        // before reentering run(), which has its own stack Host. No thread-local
+        // buffer borrow or reference to this Host crosses the import. The JS
+        // aggregate call/deadline guards remain active across both Wasm entries.
+        let failed = unsafe { domain(input.as_ptr(), input.len() as u32) };
+        if failed != 0 {
+            return Err(Error::Storage);
+        }
+        let response = RESPONSE.with(|b| std::mem::take(&mut *b.borrow_mut()));
+        match serde_json::from_slice(&response).map_err(|_| Error::Storage)? {
+            DomainResult::Success(reply) => Ok(reply),
+            DomainResult::Rejected(Rejection::Conflict) => Err(Error::Conflict),
+            DomainResult::Rejected(Rejection::Permission) => Err(Error::Permission),
+            DomainResult::Rejected(Rejection::Quota) => Err(Error::Quota),
+        }
+    }
 }
 
 #[no_mangle]
@@ -104,6 +139,28 @@ pub extern "C" fn run() -> u32 {
         Ok(reply) => (
             0,
             serde_json::to_vec(&reply).expect("serializable bounded reply"),
+        ),
+        Err(error) => (
+            1,
+            serde_json::to_vec(error.code()).expect("static error code"),
+        ),
+    };
+    OUTPUT.with(|b| *b.borrow_mut() = output);
+    status
+}
+
+/// Private trusted-host entry point; the host authenticates and constructs caller
+/// context. Public request bodies cannot choose controller capability.
+#[no_mangle]
+pub extern "C" fn run_authority() -> u32 {
+    let bytes = INPUT.with(|b| std::mem::take(&mut *b.borrow_mut()));
+    let result = serde_json::from_slice::<crate::authority::Invocation>(&bytes)
+        .map_err(|_| Error::Invalid("authority invocation"))
+        .and_then(|invocation| crate::authority::run(&mut Host { calls: 0 }, invocation));
+    let (status, output) = match result {
+        Ok(reply) => (
+            0,
+            serde_json::to_vec(&reply).expect("bounded authority reply"),
         ),
         Err(error) => (
             1,

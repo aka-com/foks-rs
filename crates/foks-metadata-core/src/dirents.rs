@@ -2,7 +2,7 @@ use crate::{integer, unsigned, Error, Result, Sql, Statement as S, Value as V, M
 use foks_proto::{KvDirent, KvPathVersionVector, Role};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Limits {
     pub blob_bytes: usize,

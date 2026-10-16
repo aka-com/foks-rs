@@ -12,7 +12,7 @@ pub enum Value {
     Blob(Vec<u8>),
 }
 
-mod decimal {
+pub(crate) mod decimal {
     use serde::{Deserialize, Deserializer, Serializer};
     pub fn serialize<S: Serializer>(n: &i64, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&n.to_string())
@@ -54,6 +54,23 @@ pub enum Statement {
     InsertDirent,
     SetHead,
     ProbeTypes,
+    AuthorityState,
+    AuthorityInitialize,
+    AuthorityClock,
+    AuthorityPromote,
+    AuthorityActivate,
+    AuthorityRevision,
+    AuthorityAllocate,
+    AuthorityPrincipal,
+    AuthoritySetPrincipal,
+    AuthorityIntent,
+    AuthorityRegister,
+    AuthorityOutcome,
+    AuthorityPrune,
+    AuthoritySavepoint,
+    AuthorityRollback,
+    AuthorityRelease,
+    AuthoritySettle,
 }
 
 #[derive(Serialize)]
@@ -67,7 +84,7 @@ pub struct Spec {
 }
 
 impl Statement {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 32] = [
         Self::NamespaceParty,
         Self::NamespaceEnsure,
         Self::Head,
@@ -83,6 +100,23 @@ impl Statement {
         Self::InsertDirent,
         Self::SetHead,
         Self::ProbeTypes,
+        Self::AuthorityState,
+        Self::AuthorityInitialize,
+        Self::AuthorityClock,
+        Self::AuthorityPromote,
+        Self::AuthorityActivate,
+        Self::AuthorityRevision,
+        Self::AuthorityAllocate,
+        Self::AuthorityPrincipal,
+        Self::AuthoritySetPrincipal,
+        Self::AuthorityIntent,
+        Self::AuthorityRegister,
+        Self::AuthorityOutcome,
+        Self::AuthorityPrune,
+        Self::AuthoritySavepoint,
+        Self::AuthorityRollback,
+        Self::AuthorityRelease,
+        Self::AuthoritySettle,
     ];
 
     pub fn from_id(id: u32) -> Result<Self> {
@@ -93,6 +127,9 @@ impl Statement {
     }
 
     pub fn spec(self) -> Spec {
+        if (self as u32) >= Self::AuthorityState as u32 {
+            return crate::authority::catalog::spec(self);
+        }
         use Kind::{Blob as B, Integer as I, NullableBlob as N, Text as T};
         let (sql, parameters, columns, write): (_, &'static [_], &'static [_], _) = match self {
             Self::NamespaceParty => ("SELECT CAST(party_kind AS TEXT),host_id FROM (SELECT 1 AS party_kind,COALESCE((SELECT host_id FROM host_metadata WHERE singleton=1),zeroblob(33)) AS host_id FROM users WHERE uid=?1 UNION ALL SELECT team_kind,host_id FROM teams WHERE team_id=?1) LIMIT 1", &[B], &[I,B], false),
@@ -112,6 +149,7 @@ impl Statement {
             Self::InsertDirent => ("INSERT INTO kv_dirents(uid,parent_id,dirent_id,version,directory_version,node_id,name_mac,creation_time,exact_dirent) VALUES(?1,?2,?3,CAST(?4 AS INTEGER),CAST(?5 AS INTEGER),?6,?7,CAST(?8 AS INTEGER),?9)", &[B,B,B,I,I,B,B,I,B], &[], true),
             Self::SetHead => ("INSERT INTO kv_dirent_heads(uid,parent_id,dirent_id,version) VALUES(?1,?2,?3,CAST(?4 AS INTEGER)) ON CONFLICT(uid,parent_id,dirent_id) DO UPDATE SET version=excluded.version", &[B,B,B,I], &[], true),
             Self::ProbeTypes => ("SELECT CAST(CAST(?1 AS INTEGER) AS TEXT),?2,?3,?4", &[I,B,N,T], &[I,B,N,T], false),
+            _ => unreachable!("authority statements delegated above"),
         };
         Spec {
             id: self as u32,

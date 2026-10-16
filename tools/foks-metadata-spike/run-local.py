@@ -32,14 +32,15 @@ try:
             time.sleep(.1)
     bucket='foks-metadata-spike';s3.create_bucket(Bucket=bucket)
     project=root/'worker';project.mkdir(mode=0o700)
-    for name in ['host.mjs','worker.mjs']:shutil.copyfile(source/name,project/name)
+    for name in ['host.mjs','worker.mjs','durability.mjs']:shutil.copyfile(source/name,project/name)
     for original,name in [(a.wasm,'kernel.wasm'),(a.vectors,'vectors.json'),(a.catalog,'catalog.json')]:shutil.copyfile(original,project/name)
     token=secrets.token_urlsafe(32)
-    config={'name':'foks-metadata-spike','main':'worker.mjs','compatibility_date':'2026-01-01','vars':{'M0_TOKEN':token},'durable_objects':{'bindings':[{'name':'FOKS_M0','class_name':'FoksMetadata'}]},'migrations':[{'tag':'v1','new_sqlite_classes':['FoksMetadata']}]}
+    control_token=secrets.token_urlsafe(32);frontend_token=secrets.token_urlsafe(32)
+    config={'name':'foks-metadata-spike','main':'worker.mjs','compatibility_date':'2026-01-01','vars':{'M0_TOKEN':token,'CONTROL_TOKEN':control_token,'FRONTEND_TOKEN':frontend_token},'durable_objects':{'bindings':[{'name':'FOKS_M0','class_name':'FoksMetadata'}]},'migrations':[{'tag':'v1','new_sqlite_classes':['FoksMetadata']}]}
     (project/'wrangler.jsonc').write_text(json.dumps(config));(project/'wrangler.jsonc').chmod(0o600)
     common=['--bucket','s3://'+bucket,'--endpoint',endpoint,'--region','us-east-1']
     deployment=subprocess.run([str(a.celld.resolve()),'deploy',str(project)]+common,cwd=root,env=dict(env,CELLD_ESBUILD=str(a.esbuild.resolve())),capture_output=True,text=True,timeout=45)
-    (root/'deploy.log').write_text((deployment.stdout+deployment.stderr).replace(token,'[redacted]'))
+    (root/'deploy.log').write_text((deployment.stdout+deployment.stderr).replace(token,'[redacted]').replace(control_token,'[redacted]').replace(frontend_token,'[redacted]'))
     if deployment.returncode:raise RuntimeError('deployment failed')
     public,internal=port(),port();watch=root/'node';watch.mkdir()
     node=start([str(a.celld.resolve())]+common+['--listen',f'127.0.0.1:{public}','--internal-listen',f'127.0.0.1:{internal}','--advertise',f'127.0.0.1:{internal}'],'celld',{'CELLD_NODE':'metadata-m0','CELLD_WATCH':str(watch),'CELLD_READY_FLEET_GATE_MS':'0','CELLD_DURABILITY':'bucket','CELLD_MAX_RESIDENT_CELLS':'32','CELLD_V8_HEAP_LIMIT_MB':'64','CELLD_TOKIO_THREADS':'2'})
@@ -53,7 +54,18 @@ try:
             time.sleep(.1)
     vectors=json.loads(a.vectors.read_text())['vectors']
     for index,vector in enumerate(vectors):
-        request=urllib.request.Request(f'http://127.0.0.1:{public}/{index}',data=b'',headers={'authorization':'Bearer '+token})
+        selected=token
+        wrong_rejected=None
+        if vector.get('authority') is True:
+            selected=control_token if json.loads(vector['command'])['caller']['kind']=='controller' else frontend_token
+            wrong=frontend_token if selected==control_token else control_token
+            denied=urllib.request.Request(f'http://127.0.0.1:{public}/{index}',data=b'',headers={'authorization':'Bearer '+wrong})
+            try:
+                with urllib.request.urlopen(denied,timeout=15) as response:wrong_rejected=response.status==403
+            except urllib.error.HTTPError as error:
+                wrong_rejected=error.code==403;error.close()
+            if not wrong_rejected:raise RuntimeError('private capability separation failed')
+        request=urllib.request.Request(f'http://127.0.0.1:{public}/{index}',data=b'',headers={'authorization':'Bearer '+selected})
         began=time.monotonic()
         try:response=urllib.request.urlopen(request,timeout=15)
         except urllib.error.HTTPError as error:response=error
@@ -61,7 +73,7 @@ try:
             body=response.read(65537)
             if len(body)>65536:raise RuntimeError('result size')
             result=json.loads(body)
-        result['elapsed_seconds']=time.monotonic()-began;results.append(result)
+        result['elapsed_seconds']=time.monotonic()-began;result['wrong_capability_rejected']=wrong_rejected;results.append(result)
         (root/'results.json').write_text(json.dumps(results,indent=2))
         print(json.dumps(result),flush=True)
     passed=all(r.get('passed') is True for r in results) and len(results)==len(vectors)
@@ -72,6 +84,6 @@ finally:
             try:child.wait(timeout=5)
             except subprocess.TimeoutExpired:child.kill();child.wait()
     for log in logs:log.close()
-    evidence={'passed':passed,'results':results,'wasm_memory_pages':declared_memory,'scope':'M0 native/Wasm transaction boundary on actual initialized schema; local emulator; not production authorization, fencing or failover','sha256':{str(item):hashlib.sha256(item.read_bytes()).hexdigest() for item in [a.celld,a.wasm,a.vectors,a.catalog,source/'host.mjs',source/'worker.mjs',source/'wasm_limits.py',pathlib.Path(__file__)]}}
+    evidence={'passed':passed,'results':results,'wasm_memory_pages':declared_memory,'scope':'Private native/Wasm SQL qualification on actual initialized schema; per-vector seeded snapshots are fixture setup/assertions, not a persistent HTTP/native adapter; local emulator, not production FOKS authentication, hard deadlines or failover','sha256':{str(item):hashlib.sha256(item.read_bytes()).hexdigest() for item in [a.celld,a.wasm,a.vectors,a.catalog,source/'host.mjs',source/'worker.mjs',source/'durability.mjs',source/'wasm_limits.py',pathlib.Path(__file__)]}}
     (root/'qualification.json').write_text(json.dumps(evidence,indent=2))
 raise SystemExit(0 if passed else 1)
