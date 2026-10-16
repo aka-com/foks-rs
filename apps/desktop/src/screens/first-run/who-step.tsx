@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { Button, Inset, RadioCard, RadioGroup } from '../../components';
 import { Pane } from '../first-run-view';
-import { GoProfileChooser } from '../go-profile-chooser';
+import { GoProfileChooser } from '../../features/settings';
 import { JoiningChoice } from './setup-method-choice';
 import { useSetupContext } from './setup-context';
 

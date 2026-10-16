@@ -57,7 +57,7 @@ const devices = deferredScreen('DevicesScreen', () =>
   import('../features/devices/devices-screen').then((m) => m.DevicesScreen),
 );
 const settings = deferredScreen('SettingsScreen', () =>
-  import('../screens/settings-screen').then((m) => m.SettingsScreen),
+  import('../features/settings/settings-screen').then((m) => m.SettingsScreen),
 );
 const groupSettings = deferredScreen('GroupSettingsScreen', () =>
   import('../features/teams/groups-screen').then((m) => m.GroupSettingsScreen),

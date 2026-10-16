@@ -1,6 +1,7 @@
 /**
  * The add and rename server sheets rendered from their own modules under
- * screens/servers: what each accepts, and what it asks the bridge for.
+ * features/settings/servers: what each accepts, and what it asks the bridge
+ * for.
  */
 
 import assert from 'node:assert/strict';
@@ -28,9 +29,9 @@ test.afterEach(() => ui.cleanup());
 
 async function harness() {
   const { AddServerSheet } =
-    await import('../src/screens/servers/add-server-sheet');
+    await import('../src/features/settings/servers/add-server-sheet');
   const { RenameServerSheet } =
-    await import('../src/screens/servers/rename-server-sheet');
+    await import('../src/features/settings/servers/rename-server-sheet');
   const { FIXTURE } = await import('../src/mock/fixture');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const { OverlayProvider } = await import('../kit/overlay-primitives');

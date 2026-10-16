@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Button } from '../../components';
-import { SsoPanel } from '../../components/sso-panel';
+import { SsoPanel } from '../../features/settings';
 import { provisioningInFlight } from '../../first-run-operations';
 import { pastePhrase } from '../../phrase-input';
 import { Pane } from '../first-run-view';

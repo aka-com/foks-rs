@@ -43,7 +43,8 @@ async function setup(label: string | null) {
 for (const label of ['Local server alias', null]) {
   test(`server page and breadcrumb use ${label ?? 'Loading...'} while retaining the Internal ID`, async () => {
     const h = await setup(label);
-    const { ServersSection } = await import('../src/screens/servers-screen');
+    const { ServersSection } =
+      await import('../src/features/settings/servers/servers-screen');
     const { crumbTrail } = await import('../src/shell/topbar');
     const profile = h.snapshot.servers[0].profileName;
     const props = {

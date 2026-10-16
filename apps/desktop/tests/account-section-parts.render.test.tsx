@@ -1,7 +1,7 @@
 /**
  * Parts of Settings › Account rendered from their own modules under
- * screens/settings, without the section around them: the secondary account
- * workflows and the notices drawn when an account is missing.
+ * features/settings/account, without the section around them: the secondary
+ * account workflows and the notices drawn when an account is missing.
  */
 
 import assert from 'node:assert/strict';
@@ -10,7 +10,7 @@ import { createElement } from 'react';
 import type { ReactNode } from 'react';
 
 import type { AccountStore } from '../src/model';
-import type { AccountSheet } from '../src/screens/settings/account-panel';
+import type { AccountSheet } from '../src/features/settings/account/account-panel';
 import { installDom } from './lib/dom-harness';
 import { loadTestShell } from './lib/test-shell';
 
@@ -45,7 +45,7 @@ async function harness() {
 
 test('Import from FOKS CLI asks the section for the profile sheet', async () => {
   const { AccountActions } =
-    await import('../src/screens/settings/account-actions');
+    await import('../src/features/settings/account/account-actions');
   const h = await harness();
   const opened: AccountSheet[] = [];
   const rendered = h.render(
@@ -63,7 +63,7 @@ test('Import from FOKS CLI asks the section for the profile sheet', async () => 
 
 test('a missing account offers Refresh and every account still on this device', async () => {
   const { UnavailableAccount } =
-    await import('../src/screens/settings/unavailable-account');
+    await import('../src/features/settings/account/unavailable-account');
   const h = await harness();
   const chosen: string[] = [];
   let refreshed = 0;
@@ -89,7 +89,7 @@ test('a missing account offers Refresh and every account still on this device', 
 
 test('with no account left, the missing-account notice says how to get one', async () => {
   const { UnavailableAccount } =
-    await import('../src/screens/settings/unavailable-account');
+    await import('../src/features/settings/account/unavailable-account');
   const h = await harness();
   const rendered = h.render(
     createElement(UnavailableAccount, {

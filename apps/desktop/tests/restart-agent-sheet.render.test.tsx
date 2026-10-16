@@ -1,6 +1,6 @@
 /**
  * The Restart agent sheet rendered from its own module under
- * screens/settings: when it asks the bridge to take over the agent, and that
+ * features/settings: when it asks the bridge to take over the agent, and that
  * a restart made for a refused action runs that action afterwards.
  */
 
@@ -13,7 +13,7 @@ import type {
   Bridge,
   MaintenanceSnapshot,
 } from '../src/bridge';
-import type { RestartRequest } from '../src/screens/settings/restart-agent-sheet';
+import type { RestartRequest } from '../src/features/settings/restart-agent-sheet';
 import { installDom } from './lib/dom-harness';
 
 installDom({
@@ -43,7 +43,7 @@ async function restart(
   process: AgentProcessInfo,
 ): Promise<{ title: string; takeovers: boolean[]; closed: number }> {
   const { RestartAgentSheet } =
-    await import('../src/screens/settings/restart-agent-sheet');
+    await import('../src/features/settings/restart-agent-sheet');
   const { FIXTURE } = await import('../src/mock/fixture');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const { OverlayProvider } = await import('../kit/overlay-primitives');

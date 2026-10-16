@@ -11,7 +11,7 @@ import type { AgentSnapshot, Server } from '../src/model';
 import {
   readCurrentServerStatus,
   ServerCheckController,
-} from '../src/screens/servers/server-workflow';
+} from '../src/features/settings/servers/server-workflow';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

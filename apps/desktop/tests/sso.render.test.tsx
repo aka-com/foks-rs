@@ -77,7 +77,8 @@ test('account status uses the public provider block reason field', () => {
   );
 });
 test('reopening a saved accepted signup uses status without replaying signup', async () => {
-  const { SsoPanel } = await import('../src/components/sso-panel');
+  const { SsoPanel } =
+    await import('../src/features/settings/account/sso-panel');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   for (const state of ['complete', 'service-unavailable'] as const) {
     const actions: string[] = [];
@@ -108,7 +109,8 @@ test('reopening a saved accepted signup uses status without replaying signup', a
   }
 });
 test('consent, signed completion and usable access are distinct; no automatic operation replay', async () => {
-  const { SsoPanel } = await import('../src/components/sso-panel');
+  const { SsoPanel } =
+    await import('../src/features/settings/account/sso-panel');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const actions: string[] = [];
   let opened = 0;
@@ -167,7 +169,8 @@ test('consent, signed completion and usable access are distinct; no automatic op
   assert.deepEqual(actions, ['begin', 'poll', 'finish-login']);
 });
 test('a response for another account never updates the displayed flow', async () => {
-  const { SsoPanel } = await import('../src/components/sso-panel');
+  const { SsoPanel } =
+    await import('../src/features/settings/account/sso-panel');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const bridge = {
     ...mockBridge(),
@@ -193,7 +196,8 @@ test('a response for another account never updates the displayed flow', async ()
 });
 
 test('account linkage status chooses explicit first-link action and preserves lockout messaging', async () => {
-  const { SsoPanel } = await import('../src/components/sso-panel');
+  const { SsoPanel } =
+    await import('../src/features/settings/account/sso-panel');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const actions: import('../src/sso-contract').SsoAction[] = [];
   const bridge = {
@@ -252,7 +256,8 @@ test('account linkage status chooses explicit first-link action and preserves lo
 });
 
 test('SSO login hides the PIN behind the security key choice and clears it when disabled', async () => {
-  const { SsoPanel } = await import('../src/components/sso-panel');
+  const { SsoPanel } =
+    await import('../src/features/settings/account/sso-panel');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   ui.render(
     await overlay(
@@ -280,7 +285,8 @@ test('SSO login hides the PIN behind the security key choice and clears it when 
 });
 
 test('the sign-in sheet runs in two steps with one primary action each', async () => {
-  const { SsoPanel } = await import('../src/components/sso-panel');
+  const { SsoPanel } =
+    await import('../src/features/settings/account/sso-panel');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const bridge = {
     ...mockBridge(),

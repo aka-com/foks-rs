@@ -497,7 +497,7 @@ test('screen and shell model modules load without React or a view module', async
     'shell/sync-summary.ts',
     'features/devices/credential-actions.ts',
     'model/group-model.ts',
-    'screens/servers/server-model.ts',
+    'features/settings/servers/server-model.ts',
     'features/files/write-workflow-model.ts',
     'features/files/details-model.ts',
   ].map((path) => join(root, path));

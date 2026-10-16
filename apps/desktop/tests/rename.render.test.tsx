@@ -54,7 +54,8 @@ test('rename status rejects secrets, unknown fields and invalid handles', () => 
   assert.throws(() => decodeRenameProgress(Array(161).fill(progress)));
 });
 test('the dialog prepares a rename and returns its operation', async () => {
-  const { RenamePanel } = await import('../src/components/rename-panel');
+  const { RenamePanel } =
+    await import('../src/features/settings/account/rename-panel');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const actions: string[] = [];
   const prepared: RenameProgress[][] = [];
@@ -95,7 +96,8 @@ test('the dialog prepares a rename and returns its operation', async () => {
   assert.deepEqual(actions, ['prepare']);
 });
 test('a prepare answered for another account is rejected', async () => {
-  const { RenamePanel } = await import('../src/components/rename-panel');
+  const { RenamePanel } =
+    await import('../src/features/settings/account/rename-panel');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const bridge = {
     ...mockBridge(),

@@ -76,7 +76,7 @@ import {
   deviceIsCard,
 } from '../../data/device-model';
 import type { DeviceEntry } from '../../data/device-model';
-import { UnavailableAccount } from '../../screens/settings/unavailable-account';
+import { UnavailableAccount } from '../settings';
 import { deviceAlertRegistry } from '../../data/device-alert';
 import { RecoveryPhraseTestSheet } from './recovery-phrase-test-sheet';
 import {

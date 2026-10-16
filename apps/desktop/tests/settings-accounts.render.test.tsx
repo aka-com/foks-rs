@@ -55,7 +55,8 @@ async function renderPeople(
     holdRefresh,
   }: PeopleOptions = {},
 ) {
-  const { AccountSection } = await import('../src/screens/account-section');
+  const { AccountSection } =
+    await import('../src/features/settings/account/account-section');
   const TestShell = await loadTestShell();
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const { ToastController, ToastProvider } = await import('../kit/toasts');

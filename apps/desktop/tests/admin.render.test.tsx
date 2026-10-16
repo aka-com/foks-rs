@@ -39,7 +39,8 @@ test('admin acknowledgments cannot return bearer URLs to the main webview', asyn
   assert.throws(() => decodeCommandAck({ ok: true, url: 'secret' }));
 });
 test('admin configuration and opening are distinct explicit actions and PIN is cleared', async () => {
-  const { AdminPanel } = await import('../src/components/admin-panel');
+  const { AdminPanel } =
+    await import('../src/features/settings/account/admin-panel');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const calls: unknown[][] = [];
   const bridge = {

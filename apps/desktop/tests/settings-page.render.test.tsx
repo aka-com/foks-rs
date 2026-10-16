@@ -97,7 +97,8 @@ async function renderSettings(
     shellKeyed = false,
   }: SettingsOptions = {},
 ) {
-  const { SettingsScreen } = await import('../src/screens/settings-screen');
+  const { SettingsScreen } =
+    await import('../src/features/settings/settings-screen');
   const TestShell = await loadTestShell();
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const { ToastController, ToastProvider } = await import('../kit/toasts');

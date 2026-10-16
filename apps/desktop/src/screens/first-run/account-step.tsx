@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Button, InsetRow } from '../../components';
-import { SsoPanel } from '../../components/sso-panel';
+import { SsoPanel } from '../../features/settings';
 import { fixDeviceName } from '../../device-name';
 import type { PendingOperation } from '../../bridge';
 import { updateRetainedSetup } from '../../first-run-recovery';

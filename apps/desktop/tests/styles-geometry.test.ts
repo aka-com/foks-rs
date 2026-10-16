@@ -11,7 +11,10 @@ const STYLE_ENTRY = new URL('../src/styles/index.css', import.meta.url);
 const SHELL = new URL('../src/styles/shell.css', import.meta.url);
 const COMPONENTS = new URL('../src/styles/app.css', import.meta.url);
 const FIRST_RUN = new URL('../src/screens/first-run.css', import.meta.url);
-const SETTINGS = new URL('../src/screens/settings.css', import.meta.url);
+const SETTINGS = new URL(
+  '../src/features/settings/settings.css',
+  import.meta.url,
+);
 const TEAMS = new URL('../src/features/teams/teams.css', import.meta.url);
 const CASCADE = ['tokens', 'base', 'components', 'features', 'overrides'];
 /**

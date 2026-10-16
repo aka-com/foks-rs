@@ -1,0 +1,132 @@
+import { useEffect, useRef, useState } from 'react';
+import { useWorkflowAccess } from '../../../workflow-context';
+import type { ReactNode } from 'react';
+import type { Bridge } from '../../../bridge';
+import { normalizeCommandError } from '../../../bridge';
+import { securityKeyPinProblem } from '../../../security-key-pin';
+import { Button } from '../../../components/button';
+import { Inset, InsetRow } from '../../../components/inset';
+import { PanelSheet } from '../../../components/panel-sheet';
+import type { PanelPresentation } from '../../../components/panel-sheet';
+import { SecurityKeyPinField } from '../../../components/security-key-pin-field';
+
+export function AdminPanel({
+  bridge,
+  profile,
+  account,
+  presentation,
+}: {
+  bridge: Bridge;
+  profile: string;
+  account: string;
+  presentation: PanelPresentation;
+}): ReactNode {
+  const access = useWorkflowAccess();
+  const target = { profile, account };
+  const configureAccess = access.props('web-admin-configure', target);
+  const openAccess = access.props('web-admin-open', target);
+  const [destination, setDestination] = useState('');
+  const [pin, setPin] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const owner = `${profile}/${account}`;
+  const active = useRef(owner);
+  useEffect(() => {
+    active.current = owner;
+    setDestination('');
+    setPin('');
+    setMessage('');
+    setError('');
+    setBusy(false);
+    return () => {
+      active.current = '';
+    };
+  }, [owner]);
+  const run = async (configure: boolean) => {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    const supplied = pin || null;
+    setPin('');
+    try {
+      access.require(
+        configure ? 'web-admin-configure' : 'web-admin-open',
+        target,
+      );
+      if (configure)
+        await bridge.configureWebAdmin(profile, account, destination);
+      else await bridge.openWebAdmin(profile, account, supplied);
+      if (active.current === owner)
+        setMessage(
+          configure
+            ? 'Address saved.'
+            : 'Admin panel opened in a private window.',
+        );
+    } catch (e) {
+      if (active.current === owner) setError(normalizeCommandError(e).message);
+    } finally {
+      if (active.current === owner) setBusy(false);
+    }
+  };
+  return (
+    <PanelSheet
+      presentation={presentation}
+      busy={busy}
+      footer={
+        <>
+          <Button disabled={busy} onClick={presentation.onClose}>
+            Cancel
+          </Button>
+          <Button
+            title={configureAccess.title}
+            disabled={busy || configureAccess.disabled || !destination}
+            onClick={() => void run(true)}
+          >
+            Save address
+          </Button>
+          <Button
+            variant="primary"
+            title={openAccess.title}
+            disabled={
+              busy || openAccess.disabled || securityKeyPinProblem(pin) !== null
+            }
+            onClick={() => void run(false)}
+          >
+            Open admin panel
+          </Button>
+        </>
+      }
+    >
+      <p>
+        Opens the host’s web admin panel in a private browser window. This
+        browser window closes automatically when FOKS locks.
+      </p>
+      <Inset className="form">
+        <InsetRow label="Admin panel address">
+          <input
+            type="url"
+            value={destination}
+            maxLength={2048}
+            disabled={busy}
+            placeholder="Address from the host operator"
+            onChange={(e) => setDestination(e.target.value)}
+          />
+        </InsetRow>
+        <SecurityKeyPinField
+          label="Security key PIN (enrolled keys only)"
+          value={pin}
+          disabled={busy}
+          onChange={setPin}
+          refusal={error}
+        />
+      </Inset>
+      {message && <p role="status">{message}</p>}
+      {error && (
+        <p role="alert" className="crit">
+          {error}
+        </p>
+      )}
+    </PanelSheet>
+  );
+}

@@ -1,0 +1,138 @@
+/** Prepare a username change for confirmation on the account page. */
+
+import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
+import { useWorkflowAccess } from '../../../workflow-context';
+import type { Bridge } from '../../../bridge';
+import type { RenameProgress } from '../../../rename-contract';
+import { checkRenameRows } from './rename-status';
+import { normalizeCommandError } from '../../../bridge';
+import { useSheetGuard } from '../../../navigation-guard';
+import { securityKeyPinProblem } from '../../../security-key-pin';
+import { Button } from '../../../components/button';
+import { Inset, InsetRow } from '../../../components/inset';
+import { PanelSheet } from '../../../components/panel-sheet';
+import type { PanelPresentation } from '../../../components/panel-sheet';
+import { SecurityKeyPinField } from '../../../components/security-key-pin-field';
+
+export function RenamePanel({
+  bridge,
+  profile,
+  account,
+  presentation,
+  onPrepared,
+}: {
+  bridge: Bridge;
+  profile: string;
+  account: string;
+  presentation: PanelPresentation;
+  /** Store the preparation response and close the dialog. */
+  onPrepared: (rows: RenameProgress[]) => void | Promise<void>;
+}): ReactNode {
+  const access = useWorkflowAccess();
+  const target = { profile, account };
+  const eligibility = access.props('account-rename', target);
+  const [name, setName] = useState('');
+  const [pin, setPin] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const generation = useRef(0);
+  useEffect(() => {
+    generation.current += 1;
+    setName('');
+    setPin('');
+    setBusy(false);
+    setError(null);
+    return () => {
+      generation.current += 1;
+    };
+  }, [profile, account]);
+  useSheetGuard(
+    busy
+      ? { verdict: 'refuse', reason: 'Wait for the rename to be prepared.' }
+      : name
+        ? {
+            verdict: 'prompt',
+            title: 'Discard username change?',
+            body: 'The new username has not been prepared.',
+            confirm: 'Discard',
+            onConfirm: presentation.onClose,
+          }
+        : null,
+  );
+  const prepare = async () => {
+    if (!name || busy || securityKeyPinProblem(pin)) return;
+    const version = generation.current;
+    setBusy(true);
+    setError(null);
+    const suppliedPin = pin || null;
+    setPin('');
+    try {
+      access.require('account-rename', target);
+      const rows = await bridge.renameAccount(profile, account, {
+        action: 'prepare',
+        username: name,
+        pin: suppliedPin,
+      });
+      if (generation.current !== version) return;
+      checkRenameRows(rows, account, null);
+      await onPrepared(rows);
+    } catch (e) {
+      if (generation.current !== version) return;
+      setError(normalizeCommandError(e).message);
+      setBusy(false);
+    }
+  };
+  const disabled = busy || eligibility.disabled;
+  return (
+    <PanelSheet
+      presentation={presentation}
+      busy={busy}
+      footer={
+        <>
+          <Button disabled={busy} onClick={presentation.onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            busy={busy}
+            title={eligibility.title}
+            disabled={disabled || !name || securityKeyPinProblem(pin) !== null}
+            onClick={() => void prepare()}
+          >
+            {busy ? 'Preparing…' : 'Prepare rename'}
+          </Button>
+        </>
+      }
+    >
+      <p>
+        Prepares a new username for this account. Nothing changes on the server
+        until you confirm the rename on the account page.
+      </p>
+      <Inset className="form">
+        <InsetRow label="Username">
+          <input
+            value={name}
+            maxLength={256}
+            disabled={disabled}
+            title={eligibility.title}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </InsetRow>
+        <SecurityKeyPinField
+          label="Security key PIN (enrolled keys only)"
+          value={pin}
+          disabled={disabled}
+          title={eligibility.title}
+          onChange={setPin}
+          refusal={error}
+        />
+      </Inset>
+      {error && (
+        <p role="alert" className="crit">
+          {error}
+        </p>
+      )}
+    </PanelSheet>
+  );
+}

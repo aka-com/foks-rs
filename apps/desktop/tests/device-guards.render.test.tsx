@@ -396,7 +396,8 @@ test('the two default routes are canonicalized without asking the guards', async
   const h = await harness();
   const { DevicesScreen } =
     await import('../src/features/devices/devices-screen');
-  const { AccountSection } = await import('../src/screens/account-section');
+  const { AccountSection } =
+    await import('../src/features/settings/account/account-section');
   const { FIXTURE } = await import('../src/mock/fixture');
   const snapshot: AgentSnapshot = FIXTURE;
 
@@ -443,7 +444,8 @@ test('Devices and Account wait for account inventory instead of showing a missin
   const h = await harness();
   const { DevicesScreen } =
     await import('../src/features/devices/devices-screen');
-  const { AccountSection } = await import('../src/screens/account-section');
+  const { AccountSection } =
+    await import('../src/features/settings/account/account-section');
   const { FIXTURE } = await import('../src/mock/fixture');
   const snapshot: AgentSnapshot = {
     ...FIXTURE,

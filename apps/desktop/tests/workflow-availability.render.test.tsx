@@ -69,7 +69,7 @@ test('a queued workflow uses the latest snapshot instead of launch permission', 
 
 test('local aliases save while remote operations are unavailable', async () => {
   const { LocalAliasPanel } =
-    await import('../src/components/local-alias-panel');
+    await import('../src/features/settings/account/local-alias-panel');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const current = await fixture();
   current.servers[0].compatibility = { status: 'required-unavailable' };
@@ -101,7 +101,8 @@ test('local aliases save while remote operations are unavailable', async () => {
 });
 
 test('web admin needs user-sync, not device administration, and rechecks submit', async () => {
-  const { AdminPanel } = await import('../src/components/admin-panel');
+  const { AdminPanel } =
+    await import('../src/features/settings/account/admin-panel');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const current = await fixture();
   current.servers[0].compatibility = {

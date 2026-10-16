@@ -20,7 +20,7 @@ import {
   serverFor,
   STATE_LABEL,
   versionMismatchText,
-} from '../src/screens/servers/server-model';
+} from '../src/features/settings/servers/server-model';
 
 const failure: ServerFailure = {
   code: 'verification-failed',

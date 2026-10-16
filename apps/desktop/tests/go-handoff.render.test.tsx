@@ -440,7 +440,7 @@ test('the start fork selects nested CLI accounts with row actions', async () => 
 
 test('disables account selection and dialog dismissal while server verification is pending', async () => {
   const { GoProfileConnectSheet } =
-    await import('../src/screens/go-profile-connect');
+    await import('../src/features/settings/account/go-profile-connect');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   let resolve!: (
     value: Awaited<ReturnType<Bridge['checkAndAddGoProfile']>>,
@@ -1226,9 +1226,10 @@ test('identity loading waits out a native mutation instead of failing setup', as
 });
 
 test('a server added after unmount is listed on Accounts and pairs without another add', async () => {
-  const { AccountSection } = await import('../src/screens/account-section');
+  const { AccountSection } =
+    await import('../src/features/settings/account/account-section');
   const { GoProfileConnectSheet } =
-    await import('../src/screens/go-profile-connect');
+    await import('../src/features/settings/account/go-profile-connect');
   const { FIXTURE } = await import('../src/mock/fixture');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
@@ -1361,7 +1362,7 @@ test('a server added after unmount is listed on Accounts and pairs without anoth
 
 test('CLI pairing resumes without entering a new device name', async () => {
   const { GoProfileConnectSheet } =
-    await import('../src/screens/go-profile-connect');
+    await import('../src/features/settings/account/go-profile-connect');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const calls: string[][] = [];

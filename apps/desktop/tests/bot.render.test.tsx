@@ -64,7 +64,8 @@ test('bot DTOs reject secret fields and wrong handles', () => {
   );
 });
 test('hardware-needed enrollment stays passive until a PIN is explicitly supplied', async () => {
-  const { BotPanel } = await import('../src/components/bot-panel');
+  const { BotPanel } =
+    await import('../src/features/settings/account/bot-panel');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const actions: BotAction[] = [];
   let scans = 0;
@@ -115,7 +116,8 @@ test('hardware-needed enrollment stays passive until a PIN is explicitly supplie
 });
 
 test('explicit role, confirmation and unknown recovery never export or replay', async () => {
-  const { BotPanel } = await import('../src/components/bot-panel');
+  const { BotPanel } =
+    await import('../src/features/settings/account/bot-panel');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const actions: BotAction[] = [];
   const bridge = {
@@ -190,7 +192,8 @@ test('explicit role, confirmation and unknown recovery never export or replay', 
 });
 
 test('revocation accepts a security key PIN directly in the Revoke pane', async () => {
-  const { BotPanel } = await import('../src/components/bot-panel');
+  const { BotPanel } =
+    await import('../src/features/settings/account/bot-panel');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const actions: BotAction[] = [];
   const bridge = {

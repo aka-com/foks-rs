@@ -266,7 +266,8 @@ test('an unsaved team name prompts before navigation', async () => {
 
 test('an active server check blocks navigation', async () => {
   const h = await harness();
-  const { ServersSection } = await import('../src/screens/servers-screen');
+  const { ServersSection } =
+    await import('../src/features/settings/servers/servers-screen');
   const unprobed: AgentSnapshot = {
     ...h.fixture,
     servers: h.fixture.servers.map((server) =>
@@ -307,7 +308,7 @@ test('an active server check blocks navigation', async () => {
 test('scanning and adding a CLI server both allow navigation', async () => {
   const h = await harness();
   const { GoProfileConnectSheet } =
-    await import('../src/screens/go-profile-connect');
+    await import('../src/features/settings/account/go-profile-connect');
   const bridge = h.bridge({
     discoverGoProfiles: async () => ({
       installed: true,
@@ -347,7 +348,7 @@ test('scanning and adding a CLI server both allow navigation', async () => {
 test('local alias draft prompts on navigation and an active save refuses it', async () => {
   const h = await harness();
   const { LocalAliasPanel } =
-    await import('../src/components/local-alias-panel');
+    await import('../src/features/settings/account/local-alias-panel');
   const { store, rendered } = h.mount(
     createElement(LocalAliasPanel, {
       bridge: h.bridge({ setLocalAccountAlias: () => never() }),

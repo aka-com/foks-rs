@@ -56,7 +56,7 @@ import {
   subscribeRecoveryPhraseTests,
 } from '../recovery-phrase-tests';
 import { DetailsPanel } from '../features/files/details-panel';
-import { unroutedNotices } from '../screens/unrouted-notices';
+import { unroutedNotices } from '../features/settings/account/unrouted-notices';
 import {
   ALL_ITEMS,
   folderKey,
