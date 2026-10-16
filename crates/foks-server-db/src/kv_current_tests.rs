@@ -305,9 +305,7 @@ fn genuine_schema55_backfill_preserves_all_base_data_counters_and_history() {
     let before = data(&c);
     // Including a tied historical name: preserve the predecessor's exact bytes,
     // without imposing a new tie-breaker or changing its history index.
-    let history_before = kv_dirent_at_name(&c, &UID, &PARENT, 1, &[3; 32])
-        .unwrap()
-        .unwrap();
+    let history_before = super::historical_tests::legacy(&c, &UID, &PARENT, 1, &[3; 32]);
     let legacy_current:Vec<Vec<u8>>=c.prepare("SELECT d.exact_dirent FROM kv_dirent_heads h JOIN kv_dirents d ON d.uid=h.uid AND d.parent_id=h.parent_id AND d.dirent_id=h.dirent_id AND d.version=h.version WHERE h.uid=?1 AND h.parent_id=?2 AND substr(d.node_id,1,1)!=X'00' ORDER BY d.name_mac,d.dirent_id LIMIT 10").unwrap().query_map(params![UID,PARENT],|r|r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
     crate::schema::initialize(&mut c).unwrap();
     invariant(&c);

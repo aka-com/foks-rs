@@ -1115,6 +1115,13 @@ fn kv_dirent(
         .transpose()
 }
 
+/// Shared key selection; exact native payloads are fetched in this same statement.
+/// The private hosted catalog wraps the identical selection with separate bounds.
+pub const KV_HISTORICAL_NAME_SELECTION_SQL: &str = "SELECT e.dirent_id,e.version FROM kv_dirents e INDEXED BY kv_dirent_historical_name JOIN kv_directories d ON d.uid=e.uid AND d.directory_id=e.parent_id AND d.version=e.directory_version WHERE e.uid=?1 AND e.parent_id=?2 AND e.name_mac=?3 AND e.directory_version=CAST(?4 AS INTEGER) ORDER BY e.version DESC,e.dirent_id ASC LIMIT 1";
+static KV_HISTORICAL_NAME_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!("WITH selected AS ({}) SELECT e.exact_dirent,e.node_id,d.exact_directory FROM selected s JOIN kv_dirents e ON e.uid=?1 AND e.parent_id=?2 AND e.dirent_id=s.dirent_id AND e.version=s.version JOIN kv_directories d ON d.uid=e.uid AND d.directory_id=e.parent_id AND d.version=e.directory_version",KV_HISTORICAL_NAME_SELECTION_SQL)
+});
+
 fn kv_dirent_at_name(
     connection: &rusqlite::Connection,
     uid: &[u8],
@@ -1124,13 +1131,7 @@ fn kv_dirent_at_name(
 ) -> Result<Option<StoredKvDirent>> {
     let stored: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = connection
         .query_row(
-            "SELECT e.exact_dirent, e.node_id, d.exact_directory
-             FROM kv_dirents e JOIN kv_directories d
-               ON d.uid = e.uid AND d.directory_id = e.parent_id
-              AND d.version = e.directory_version
-             WHERE e.uid = ?1 AND e.parent_id = ?2
-               AND e.name_mac = ?3 AND e.directory_version = ?4
-             ORDER BY e.version DESC LIMIT 1",
+            KV_HISTORICAL_NAME_SQL.as_str(),
             params![uid, parent, name_mac, sql_integer(directory_version)?],
             |row| {
                 Ok((
@@ -1616,3 +1617,7 @@ mod accounting_scaling_tests {
 #[cfg(test)]
 #[path = "kv_current_tests.rs"]
 mod current_tests;
+
+#[cfg(test)]
+#[path = "kv_historical_tests.rs"]
+mod historical_tests;
