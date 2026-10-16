@@ -2,6 +2,8 @@
 mod descriptor;
 mod introspection;
 mod policy;
+mod record_oracle;
+mod runtime;
 mod tests;
 
 use descriptor::*;
@@ -188,7 +190,16 @@ fn bytes(value: &impl Serialize) -> Result<Vec<u8>> {
     writer.write_all(b"\n").map_err(|e| e.to_string())?;
     Ok(writer.0)
 }
+struct ReferenceBundle {
+    foks: Component,
+    authority: Component,
+    ownership: serde_json::Value,
+    files: BTreeMap<String, Vec<u8>>,
+}
 fn generate() -> Result<BTreeMap<String, Vec<u8>>> {
+    Ok(reference_bundle()?.files)
+}
+fn reference_bundle() -> Result<ReferenceBundle> {
     if foks_server_db::SCHEMA_VERSION != 59 {
         return Err("schema version needs review".into());
     }
@@ -241,7 +252,8 @@ fn generate() -> Result<BTreeMap<String, Vec<u8>>> {
     let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     files.insert("foks-records-v1.json".into(), bytes(&foks)?);
     files.insert("authority-records-v1.json".into(), bytes(&authority)?);
-    files.insert("engine-ownership-v1.json".into(),bytes(&serde_json::json!({"format_version":1,"scope":"engine_owned_not_application_storage_admission","objects":engine_objects,"sqlite_owned":{"foks":foks_sqlite_owned,"authority":authority_sqlite_owned,"engine":engine_sqlite_owned}}))?);
+    let ownership = serde_json::json!({"format_version":1,"scope":"engine_owned_not_application_storage_admission","objects":engine_objects,"sqlite_owned":{"foks":foks_sqlite_owned,"authority":authority_sqlite_owned,"engine":engine_sqlite_owned}});
+    files.insert("engine-ownership-v1.json".into(), bytes(&ownership)?);
     let file_hashes: BTreeMap<&str, String> = files
         .iter()
         .map(|(name, value)| (name.as_str(), hash(value)))
@@ -258,7 +270,12 @@ fn generate() -> Result<BTreeMap<String, Vec<u8>>> {
     });
     let manifest_bytes = bytes(&manifest)?;
     files.insert("storage-descriptors-manifest.json".into(), manifest_bytes);
-    Ok(files)
+    Ok(ReferenceBundle {
+        foks,
+        authority,
+        ownership,
+        files,
+    })
 }
 fn publish_new(directory: &Path, files: BTreeMap<String, Vec<u8>>) -> Result<()> {
     const NAMES: [&str; 4] = [
