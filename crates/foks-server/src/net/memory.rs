@@ -265,6 +265,26 @@ impl foks_snowpack::AllocationBudget for Request {
     }
 }
 
+// Reuse the original request and fixed permit slots. Page-local credits never
+// release these permits; retained bytes and physical work keep this Arc alive.
+impl foks_metadata_core::owned_list::ListRetainedOwner for Request {
+    fn reserve_retained(&self, bytes: usize) -> bool {
+        !self.failed() && foks_snowpack::AllocationBudget::reserve(self, bytes) && !self.failed()
+    }
+    fn reserve_page_workspace(&self, bytes: usize) -> bool {
+        !self.failed() && foks_snowpack::AllocationBudget::reserve(self, bytes) && !self.failed()
+    }
+    fn failed(&self) -> bool {
+        Request::failed(self)
+    }
+    fn fail(&self) {
+        self.failed.store(true, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod owned_list_tests;
+
 // Field order also matters if a task is cancelled before its first poll/run.
 // Keep the whole owner in spawned closures instead of separately captured fields.
 pub(crate) struct RetainedWork<F> {

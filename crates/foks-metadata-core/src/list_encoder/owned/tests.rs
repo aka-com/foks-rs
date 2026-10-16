@@ -10,6 +10,27 @@ struct Owner {
     calls: Mutex<Vec<usize>>,
     fail_at: usize,
     failed: AtomicBool,
+    refuse_frame: AtomicBool,
+    panic_frame: AtomicBool,
+    panic_validation: AtomicBool,
+    frame_calls: Mutex<Vec<usize>>,
+}
+impl foks_snowpack::AllocationBudget for Owner {
+    fn reserve(&self, _: usize) -> bool {
+        assert!(
+            !self.panic_validation.load(Ordering::SeqCst),
+            "validation injection"
+        );
+        true
+    }
+}
+impl foks_rpc::ResponseAllocationBudget for Owner {
+    fn reserve(&self, bytes: usize, control: bool) -> bool {
+        assert!(!control);
+        assert!(!self.panic_frame.load(Ordering::SeqCst), "frame injection");
+        self.frame_calls.lock().unwrap().push(bytes);
+        !self.refuse_frame.load(Ordering::SeqCst)
+    }
 }
 impl ListRetainedOwner for Owner {
     fn reserve_retained(&self, bytes: usize) -> bool {
@@ -134,6 +155,11 @@ fn frame_errors_latch_owner_but_preserve_original_error() {
     }
 }
 struct RefuseFrame;
+impl foks_snowpack::AllocationBudget for RefuseFrame {
+    fn reserve(&self, _: usize) -> bool {
+        false
+    }
+}
 impl foks_rpc::ResponseAllocationBudget for RefuseFrame {
     fn reserve(&self, _: usize, _: bool) -> bool {
         false
@@ -147,7 +173,8 @@ fn frame_refusal_releases_output_and_latches_shared_owner() {
         .unwrap()
         .finish(true)
         .unwrap();
-    let result = foks_rpc::with_response_budget(Arc::new(RefuseFrame), || frame_owned_list(raw, 0));
+    owner.refuse_frame.store(true, Ordering::SeqCst);
+    let result = frame_owned_list(raw, 0);
     assert!(
         matches!(result, Err(foks_rpc::Error::Io(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock)
     );
@@ -155,4 +182,47 @@ fn frame_refusal_releases_output_and_latches_shared_owner() {
     drop(result);
     drop(owner);
     assert!(weak.upgrade().is_none());
+}
+
+#[test]
+fn captured_frame_owner_overrides_and_restores_ambient_on_success_error_and_unwind() {
+    for mode in 0..4 {
+        let owner = owner(0);
+        owner.refuse_frame.store(mode == 1, Ordering::SeqCst);
+        owner.panic_frame.store(mode == 2, Ordering::SeqCst);
+        owner.panic_validation.store(mode == 3, Ordering::SeqCst);
+        let raw = OwnedListEncoder::new(0, owner.clone())
+            .unwrap()
+            .finish(true)
+            .unwrap();
+        foks_snowpack::with_allocation_budget(Arc::new(RefuseFrame), || {
+            foks_rpc::with_response_budget(Arc::new(RefuseFrame), || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    frame_owned_list(raw, 256)
+                }));
+                match mode {
+                    0 => {
+                        assert!(result.unwrap().is_ok());
+                    }
+                    1 => {
+                        assert!(result.unwrap().is_err());
+                    }
+                    _ => {
+                        assert!(result.is_err());
+                    }
+                }
+                // The unrelated refusal hook was restored; it cannot have refused
+                // the captured owner's successful frame in mode zero.
+                assert!(matches!(
+                    foks_rpc::encode_success_response_at(&[0xc0], 0),
+                    Err(foks_rpc::Error::Io(_))
+                ));
+            });
+            assert!(foks_snowpack::reserve_allocation(1).is_err());
+        });
+        if mode == 3 {
+            assert_eq!(owner.frame_calls.lock().unwrap().len(), 1);
+        }
+        assert_eq!(owner.failed(), mode != 0);
+    }
 }

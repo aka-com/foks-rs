@@ -189,12 +189,12 @@ fn ordered(request: &ListRequest, previous: Option<Position>, next: Position) ->
         (ListCursor::Initial, None) => true,
     }
 }
-#[cfg(any(test, feature = "list-allocation-qualification"))]
+#[cfg(any(test, feature = "owned-list"))]
 pub(crate) mod allowance;
 
 trait Encoder {
     type Output;
-    #[cfg(any(test, feature = "list-allocation-qualification"))]
+    #[cfg(any(test, feature = "owned-list"))]
     fn page_owner(
         &self,
     ) -> Option<std::sync::Arc<dyn crate::list_encoder::owned::ListRetainedOwner>> {
@@ -212,7 +212,7 @@ impl Encoder for ListEncoder {
         ListEncoder::finish(self, final_page)
     }
 }
-#[cfg(any(test, feature = "list-allocation-qualification"))]
+#[cfg(any(test, feature = "owned-list"))]
 impl Encoder for crate::list_encoder::owned::OwnedListEncoder {
     type Output = crate::list_encoder::owned::OwnedListBytes;
     fn page_owner(
@@ -304,13 +304,13 @@ impl From<PageFault> for PersonalError {
 #[derive(Default)]
 struct PageWork {
     active: std::cell::Cell<bool>,
-    #[cfg(any(test, feature = "list-allocation-qualification"))]
+    #[cfg(any(test, feature = "owned-list"))]
     allowance: Option<std::sync::Arc<allowance::Budget>>,
 }
 struct PageScope<'a>(&'a std::cell::Cell<bool>);
 impl PageWork {
     fn new(encoder: &impl Encoder) -> crate::Result<Self> {
-        #[cfg(any(test, feature = "list-allocation-qualification"))]
+        #[cfg(any(test, feature = "owned-list"))]
         {
             Ok(Self {
                 active: std::cell::Cell::new(false),
@@ -320,7 +320,7 @@ impl PageWork {
                     .transpose()?,
             })
         }
-        #[cfg(not(any(test, feature = "list-allocation-qualification")))]
+        #[cfg(not(any(test, feature = "owned-list")))]
         {
             let _ = encoder;
             Ok(Self::default())
@@ -331,7 +331,7 @@ impl PageWork {
         f: impl FnOnce() -> std::result::Result<PageProgress, PageFault>,
     ) -> std::result::Result<PageProgress, PageFault> {
         let _scope = self.enter()?;
-        #[cfg(any(test, feature = "list-allocation-qualification"))]
+        #[cfg(any(test, feature = "owned-list"))]
         if let Some(budget) = &self.allowance {
             return budget.run(f);
         }
@@ -339,7 +339,7 @@ impl PageWork {
     }
     fn enter(&self) -> std::result::Result<PageScope<'_>, PageFault> {
         if self.active.replace(true) {
-            #[cfg(any(test, feature = "list-allocation-qualification"))]
+            #[cfg(any(test, feature = "owned-list"))]
             if let Some(budget) = &self.allowance {
                 budget.fail();
             }
@@ -479,8 +479,11 @@ pub fn read_personal_list(
     )
 }
 
-#[cfg(any(test, feature = "list-allocation-qualification"))]
-pub(crate) fn read_personal_list_owned(
+/// Read under the supplied original allocation owner, retaining it with output.
+/// The caller must establish current authentication, a valid SQL transaction and
+/// its execution/deadline scope. Allocation ownership is not permission to publish.
+#[cfg(any(test, feature = "owned-list"))]
+pub fn read_personal_list_owned(
     sql: &mut impl Sql,
     credential: &CurrentCredential,
     request: &ListRequest,
@@ -491,14 +494,24 @@ pub(crate) fn read_personal_list_owned(
     if owner.failed() {
         return Err(crate::Error::Bounds.into());
     }
-    let output = read_with_encoder(
-        sql,
-        credential,
-        request,
-        now_micros,
-        maximum_directory_bytes,
-        |count| crate::list_encoder::owned::OwnedListEncoder::new(count, owner.clone()),
-    )?;
+    let mut unwind = crate::list_encoder::owned::UnwindFailure::new(owner.clone());
+    // Bind entry/parent work too; the nested page hook restores this owner.
+    let allocation: std::sync::Arc<dyn foks_snowpack::AllocationBudget> = owner.clone();
+    let response: std::sync::Arc<dyn foks_rpc::ResponseAllocationBudget> = owner.clone();
+    let result = foks_snowpack::with_allocation_budget(allocation, || {
+        foks_rpc::with_response_budget(response, || {
+            read_with_encoder(
+                sql,
+                credential,
+                request,
+                now_micros,
+                maximum_directory_bytes,
+                |count| crate::list_encoder::owned::OwnedListEncoder::new(count, owner.clone()),
+            )
+        })
+    });
+    unwind.complete();
+    let output = result?;
     if owner.failed() {
         drop(output);
         return Err(crate::Error::Bounds.into());

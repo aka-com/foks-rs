@@ -11,7 +11,8 @@ crate-type = ["rlib", "cdylib"]
 [features]
 native = ["dep:rusqlite", "dep:getrandom"]
 read-token-qualification = []
-list-allocation-qualification = ["dep:foks-rpc"]
+owned-list = ["dep:foks-rpc"]
+list-allocation-qualification = ["owned-list"]
 
 [dependencies]
 foks-rpc = { workspace = true, optional = true }

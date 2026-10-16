@@ -246,6 +246,16 @@ fn owned_entry_fails_before_sql_only_when_owner_failed() {
         Arc,
     };
     struct Owner(AtomicBool);
+    impl foks_snowpack::AllocationBudget for Owner {
+        fn reserve(&self, _: usize) -> bool {
+            true
+        }
+    }
+    impl foks_rpc::ResponseAllocationBudget for Owner {
+        fn reserve(&self, _: usize, _: bool) -> bool {
+            true
+        }
+    }
     impl ListRetainedOwner for Owner {
         fn reserve_retained(&self, _: usize) -> bool {
             true
@@ -297,6 +307,16 @@ fn owned_page_latches_late_errors_after_preserving_role_query_precedence() {
         Arc,
     };
     struct Owner(AtomicBool);
+    impl foks_snowpack::AllocationBudget for Owner {
+        fn reserve(&self, _: usize) -> bool {
+            true
+        }
+    }
+    impl foks_rpc::ResponseAllocationBudget for Owner {
+        fn reserve(&self, _: usize, _: bool) -> bool {
+            true
+        }
+    }
     impl ListRetainedOwner for Owner {
         fn reserve_retained(&self, _: usize) -> bool {
             true

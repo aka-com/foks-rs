@@ -9,19 +9,19 @@ pub const MAX_ENTRIES: usize = 4096;
 const MAX_DIRENT_BYTES: usize = 4096;
 const MAX_SMALL_BYTES: usize = 65536;
 
-#[cfg(any(test, feature = "list-allocation-qualification"))]
+#[cfg(any(test, feature = "owned-list"))]
 pub(crate) mod owned;
 
 enum Retention {
     Ambient,
-    #[cfg(any(test, feature = "list-allocation-qualification"))]
+    #[cfg(any(test, feature = "owned-list"))]
     Owned(std::sync::Arc<dyn owned::ListRetainedOwner>),
 }
 impl Retention {
     fn reserve(&self, bytes: usize) -> Result<()> {
         match self {
             Self::Ambient => charge(bytes),
-            #[cfg(any(test, feature = "list-allocation-qualification"))]
+            #[cfg(any(test, feature = "owned-list"))]
             Self::Owned(owner) => {
                 if owner.failed() || !owner.reserve_retained(bytes) {
                     owner.fail();
@@ -33,7 +33,7 @@ impl Retention {
         }
     }
     fn fail(&self) {
-        #[cfg(any(test, feature = "list-allocation-qualification"))]
+        #[cfg(any(test, feature = "owned-list"))]
         if let Self::Owned(owner) = self {
             owner.fail();
         }

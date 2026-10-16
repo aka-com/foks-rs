@@ -13,6 +13,8 @@ mod dirents;
 pub mod list_encoder;
 #[cfg(feature = "native")]
 pub mod native;
+#[cfg(feature = "owned-list")]
+pub mod owned_list;
 pub mod page;
 pub mod page_catalog;
 pub mod personal;

@@ -9,6 +9,16 @@ struct Parent {
     failed: AtomicBool,
     refuse_workspace: AtomicBool,
 }
+impl foks_snowpack::AllocationBudget for Parent {
+    fn reserve(&self, _: usize) -> bool {
+        true
+    }
+}
+impl foks_rpc::ResponseAllocationBudget for Parent {
+    fn reserve(&self, _: usize, _: bool) -> bool {
+        true
+    }
+}
 impl ListRetainedOwner for Parent {
     fn reserve_page_workspace(&self, bytes: usize) -> bool {
         self.reservations.fetch_add(1, Ordering::SeqCst);

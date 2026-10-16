@@ -13,8 +13,8 @@ pub(crate) fn list_decoded_size() -> usize {
     std::mem::size_of::<list::Decoded>()
 }
 pub use generations::current_key_generations;
-#[cfg(any(test, feature = "list-allocation-qualification"))]
-pub(crate) use list::read_personal_list_owned;
+#[cfg(any(test, feature = "owned-list"))]
+pub use list::read_personal_list_owned;
 pub use list::{read_personal_list, ListCursor, ListRequest};
 
 use crate::{Sql, Statement as S, Value as V};
