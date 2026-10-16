@@ -57,6 +57,20 @@ struct OperationControl {
     poll_interval: Duration,
 }
 
+fn earlier_deadline(first: Option<Instant>, second: Option<Instant>) -> Option<Instant> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(first.min(second)),
+        (first, second) => first.or(second),
+    }
+}
+
+fn bounded_deadline(timeout: Duration, operation: Option<Instant>) -> Result<Instant> {
+    let local = Instant::now()
+        .checked_add(timeout)
+        .ok_or(Error::Transport("operation deadline overflow"))?;
+    Ok(operation.map_or(local, |deadline| deadline.min(local)))
+}
+
 #[derive(Debug)]
 struct CancelledIo;
 
@@ -237,6 +251,7 @@ pub(crate) struct PooledConnection {
     reusable: bool,
     maximum_frame_length: usize,
     timeout: Duration,
+    operation_deadline: Option<Instant>,
     poll_interval: Duration,
     cancellation: CancellationToken,
 }
@@ -249,12 +264,11 @@ impl PooledConnection {
 
     pub(crate) fn call(&mut self, request: &[u8], is_void: bool) -> Result<Vec<u8>> {
         let control = OperationControl {
-            deadline: Instant::now()
-                .checked_add(self.timeout)
-                .ok_or(Error::Transport("operation deadline overflow"))?,
+            deadline: bounded_deadline(self.timeout, self.operation_deadline)?,
             cancellation: self.cancellation.clone(),
             poll_interval: self.poll_interval,
         };
+        control.remaining().map_err(map_io_error)?;
         self.connection
             .as_mut()
             .ok_or(Error::Transport("pooled connection is absent"))?
@@ -367,6 +381,7 @@ impl Drop for PooledConnection {
 pub struct FoksClient {
     roots: rustls::RootCertStore,
     timeout: Duration,
+    operation_deadline: Option<Instant>,
     io_poll_interval: Duration,
     cancellation: CancellationToken,
     connection_pool: Arc<Mutex<ConnectionPool>>,
@@ -378,6 +393,7 @@ impl Clone for FoksClient {
         Self {
             roots: self.roots.clone(),
             timeout: self.timeout,
+            operation_deadline: self.operation_deadline,
             io_poll_interval: self.io_poll_interval,
             cancellation: self.cancellation.clone(),
             connection_pool: self.connection_pool.clone(),
@@ -397,6 +413,7 @@ impl FoksClient {
         Self {
             roots: rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned()),
             timeout: Duration::from_secs(15),
+            operation_deadline: None,
             io_poll_interval: DEFAULT_IO_POLL_INTERVAL,
             cancellation: CancellationToken::new(),
             connection_pool: Arc::new(Mutex::new(ConnectionPool::default())),
@@ -408,6 +425,7 @@ impl FoksClient {
         Self {
             roots,
             timeout: Duration::from_secs(15),
+            operation_deadline: None,
             io_poll_interval: DEFAULT_IO_POLL_INTERVAL,
             cancellation: CancellationToken::new(),
             connection_pool: Arc::new(Mutex::new(ConnectionPool::default())),
@@ -419,6 +437,8 @@ impl FoksClient {
     /// roots and isolated connection pool. Used for cross-profile federation.
     pub fn with_operation_controls_from(mut self, source: &Self) -> Self {
         self.timeout = source.timeout;
+        self.operation_deadline =
+            earlier_deadline(self.operation_deadline, source.operation_deadline);
         self.io_poll_interval = source.io_poll_interval;
         self.cancellation = source.cancellation.clone();
         self.maximum_frame_length = source.maximum_frame_length;
@@ -434,10 +454,21 @@ impl FoksClient {
         self.timeout = timeout;
     }
 
+    /// Bind all RPCs on a derived client to one caller-owned monotonic budget.
+    /// Rebinding can only shorten that budget. Start independent operations from
+    /// the unbound base client; socket pools never retain this caller context.
+    /// Protocol polls and bulk operations should bind their own explicit budget.
+    pub fn with_operation_deadline(&self, deadline: Instant) -> Self {
+        let mut client = self.clone();
+        client.operation_deadline = earlier_deadline(client.operation_deadline, Some(deadline));
+        client
+    }
+
     pub(crate) fn isolated_with_timeout(&self, timeout: Duration) -> Self {
         Self {
             roots: self.roots.clone(),
             timeout,
+            operation_deadline: self.operation_deadline,
             io_poll_interval: self.io_poll_interval,
             cancellation: self.cancellation.clone(),
             connection_pool: Arc::new(Mutex::new(ConnectionPool::default())),
@@ -511,14 +542,13 @@ impl FoksClient {
     }
 
     fn operation_control(&self) -> Result<OperationControl> {
-        let deadline = Instant::now()
-            .checked_add(self.timeout)
-            .ok_or(Error::Transport("operation deadline overflow"))?;
-        Ok(OperationControl {
-            deadline,
+        let control = OperationControl {
+            deadline: bounded_deadline(self.timeout, self.operation_deadline)?,
             cancellation: self.cancellation.clone(),
             poll_interval: self.io_poll_interval,
-        })
+        };
+        control.remaining().map_err(map_io_error)?;
+        Ok(control)
     }
 
     pub fn probe(&self, target: &ProbeTarget) -> Result<Vec<u8>> {
@@ -854,6 +884,7 @@ impl FoksClient {
         seed: &SecretSeed,
         certificate_chain: &'a [Vec<u8>],
     ) -> Result<TlsClientCredential<'a>> {
+        self.operation_control()?;
         Ok(TlsClientCredential {
             signing_key_pkcs8: device_signing_key_pkcs8(seed)?,
             certificate_chain,
@@ -942,6 +973,7 @@ impl FoksClient {
             reusable: true,
             maximum_frame_length: self.maximum_frame_length,
             timeout: self.timeout,
+            operation_deadline: self.operation_deadline,
             poll_interval: self.io_poll_interval,
             cancellation: self.cancellation.clone(),
         };
@@ -1023,6 +1055,127 @@ fn map_rpc_error(error: foks_rpc::Error) -> Error {
 #[cfg(test)]
 mod transport_tests {
     use super::*;
+
+    #[test]
+    fn operation_deadlines_survive_cloning_and_cannot_be_extended() {
+        let base = FoksClient::webpki();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let bound = base.with_operation_deadline(deadline);
+        assert!(base.operation_deadline.is_none());
+        assert!(base.shares_connection_pool_with(&bound));
+        let mut rebound = bound.with_operation_deadline(deadline + Duration::from_secs(60));
+        rebound.set_timeout(Duration::from_secs(120));
+        assert_eq!(rebound.operation_control().unwrap().deadline, deadline);
+        assert_eq!(
+            rebound
+                .isolated_with_timeout(Duration::from_secs(120))
+                .operation_control()
+                .unwrap()
+                .deadline,
+            deadline
+        );
+        let copied = FoksClient::webpki().with_operation_controls_from(&rebound);
+        assert_eq!(copied.operation_control().unwrap().deadline, deadline);
+        let copied_back = rebound.with_operation_controls_from(&base);
+        assert_eq!(copied_back.operation_control().unwrap().deadline, deadline);
+        let sooner = deadline - Duration::from_secs(1);
+        assert_eq!(
+            bound
+                .with_operation_deadline(sooner)
+                .operation_control()
+                .unwrap()
+                .deadline,
+            sooner
+        );
+    }
+
+    #[test]
+    fn expired_operation_rejects_before_dns_and_socket_creation() {
+        let expired =
+            FoksClient::webpki().with_operation_deadline(Instant::now() - Duration::from_secs(1));
+        let target = ProbeTarget::parse("deadline-must-not-resolve.invalid:1").unwrap();
+        assert!(matches!(
+            expired.probe(&target),
+            Err(Error::DeadlineExceeded)
+        ));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let target = ProbeTarget::parse(&listener.local_addr().unwrap().to_string()).unwrap();
+        assert!(matches!(
+            expired.probe(&target),
+            Err(Error::DeadlineExceeded)
+        ));
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn checked_out_expired_operation_sends_no_frame_and_does_not_poison_socket_pool() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        peer.set_nonblocking(true).unwrap();
+        let base = FoksClient::webpki();
+        let target = ProbeTarget::parse(&listener.local_addr().unwrap().to_string()).unwrap();
+        let tls = base
+            .connect_tls(
+                &target,
+                ControlledTcpStream {
+                    inner: socket,
+                    control: base.operation_control().unwrap(),
+                },
+                base.tls_config(None).unwrap(),
+            )
+            .unwrap();
+        let key = PoolKey {
+            hostname: target.hostname,
+            port: target.port,
+            host_id: vec![],
+            authentication: authentication_fingerprint(None),
+            trust: [0; 32],
+            selection_protocol: None,
+        };
+        let mut checked = PooledConnection {
+            connection: Some(RpcConnection {
+                stream: tls,
+                next_sequence: 0,
+            }),
+            key: key.clone(),
+            pool: base.connection_pool.clone(),
+            reusable: true,
+            maximum_frame_length: DEFAULT_MAX_FRAME_LENGTH,
+            timeout: Duration::from_secs(15),
+            operation_deadline: Some(Instant::now() - Duration::from_secs(1)),
+            poll_interval: DEFAULT_IO_POLL_INTERVAL,
+            cancellation: CancellationToken::new(),
+        };
+        checked.set_timeout(Duration::from_secs(120));
+        for _ in 0..2 {
+            // Even invalid request bytes must not be examined or transmitted.
+            assert!(matches!(
+                checked.call(&[], false),
+                Err(Error::DeadlineExceeded)
+            ));
+        }
+        assert_eq!(
+            peer.read(&mut [0]).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        drop(checked);
+        assert_eq!(
+            base.connection_pool
+                .lock()
+                .unwrap()
+                .idle
+                .get(&key)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(base.operation_control().is_ok());
+    }
 
     #[test]
     fn cancellation_and_deadline_have_distinct_errors() {
