@@ -128,6 +128,7 @@ function checkReport(report,host){
   assert.ok(admitted('decode')<=4096n*bound('row_decode'));
   assert.ok(admitted('append')<=4096n*bound('row_append'));
   assert.ok(admitted('growth')<=bound('retained_growth'));assert.ok(admitted('finish')<=bound('finish'));
+  assert.ok(admitted('parent')<=bound('parent'));assert.ok(admitted('frame')<=bound('frame'));
   if(report.outcome==='ok'){assert.match(report.list_sha256,/^[0-9a-f]{64}$/);assert.ok(number(report.response_bytes)>0n);}
   else{assert.equal(report.list_sha256,null);assert.equal(report.frame_sha256,null);assert.equal(report.response_bytes,'0');assert.equal(report.frame_bytes,'0');}
   if(report.frame_sha256!==null){assert.match(report.frame_sha256,/^[0-9a-f]{64}$/);assert.ok(number(report.frame_bytes)>0n);}

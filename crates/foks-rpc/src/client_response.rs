@@ -1,5 +1,8 @@
 //! Client response envelopes and exact result extraction.
 
+mod owned;
+pub use owned::encode_success_response_owned_at;
+
 use crate::codec::{
     check_compatibility_header, encode_text, encode_unsigned, frame, read_frame, text, unsigned,
     Cursor,

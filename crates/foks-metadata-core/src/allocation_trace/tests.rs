@@ -257,3 +257,134 @@ fn maximum_diagnostic_shape_is_bounded_before_output_allocation() {
     };
     assert!(encode_report(&r).unwrap().len() <= MAX_OUTPUT);
 }
+
+#[test]
+fn only_explicit_physical_framing_failure_sets_allocator_marker() {
+    let r = Arc::new(Recorder::new(0));
+    let _active = ActiveGuard(ACTIVE.with(|a| a.replace(Some(r.clone()))));
+    for kind in [std::io::ErrorKind::WouldBlock, std::io::ErrorKind::Other] {
+        assert_eq!(frame_error(foks_rpc::Error::Io(kind.into())), "frame_error");
+        assert!(!r.state.lock().unwrap().allocator_failed);
+    }
+    assert_eq!(
+        frame_error(foks_rpc::Error::Io(std::io::ErrorKind::OutOfMemory.into())),
+        "allocator_failed"
+    );
+    assert!(r.state.lock().unwrap().allocator_failed);
+}
+#[test]
+fn valid_parent_and_complete_list_frame_formulas_bound_real_codec_charges() {
+    use foks_proto::{
+        KvDirectory, KvDirectoryStatus, KvDirent, KvNodeId, KvSmallFileBox, Role,
+        RoleAndGeneration, SecretBox,
+    };
+    use foks_snowpack::Value;
+    for role in [
+        Role::NONE,
+        Role::ADMIN,
+        Role::OWNER,
+        Role::member(i16::MIN),
+        Role::member(i16::MAX),
+    ] {
+        for length in [0, 31, 524_000] {
+            let parent = KvDirectory {
+                id: [3; 16],
+                version: u64::MAX,
+                key: RoleAndGeneration {
+                    role,
+                    generation: u64::MAX,
+                },
+                seed_ciphertext: vec![5; length],
+                write_role: role,
+                status: KvDirectoryStatus::Dead,
+            };
+            let value = parent.to_value();
+            let exact = parent.encode().unwrap();
+            let (shape, _) = formula::shape(&value, std::mem::size_of::<Value>()).unwrap();
+            let r = Arc::new(Recorder::new(0));
+            foks_snowpack::with_allocation_budget(r.clone(), || KvDirectory::decode(&exact))
+                .unwrap();
+            assert_eq!(r.state.lock().unwrap().total.admitted_bytes, shape as u64);
+            assert!(shape <= formula::directory_decode(exact.len()).unwrap());
+            if role == Role::member(i16::MIN) {
+                assert_eq!(
+                    shape,
+                    4 * length + 60 * std::mem::size_of::<Value>() + 21_064
+                );
+            }
+        }
+        let entry = KvDirent::new(
+            [0; 16],
+            [1; 16],
+            KvNodeId([3; 17]),
+            1,
+            1,
+            role,
+            [2; 32],
+            SecretBox {
+                nonce: [3; 16],
+                ciphertext: vec![4; 128],
+            },
+            KvDirectoryStatus::Active,
+            [5; 32],
+            0,
+        )
+        .unwrap();
+        let small = KvSmallFileBox {
+            key: RoleAndGeneration {
+                role,
+                generation: 1,
+            },
+            ciphertext: vec![6; 1024],
+        };
+        for count in [0, 1, 15, 16, 64] {
+            for bodies in [0, count] {
+                let value = Value::Array(vec![
+                    if count == 0 {
+                        Value::Null
+                    } else {
+                        Value::Array((0..count).map(|_| entry.to_value()).collect())
+                    },
+                    Value::Bool(false),
+                    if bodies == 0 {
+                        Value::Null
+                    } else {
+                        Value::Array(
+                            (0..bodies)
+                                .map(|i| {
+                                    Value::Array(vec![Value::Unsigned(i as u64), small.to_value()])
+                                })
+                                .collect(),
+                        )
+                    },
+                ]);
+                let exact = foks_snowpack::encode(&value).unwrap();
+                let length = exact.len();
+                let r = Arc::new(Recorder::new(0));
+                foks_snowpack::with_allocation_budget(r.clone(), || {
+                    foks_rpc::with_response_budget(r.clone(), || {
+                        foks_rpc::encode_success_response_owned_at(exact, u64::MAX)
+                    })
+                })
+                .unwrap();
+                assert!(
+                    r.state.lock().unwrap().total.admitted_bytes
+                        <= formula::frame(length, count, bodies).unwrap() as u64
+                );
+            }
+        }
+    }
+    for n in [
+        0,
+        1,
+        524288,
+        524289,
+        crate::directory::MAXIMUM_DIRECTORY_BYTES,
+    ] {
+        assert!(formula::parent(n).unwrap() >= formula::directory_decode(n).unwrap());
+    }
+    assert!(formula::parent(usize::MAX).is_err());
+    assert!(formula::frame(usize::MAX, 1, 1).is_err());
+    assert!(formula::frame(1, 4097, 0).is_err());
+    assert!(formula::frame(1, 1, 2).is_err());
+}

@@ -329,7 +329,9 @@ pub struct Report {
     pub memory_pages: Option<u64>,
 }
 fn hash(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
+    digest_hex(Sha256::digest(bytes).into())
+}
+fn digest_hex(digest: [u8; 32]) -> String {
     let mut out = String::with_capacity(64);
     use std::fmt::Write;
     for b in digest {
@@ -381,6 +383,16 @@ pub fn run(sql: &mut impl Sql, input: &[u8]) -> crate::Result<Report> {
     let invocation = Invocation::decode(input)?;
     run_parsed(sql, invocation)
 }
+fn frame_error(error: foks_rpc::Error) -> &'static str {
+    match error {
+        foks_rpc::Error::FrameTooLarge { .. } => "frame_too_large",
+        foks_rpc::Error::Io(error) if error.kind() == std::io::ErrorKind::OutOfMemory => {
+            allocator_failed();
+            "allocator_failed"
+        }
+        _ => "frame_error",
+    }
+}
 pub fn run_parsed(sql: &mut impl Sql, i: Invocation) -> crate::Result<Report> {
     if ACTIVE.with(|a| a.borrow().is_some()) {
         return Err(Error::Invalid("trace reentry"));
@@ -403,20 +415,21 @@ pub fn run_parsed(sql: &mut impl Sql, i: Invocation) -> crate::Result<Report> {
                 crate::directory::MAXIMUM_DIRECTORY_BYTES,
             )
             .map_err(|e| outcome(&e))?;
+            // Keep only fixed-size diagnostics before consuming the raw bytes.
+            // They are published only after the entire framing operation succeeds.
+            let response_length = response.len();
+            let response_digest: [u8; 32] = Sha256::digest(&response).into();
             let frame = if i.frame {
                 let _phase = phase(Phase::Frame);
                 Some(
-                    foks_rpc::encode_success_response_at(&response, i.rpc_sequence).map_err(
-                        |e| match e {
-                            foks_rpc::Error::FrameTooLarge { .. } => "frame_too_large",
-                            _ => "frame_error",
-                        },
-                    )?,
+                    foks_rpc::encode_success_response_owned_at(response, i.rpc_sequence)
+                        .map_err(frame_error)?,
                 )
             } else {
+                drop(response);
                 None
             };
-            Ok::<_, &'static str>((response, frame))
+            Ok::<_, &'static str>((response_length, response_digest, frame))
         })
     });
     let s = *recorder.state.lock().unwrap();
@@ -461,9 +474,9 @@ pub fn run_parsed(sql: &mut impl Sql, i: Invocation) -> crate::Result<Report> {
         report.outcome = "allocator_failed";
     }
     if report.outcome == "ok" {
-        if let Ok((response, frame)) = result {
-            report.response_bytes = response.len() as u64;
-            report.list_sha256 = Some(hash(&response));
+        if let Ok((response_length, response_digest, frame)) = result {
+            report.response_bytes = response_length as u64;
+            report.list_sha256 = Some(digest_hex(response_digest));
             if let Some(frame) = frame {
                 report.frame_bytes = frame.len() as u64;
                 report.frame_sha256 = Some(hash(&frame));

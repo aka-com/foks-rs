@@ -285,6 +285,8 @@ fn check_bounds(r: &trace::Report) {
     assert!(bytes("roles") <= r.page_scopes.checked_mul(b.page_roles).unwrap());
     assert!(bytes("growth") <= b.retained_growth);
     assert!(bytes("finish") <= b.finish);
+    assert!(bytes("parent") <= b.parent);
+    assert!(bytes("frame") <= b.frame);
     assert!(trace::encode_report(r).unwrap().len() <= trace::MAX_OUTPUT);
 }
 fn without_bodies(mut input: Value) -> Value {

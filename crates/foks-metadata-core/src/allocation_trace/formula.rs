@@ -22,7 +22,9 @@ pub struct Bounds {
     pub full_page_scratch: u64,
     pub retained_growth: u64,
     pub finish: u64,
-    pub terms: [Term; 10],
+    pub parent: u64,
+    pub frame: u64,
+    pub terms: [Term; 12],
     pub uncovered: [&'static str; 6],
 }
 fn add(values: &[usize]) -> Result<usize> {
@@ -77,11 +79,7 @@ fn query(p: P, rows: usize, parameters: usize, payload: usize, l: &Layout) -> Re
         add(&[24, encoded, mul(parameters, l.cell_bytes)?, output])
     }
 }
-pub fn bounds() -> Result<Bounds> {
-    let l = layout();
-    let v = l.snowpack_value_bytes;
-    let d = 4096;
-    let n = 65536;
+fn schemas() -> Result<(KvDirent, KvSmallFileBox)> {
     // Member is the longest valid role shape; whole-record caps overestimate
     // ciphertext lengths. Scalar width does not change these charge formulas.
     let entry = KvDirent::new(
@@ -108,6 +106,65 @@ pub fn bounds() -> Result<Bounds> {
         },
         ciphertext: vec![],
     };
+    Ok((entry, small))
+}
+/// Valid directory schema only; malformed input retains decoder-wide limits.
+pub fn directory_decode(length: usize) -> Result<usize> {
+    if length > crate::directory::MAXIMUM_DIRECTORY_BYTES {
+        return Err(Error::Bounds);
+    }
+    add(&[
+        mul(4, length)?,
+        mul(60, layout().snowpack_value_bytes)?,
+        21_064,
+    ])
+}
+pub fn parent(length: usize) -> Result<usize> {
+    let l = layout();
+    let decode = directory_decode(length)?;
+    let slices = length.div_ceil(crate::directory::DIRECTORY_SLICE_BYTES);
+    add(&[
+        49,
+        mul(3, l.value_bytes)?,
+        query(P::DirectoryProbe, 1, 3, 69, &l)?,
+        length,
+        mul(
+            slices,
+            add(&[
+                49,
+                mul(6, l.value_bytes)?,
+                query(P::DirectorySlice, 1, 6, 129, &l)?,
+            ])?,
+        )?,
+        decode,
+    ])
+}
+/// Valid normalized List plus the unchanged conservative RPC response hook.
+/// Binary payloads use total encoded length; this is cumulative, not live memory.
+pub fn frame(length: usize, entries: usize, bodies: usize) -> Result<usize> {
+    if length > crate::list_encoder::MAX_LIST_BYTES || bodies > entries || entries > 4096 {
+        return Err(Error::Bounds);
+    }
+    let v = layout().snowpack_value_bytes;
+    let (entry, small) = schemas()?;
+    let entry = shape(&entry.to_value(), v)?.0;
+    let small = shape(&small.to_value(), v)?.0;
+    let extended_pair = add(&[mul(8, v)?, 4096, small])?;
+    add(&[
+        mul(4, length)?,
+        mul(mul(4, add(&[3, entries, bodies])?)?, v)?,
+        3 * 4096,
+        mul(entries, entry)?,
+        mul(bodies, extended_pair)?,
+        mul(2, add(&[length, 128])?)?,
+    ])
+}
+pub fn bounds() -> Result<Bounds> {
+    let l = layout();
+    let v = l.snowpack_value_bytes;
+    let d = 4096;
+    let n = 65536;
+    let (entry, small) = schemas()?;
     let (dd, de) = shape(&entry.to_value(), v)?;
     let (sd, se) = shape(&small.to_value(), v)?;
     let decode_admission = add(&[mul(4, add(&[d, n])?)?, 8192])?;
@@ -156,7 +213,19 @@ pub fn bounds() -> Result<Bounds> {
         full_page_scratch: full_page_scratch as u64,
         retained_growth: retained_growth as u64,
         finish: crate::list_encoder::MAX_LIST_BYTES as u64,
+        parent: parent(crate::directory::MAXIMUM_DIRECTORY_BYTES)? as u64,
+        frame: frame(crate::list_encoder::MAX_LIST_BYTES, 4096, 4096)? as u64,
         terms: [
+            term(
+                "parent valid-schema cumulative",
+                "parent",
+                parent(crate::directory::MAXIMUM_DIRECTORY_BYTES)?,
+            ),
+            term(
+                "valid List validation + RPC response hook",
+                "frame",
+                frame(crate::list_encoder::MAX_LIST_BYTES, 4096, 4096)?,
+            ),
             term("list::parameters", "page", page_params),
             term(
                 "query_page bindings/cursor/encoded page",
@@ -189,8 +258,8 @@ pub fn bounds() -> Result<Bounds> {
             ),
         ],
         uncovered: [
-            "parent slices/full directory decode: measured separately; formula pending",
-            "RPC framing validation/copies: origin-separated traces; formula pending",
+            "malformed parent/List: decoder-wide bounds, not valid-schema formulas",
+            "actual parent/frame live capacity and fragmentation, separate from charges",
             "scalar aggregate formula pending; S1 requested native copies are admitted",
             "S2 Wasm scalar JSON and TLS buffer lifetime",
             "S3 domain credential/DER/authority copies",
