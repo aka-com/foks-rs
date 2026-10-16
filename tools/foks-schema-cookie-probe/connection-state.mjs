@@ -1,6 +1,6 @@
 // Fixed runtime prerequisites only. Exclusive connection ownership is not proven.
 export const TEMP_PRESENT = "SELECT CASE WHEN EXISTS(SELECT 1 FROM temp.sqlite_schema LIMIT 1) THEN '1' ELSE '0' END AS value";
-export const ATTACHED_PRESENT = "SELECT CASE WHEN EXISTS(SELECT 1 FROM pragma_database_list() WHERE name NOT IN ('main','temp')) THEN '1' ELSE '0' END AS value";
+export const ATTACHED_PRESENT = "SELECT CASE WHEN EXISTS(SELECT 1 FROM pragma_table_list WHERE schema NOT IN ('main','temp')) THEN '1' ELSE '0' END AS value";
 const COOKIE = 'SELECT CAST(schema_version AS TEXT) AS value FROM pragma_schema_version';
 const MAIN_ABSENT = "SELECT CASE WHEN EXISTS(SELECT 1 FROM main.sqlite_schema WHERE name='foks_connection_state_target') THEN '0' ELSE '1' END AS value";
 export const ATTACH = "ATTACH ':memory:' AS foks_connection_state_attached";

@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {ATTACH,ATTACHED_PRESENT,CANDIDATES,TEMP_PRESENT,runProbe} from './connection-state.mjs';
 
 function fixture({denyAttach=true, denyCandidates=[], override, rollback='normal', attachThenThrow=false}={}) {
@@ -105,4 +108,36 @@ test('preexisting attachment is rejected independently of TEMP',()=>{
   const {db,storage}=fixture();
   try {db.exec("ATTACH ':memory:' AS prior");const r=runProbe(storage);assert.equal(r.passed,false);assert.equal(r.stage,'initial-attachments');assert.match(r.error,/initial attached/);}
   finally {db.close();}
+});
+
+
+test('table-list inspection detects empty memory and file attachments without relying on user tables',()=>{
+  const directory=mkdtempSync(join(tmpdir(),'foks-attachment-probe-'));
+  const {db,storage}=fixture();
+  const present=()=>db.prepare(ATTACHED_PRESENT).get().value;
+  const attached=()=>db.prepare('PRAGMA database_list').all().filter(row=>!['main','temp'].includes(row.name)).map(row=>row.name).sort();
+  try{
+    assert.equal(present(),'0');assert.deepEqual(attached(),[]);
+    db.exec('CREATE TEMP TABLE local_only(value)');
+    assert.equal(present(),'0');assert.deepEqual(attached(),[]);
+    db.exec('DROP TABLE temp.local_only');
+    db.exec("ATTACH ':memory:' AS memory_empty");
+    assert.deepEqual(attached(),['memory_empty']);assert.equal(present(),'1');
+    assert.equal(db.prepare('SELECT count(*) AS n FROM memory_empty.sqlite_schema').get().n,0);
+    let result=runProbe(storage);
+    assert.equal(result.passed,false);assert.equal(result.stage,'initial-attachments');assert.deepEqual(result.outcomes,[]);
+    db.prepare('ATTACH ? AS file_empty').run(join(directory,'empty.sqlite'));
+    assert.deepEqual(attached(),['file_empty','memory_empty']);assert.equal(present(),'1');
+    assert.equal(db.prepare('SELECT count(*) AS n FROM file_empty.sqlite_schema').get().n,0);
+    db.exec('CREATE TABLE memory_empty.example(value)');
+    assert.equal(present(),'1');
+    db.exec('DETACH memory_empty');
+    assert.deepEqual(attached(),['file_empty']);assert.equal(present(),'1');
+    result=runProbe(storage);
+    assert.equal(result.passed,false);assert.equal(result.stage,'initial-attachments');assert.deepEqual(result.outcomes,[]);
+    db.exec('CREATE TABLE file_empty.example(value)');
+    assert.equal(present(),'1');
+    db.exec('DETACH file_empty');
+    assert.deepEqual(attached(),[]);assert.equal(present(),'0');
+  }finally{db.close();rmSync(directory,{recursive:true,force:true});}
 });
