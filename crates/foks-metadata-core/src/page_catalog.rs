@@ -12,6 +12,8 @@ pub enum PageStatement {
     ListMacContinue,
     ListTimeStart,
     ListTimeContinue,
+    DirectoryProbe,
+    DirectorySlice,
 }
 
 const INTEGER: Column = Column {
@@ -86,6 +88,17 @@ const TIME_CONTINUE_PARAMETERS: &[Column] = &[
     INTEGER,
     INTEGER,
 ];
+const DIRECTORY_PROBE_PARAMETERS: &[Column] = &[blob(33, false), blob(16, false), INTEGER];
+const DIRECTORY_PROBE_COLUMNS: &[Column] = &[INTEGER, text(7), INTEGER];
+const DIRECTORY_SLICE_PARAMETERS: &[Column] = &[
+    blob(33, false),
+    blob(16, false),
+    INTEGER,
+    INTEGER,
+    INTEGER,
+    INTEGER,
+];
+const DIRECTORY_SLICE_COLUMNS: &[Column] = &[INTEGER, text(7), INTEGER, blob(512 * 1024, true)];
 
 macro_rules! list_projection {
     () => {
@@ -121,13 +134,15 @@ const TIME_CONTINUE: &str = concat!(list_projection!(),
     "WHERE c.uid=?1 AND c.parent_id=?2 AND (c.creation_time,c.dirent_id)>(CAST(?3 AS INTEGER),?4) ORDER BY c.creation_time,c.dirent_id LIMIT CAST(?6 AS INTEGER)");
 
 impl PageStatement {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::ProbeTypes,
         Self::ListInitial,
         Self::ListMacStart,
         Self::ListMacContinue,
         Self::ListTimeStart,
         Self::ListTimeContinue,
+        Self::DirectoryProbe,
+        Self::DirectorySlice,
     ];
     pub fn from_id(id: u32) -> Option<Self> {
         Self::ALL
@@ -136,6 +151,14 @@ impl PageStatement {
     }
     pub fn spec(self) -> PageSpec {
         let (sql,parameters,columns,integer_ranges,limit_parameter):(_, &'static [_], &'static [_], &'static [_], _) = match self {
+            Self::DirectoryProbe => (
+                "SELECT CAST(d.version AS TEXT),typeof(d.exact_directory),CAST(length(CAST(d.exact_directory AS BLOB)) AS TEXT) FROM kv_directory_heads h JOIN kv_directories d ON d.uid=h.uid AND d.directory_id=h.directory_id AND d.version=h.version WHERE h.uid=?1 AND h.directory_id=?2 AND CAST(?3 AS INTEGER)>0",
+                DIRECTORY_PROBE_PARAMETERS,DIRECTORY_PROBE_COLUMNS,
+                &[IntegerRange{parameter:2,minimum:1,maximum:16*1024*1024}],None),
+            Self::DirectorySlice => (
+                "SELECT CAST(d.version AS TEXT),typeof(d.exact_directory),CAST(length(CAST(d.exact_directory AS BLOB)) AS TEXT),CASE WHEN typeof(d.exact_directory)='blob' AND length(d.exact_directory)<=CAST(?6 AS INTEGER) THEN substr(d.exact_directory,CAST(?4 AS INTEGER)+1,CAST(?5 AS INTEGER)) ELSE NULL END FROM kv_directory_heads h JOIN kv_directories d ON d.uid=h.uid AND d.directory_id=h.directory_id AND d.version=h.version WHERE h.uid=?1 AND h.directory_id=?2 AND h.version=CAST(?3 AS INTEGER)",
+                DIRECTORY_SLICE_PARAMETERS,DIRECTORY_SLICE_COLUMNS,
+                &[IntegerRange{parameter:2,minimum:1,maximum:i64::MAX},IntegerRange{parameter:3,minimum:0,maximum:16*1024*1024-1},IntegerRange{parameter:4,minimum:1,maximum:512*1024},IntegerRange{parameter:5,minimum:1,maximum:16*1024*1024}],None),
             Self::ProbeTypes => (
                 "WITH RECURSIVE seq(n) AS (SELECT 0 WHERE CAST(?1 AS INTEGER)>0 UNION ALL SELECT n+1 FROM seq WHERE n+1<CAST(?1 AS INTEGER)) SELECT CAST(n AS TEXT),CAST(CAST(?2 AS INTEGER) AS TEXT),?3,?4,?5 FROM seq LIMIT CAST(?6 AS INTEGER)",
                 PROBE_PARAMETERS,
@@ -152,7 +175,11 @@ impl PageStatement {
             sql,
             parameters,
             columns,
-            maximum_rows: 64,
+            maximum_rows: if matches!(self, Self::DirectoryProbe | Self::DirectorySlice) {
+                1
+            } else {
+                64
+            },
             maximum_bytes: 1_048_576,
             integer_ranges,
             limit_parameter,

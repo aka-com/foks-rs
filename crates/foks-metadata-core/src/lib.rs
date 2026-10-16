@@ -6,12 +6,15 @@
 
 pub mod authority;
 pub mod catalog;
+pub mod directory;
 mod dirents;
+pub mod list_encoder;
 #[cfg(feature = "native")]
 pub mod native;
 pub mod page;
 pub mod page_catalog;
 pub mod personal;
+pub mod read_token;
 #[cfg(target_arch = "wasm32")]
 mod wasm;
 pub mod wire;

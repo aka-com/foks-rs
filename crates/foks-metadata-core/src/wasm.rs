@@ -18,6 +18,24 @@ extern "C" {
     fn sql_page(statement: u32, parameters: *const u8, length: u32) -> u32;
 }
 
+/// Private decoder qualification only: no caller authentication or service route.
+#[no_mangle]
+pub extern "C" fn run_directory_key() -> u32 {
+    let input = INPUT.with(|b| std::mem::take(&mut *b.borrow_mut()));
+    let result = crate::directory::qualify(&mut Host { calls: 0 }, input);
+    let (status, bytes) = match result {
+        Ok(bytes) => (0, bytes),
+        Err(error) => (
+            1,
+            crate::directory::qualification_error(&error)
+                .as_bytes()
+                .to_vec(),
+        ),
+    };
+    OUTPUT.with(|b| *b.borrow_mut() = bytes);
+    status
+}
+
 #[no_mangle]
 pub extern "C" fn page_abi_version() -> u32 {
     u32::from(crate::page::ABI_VERSION)
@@ -335,3 +353,6 @@ fn personal_output<T: serde::Serialize>(result: crate::personal::Result<T>) -> u
     OUTPUT.with(|b| *b.borrow_mut() = output);
     status
 }
+
+#[path = "read_token_wasm.rs"]
+mod read_token_host;

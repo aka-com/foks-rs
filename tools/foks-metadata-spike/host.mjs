@@ -90,7 +90,9 @@ export class Kernel {
     try {return this.instance.exports[name](...args);}
     catch(error){this.poisoned=true;throw error;}
   }
-  runPage(bytes,{deadline=Date.now()+1000,failAfter=0,trapAfter=0,failStatement=0,trapStatement=0,workingLimit=8*MAX_PAGE}={}){
+  runPage(bytes,controls={}){return this.runPageEntry('run_page',bytes,controls);}
+  runDirectory(bytes,controls={}){return this.runPageEntry('run_directory_key',bytes,controls);}
+  runPageEntry(entry,bytes,{deadline=Date.now()+1000,failAfter=0,trapAfter=0,failStatement=0,trapStatement=0,workingLimit=8*MAX_PAGE}={}){
     if(this.poisoned)throw new Error('poisoned kernel instance');
     if(this.running||!this.pageSpec)throw new Error('page activation/entry guard');
     if(!(bytes instanceof Uint8Array)||bytes.length<HEADER||bytes.length>MAX_PARAMETERS)throw new KernelError('bounds');
@@ -104,7 +106,7 @@ export class Kernel {
       this.range(pointer,bytes.length,MAX_PARAMETERS).set(bytes);
       // An imported exception/trap skips Rust destructors. Never reuse this
       // instance after an export throws; a normal returned error remains safe.
-      const status=this.invokePageExport('run_page');
+      const status=this.invokePageExport(entry);
       const output=this.range(this.instance.exports.output_pointer(),this.instance.exports.output_length(),MAX_PAGE);
       if(status!==0)throw new KernelError(decoder.decode(output));
       if(Date.now()>=deadline)throw new KernelError('expired');

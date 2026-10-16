@@ -9,7 +9,8 @@ description = "Bounded native/Wasm metadata transaction feasibility kernel"
 crate-type = ["rlib", "cdylib"]
 
 [features]
-native = ["dep:rusqlite"]
+native = ["dep:rusqlite", "dep:getrandom"]
+read-token-qualification = []
 
 [dependencies]
 foks-proto = { workspace = true }
@@ -17,9 +18,15 @@ foks-snowpack = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+hmac = "0.12"
+# Existing locked HMAC uses digest 0.10; keep existing metadata SHA-256 unchanged.
+sha2_hmac = { package = "sha2", version = "0.10" }
+zeroize = { workspace = true }
+getrandom = { workspace = true, optional = true }
 rusqlite = { workspace = true, optional = true }
 
 [dev-dependencies]
+foks-rpc = { workspace = true }
 foks-server-db = { workspace = true }
 foks-merkle-store = { workspace = true }
 tempfile = { workspace = true }
