@@ -1,5 +1,7 @@
 # foks-rs review, October 2026
 
+> **Status, 16 October 2026:** 74 of the 165 findings below are fixed on branch `claude/focused-mccarthy-3amy72` and 13 are partly fixed. [STATUS.md](STATUS.md) lists what was fixed, what remains of each partly fixed finding, and what was left out. The explorer page (`index.html`) shows only the open findings.
+
 A review of the whole repository: the chat product and stack, the desktop frontend and native shell, the agent, CLI and MCP server, the client libraries, the server, the protocol and crypto crates, and build, CI and documentation. It ends in feature refinements, missing features, and code-quality and maintainability work, sequenced into a roadmap. Interactive HTML mockups cover the UI-facing refinements.
 
 ## Method
