@@ -203,19 +203,70 @@ fn native_list_oracle_matches_raw_authenticated_rpc_bytes_and_errors() {
     else {
         panic!("encoded List argument must be a struct")
     };
-    fields[2] = foks_snowpack::Value::Null;
-    assert!(matches!(
-        compare(
-            foks_rpc::encode_call(
-                call.protocol_id(),
-                call.method_position(),
-                &foks_snowpack::encode(&foks_snowpack::Value::Array(fields)).unwrap(),
-                sequence,
-            )
-            .unwrap()
+    let mut malformed = Vec::new();
+    let mut changed = fields.clone();
+    changed[2] = foks_snowpack::Value::Null;
+    malformed.push((changed, "KV pagination is not a struct"));
+    let mut changed = fields.clone();
+    changed[1] = foks_snowpack::Value::Null;
+    changed[2] = foks_snowpack::Value::Null;
+    malformed.push((changed, "KV directory ID is not binary"));
+    let mut changed = fields.clone();
+    changed[1] = foks_snowpack::Value::Binary(vec![0; 15]);
+    malformed.push((changed, "KV directory ID has the wrong width"));
+    let mut changed = fields.clone();
+    changed.push(foks_snowpack::Value::Null);
+    malformed.push((changed, "KV argument has the wrong shape"));
+    for (cursor, count, load, message) in [
+        (
+            foks_snowpack::Value::Null,
+            foks_snowpack::Value::Negative(-1),
+            foks_snowpack::Value::Bool(false),
+            "KV pagination has the wrong shape",
         ),
-        Err(RpcStatus::BadArguments(_))
-    ));
+        (
+            foks_snowpack::Value::Null,
+            foks_snowpack::Value::Unsigned(1),
+            foks_snowpack::Value::Bool(false),
+            "KV list cursor is not a struct",
+        ),
+        (
+            foks_snowpack::Value::Array(vec![
+                foks_snowpack::Value::Unsigned(0),
+                foks_snowpack::Value::Null,
+            ]),
+            foks_snowpack::Value::Unsigned(1),
+            foks_snowpack::Value::Bool(false),
+            "unsupported KV list cursor",
+        ),
+    ] {
+        let mut changed = fields.clone();
+        changed[2] = foks_snowpack::Value::Array(vec![cursor, count, load]);
+        malformed.push((changed, message));
+    }
+    // Authority parsing still runs first; the extracted field decoder must not
+    // turn this into the competing pagination error.
+    fields[0] = foks_snowpack::Value::Array(vec![
+        foks_snowpack::Value::Unsigned(0),
+        foks_snowpack::Value::Null,
+    ]);
+    fields[2] = foks_snowpack::Value::Null;
+    malformed.push((fields, "unsupported KV authentication"));
+    for (fields, message) in malformed {
+        assert_eq!(
+            compare(
+                foks_rpc::encode_call(
+                    call.protocol_id(),
+                    call.method_position(),
+                    &foks_snowpack::encode(&foks_snowpack::Value::Array(fields)).unwrap(),
+                    sequence,
+                )
+                .unwrap()
+            ),
+            Err(RpcStatus::BadArguments(message.into()))
+        );
+        sequence += 1;
+    }
     drop(tls);
     // Certificate failures are outer qualification errors, not invented List statuses.
     assert!(matches!(

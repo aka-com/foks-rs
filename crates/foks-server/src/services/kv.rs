@@ -846,21 +846,17 @@ fn list(
     reader: &foks_server_db::ReadSnapshot<'_>,
     authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
-    let fields = fields(argument, 3)?;
-    let id = fixed_16(&fields[1], "KV directory ID")?;
-    let Value::Array(pagination) = &fields[2] else {
-        return Err(bad_arguments("KV pagination is not a struct"));
+    let foks_rpc::arguments::KvListArguments {
+        parent: id,
+        cursor,
+        number,
+        load_small,
+    } = foks_rpc::arguments::decode_kv_list_arguments(argument)?;
+    let cursor = match cursor {
+        foks_rpc::KvListCursor::None => None,
+        foks_rpc::KvListCursor::Mac(mac) => Some(foks_server_db::KvListCursor::Mac(mac)),
+        foks_rpc::KvListCursor::Time(time) => Some(foks_server_db::KvListCursor::Time(time)),
     };
-    let [cursor, Value::Unsigned(number), Value::Bool(load_small)] = pagination.as_slice() else {
-        return Err(bad_arguments("KV pagination has the wrong shape"));
-    };
-    const GO_DEFAULT_PAGE_ENTRIES: u64 = 4096;
-    let number = if *number == 0 || *number > GO_DEFAULT_PAGE_ENTRIES {
-        GO_DEFAULT_PAGE_ENTRIES
-    } else {
-        *number
-    };
-    let cursor = list_cursor(cursor)?;
     let uid = authority.party.clone();
     let parent = reader
         .kv_directory(&uid, &id)
@@ -880,7 +876,7 @@ fn list(
     for (position, stored) in stored.into_iter().enumerate() {
         let entry =
             foks_proto::KvDirent::decode(&stored.exact).map_err(|_| RpcStatus::TransactionRetry)?;
-        if *load_small && stored.node_id[0] == 3 {
+        if load_small && stored.node_id[0] == 3 {
             let Some(node) = reader
                 .kv_node(&uid, &stored.node_id)
                 .map_err(|_| RpcStatus::TransactionRetry)?
@@ -1325,33 +1321,6 @@ fn fixed_32(value: &Value, kind: &'static str) -> Result<[u8; 32], RpcStatus> {
         .as_slice()
         .try_into()
         .map_err(|_| bad_arguments(format_args!("{kind} has the wrong width")))
-}
-
-fn list_cursor(value: &Value) -> Result<Option<foks_server_db::KvListCursor>, RpcStatus> {
-    let Value::Array(fields) = value else {
-        return Err(bad_arguments("KV list cursor is not a struct"));
-    };
-    match fields.as_slice() {
-        [Value::Unsigned(0), Value::Variant(None)] => Ok(None),
-        [Value::Unsigned(1), Value::Variant(Some((tag, value)))] if tag == b"1" => {
-            let Value::Binary(bytes) = value.as_ref() else {
-                return Err(bad_arguments("KV list MAC cursor is not binary"));
-            };
-            bytes
-                .as_slice()
-                .try_into()
-                .map(foks_server_db::KvListCursor::Mac)
-                .map(Some)
-                .map_err(|_| bad_arguments("KV list MAC cursor has the wrong width"))
-        }
-        [Value::Unsigned(2), Value::Variant(Some((tag, value)))] if tag == b"2" => {
-            let Value::Unsigned(time) = value.as_ref() else {
-                return Err(bad_arguments("KV list time cursor is not unsigned"));
-            };
-            Ok(Some(foks_server_db::KvListCursor::Time(*time)))
-        }
-        _ => Err(bad_arguments("unsupported KV list cursor")),
-    }
 }
 
 fn lock_fields(value: &Value) -> Result<LockFields, RpcStatus> {
