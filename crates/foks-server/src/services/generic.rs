@@ -384,10 +384,10 @@ fn stored_role(role_type: u64, visibility: i64) -> Result<Role, RpcStatus> {
     match role_type {
         1 => i16::try_from(visibility)
             .map(Role::member)
-            .map_err(|_| internal(foks_server_db::Error::IntegerRange)),
+            .map_err(|_| internal(foks_server_db::Error::Invalid("stored role"))),
         2 if visibility == 0 => Ok(Role::ADMIN),
         3 if visibility == 0 => Ok(Role::OWNER),
-        _ => Err(RpcStatus::TransactionRetry),
+        _ => Err(internal(foks_server_db::Error::Invalid("stored role"))),
     }
 }
 

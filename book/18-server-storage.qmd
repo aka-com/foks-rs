@@ -182,7 +182,8 @@ opens connections lazily up to a maximum (default 32) and, when exhausted,
 returns `Error::ReaderPool` rather than waiting. The request is answered
 with status 1012 and counted in `foks_reader_pool_exhausted_total`, apart
 from the per-address rate limit. A lease returns its connection to the pool
-on drop.
+on drop; the pool never closes a connection it opened, and the
+`foks_reader_pool_open` gauge reports how many it holds.
 
 A `ReadSnapshot` wraps a read transaction on one of these connections and
 is the unit of consistency: every query inside it sees the same WAL state.

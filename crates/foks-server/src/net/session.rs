@@ -97,10 +97,12 @@ impl ServerData {
                 .read_database
                 .clone()
                 .map(|database| {
-                    crate::read_pool::ReadPool::new(
+                    let pool = crate::read_pool::ReadPool::new(
                         database,
                         config.limits.maximum_read_connections,
-                    )
+                    )?;
+                    config.metrics.reader_pool_opened(pool.open_connections()?);
+                    Ok::<_, crate::Error>(pool)
                 })
                 .transpose()?,
             writer: config.writer.clone(),

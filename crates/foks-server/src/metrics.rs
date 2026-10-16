@@ -108,6 +108,7 @@ pub struct ServerMetricsSnapshot {
     pub rate_limited_connections: u64,
     pub rate_limited_requests: u64,
     pub reader_pool_exhausted: u64,
+    pub reader_pool_open: u64,
     pub request_duration_observations: u64,
     pub request_duration_microseconds_total: u64,
     pub request_duration_microseconds_max: u64,
@@ -158,6 +159,7 @@ pub struct ServerMetrics {
     rate_limited_connections: AtomicU64,
     rate_limited_requests: AtomicU64,
     reader_pool_exhausted: AtomicU64,
+    reader_pool_open: AtomicU64,
     /// Written responses keyed by route family and wire status code.
     request_outcomes: Mutex<BTreeMap<(&'static str, u64), u64>>,
     request_duration: DurationMetric,
@@ -230,6 +232,7 @@ impl ServerMetrics {
             rate_limited_connections: self.rate_limited_connections.load(Ordering::Relaxed),
             rate_limited_requests: self.rate_limited_requests.load(Ordering::Relaxed),
             reader_pool_exhausted: self.reader_pool_exhausted.load(Ordering::Relaxed),
+            reader_pool_open: self.reader_pool_open.load(Ordering::Relaxed),
             request_duration_observations: request_duration.observations,
             request_duration_microseconds_total: request_duration.microseconds_total,
             request_duration_microseconds_max: request_duration.microseconds_max,
@@ -363,6 +366,14 @@ impl ServerMetrics {
     /// use. This is separate from the per-address token bucket.
     pub(crate) fn reader_pool_exhausted(&self) {
         self.reader_pool_exhausted.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records that the request reader pool holds `open` connections. The
+    /// pool never closes a connection it opened, so the gauge keeps the
+    /// largest count reported, whatever order concurrent leases report in.
+    pub(crate) fn reader_pool_opened(&self, open: usize) {
+        let open = u64::try_from(open).unwrap_or(u64::MAX);
+        self.reader_pool_open.fetch_max(open, Ordering::Relaxed);
     }
 
     pub(crate) fn backup_attempted(&self) {

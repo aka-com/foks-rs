@@ -134,12 +134,10 @@ pub(crate) mod contract {
         sqlite(rusqlite::ffi::SQLITE_FULL)
     }
 
-    /// The number of request failures counted in this process so far.
+    /// The number of request failures counted on this test's thread so far.
+    /// Other tests running in parallel do not change it.
     pub(crate) fn failures_counted() -> u64 {
-        crate::diagnostics::operational::request_failures()
-            .into_iter()
-            .map(|(_, _, count)| count)
-            .sum()
+        crate::diagnostics::operational::thread_request_failures()
     }
 
     /// Asserts that `map` reports the shared failure classes with the shared

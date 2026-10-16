@@ -253,7 +253,9 @@ stderr line per minute, `FOKS request failed: site=..., reason=...,
 count_since_last_line=...`, without error text. This counter is process-wide.
 Handler paths that still map an error to status 1014 inline, without a mapper,
 are not counted. `foks_reader_pool_exhausted_total` counts requests refused
-with status 1012 because every pooled read connection was in use;
+with status 1012 because every pooled read connection was in use. The
+`foks_reader_pool_open` gauge is the number of connections that pool holds
+open; it never decreases, because the pool keeps every connection it opens.
 `foks_rate_limited_requests_total` counts only per-source token-bucket and
 handler-permit refusals. `foks_admission_rejected_total{reason}` counts every
 admission refusal by its cause: `connection_rate` and `request_rate` (the

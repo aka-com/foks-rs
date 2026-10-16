@@ -153,7 +153,23 @@ pub(crate) fn request_invariant_failed(site: &'static str) {
     record_request_failure(site, Reason::Internal);
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Request failures recorded on the current thread. Unit tests run in
+    /// parallel and share [`REQUEST_FAILURES`], so a test that checks whether
+    /// one call was counted reads this count instead.
+    static THREAD_REQUEST_FAILURES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The number of request failures recorded on the current thread.
+#[cfg(test)]
+pub(crate) fn thread_request_failures() -> u64 {
+    THREAD_REQUEST_FAILURES.get()
+}
+
 fn record_request_failure(site: &'static str, reason: Reason) {
+    #[cfg(test)]
+    THREAD_REQUEST_FAILURES.set(THREAD_REQUEST_FAILURES.get() + 1);
     let reason = reason.code();
     let logged = {
         let mut failures = REQUEST_FAILURES

@@ -493,6 +493,11 @@ fn prometheus(
         ] {
             let _ = writeln!(output, "# TYPE {name} counter\n{name} {value}");
         }
+        let _ = writeln!(
+            output,
+            "# TYPE foks_reader_pool_open gauge\nfoks_reader_pool_open {}",
+            metrics.reader_pool_open
+        );
         let _ = writeln!(output, "# TYPE foks_accept_errors_total counter");
         for kind in crate::AcceptErrorKind::ALL {
             let _ = writeln!(

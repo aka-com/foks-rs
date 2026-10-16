@@ -45,28 +45,45 @@ impl ReadPool {
         })
     }
 
+    /// The number of connections the pool holds open, idle or leased.
+    pub(crate) fn open_connections(&self) -> Result<usize> {
+        let state = self.inner.state.lock().map_err(|_| Error::Thread)?;
+        Ok(state.open_connections)
+    }
+
     pub(crate) fn checkout(&self) -> Result<ReadLease> {
+        self.checkout_counted().map(|(lease, _)| lease)
+    }
+
+    /// Checks out a connection and returns it with the number of connections
+    /// the pool held open when it was checked out.
+    fn checkout_counted(&self) -> Result<(ReadLease, usize)> {
         let mut state = self.inner.state.lock().map_err(|_| Error::Thread)?;
         if let Some(database) = state.idle.pop() {
-            return Ok(ReadLease {
+            let lease = ReadLease {
                 pool: Arc::clone(&self.inner),
                 database: Some(database),
-            });
+            };
+            return Ok((lease, state.open_connections));
         }
         if state.open_connections == self.inner.maximum_connections {
             return Err(Error::ReaderPool);
         }
         state.open_connections += 1;
+        let open = state.open_connections;
         drop(state);
 
         match foks_server_db::ReadDatabase::open_pooled(
             &self.inner.config.path,
             self.inner.config.database.clone(),
         ) {
-            Ok(database) => Ok(ReadLease {
-                pool: Arc::clone(&self.inner),
-                database: Some(database),
-            }),
+            Ok(database) => Ok((
+                ReadLease {
+                    pool: Arc::clone(&self.inner),
+                    database: Some(database),
+                },
+                open,
+            )),
             Err(error) => {
                 let mut state = self.inner.state.lock().map_err(|_| Error::Thread)?;
                 state.open_connections = state.open_connections.saturating_sub(1);
@@ -75,7 +92,8 @@ impl ReadPool {
         }
     }
 
-    /// Checks out a connection for an RPC request. An exhausted pool is
+    /// Checks out a connection for an RPC request and records the number of
+    /// open connections in `foks_reader_pool_open`. An exhausted pool is
     /// reported as `RateLimited` and counted in
     /// `foks_reader_pool_exhausted_total`; any other failure is a server fault
     /// counted at the `read_pool` site.
@@ -83,8 +101,11 @@ impl ReadPool {
         &self,
         metrics: &crate::ServerMetrics,
     ) -> std::result::Result<ReadLease, foks_rpc::RpcStatus> {
-        match self.checkout() {
-            Ok(lease) => Ok(lease),
+        match self.checkout_counted() {
+            Ok((lease, open)) => {
+                metrics.reader_pool_opened(open);
+                Ok(lease)
+            }
             Err(Error::ReaderPool) => {
                 metrics.reader_pool_exhausted();
                 Err(foks_rpc::RpcStatus::RateLimited)
@@ -159,10 +180,37 @@ mod tests {
             pool.lease(&metrics),
             Err(foks_rpc::RpcStatus::RateLimited)
         ));
-        assert_eq!(metrics.snapshot().reader_pool_exhausted, 1);
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.reader_pool_exhausted, 1);
+        assert_eq!(snapshot.rate_limited_requests, 0);
         drop(first);
         pool.lease(&metrics).unwrap();
         assert_eq!(metrics.snapshot().reader_pool_exhausted, 1);
+    }
+
+    #[test]
+    fn leases_report_the_open_connection_count() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("pool.sqlite");
+        foks_server_db::Database::open(&path, foks_server_db::Config::default()).unwrap();
+        let pool = ReadPool::new(
+            ReadDatabaseConfig {
+                path,
+                database: foks_server_db::Config::default(),
+            },
+            3,
+        )
+        .unwrap();
+        let metrics = crate::ServerMetrics::default();
+
+        let first = pool.lease(&metrics).unwrap();
+        assert_eq!(metrics.snapshot().reader_pool_open, 1);
+        let second = pool.lease(&metrics).unwrap();
+        assert_eq!(metrics.snapshot().reader_pool_open, 2);
+        drop((first, second));
+        // Returned connections stay open, so reusing one keeps the count.
+        let _reused = pool.lease(&metrics).unwrap();
+        assert_eq!(metrics.snapshot().reader_pool_open, 2);
     }
 
     #[test]
