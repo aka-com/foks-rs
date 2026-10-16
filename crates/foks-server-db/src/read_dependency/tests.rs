@@ -75,39 +75,40 @@ fn reserved_prefix_filter_does_not_hide_authoritative_extension_triggers() {
 }
 
 #[test]
-fn schema_canonicalization_preserves_literal_contents_and_token_boundaries() {
-    assert_eq!(
-        sql_tokens("CREATE TABLE chunk_objects (source_hash INTEGER CHECK (source_hash > 0));")
-            .unwrap(),
-        sql_tokens(
-            "create table \"chunk_objects\"(\"source_hash\" integer check(\"source_hash\">0))"
-        )
-        .unwrap()
-    );
-    assert_ne!(
-        sql_tokens("SELECT 'A B'").unwrap(),
-        sql_tokens("SELECT 'ab'").unwrap()
-    );
-    for literal in ["0", "null", "true", "arbitrary"] {
-        assert_ne!(
-            sql_tokens(&format!("SELECT \"{literal}\"")).unwrap(),
-            sql_tokens(&format!("SELECT {literal}")).unwrap()
-        );
+fn schema_enumeration_rejects_malformed_public_rows_but_keeps_valid_autoindexes() {
+    for (column, expression, expected_type) in [
+        ("name", "NULL", "null"),
+        ("name", "CAST('extension' AS BLOB)", "blob"),
+        ("name", "CAST('sqlite_hidden' AS BLOB)", "blob"),
+        ("sql", "NULL", "null"),
+        (
+            "sql",
+            "CAST('CREATE TABLE extension(v UNIQUE)' AS BLOB)",
+            "blob",
+        ),
+    ] {
+        let c = connection();
+        let expected_hash = *verify(&c).unwrap().contract_hash();
+        c.execute_batch("CREATE TABLE extension(v UNIQUE)").unwrap();
+        let internal: (String, String) = c.query_row(
+            "SELECT typeof(name),typeof(sql) FROM sqlite_schema WHERE name='sqlite_autoindex_extension_1'",
+            [], |r| Ok((r.get(0)?, r.get(1)?)),
+        ).unwrap();
+        assert_eq!(internal, ("text".into(), "null".into()));
+        assert_eq!(*verify(&c).unwrap().contract_hash(), expected_hash);
+        c.execute_batch("PRAGMA writable_schema=ON").unwrap();
+        c.execute(
+            &format!("UPDATE sqlite_schema SET {column}={expression} WHERE type='table' AND tbl_name='extension'"),
+            [],
+        ).unwrap();
+        c.execute_batch("PRAGMA writable_schema=OFF").unwrap();
+        let actual_type: String = c.query_row(
+            &format!("SELECT typeof({column}) FROM sqlite_schema WHERE type='table' AND tbl_name='extension'"),
+            [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(actual_type, expected_type, "{column}={expression}");
+        assert!(verify(&c).is_err(), "{column}={expression}");
     }
-    assert_ne!(
-        sql_tokens("SELECT a bc").unwrap(),
-        sql_tokens("SELECT ab c").unwrap()
-    );
-    assert_ne!(
-        sql_tokens("SELECT 'a''b'").unwrap(),
-        sql_tokens("SELECT 'ab'").unwrap()
-    );
-    assert_eq!(
-        sql_tokens("SELECT /* x */ '/* x */'; --ignored").unwrap(),
-        sql_tokens("select '/* x */'").unwrap()
-    );
-    assert!(sql_tokens("SELECT 'unterminated").is_err());
-    assert!(sql_tokens("/* unterminated").is_err());
 }
 
 #[test]
@@ -360,4 +361,47 @@ fn row_revision_overhead_does_not_scan_retained_history() {
         .iter()
         .zip(baseline)
         .all(|(with, without)| *with > without));
+}
+
+#[test]
+fn shared_streaming_contract_preserves_full_schema59_legacy_hash_and_tokens() {
+    let c = connection();
+    let mut statement = c.prepare(SCHEMA_OBJECTS_SQL).unwrap();
+    let all = statement
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    let old = test_oracle::hash(all.iter().map(|(kind, name, table, sql)| {
+        (kind.as_str(), name.as_str(), table.as_str(), sql.as_str())
+    }))
+    .unwrap();
+    let actual = verify(&c).unwrap();
+    assert_eq!(*actual.contract_hash(), old);
+    // Captured from the independent schema59 algorithm before extraction.
+    assert_eq!(
+        old,
+        [
+            0x44, 0x4f, 0xc9, 0x34, 0xa1, 0x33, 0x6a, 0x96, 0x7d, 0xb1, 0xd8, 0x9e, 0x07, 0x86,
+            0x32, 0x18, 0x3c, 0x2c, 0x5b, 0x00, 0x1a, 0xdb, 0x42, 0x2d, 0xf7, 0x07, 0xa6, 0x43,
+            0x9b, 0x5e, 0xdb, 0x3b
+        ],
+    );
+    for (_, _, _, sql) in &all {
+        // Exact original spelling and comment/spacing variants are qualified by
+        // both the old oracle and the extracted streaming comparator.
+        let variant = format!(" /*before*/ {sql} --after");
+        assert_eq!(
+            test_oracle::tokens(sql).unwrap(),
+            test_oracle::tokens(&variant).unwrap()
+        );
+        assert!(foks_schema_contract::sql_equal(sql, &variant).unwrap());
+    }
 }

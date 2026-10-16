@@ -1,13 +1,10 @@
 //! Schema-owned read invalidation, separate from hosted authority intent receipts.
 //! A schema proof belongs to the Database/ReadDatabase that created it. Snapshots
 //! borrow that proof; callers cannot attach a proof from a different connection.
-use std::{
-    collections::BTreeMap,
-    sync::{Mutex, OnceLock},
-};
+use std::sync::{Mutex, OnceLock};
 
+use foks_schema_contract::{Contract, ContractObject, MatchPolicy};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
-use sha2::{Digest, Sha256};
 
 use crate::allocation::RowAllocationExt as _;
 use crate::{Database, Error, ReadDatabase, ReadSnapshot, Result};
@@ -135,120 +132,30 @@ impl ReadSnapshot<'_> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-struct ObjectKey {
-    kind: String,
-    name: String,
-    table: String,
+const SCHEMA_OBJECTS_SQL: &str = "SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE typeof(name) != 'text' OR substr(name,1,7) != 'sqlite_' COLLATE NOCASE ORDER BY type,name";
+fn contract_error(_: foks_schema_contract::ContractError) -> Error {
+    Error::ReadDependencySchema("schema object differs from qualified contract")
 }
-type Schema = BTreeMap<ObjectKey, Vec<Vec<u8>>>;
-
-/// Tokenize SQL rather than deleting whitespace: literal bytes remain distinct,
-/// and explicitly qualified identifier quotes from historical ALTER are normalized.
-/// Unknown/truncated syntax fails closed. Actual schema definitions were already
-/// parsed by SQLite; this lexer is only an equality canonicalizer.
-fn sql_tokens(sql: &str) -> Result<Vec<Vec<u8>>> {
-    let bytes = sql.as_bytes();
-    let mut at = 0;
-    let mut tokens = Vec::new();
-    while at < bytes.len() {
-        let first = bytes[at];
-        if first.is_ascii_whitespace() {
-            at += 1;
-            continue;
-        }
-        if bytes[at..].starts_with(b"--") {
-            while at < bytes.len() && bytes[at] != b'\n' {
-                at += 1;
-            }
-            continue;
-        }
-        if bytes[at..].starts_with(b"/*") {
-            at += 2;
-            while at < bytes.len() && !bytes[at..].starts_with(b"*/") {
-                at += 1;
-            }
-            if at == bytes.len() {
-                return Err(Error::ReadDependencySchema("unterminated schema comment"));
-            }
-            at += 2;
-            continue;
-        }
-        if matches!(first, b'\'' | b'"' | b'`' | b'[') {
-            let start = at;
-            let end = if first == b'[' { b']' } else { first };
-            at += 1;
-            let mut text = Vec::new();
-            loop {
-                let byte = *bytes
-                    .get(at)
-                    .ok_or(Error::ReadDependencySchema("unterminated schema quote"))?;
-                at += 1;
-                if byte == end {
-                    if end != b']' && bytes.get(at) == Some(&end) {
-                        text.push(end);
-                        at += 1;
-                        continue;
-                    }
-                    break;
-                }
-                text.push(byte);
-            }
-            // SQLite ALTER TABLE historically quotes precisely these renamed
-            // table/column identifiers. Qualify those spellings explicitly;
-            // do not treat arbitrary double-quoted tokens as identifiers since
-            // SQLite can also interpret them as string literals (DQS).
-            text.make_ascii_lowercase();
-            let migrated_identifier = matches!(
-                text.as_slice(),
-                b"chunk_objects"
-                    | b"chunk_object_attempts"
-                    | b"kv_file_chunks"
-                    | b"blocked_reason"
-                    | b"source_hash"
-            );
-            if first != b'\'' && migrated_identifier {
-                tokens.push(text);
-            } else {
-                tokens.push(bytes[start..at].to_vec());
-            }
-        } else if first.is_ascii_alphanumeric() || first == b'_' {
-            let start = at;
-            at += 1;
-            while at < bytes.len() && (bytes[at].is_ascii_alphanumeric() || bytes[at] == b'_') {
-                at += 1;
-            }
-            tokens.push(bytes[start..at].to_ascii_lowercase());
-        } else {
-            tokens.push(vec![first]);
-            at += 1;
-        }
-    }
-    // sqlite_schema normally omits the last semicolon; do not alter inner ones.
-    if tokens.last().is_some_and(|t| t == b";") {
-        tokens.pop();
-    }
-    Ok(tokens)
+fn object(row: &rusqlite::Row<'_>) -> Result<ContractObject<'static>> {
+    Ok(ContractObject::owned(
+        row.budgeted_get(0)?,
+        row.budgeted_get(1)?,
+        row.budgeted_get(2)?,
+        row.budgeted_get(3)?,
+    ))
 }
-
-fn schema_objects(connection: &Connection) -> Result<Schema> {
-    let mut statement = connection.prepare(
-        "SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE substr(name,1,7) != 'sqlite_' COLLATE NOCASE AND sql IS NOT NULL ORDER BY type,name",
-    )?;
+fn reference_contract(connection: &Connection) -> Result<Contract<'static>> {
+    let mut statement = connection.prepare(SCHEMA_OBJECTS_SQL)?;
     let mut rows = statement.query([])?;
-    let mut objects = BTreeMap::new();
+    let mut objects = Vec::new();
     while let Some(row) = rows.next()? {
-        let kind = row.budgeted_get(0)?;
-        let name = row.budgeted_get(1)?;
-        let table = row.budgeted_get(2)?;
-        let sql: String = row.budgeted_get(3)?;
-        objects.insert(ObjectKey { kind, name, table }, sql_tokens(&sql)?);
+        objects.push(object(row)?);
     }
-    Ok(objects)
+    Contract::new(objects).map_err(contract_error)
 }
 
-fn expected_schema() -> Result<&'static Schema> {
-    static EXPECTED: OnceLock<Schema> = OnceLock::new();
+fn expected_schema() -> Result<&'static Contract<'static>> {
+    static EXPECTED: OnceLock<Contract<'static>> = OnceLock::new();
     static BUILD: Mutex<()> = Mutex::new(());
     if let Some(schema) = EXPECTED.get() {
         return Ok(schema);
@@ -263,7 +170,7 @@ fn expected_schema() -> Result<&'static Schema> {
     // opener, entropy dependency or recursive verification. Failed construction
     // (including caller allocation refusal) does not poison future admissions.
     let connection = crate::schema::reference_connection()?;
-    let schema = schema_objects(&connection)?;
+    let schema = reference_contract(&connection)?;
     let _ = EXPECTED.set(schema);
     EXPECTED
         .get()
@@ -283,52 +190,53 @@ pub(crate) fn verify_in_transaction(transaction: &Connection) -> Result<ReadDepe
     }
     let cookie: i64 =
         transaction.pragma_query_value(None, "schema_version", |r| r.budgeted_get(0))?;
-    let actual = schema_objects(transaction)?;
     let expected = expected_schema()?;
-    // Verify the complete existing schema, including projections, accounting,
-    // checks, FKs and cascades. New counter hooks alone cannot certify any of it.
-    for (key, value) in expected {
-        if actual.get(key) != Some(value) {
-            return Err(Error::ReadDependencySchema(
-                "schema object differs from qualified contract",
-            ));
-        }
+    let mut verifier = expected.verifier(MatchPolicy::NativeRequired);
+    let mut statement = transaction.prepare(SCHEMA_OBJECTS_SQL)?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let object = object(row)?;
+        verifier
+            .observe(object.as_object())
+            .map_err(contract_error)?;
     }
-    for key in actual.keys() {
-        if !expected.contains_key(key)
-            && (key
-                .name
-                .get(.."metadata_read_".len())
-                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("metadata_read_"))
-                || key.kind == "trigger"
-                    && expected
-                        .keys()
-                        .any(|k| k.kind == "table" && k.name.eq_ignore_ascii_case(&key.table)))
-        {
-            return Err(Error::ReadDependencySchema(
-                "unexpected hook on authoritative table",
-            ));
-        }
-    }
+    verifier.finish().map_err(contract_error)?;
     read(transaction)?;
-    let mut hash = Sha256::new();
-    hash.update(b"foks-read-dependency-schema-v1\0");
-    for (key, tokens) in expected {
-        for text in [&key.kind, &key.name, &key.table] {
-            hash.update((text.len() as u64).to_le_bytes());
-            hash.update(text.as_bytes());
-        }
-        hash.update((tokens.len() as u64).to_le_bytes());
-        for token in tokens {
-            hash.update((token.len() as u64).to_le_bytes());
-            hash.update(token);
-        }
-    }
     Ok(ReadDependencySchema {
         cookie,
-        hash: hash.finalize().into(),
+        hash: *expected.hash(),
     })
 }
 
 #[cfg(test)]
 mod tests;
+
+// The allocation-heavy historical algorithm is a test oracle only. It cannot
+// be invoked by serving admission or any transaction guard.
+#[cfg(test)]
+#[path = "../../foks-schema-contract/src/test_oracle.rs"]
+mod test_oracle;
+#[cfg(test)]
+type TestSchema = std::collections::BTreeMap<(String, String, String), Vec<Vec<u8>>>;
+#[cfg(test)]
+fn schema_objects(connection: &Connection) -> Result<TestSchema> {
+    let mut statement = connection.prepare(SCHEMA_OBJECTS_SQL)?;
+    let mut rows = statement.query([])?;
+    let mut result = std::collections::BTreeMap::new();
+    while let Some(row) = rows.next()? {
+        let object = object(row)?;
+        let view = object.as_object();
+        // Every historical fixture that inspects this schema also compares the
+        // independent old digest with the new borrowed-token implementation.
+        let old_hash = test_oracle::hash([(view.kind, view.name, view.table, view.sql)])
+            .map_err(Error::ReadDependencySchema)?;
+        let new_hash =
+            Contract::new(vec![ContractObject::borrowed(view)]).map_err(contract_error)?;
+        assert_eq!(*new_hash.hash(), old_hash);
+        result.insert(
+            (view.kind.into(), view.name.into(), view.table.into()),
+            test_oracle::tokens(view.sql).map_err(Error::ReadDependencySchema)?,
+        );
+    }
+    Ok(result)
+}

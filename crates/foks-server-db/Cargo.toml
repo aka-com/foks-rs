@@ -13,6 +13,7 @@ foks-crypto = { workspace = true }
 foks-merkle-store = { workspace = true }
 foks-proto = { workspace = true }
 foks-snowpack = { workspace = true }
+foks-schema-contract = { workspace = true }
 libc = { workspace = true }
 rusqlite = { workspace = true }
 thiserror = { workspace = true }
