@@ -12,7 +12,8 @@ use rusqlite::{
 };
 use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
 
-const SCHEMA_HASH: &str = "444fc934a1336a967db1d89e078632183c2c5b001adb422df707a6439b5edb3b";
+pub(super) const SCHEMA_HASH: &str =
+    "444fc934a1336a967db1d89e078632183c2c5b001adb422df707a6439b5edb3b";
 const LOCATOR_BYTES: usize = 2 * 1024 * 1024;
 fn unsupported(reason: &'static str) -> ScanError {
     ScanError::Unsupported(reason)
@@ -61,6 +62,21 @@ impl Database {
                 | OpenFlags::SQLITE_OPEN_URI
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
+        Self::configure(connection, control, true)
+    }
+    #[cfg(any(test, feature = "celld-proof"))]
+    pub(super) fn private_target(connection: Connection, control: Arc<Control>) -> Result<Self> {
+        Self::configure(connection, control, false)
+    }
+    #[cfg(any(test, feature = "celld-proof"))]
+    pub(super) fn connection(&self) -> &Connection {
+        &self.connection
+    }
+    #[cfg(any(test, feature = "celld-proof"))]
+    pub(super) fn control(&self) -> Arc<Control> {
+        Arc::clone(&self.control)
+    }
+    fn configure(connection: Connection, control: Arc<Control>, readonly: bool) -> Result<Self> {
         // These C API settings do not prepare SQL or trust source DDL. Extension
         // loading is never enabled and no functions/modules are registered.
         connection.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
@@ -81,10 +97,10 @@ impl Database {
         let hook = control.clone();
         connection.progress_handler(1000, Some(move || hook.progress()))?;
         control.statement()?;
-        connection.pragma_update(None, "query_only", true)?;
+        connection.pragma_update(None, "query_only", readonly)?;
         control.statement()?;
         let query_only: i64 = connection.pragma_query_value(None, "query_only", |r| r.get(0))?;
-        if query_only != 1
+        if query_only != i64::from(readonly)
             || !connection.db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE)?
             || connection.db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA)?
         {

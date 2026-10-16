@@ -1,7 +1,11 @@
 //! Unix-only storage-fit scanning of owned finalized native backups. A successful receipt
 //! is not authentication, physical integrity, import readiness, or serving authority.
 mod capture;
+#[cfg(any(test, feature = "celld-proof"))]
+mod import;
 mod scan;
+#[cfg(feature = "celld-proof")]
+pub use import::{qualify_personal_list_import, ImportQualification};
 #[cfg(test)]
 mod tests;
 

@@ -339,6 +339,35 @@ impl Package {
         }
         Ok(bytes)
     }
+    #[cfg(any(test, feature = "celld-proof"))]
+    pub(super) fn copy_keys(&mut self, destination: &Path, control: &Control) -> Result<()> {
+        self.verify(control)?;
+        std::fs::DirBuilder::new().mode(0o700).create(destination)?;
+        let root = open_directory(self.directory.path())?;
+        let keys =
+            Dir::openat(&root, "keys", FLAGS | OFlag::O_DIRECTORY, Mode::empty()).map_err(io)?;
+        for entry in self.entries.iter().filter(|entry| entry.key) {
+            control.check()?;
+            let mut source = open_file(&keys, &entry.name)?;
+            let mut target = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(destination.join(&entry.name))?;
+            let observed = file_hash(&mut source, entry.length, control, Some(&mut target))?;
+            if observed != (entry.length, entry.hash) {
+                return Err(ScanError::Unsupported("key changed during import"));
+            }
+            target.sync_all()?;
+            let mut check = open_file(&open_directory(destination)?, &entry.name)?;
+            if file_hash(&mut check, entry.length, control, None)? != observed {
+                return Err(ScanError::Unsupported("copied key mismatch"));
+            }
+        }
+        File::open(destination)?.sync_all()?;
+        self.verify(control)
+    }
     pub fn verify(&mut self, control: &Control) -> Result<()> {
         let mut root = open_directory(self.directory.path())?;
         let current = inventory(&mut root, self.limits, control, None)?;

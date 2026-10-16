@@ -90,9 +90,9 @@ pub struct BackupArtifacts {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct HostKeyBackupFiles {
-    include_genesis: bool,
-    include_genesis_capability: bool,
-    generated: Vec<String>,
+    pub(crate) include_genesis: bool,
+    pub(crate) include_genesis_capability: bool,
+    pub(crate) generated: Vec<String>,
 }
 
 struct ValidatedBackup {
@@ -712,6 +712,19 @@ pub(crate) fn host_key_backup_files(
 ) -> Result<HostKeyBackupFiles> {
     let generations = database.host_key_generations()?;
     let operation = database.active_host_rotation()?;
+    host_key_backup_files_from_loaded(generations, operation, || {
+        database
+            .capability_key_generations()
+            .map_err(crate::Error::from)
+    })
+}
+
+/// Shared read-only ledger closure. The supplier preserves native read/error order.
+pub(crate) fn host_key_backup_files_from_loaded(
+    generations: Vec<foks_server_db::HostKeyGeneration>,
+    operation: Option<foks_server_db::HostRotationOperation>,
+    capabilities: impl FnOnce() -> Result<Vec<foks_server_db::CapabilityKeyGeneration>>,
+) -> Result<HostKeyBackupFiles> {
     let active = generations
         .iter()
         .filter(|generation| generation.state == foks_server_db::HostKeyGenerationState::Active)
@@ -769,7 +782,7 @@ pub(crate) fn host_key_backup_files(
             generated.push(expected);
         }
     }
-    let capability_generations = database.capability_key_generations()?;
+    let capability_generations = capabilities()?;
     if capability_generations
         .iter()
         .filter(|generation| {
