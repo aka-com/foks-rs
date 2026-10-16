@@ -1464,3 +1464,19 @@ pub(crate) fn qualify_personal_usage(
         Response::Void => Err(RpcStatus::TransactionRetry),
     }
 }
+
+#[cfg(feature = "celld-proof")]
+pub(crate) fn qualify_list(
+    principal: &Principal,
+    reader: &foks_server_db::ReadDatabase,
+    clock: &Arc<dyn foks_server_db::Clock>,
+    argument: &[u8],
+) -> Result<Vec<u8>, RpcStatus> {
+    principal.require_ordinary_device()?;
+    let snapshot = reader.snapshot().map_err(|_| RpcStatus::TransactionRetry)?;
+    let authority = resolve_authority(argument, principal, &snapshot, clock)?;
+    match list(argument, &snapshot, &authority)? {
+        Response::Data(bytes) => Ok(bytes),
+        Response::Void => Err(RpcStatus::TransactionRetry),
+    }
+}

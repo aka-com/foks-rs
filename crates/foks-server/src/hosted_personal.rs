@@ -87,3 +87,22 @@ pub fn native_usage(
         &principal, reader, clock,
     ))
 }
+
+/// Exact native List bytes/status for an original public argument. This is an
+/// oracle for private adapter qualification, not TLS possession or hosted proof.
+pub fn native_list(
+    certificate: &CertificateDer<'_>,
+    reader: &foks_server_db::ReadDatabase,
+    clock: &Arc<dyn foks_server_db::Clock>,
+    argument: &[u8],
+) -> Result<Result<Vec<u8>, foks_rpc::RpcStatus>, QualificationError> {
+    let now = clock
+        .now_micros()
+        .map_err(crate::Error::from)
+        .map_err(QualificationError::Certificate)?;
+    let principal = crate::auth::Principal::authenticate(certificate, reader, now)
+        .map_err(QualificationError::Certificate)?;
+    Ok(crate::services::kv::qualify_list(
+        &principal, reader, clock, argument,
+    ))
+}
