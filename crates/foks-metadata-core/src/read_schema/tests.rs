@@ -67,3 +67,6 @@ fn qualification_ids_and_every_contract_component_bind_the_digest() {
 
 #[cfg(feature = "native")]
 mod generator;
+
+#[cfg(feature = "native")]
+mod restricted_generator;
