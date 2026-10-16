@@ -151,7 +151,7 @@ test('immutable feature/default artifacts expose exactly the reviewed functions 
 for(const fixture of manifest.fixtures)test(`same-instance native/Wasm trace parity: ${fixture.name}`,()=>{
   const db=seed(fixture),host=new ListChargeHost(module,scalar,storage(db),page);
   try{
-    const layout=host.layout();assert.equal(layout.version,1);assert.equal(layout.target.pointer_bits,32);assert.equal(layout.bounds.complete,false);
+    const layout=host.layout();assert.equal(layout.version,1);assert.equal(layout.target.pointer_bits,32);assert.equal(layout.bounds.complete,false);assert.equal(layout.bounds.selected_auth_caller,82296);
     const changes=db.prepare('SELECT total_changes() AS n').get().n;
     for(const vector of fixture.cases){
       const before=host.instance.exports.memory.buffer.byteLength,start=performance.now();let report,error;

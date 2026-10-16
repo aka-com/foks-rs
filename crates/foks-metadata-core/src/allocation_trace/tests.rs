@@ -120,6 +120,14 @@ fn bounded_serializer_and_formula_are_not_runtime_allowances() {
     assert!(b.row_decode > 4 * (4096 + 65536));
     assert!(b.page_transport > 15 * (4096 + 65536));
     assert!(b.page_roles > 0);
+    assert_eq!(b.selected_auth_caller, 82_296);
+    let caller = b
+        .terms
+        .iter()
+        .find(|term| term.site == "one authenticate/recheck/profile/parent-key caller payload")
+        .unwrap();
+    assert_eq!(caller.scope, "selected-callgraph cumulative");
+    assert_eq!(caller.bytes, b.selected_auth_caller);
 }
 #[test]
 fn valid_schema_formula_matches_codec_charge_and_encoder_capacity_terms() {
