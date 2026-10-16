@@ -9,6 +9,7 @@ description = "Bounded OIDC provider and identity policy for FOKS clients and ho
 test-support = []
 
 [dependencies]
+foks-local-deadline = { workspace = true, features = ["clock"] }
 base64 = { workspace = true }
 sha2 = "0.10"
 zeroize = { workspace = true }

@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 mod account_conveniences;
 mod bot_token;
+mod deadline;
 mod invitations;
 mod mcp;
 mod retention;
@@ -734,7 +735,67 @@ fn main() {
     }
 }
 
+fn command_budget(command: &Command) -> std::time::Duration {
+    use std::time::Duration;
+    let seconds = match command {
+        Command::Kv(command) => match command {
+            KvCommand::Get { .. } | KvCommand::Put { .. } | KvCommand::ResumeUpload { .. } => 300,
+            KvCommand::Uploads { .. }
+            | KvCommand::CancelUpload { .. }
+            | KvCommand::UploadCapacity { .. }
+            | KvCommand::List { .. }
+            | KvCommand::Mkdir { .. }
+            | KvCommand::Remove { .. } => 15,
+        },
+        Command::Device(command) => match command {
+            DeviceCommand::PairOffer { .. }
+            | DeviceCommand::PairRepublish { .. }
+            | DeviceCommand::PairFinish { .. }
+            | DeviceCommand::PairAccept { .. }
+            | DeviceCommand::PairResumeAccept { .. } => 300,
+            DeviceCommand::Revoke { .. }
+            | DeviceCommand::List { .. }
+            | DeviceCommand::ProvisionOwner { .. }
+            | DeviceCommand::ResumeProvision { .. } => 15,
+        },
+        Command::Jobs(command) => match command {
+            JobCommand::RunDue { .. } => 300,
+            JobCommand::ScheduleUserRefresh { .. } => 15,
+        },
+        Command::State(command) => match command {
+            state::StateCommand::Export { .. }
+            | state::StateCommand::Import { .. }
+            | state::StateCommand::VerifyOnline { .. } => 300,
+            state::StateCommand::Inspect
+            | state::StateCommand::Status
+            | state::StateCommand::ImportStatus
+            | state::StateCommand::Relocate { .. }
+            | state::StateCommand::Recover
+            | state::StateCommand::RecoverRelocation => 15,
+        },
+        Command::Retention(command) => match command {
+            retention::RetentionCommand::Maintain { max_seconds, .. } => {
+                (*max_seconds).clamp(1, 60)
+            }
+            retention::RetentionCommand::Status | retention::RetentionCommand::Reanchor { .. } => {
+                15
+            }
+        },
+        Command::Mcp(_)
+        | Command::Sso(_)
+        | Command::Init(_)
+        | Command::Profile(_)
+        | Command::Account(_)
+        | Command::Recovery(_)
+        | Command::Passphrase(_)
+        | Command::Team(_)
+        | Command::Yubi(_) => 15,
+    };
+    Duration::from_secs(seconds)
+}
+
 fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
+    let _scope = deadline::CommandScope::enter(command_budget(&arguments.command))?;
     match arguments.command {
         Command::State(command) => state::run(&arguments.state_dir, command),
         Command::Mcp(command) => mcp::run(&arguments.state_dir, command),
@@ -994,14 +1055,16 @@ fn account_command(
             account_alias,
         } => {
             mcp::ensure_agent(state_dir)?;
-            let response = foks_agent_client::AgentClient::new(state_dir.join("foks-rs.sock"))
-                .call(foks_agent_proto::Operation::SyncAccount {
+            let response = deadline::agent_client(state_dir)?.call(
+                foks_agent_proto::Operation::SyncAccount {
                     profile,
                     alias: account_alias,
-                })?;
+                },
+            )?;
             match response.result {
                 foks_agent_proto::ResponseResult::Success { value } => {
-                    output(json, &value, "account synchronized")
+                    let value = deadline::AgentValue::new(value);
+                    output(json, &*value, "account synchronized")
                 }
                 foks_agent_proto::ResponseResult::Error { message, .. } => Err(message.into()),
             }
@@ -1174,10 +1237,12 @@ fn kv_command(
                     use std::os::unix::fs::OpenOptionsExt as _;
                     options.mode(0o600);
                 }
+                deadline::check()?;
                 let mut file = options.open(&destination)?;
                 let result = (|| {
                     let bytes = session.write_kv_file(&account_alias, &path, vault, &mut file)?;
                     file.sync_all()?;
+                    deadline::check()?;
                     Ok::<_, Box<dyn std::error::Error>>(bytes)
                 })();
                 let bytes = match result {
@@ -1215,8 +1280,11 @@ fn kv_command(
                     None,
                     vault,
                 )?)?;
-                let mut file = File::open(input)?;
-                let report = if file.metadata()?.len() > 2040 {
+                deadline::check()?;
+                let file = File::open(input)?;
+                let large = file.metadata()?.len() > 2040;
+                let mut file = deadline::Reader::new(file)?;
+                let report = if large {
                     eprintln!("Upload recovery handle: {id}");
                     session.put_kv_file_identified(
                         &account_alias,
@@ -1902,6 +1970,7 @@ fn read_yubi_retry_configuration(
 }
 
 fn read_invite(path: &Path) -> Result<Zeroizing<String>, Box<dyn std::error::Error>> {
+    deadline::check()?;
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -1923,6 +1992,7 @@ fn read_invite(path: &Path) -> Result<Zeroizing<String>, Box<dyn std::error::Err
     }
     let mut value = Zeroizing::new(String::new());
     file.take(4099).read_to_string(&mut value)?;
+    deadline::check()?;
     if value.ends_with("\r\n") {
         let length = value.len() - 2;
         value.truncate(length);
@@ -2389,6 +2459,7 @@ fn read_phrase_tokens(
     expected_tokens: usize,
     kind: &str,
 ) -> Result<Zeroizing<String>, Box<dyn std::error::Error>> {
+    deadline::check()?;
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 4096 {
         return Err(format!(
@@ -2415,6 +2486,7 @@ fn read_phrase_tokens(
     let file = options.open(path)?;
     let mut phrase = Zeroizing::new(String::new());
     file.take(4097).read_to_string(&mut phrase)?;
+    deadline::check()?;
     if phrase.len() > 4096 {
         return Err(format!("{kind} phrase file exceeds the 4096-byte limit").into());
     }
@@ -2440,6 +2512,7 @@ fn confirmed_passphrase(
 }
 
 fn read_passphrase(path: &Path) -> Result<Zeroizing<String>, Box<dyn std::error::Error>> {
+    deadline::check()?;
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -2461,6 +2534,7 @@ fn read_passphrase(path: &Path) -> Result<Zeroizing<String>, Box<dyn std::error:
     }
     let mut value = Zeroizing::new(String::new());
     file.take(1027).read_to_string(&mut value)?;
+    deadline::check()?;
     if value.len() > 1026 || value.contains('\0') {
         return Err("passphrase file contains invalid characters or exceeds 1024 bytes".into());
     }
@@ -2481,6 +2555,7 @@ fn read_bounded_private_file(
     path: &Path,
     maximum: u64,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    deadline::check()?;
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > maximum {
         return Err(
@@ -2497,6 +2572,7 @@ fn read_bounded_private_file(
     let file = options.open(path)?;
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.take(maximum + 1).read_to_end(&mut bytes)?;
+    deadline::check()?;
     if bytes.len() as u64 > maximum {
         return Err(format!("artifact content exceeds maximum size of {maximum} bytes").into());
     }
@@ -2504,6 +2580,7 @@ fn read_bounded_private_file(
 }
 
 fn write_new_private(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    deadline::check()?;
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -2564,8 +2641,9 @@ fn output(
     human: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if json {
-        println!("{}", serde_json::to_string_pretty(value)?);
+        deadline::print_json(value)?;
     } else {
+        deadline::check()?;
         println!("{human}");
     }
     Ok(())
@@ -2582,7 +2660,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn command_policies_assign_bulk_pairing_and_explicit_maintenance_budgets() {
+        for (args, seconds) in [
+            (
+                vec![
+                    "kv",
+                    "get",
+                    "local",
+                    "--account-alias",
+                    "owner",
+                    "/file",
+                    "--output",
+                    "out",
+                ],
+                300,
+            ),
+            (
+                vec!["device", "pair-offer", "local", "--account-alias", "owner"],
+                300,
+            ),
+            (
+                vec![
+                    "retention",
+                    "maintain",
+                    "--profile",
+                    "local",
+                    "--max-seconds",
+                    "42",
+                ],
+                42,
+            ),
+            (vec!["profile", "list"], 15),
+        ] {
+            let parsed = Arguments::try_parse_from(
+                ["foks-rs", "--state-dir", "/tmp/policy"]
+                    .into_iter()
+                    .chain(args),
+            )
+            .unwrap();
+            assert_eq!(command_budget(&parsed.command).as_secs(), seconds);
+        }
+    }
+    #[test]
     fn best_effort_reset_is_explicit_and_preserves_exact_default() {
+        let _scope = deadline::CommandScope::enter(std::time::Duration::from_secs(300)).unwrap();
         assert!(Arguments::try_parse_from([
             "foks-rs",
             "--state-dir",
@@ -2664,6 +2785,7 @@ mod tests {
 
     #[test]
     fn init_and_profile_commands_use_only_the_explicit_state_root() {
+        let _scope = deadline::CommandScope::enter(std::time::Duration::from_secs(300)).unwrap();
         let directory = tempfile::tempdir().unwrap();
         let state = directory.path().join("foks");
         initialize(&state, false, CredentialBackend::PrivateFile).unwrap();
@@ -2740,6 +2862,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn secret_input_files_are_private_bounded_and_normalized_once() {
+        let _scope = deadline::CommandScope::enter(std::time::Duration::from_secs(15)).unwrap();
         use std::os::unix::fs::PermissionsExt as _;
 
         let directory = tempfile::tempdir().unwrap();

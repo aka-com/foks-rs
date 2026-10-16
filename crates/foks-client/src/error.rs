@@ -45,6 +45,8 @@ pub enum Error {
     Connect(std::io::Error),
     #[error("FOKS operation cancelled")]
     Cancelled,
+    #[error("{0}")]
+    LocalDeadline(#[source] foks_local_deadline::Error),
     #[error("FOKS operation deadline exceeded")]
     DeadlineExceeded,
     #[error("FOKS transport configuration failed: {0}")]
@@ -125,3 +127,12 @@ pub enum Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+impl From<foks_local_deadline::Error> for Error {
+    fn from(error: foks_local_deadline::Error) -> Self {
+        match error {
+            foks_local_deadline::Error::Expired => Self::DeadlineExceeded,
+            error => Self::LocalDeadline(error),
+        }
+    }
+}

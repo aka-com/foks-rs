@@ -9,6 +9,7 @@ pub(crate) mod chat;
 pub(crate) mod chat_local;
 mod chat_migration;
 mod context;
+mod deadline;
 pub(crate) mod enrollment;
 mod execution;
 pub(crate) mod first_run;

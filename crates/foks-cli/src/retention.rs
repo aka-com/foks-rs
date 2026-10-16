@@ -55,11 +55,11 @@ pub fn run(state: &Path, command: RetentionCommand) -> Result<(), Box<dyn std::e
         confirm_digest,
     } = command
     else {
-        let reply = foks_agent_client::AgentClient::new(state.join("foks-rs.sock"))
+        let reply = super::deadline::agent_client(state)?
             .call(foks_agent_proto::Operation::RetentionStatus)?;
         return match reply.result {
             foks_agent_proto::ResponseResult::Success { value } => {
-                println!("{}", serde_json::to_string_pretty(&value)?);
+                super::deadline::print_agent_value(value)?;
                 Ok(())
             }
             foks_agent_proto::ResponseResult::Error { code, message, .. } => {
@@ -87,7 +87,7 @@ pub fn run(state: &Path, command: RetentionCommand) -> Result<(), Box<dyn std::e
                 )?,
             })
         })?;
-    println!("{}", serde_json::to_string_pretty(&result)?);
+    super::deadline::print_agent_value(result)?;
     Ok(())
 }
 
@@ -97,7 +97,9 @@ fn maintain(
     seconds: u64,
     turns: u32,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    let control = super::deadline::current()?
+        .shorten(std::time::Instant::now() + std::time::Duration::from_secs(seconds))?;
+    let deadline = control.instant();
     let registry = ProfileRegistry::open(state)?;
     let session = ProfileSession::open(&registry, profile)?;
     let credentials = foks_client_app::ClientCredentials::open(state)?;
@@ -105,6 +107,7 @@ fn maintain(
     let mut last = None;
     let mut completed_turns = 0;
     while completed_turns < turns && std::time::Instant::now() < deadline {
+        control.check()?;
         let turn_deadline =
             deadline.min(std::time::Instant::now() + std::time::Duration::from_millis(50));
         let result = credentials.try_with_checked_session(&session, |checked| {
@@ -196,6 +199,9 @@ mod tests {
     }
     #[test]
     fn local_drain_reports_completion_and_contention_without_remote_access() {
+        let _scope =
+            super::super::deadline::CommandScope::enter(std::time::Duration::from_secs(15))
+                .unwrap();
         use foks_client_app::*;
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("state");

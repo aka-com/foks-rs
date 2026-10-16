@@ -1,12 +1,9 @@
 //! Native invitation boundary: opaque handles and verified identity, no capabilities.
-use super::{
-    context::AppState,
-    validation::{invalid_request, invalid_response, require_main_window, valid_local_name},
-};
+use super::validation::{invalid_request, invalid_response, require_main_window, valid_local_name};
 use crate::agent::AgentError;
 use foks_agent_proto::{invitations::InvitationAction, Operation, SecretString};
 use serde::{Deserialize, Serialize};
-use tauri::{Manager as _, State};
+use tauri::Manager as _;
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct StoredRole {
@@ -121,7 +118,7 @@ fn decode(value: serde_json::Value) -> Result<serde_json::Value, AgentError> {
 #[tauri::command]
 pub async fn invitation_request(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     account_alias: String,
     action: InvitationAction,
@@ -145,33 +142,31 @@ pub async fn invitation_request(
     };
     let changes_catalog = action.changes_catalog();
     let _mutation = state.begin_catalog_action(changes_catalog)?;
-    let transport = state.agent.transport();
-    let value = tauri::async_runtime::spawn_blocking(move || {
-        super::servers::require_transport_profile(transport.as_ref(), &profile)?;
-        if let Some(remote) = action.remote_profile() {
-            super::servers::require_transport_profile(transport.as_ref(), remote)?;
-        }
-        let value = transport
-            .call(Operation::Invitations {
-                profile,
-                account_alias,
-                action,
-                pin,
-            })
-            .map_err(AgentError::from_desktop)?;
-        decode(value)
-    })
-    .await
-    .map_err(|_| {
-        if changes_catalog {
-            super::execution::ambiguous_worker_failure(
-                &state,
-                "Invitation interrupted; check its original operation.",
-            )
-        } else {
-            invalid_request("Invitation interrupted; check its original operation.")
-        }
-    })?
+    let transport = state.transport()?;
+    let value = {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            true,
+            move || {
+                super::servers::require_transport_profile(transport.as_ref(), &profile)?;
+                if let Some(remote) = action.remote_profile() {
+                    super::servers::require_transport_profile(transport.as_ref(), remote)?;
+                }
+                let value = transport
+                    .call(Operation::Invitations {
+                        profile,
+                        account_alias,
+                        action,
+                        pin,
+                    })
+                    .map_err(AgentError::from_desktop)?;
+                decode(value)
+            },
+            super::vault::clear_response,
+        )
+        .await
+    }
     .map_err(|error| {
         if changes_catalog {
             super::execution::observe_mutation_error(&state, error)

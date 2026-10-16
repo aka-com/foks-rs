@@ -87,9 +87,7 @@ pub(super) fn recover(
             if selected != *candidate {
                 continue;
             }
-            let transport = scoped
-                .agent
-                .transport_for("chat_migration", Some(&candidate.profile));
+            let transport = scoped.transport_for("chat_migration", Some(&candidate.profile))?;
             let cancelled = || {
                 crate::applock::require_unlocked_generation(app, unlocked).is_err()
                     || scoped.chat_generation.load(Ordering::Acquire) != generation
@@ -117,9 +115,7 @@ pub(super) fn recover(
             continue;
         }
         let (scoped, id, generation, selected) = matches.pop().unwrap();
-        let transport = scoped
-            .agent
-            .transport_for("chat_migration", Some(&selected.profile));
+        let transport = scoped.transport_for("chat_migration", Some(&selected.profile))?;
         let cancelled = || {
             crate::applock::require_unlocked_generation(app, unlocked).is_err()
                 || scoped.chat_generation.load(Ordering::Acquire) != generation

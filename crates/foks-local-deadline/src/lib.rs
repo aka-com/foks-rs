@@ -3,7 +3,7 @@
 //! the complete local IPC migration; these are never FOKS network fields.
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error("local request deadline exceeded")]
     Expired,

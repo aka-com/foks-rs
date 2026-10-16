@@ -204,7 +204,7 @@ fn open_lock(path: &Path) -> Result<File> {
 }
 pub(crate) fn lock(path: &Path) -> Result<File> {
     let file = open_lock(path)?;
-    file.lock_exclusive()?;
+    crate::runtime::controlled_lock(&file)?;
     Ok(file)
 }
 pub(crate) fn try_lock(path: &Path) -> Result<File> {

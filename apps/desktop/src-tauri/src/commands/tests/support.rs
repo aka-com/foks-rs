@@ -70,7 +70,9 @@ pub(super) fn phase_four_catalog(blocked_profiles: Vec<String>) -> CatalogSnapsh
 pub(super) fn phase_four_state(blocked_profiles: Vec<String>) -> AppState {
     let state = AppState::new(Arc::new(AgentHandle::new(
         "/tmp/unused-foks-agent.sock".into(),
-    )));
+    )))
+    .begin_operation(foks_agent_proto::DeadlineClass::Ordinary)
+    .unwrap();
     *state.catalog.lock().unwrap() = Some(phase_four_catalog(blocked_profiles));
     state
 }

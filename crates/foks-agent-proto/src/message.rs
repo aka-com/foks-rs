@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 36;
+pub const PROTOCOL_VERSION: u32 = 37;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -70,6 +70,7 @@ pub struct Request {
     pub version: u32,
     pub id: u64,
     pub operation: Operation,
+    pub deadline: foks_local_deadline::DeadlineEnvelope,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -531,11 +532,152 @@ pub enum ProfileTrust {
 }
 
 impl Request {
-    pub fn new(id: u64, operation: Operation) -> Self {
+    pub fn new(
+        id: u64,
+        operation: Operation,
+        deadline: foks_local_deadline::DeadlineEnvelope,
+    ) -> Self {
         Self {
             version: PROTOCOL_VERSION,
             id,
             operation,
+            deadline,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeadlineClass {
+    Ordinary,
+    ChatPoll,
+    Pairing,
+    Bulk,
+}
+impl DeadlineClass {
+    pub fn cap(self) -> std::time::Duration {
+        std::time::Duration::from_secs(match self {
+            Self::Ordinary => 15,
+            Self::ChatPoll => 60,
+            Self::Pairing | Self::Bulk => 300,
+        })
+    }
+}
+impl Operation {
+    /// Explicit exhaustive policy: new variants require a budget decision.
+    pub fn deadline_class(&self) -> DeadlineClass {
+        match self {
+            Self::SetLocalAccountAlias { .. } => DeadlineClass::Ordinary,
+            Self::Invitations { .. } => DeadlineClass::Ordinary,
+            Self::WebAdmin { .. } => DeadlineClass::Ordinary,
+            Self::BotAccount { .. } => DeadlineClass::Ordinary,
+            Self::ListAccountRenames { .. } => DeadlineClass::Ordinary,
+            Self::RenameAccount { .. } => DeadlineClass::Ordinary,
+            Self::Sso { action, .. } => action.deadline_class(),
+            Self::PrepareDataWrite { .. } => DeadlineClass::Ordinary,
+            Self::ExecuteDataWrite { .. } => DeadlineClass::Ordinary,
+            Self::DataWriteStatus { .. } => DeadlineClass::Ordinary,
+            Self::PendingDataWrites { .. } => DeadlineClass::Ordinary,
+            Self::BindDataAccount { .. } => DeadlineClass::Ordinary,
+            Self::ReadData { .. } => DeadlineClass::Ordinary,
+            Self::Chat { action, .. } => action.deadline_class(),
+            Self::Ping => DeadlineClass::Ordinary,
+            Self::AgentStatus => DeadlineClass::Ordinary,
+            Self::RetentionStatus => DeadlineClass::Ordinary,
+            Self::DiscoverGoProfiles => DeadlineClass::Ordinary,
+            Self::InitializeState { .. } => DeadlineClass::Ordinary,
+            Self::AddProfile { .. } => DeadlineClass::Ordinary,
+            Self::CheckAndAddProfile { .. } => DeadlineClass::Ordinary,
+            Self::CheckAndAddGoProfile { .. } => DeadlineClass::Ordinary,
+            Self::RemoveProfile { .. } => DeadlineClass::Ordinary,
+            Self::SetProfileLabel { .. } => DeadlineClass::Ordinary,
+            Self::DescribeResetHardState { .. } => DeadlineClass::Ordinary,
+            Self::ResetHardState { .. } => DeadlineClass::Ordinary,
+            Self::ListProfiles => DeadlineClass::Ordinary,
+            Self::Probe { .. } => DeadlineClass::Ordinary,
+            Self::RefreshLease { .. } => DeadlineClass::Ordinary,
+            Self::ReconcileProfile { .. } => DeadlineClass::Ordinary,
+            Self::ListKnownStores { .. } => DeadlineClass::Ordinary,
+            Self::ListProfileOverview { .. } => DeadlineClass::Ordinary,
+            Self::ListAccounts { .. } => DeadlineClass::Ordinary,
+            Self::ListPendingOperations { .. } => DeadlineClass::Ordinary,
+            Self::CreateAccount { .. } => DeadlineClass::Ordinary,
+            Self::ResumeAccount { .. } => DeadlineClass::Ordinary,
+            Self::ListDevices { .. } => DeadlineClass::Ordinary,
+            Self::ListBackupEnrollments { .. } => DeadlineClass::Ordinary,
+            Self::DescribeServerStatus { .. } => DeadlineClass::Ordinary,
+            Self::RemoveDevice { .. } => DeadlineClass::Ordinary,
+            Self::ProvisionOwnerDevice { .. } => DeadlineClass::Ordinary,
+            Self::ResumeOwnerDeviceProvision { .. } => DeadlineClass::Ordinary,
+            Self::PrepareOwnerBackup { .. } => DeadlineClass::Ordinary,
+            Self::CommitOwnerBackup { .. } => DeadlineClass::Ordinary,
+            Self::RevokeOwnerBackup { .. } => DeadlineClass::Ordinary,
+            Self::RecoverOwnerAccount { .. } => DeadlineClass::Ordinary,
+            Self::ResumeOwnerRecovery { .. } => DeadlineClass::Ordinary,
+            Self::PassphraseStatus { .. } => DeadlineClass::Ordinary,
+            Self::SetPassphrase { .. } => DeadlineClass::Ordinary,
+            Self::ChangePassphrase { .. } => DeadlineClass::Ordinary,
+            Self::VerifyPassphrase { .. } => DeadlineClass::Ordinary,
+            Self::SetYubiPassphrase { .. } => DeadlineClass::Ordinary,
+            Self::ChangeYubiPassphrase { .. } => DeadlineClass::Ordinary,
+            Self::VerifyYubiPassphrase { .. } => DeadlineClass::Ordinary,
+            Self::SyncAccount { .. } => DeadlineClass::Ordinary,
+            Self::StartDevicePairing { .. } => DeadlineClass::Ordinary,
+            Self::RepublishDevicePairing { .. } => DeadlineClass::Ordinary,
+            Self::FinishDevicePairing { .. } => DeadlineClass::Pairing,
+            Self::AcceptDevicePairing { .. } => DeadlineClass::Pairing,
+            Self::AcceptGoProfilePairing { .. } => DeadlineClass::Pairing,
+            Self::ResumeDevicePairingAcceptance { .. } => DeadlineClass::Pairing,
+            Self::ResumeGoProfilePairing { .. } => DeadlineClass::Pairing,
+            Self::CopyGoProfileDevice { .. } => DeadlineClass::Pairing,
+            Self::ListYubiCards { .. } => DeadlineClass::Ordinary,
+            Self::ListYubiAccounts { .. } => DeadlineClass::Ordinary,
+            Self::CreateYubiAccount { .. } => DeadlineClass::Ordinary,
+            Self::ResumeYubiAccount { .. } => DeadlineClass::Ordinary,
+            Self::ProvisionYubiDevice { .. } => DeadlineClass::Ordinary,
+            Self::SyncYubiAccount { .. } => DeadlineClass::Ordinary,
+            Self::YubiPinStatus { .. } => DeadlineClass::Ordinary,
+            Self::ChangeYubiPin { .. } => DeadlineClass::Ordinary,
+            Self::ChangeYubiPuk { .. } => DeadlineClass::Ordinary,
+            Self::UnblockYubiPin { .. } => DeadlineClass::Ordinary,
+            Self::RotateYubiManagementKey { .. } => DeadlineClass::Ordinary,
+            Self::ResumeYubiManagementKey { .. } => DeadlineClass::Ordinary,
+            Self::RecoverYubiManagementKey { .. } => DeadlineClass::Ordinary,
+            Self::RecoverYubiSubkey { .. } => DeadlineClass::Ordinary,
+            Self::RevokeYubiDevice { .. } => DeadlineClass::Ordinary,
+            Self::ListKv { .. } => DeadlineClass::Ordinary,
+            Self::ListTeamKv { .. } => DeadlineClass::Ordinary,
+            Self::ReadKv { .. } => DeadlineClass::Ordinary,
+            Self::ReadKvChunk { .. } => DeadlineClass::Ordinary,
+            Self::PutKv { .. } => DeadlineClass::Ordinary,
+            Self::KvUploadIssuance { .. } => DeadlineClass::Ordinary,
+            Self::PrepareKvUpload { .. } => DeadlineClass::Ordinary,
+            Self::ListKvUploads { .. } => DeadlineClass::Ordinary,
+            Self::ResumeKvUpload { .. } => DeadlineClass::Bulk,
+            Self::CancelKvUpload { .. } => DeadlineClass::Ordinary,
+            Self::PutKvStream { .. } => DeadlineClass::Bulk,
+            Self::PutKvSymlink { .. } => DeadlineClass::Ordinary,
+            Self::MkdirKv { .. } => DeadlineClass::Ordinary,
+            Self::MoveKv { .. } => DeadlineClass::Ordinary,
+            Self::RemoveKv { .. } => DeadlineClass::Ordinary,
+            Self::CreateTeam { .. } => DeadlineClass::Ordinary,
+            Self::ResumeTeamCreation { .. } => DeadlineClass::Ordinary,
+            Self::AbandonTeamCreation { .. } => DeadlineClass::Ordinary,
+            Self::ListTeams { .. } => DeadlineClass::Ordinary,
+            Self::DiscoverTeams { .. } => DeadlineClass::Ordinary,
+            Self::SyncTeam { .. } => DeadlineClass::Ordinary,
+            Self::ListTeamDetails { .. } => DeadlineClass::Ordinary,
+            Self::ListTeamMembers { .. } => DeadlineClass::Ordinary,
+            Self::AddTeamMember { .. } => DeadlineClass::Ordinary,
+            Self::ResumeTeamMemberAddition { .. } => DeadlineClass::Ordinary,
+            Self::PromoteTeamMember { .. } => DeadlineClass::Ordinary,
+            Self::DemoteTeamMember { .. } => DeadlineClass::Ordinary,
+            Self::RemoveTeamMember { .. } => DeadlineClass::Ordinary,
+            Self::ResumeTeamMemberEdit { .. } => DeadlineClass::Ordinary,
+            Self::AddFederatedTeamMember { .. } => DeadlineClass::Ordinary,
+            Self::ListFederatedTeams { .. } => DeadlineClass::Ordinary,
+            Self::ExpelFederatedTeam { .. } => DeadlineClass::Ordinary,
+            Self::RefreshFederatedSecurity { .. } => DeadlineClass::Ordinary,
+            Self::RunDueJobs { .. } => DeadlineClass::Ordinary,
         }
     }
 }
@@ -2367,6 +2509,40 @@ impl std::fmt::Debug for Response {
 }
 
 impl Response {
+    /// Erase discarded response values; returned JSON may contain plaintext.
+    pub fn zeroize_plaintext(&mut self) {
+        fn erase(value: &mut serde_json::Value) {
+            match value {
+                serde_json::Value::String(text) => text.zeroize(),
+                serde_json::Value::Array(items) => {
+                    for item in items {
+                        erase(item);
+                    }
+                }
+                serde_json::Value::Object(fields) => {
+                    for (mut key, mut value) in std::mem::take(fields) {
+                        key.zeroize();
+                        erase(&mut value);
+                    }
+                }
+                serde_json::Value::Null
+                | serde_json::Value::Bool(_)
+                | serde_json::Value::Number(_) => *value = serde_json::Value::Null,
+            }
+        }
+        match &mut self.result {
+            ResponseResult::Success { value } => erase(value),
+            ResponseResult::Error {
+                message, fields, ..
+            } => {
+                message.zeroize();
+                fields.capability.zeroize();
+                fields.profile.zeroize();
+                fields.state_dir.zeroize();
+                fields.reason.zeroize();
+            }
+        }
+    }
     pub fn success(id: u64, value: serde_json::Value) -> Self {
         Self {
             version: PROTOCOL_VERSION,
@@ -2447,6 +2623,8 @@ impl std::fmt::Debug for ResponseResult {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ErrorCode {
+    DeadlineClockUnavailable,
+    DeadlineDomainMismatch,
     CredentialsRequired,
     SavedTrustMissing,
     ServerUnavailable,

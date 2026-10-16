@@ -222,7 +222,7 @@ pub use federation::{
     AddFederatedTeamMemberReport, FederatedMembershipSummary, FederationDestinationRole,
     FederationExpulsionReport, FederationRefreshReport, UnlockedYubiActor,
 };
-pub use runtime::{JobRun, JobRunReport};
+pub use runtime::{JobRun, JobRunReport, OperationScope as ProfileOperationScope};
 pub use yubi::{
     LoadedYubiAccount, YubiAccountReport, YubiAccountSummary, YubiCardSummary, YubiEnrollmentState,
     YubiFederationSyncReport, YubiLifecycleReport, YubiPinStatus, YubiProvisionInput,

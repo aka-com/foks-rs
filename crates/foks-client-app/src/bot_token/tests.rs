@@ -4,7 +4,7 @@ fn id(p: &BotEnrollmentReport) -> [u8; 16] {
     std::array::from_fn(|i| u8::from_str_radix(&p.operation_id[i * 2..i * 2 + 2], 16).unwrap())
 }
 #[test]
-fn bot_export_is_once_and_selection_survives_without_secret() {
+fn bot_export_replays_until_durable_completion_and_selection_survives_without_secret() {
     let f = Fixture::start();
     f.run(|s, v, k| s.create_account("work", "appbotowner", "laptop", "", "", None, v, k));
     let p = f.run(|s, v, k| s.prepare_bot_account("work", Role::OWNER, None, v, k));
@@ -42,6 +42,29 @@ fn bot_export_is_once_and_selection_survives_without_secret() {
         .exported
         .unwrap();
     f.run(|s, v, k| {
+        // Each Fixture run reopens the protected store: offered state survives
+        // a discarded response and resumes with exactly the original token.
+        let replay =
+            s.bot_account_enrollment("work", id(&p), BotEnrollmentAction::Export, None, v, k)?;
+        assert_eq!(
+            replay.exported.as_deref().map(String::as_str),
+            Some(export.as_str())
+        );
+        assert!(replay.report.export_available);
+        let pending = PendingBot::load(v, id(&p), "work", s.pinned_host()?.host_id())?;
+        assert!(pending.export_offered);
+        for _ in 0..2 {
+            let completed = s.bot_account_enrollment(
+                "work",
+                id(&p),
+                BotEnrollmentAction::CompleteExport,
+                None,
+                v,
+                k,
+            )?;
+            assert!(completed.exported.is_none());
+            assert!(!completed.report.export_available);
+        }
         assert!(s
             .bot_account_enrollment("work", id(&p), BotEnrollmentAction::Export, None, v, k)
             .is_err());
@@ -221,10 +244,99 @@ fn completion_record_cleanup_retains_pending_and_unexported_tokens() {
     f.run(|s, v, k| {
         let uid = v.account("work")?.credential.uid;
         s.clean_bot_completion_records(uid.as_bytes(), v, k, u64::MAX / 2)?;
+        assert_eq!(s.bot_account_enrollments("work", v)?.len(), 1);
+        s.bot_account_enrollment(
+            "work",
+            id(&p),
+            BotEnrollmentAction::CompleteExport,
+            None,
+            v,
+            k,
+        )?;
+        s.clean_bot_completion_records(uid.as_bytes(), v, k, u64::MAX / 2)?;
         assert!(s.bot_account_enrollments("work", v)?.is_empty());
         assert!(HardStateStore::open(&s.paths.hard_database)?
             .mutation(&id(&p))?
             .is_none());
+        Ok(())
+    });
+}
+
+#[test]
+fn export_completion_refuses_unoffered_and_cancelled_without_consuming_token() {
+    let f = Fixture::start();
+    f.run(|s, v, k| s.create_account("work", "botackowner", "laptop", "", "", None, v, k));
+    let p = f.run(|s, v, k| s.prepare_bot_account("work", Role::OWNER, None, v, k));
+    for finalized in [false, true] {
+        if finalized {
+            f.run(|s, v, k| {
+                s.bot_account_enrollment("work", id(&p), BotEnrollmentAction::Attempt, None, v, k)
+            });
+        }
+        f.run(|s, v, k| {
+            let before = v.store.get(&enrollment_key(&id(&p)))?;
+            let op = HardStateStore::open(&s.paths.hard_database)?.mutation(&id(&p))?;
+            assert!(s
+                .bot_account_enrollment(
+                    "work",
+                    id(&p),
+                    BotEnrollmentAction::CompleteExport,
+                    None,
+                    v,
+                    k
+                )
+                .is_err());
+            assert_eq!(
+                v.store.get(&enrollment_key(&id(&p)))?.as_slice(),
+                before.as_slice()
+            );
+            let after = HardStateStore::open(&s.paths.hard_database)?.mutation(&id(&p))?;
+            assert_eq!(
+                after.as_ref().map(|o| (o.state, o.attempt_count)),
+                op.as_ref().map(|o| (o.state, o.attempt_count))
+            );
+            Ok(())
+        });
+    }
+    // Simulate a pre-upgrade successful export lacking the new offered field.
+    f.run(|s, v, k| {
+        let key = enrollment_key(&id(&p));
+        let mut raw: serde_json::Value = serde_json::from_slice(&v.store.get(&key)?)?;
+        raw["token"] = serde_json::Value::Null;
+        raw.as_object_mut().unwrap().remove("export_offered");
+        v.store
+            .put(&key, &Zeroizing::new(serde_json::to_vec(&raw)?))?;
+        let completed = s.bot_account_enrollment(
+            "work",
+            id(&p),
+            BotEnrollmentAction::CompleteExport,
+            None,
+            v,
+            k,
+        )?;
+        assert!(!completed.report.export_available);
+        Ok(())
+    });
+    let cancelled = f.run(|s, v, k| s.prepare_bot_account("work", Role::OWNER, None, v, k));
+    f.run(|s, v, k| {
+        s.bot_account_enrollment(
+            "work",
+            id(&cancelled),
+            BotEnrollmentAction::Cancel,
+            None,
+            v,
+            k,
+        )?;
+        assert!(s
+            .bot_account_enrollment(
+                "work",
+                id(&cancelled),
+                BotEnrollmentAction::CompleteExport,
+                None,
+                v,
+                k
+            )
+            .is_err());
         Ok(())
     });
 }

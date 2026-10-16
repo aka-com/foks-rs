@@ -103,6 +103,7 @@ impl Resolve for GuardedResolver {
 pub struct ProviderHttp {
     client: reqwest::blocking::Client,
     policy: NetworkPolicy,
+    deadline: Option<foks_local_deadline::Deadline>,
 }
 impl ProviderHttp {
     pub fn new(policy: NetworkPolicy) -> Result<Self, Error> {
@@ -114,19 +115,65 @@ impl ProviderHttp {
             .dns_resolver(Arc::new(GuardedResolver(policy)))
             .build()
             .map_err(|_| Error::Configuration)?;
-        Ok(Self { client, policy })
+        Ok(Self {
+            client,
+            policy,
+            deadline: None,
+        })
+    }
+    /// Retain the caller's full coordinate across discovery, JWKS and exchange.
+    pub fn with_local_deadline(
+        mut self,
+        deadline: foks_local_deadline::Deadline,
+    ) -> Result<Self, Error> {
+        deadline.check()?;
+        self.deadline = Some(match &self.deadline {
+            Some(existing) => existing.intersect(&deadline)?,
+            None => deadline,
+        });
+        Ok(self)
+    }
+    fn check_deadline(&self) -> Result<(), Error> {
+        if let Some(deadline) = &self.deadline {
+            deadline.check()?;
+        }
+        Ok(())
+    }
+    fn request_budget(&self) -> Result<Duration, Error> {
+        self.check_deadline()?;
+        let cap = Duration::from_millis(PROVIDER_DEADLINE_MS);
+        match &self.deadline {
+            Some(deadline) => Ok(cap.min(
+                deadline
+                    .instant()
+                    .checked_duration_since(std::time::Instant::now())
+                    .filter(|d| !d.is_zero())
+                    .ok_or(foks_local_deadline::Error::Expired)?,
+            )),
+            None => Ok(cap),
+        }
+    }
+    fn body(&self, response: reqwest::blocking::Response) -> Result<Vec<u8>, Error> {
+        self.check_deadline()?;
+        let mut result = bounded_response(response);
+        if let Err(error) = self.check_deadline() {
+            if let Ok(bytes) = &mut result {
+                use zeroize::Zeroize as _;
+                bytes.zeroize();
+            }
+            return Err(error);
+        }
+        result
     }
     pub fn get(&self, url: &str) -> Result<Vec<u8>, Error> {
         let url = self.policy.check_url(url)?;
-        let response = self
-            .client
-            .get(url)
-            .send()
-            .map_err(|_| Error::ProviderUnavailable)?;
+        let response = self.client.get(url).timeout(self.request_budget()?).send();
+        self.check_deadline()?;
+        let response = response.map_err(|_| Error::ProviderUnavailable)?;
         if !response.status().is_success() {
             return Err(Error::ProviderUnavailable);
         }
-        bounded_response(response)
+        self.body(response)
     }
     pub fn policy(&self) -> NetworkPolicy {
         self.policy
@@ -288,20 +335,108 @@ impl openidconnect::SyncHttpClient for ProviderHttp {
             .request(parts.method, url)
             .headers(parts.headers)
             .body(body)
-            .send()
-            .map_err(|_| Error::ProviderUnavailable)?;
+            .timeout(self.request_budget()?)
+            .send();
+        self.check_deadline()?;
+        let response = response.map_err(|_| Error::ProviderUnavailable)?;
         // Never forward a code, verifier or client secret to a redirect target.
         if response.status().is_redirection() {
             return Err(Error::ProviderUnavailable);
         }
         let status = response.status();
         let headers = response.headers().clone();
-        let bytes = bounded_response(response)?;
+        let bytes = self.body(response)?;
         let mut result = openidconnect::http::Response::builder()
             .status(status)
             .body(bytes)
             .map_err(|_| Error::ProviderUnavailable)?;
         *result.headers_mut() = headers;
+        if let Err(error) = self.check_deadline() {
+            use zeroize::Zeroize as _;
+            result.body_mut().zeroize();
+            return Err(error);
+        }
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+    use openidconnect::SyncHttpClient as _;
+    use std::{io::Write as _, time::Instant};
+
+    #[test]
+    fn expired_provider_context_dispatches_neither_get_nor_exchange() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}/idp", listener.local_addr().unwrap());
+        let http = ProviderHttp::new(NetworkPolicy::loopback_test()).unwrap();
+        let deadline =
+            foks_local_deadline::Deadline::capture(Instant::now() + Duration::from_millis(10))
+                .unwrap();
+        let http = http.with_local_deadline(deadline.clone()).unwrap();
+        while Instant::now() < deadline.instant() {
+            std::thread::yield_now();
+        }
+        assert!(matches!(
+            http.get(&url),
+            Err(Error::LocalDeadline(foks_local_deadline::Error::Expired))
+        ));
+        let request = openidconnect::http::Request::builder()
+            .uri(&url)
+            .method("POST")
+            .body(b"secret".to_vec())
+            .unwrap();
+        assert!(matches!(
+            http.call(request),
+            Err(Error::LocalDeadline(foks_local_deadline::Error::Expired))
+        ));
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn delayed_response_body_spends_budget_for_later_provider_calls() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/idp", listener.local_addr().unwrap());
+        let http = ProviderHttp::new(NetworkPolicy::loopback_test()).unwrap();
+        let deadline =
+            foks_local_deadline::Deadline::capture(Instant::now() + Duration::from_millis(100))
+                .unwrap();
+        let http = http.with_local_deadline(deadline.clone()).unwrap();
+        let until = deadline.instant();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut buffer = [0; 2048];
+            let _ = socket.read(&mut buffer).unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            while Instant::now() < until {
+                std::thread::yield_now();
+            }
+            let _ = socket.write_all(b"{}");
+            listener.set_nonblocking(true).unwrap();
+            listener
+        });
+        assert!(matches!(
+            http.get(&url),
+            Err(Error::LocalDeadline(foks_local_deadline::Error::Expired))
+        ));
+        let listener = server.join().unwrap();
+        assert!(matches!(
+            http.get(&url),
+            Err(Error::LocalDeadline(foks_local_deadline::Error::Expired))
+        ));
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
     }
 }

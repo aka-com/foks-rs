@@ -7,6 +7,7 @@ use super::{
 use crate::diagnostics::{agent_operation, outcome_of, Label, TimingLog};
 use foks_agent_proto::{ErrorCode, ErrorFields, Operation, Response, ResponseResult};
 use foks_desktop::{AgentError as DesktopAgentError, AgentTransport, IpcErrorCode};
+use foks_local_deadline::Deadline;
 use serde_json::Value;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex};
@@ -119,6 +120,8 @@ impl AgentError {
             ErrorCode::CurrentPassphraseRejected => ("current-passphrase-rejected", true),
             ErrorCode::Busy => ("busy", true),
             ErrorCode::DeadlineExceeded => ("deadline-exceeded", true),
+            ErrorCode::DeadlineClockUnavailable => ("deadline-clock-unavailable", false),
+            ErrorCode::DeadlineDomainMismatch => ("deadline-domain-mismatch", false),
             ErrorCode::CapabilityDenied => ("capability-denied", false),
             ErrorCode::RollbackDetected => ("rollback-detected", false),
             ErrorCode::CheckpointResetRequired => ("checkpoint-reset-required", false),
@@ -226,6 +229,33 @@ impl Drop for MaintenanceDrain<'_> {
 }
 
 impl StartupGate {
+    pub(super) fn wait_until(
+        &self,
+        deadline: &Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), DesktopAgentError> {
+        let mut guard = self
+            .open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        loop {
+            deadline
+                .check()
+                .map_err(foks_desktop::local_deadline_error)?;
+            if cancelled() {
+                return Err(DesktopAgentError::Cancelled);
+            }
+            if *guard {
+                return Ok(());
+            }
+            let remaining = deadline.instant().saturating_duration_since(Instant::now());
+            let (next, _) = self
+                .ready
+                .wait_timeout(guard, remaining.min(Duration::from_millis(50)))
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard = next;
+        }
+    }
     pub(super) fn new_open() -> Self {
         Self {
             open: Mutex::new(true),
@@ -406,14 +436,37 @@ impl ObservedTransport {
         operation: Operation,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Value, DesktopAgentError> {
-        self.startup_gate.wait();
-        let _use = self.reserve_use()?;
+        let cap = operation.deadline_class().cap();
+        let mut operation = foks_desktop::PendingOperation::new(operation);
+        let deadline =
+            Deadline::capture(Instant::now() + cap).map_err(foks_desktop::local_deadline_error)?;
+        self.call_observed_until(label, operation.take(), cancelled, &deadline)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn call_observed_until(
+        &self,
+        label: Option<&Label>,
+        operation: Operation,
+        cancelled: &dyn Fn() -> bool,
+        deadline: &Deadline,
+    ) -> Result<Value, DesktopAgentError> {
         let name = operation.name();
         let preemptible = !operation.is_mutation();
+        let mut operation = foks_desktop::PendingOperation::new(operation);
+        self.startup_gate.wait_until(deadline, cancelled)?;
+        let _use = self.reserve_use()?;
+        deadline
+            .check()
+            .map_err(foks_desktop::local_deadline_error)?;
         let started = Instant::now();
         let response = self
             .client
-            .call_cancellable(operation, &|| cancelled() || self.preempted(preemptible))
+            .with_local_deadline(deadline.clone())
+            .map_err(client_to_desktop)?
+            .call_cancellable(operation.take(), &|| {
+                cancelled() || self.preempted(preemptible)
+            })
             .map_err(client_to_desktop);
         self.observe(label, name, started, &response);
         let result = response.and_then(|response| response_result(response.result));
@@ -428,11 +481,29 @@ impl ObservedTransport {
         header: foks_agent_proto::KvUploadHeader,
         reader: &mut dyn std::io::Read,
     ) -> Result<Value, DesktopAgentError> {
-        self.startup_gate.wait();
+        let deadline = Deadline::capture(Instant::now() + Duration::from_secs(300))
+            .map_err(foks_desktop::local_deadline_error)?;
+        self.stream_observed_until(label, header, reader, &deadline)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn stream_observed_until(
+        &self,
+        label: Option<&Label>,
+        header: foks_agent_proto::KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+        deadline: &Deadline,
+    ) -> Result<Value, DesktopAgentError> {
+        self.startup_gate.wait_until(deadline, &|| false)?;
         let _use = self.reserve_use()?;
+        deadline
+            .check()
+            .map_err(foks_desktop::local_deadline_error)?;
         let started = Instant::now();
         let response = self
             .client
+            .with_local_deadline(deadline.clone())
+            .map_err(client_to_desktop)?
             .put_kv_stream(header, reader)
             .map_err(client_to_desktop);
         self.observe(label, "PutKvStream", started, &response);
@@ -443,6 +514,22 @@ impl ObservedTransport {
 }
 
 impl AgentTransport for ObservedTransport {
+    fn call_with_deadline(
+        &self,
+        operation: Operation,
+        deadline: &Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Value, DesktopAgentError> {
+        self.call_observed_until(None, operation, cancelled, deadline)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        header: foks_agent_proto::KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+        deadline: &Deadline,
+    ) -> Result<Value, DesktopAgentError> {
+        self.stream_observed_until(None, header, reader, deadline)
+    }
     fn call_cancellable(
         &self,
         operation: Operation,
@@ -465,6 +552,24 @@ impl AgentTransport for ObservedTransport {
 }
 
 impl AgentTransport for LabelledTransport {
+    fn call_with_deadline(
+        &self,
+        operation: Operation,
+        deadline: &Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Value, DesktopAgentError> {
+        self.inner
+            .call_observed_until(Some(&self.label), operation, cancelled, deadline)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        header: foks_agent_proto::KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+        deadline: &Deadline,
+    ) -> Result<Value, DesktopAgentError> {
+        self.inner
+            .stream_observed_until(Some(&self.label), header, reader, deadline)
+    }
     fn call_cancellable(
         &self,
         operation: Operation,
@@ -571,28 +676,54 @@ impl AgentHandle {
         self.transport.timings.record_agent_timers(status.timers());
     }
 
-    pub async fn call(self: &Arc<Self>, operation: Operation) -> Result<Response, AgentError> {
+    pub async fn call_until(
+        self: &Arc<Self>,
+        operation: Operation,
+        deadline: &Deadline,
+    ) -> Result<Response, AgentError> {
+        let mutation = operation.is_mutation();
+        let mut operation = foks_desktop::PendingOperation::new(operation);
         let handle = Arc::clone(self);
-        tauri::async_runtime::spawn_blocking(move || handle.call_blocking(operation))
-            .await
-            .map_err(|error| {
-                AgentError::unknown(format!("Agent call failed to complete: {error}"))
-            })?
+        let worker_deadline = deadline.clone();
+        super::deadline::run(
+            deadline,
+            mutation,
+            move || handle.call_blocking_until(operation.take(), &worker_deadline),
+            Response::zeroize_plaintext,
+        )
+        .await
     }
 
     pub fn call_blocking(&self, operation: Operation) -> Result<Response, AgentError> {
-        self.wait_for_startup();
+        let cap = operation.deadline_class().cap();
+        let mut operation = foks_desktop::PendingOperation::new(operation);
+        let deadline = Deadline::capture(Instant::now() + cap)
+            .map_err(|e| AgentError::from_desktop(foks_desktop::local_deadline_error(e)))?;
+        self.call_blocking_until(operation.take(), &deadline)
+    }
+
+    pub fn call_blocking_until(
+        &self,
+        operation: Operation,
+        deadline: &Deadline,
+    ) -> Result<Response, AgentError> {
+        let name = operation.name();
+        let preemptible = !operation.is_mutation();
+        let mut operation = foks_desktop::PendingOperation::new(operation);
+        self.startup_gate
+            .wait_until(deadline, &|| false)
+            .map_err(AgentError::from_desktop)?;
         let _use = self
             .transport
             .reserve_use()
             .map_err(AgentError::from_desktop)?;
-        let name = operation.name();
-        let preemptible = !operation.is_mutation();
         let started = Instant::now();
         let result = self
             .transport
             .client
-            .call_cancellable(operation, &|| self.transport.preempted(preemptible))
+            .with_local_deadline(deadline.clone())
+            .map_err(|error| AgentError::from_client(&error))?
+            .call_cancellable(operation.take(), &|| self.transport.preempted(preemptible))
             .map_err(client_to_desktop);
         self.transport.observe(None, name, started, &result);
         self.transport.record(&result);

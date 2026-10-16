@@ -4,6 +4,10 @@
 
 mod chat;
 pub use chat::{chat_request, chat_request_cancellable, validate_chat_reply};
+mod deadline;
+pub use deadline::{
+    bind_transport_deadline, discard_transport_result, local_deadline_error, PendingOperation,
+};
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -67,6 +71,7 @@ pub enum IpcErrorCode {
     VersionMismatch,
     Cancelled,
     DeadlineExceeded,
+    DeadlineClock,
     Ambiguous,
 }
 
@@ -82,6 +87,7 @@ impl IpcErrorCode {
             Self::VersionMismatch => "version-mismatch",
             Self::Cancelled => "cancelled",
             Self::DeadlineExceeded => "deadline-exceeded",
+            Self::DeadlineClock => "deadline-clock",
             Self::Ambiguous => "ambiguous",
         }
     }
@@ -291,17 +297,42 @@ impl Screen {
 
 pub trait AgentTransport: Send + Sync + 'static {
     fn call(&self, operation: Operation) -> Result<Value, AgentError>;
+    /// A supplied operation context must reach the concrete IPC transport.
+    /// Unsupported adapters fail closed instead of silently resetting its cap.
+    fn call_with_deadline(
+        &self,
+        mut operation: Operation,
+        _deadline: &foks_local_deadline::Deadline,
+        _cancelled: &dyn Fn() -> bool,
+    ) -> Result<Value, AgentError> {
+        operation.zeroize_plaintext();
+        Err(deadline::unsupported())
+    }
+
+    fn put_kv_stream_with_deadline(
+        &self,
+        _header: KvUploadHeader,
+        _reader: &mut dyn std::io::Read,
+        _deadline: &foks_local_deadline::Deadline,
+    ) -> Result<Value, AgentError> {
+        Err(deadline::unsupported())
+    }
     fn call_cancellable(
         &self,
         operation: Operation,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Value, AgentError> {
+        let mutation = operation.is_mutation();
+        let mut operation = PendingOperation::new(operation);
         if cancelled() {
             return Err(AgentError::Cancelled);
         }
-        let mutation = operation.is_mutation();
-        let result = self.call(operation);
-        if result.is_ok() && cancelled() {
+        let mut result = self.call(operation.take());
+        if cancelled() {
+            if deadline::preserve_terminal_transport_error(&mut result) {
+                return result;
+            }
+            discard_transport_result(&mut result);
             return Err(if mutation {
                 AgentError::Ambiguous("Request cancelled after mutation started.".into())
             } else {
@@ -323,6 +354,31 @@ pub trait AgentTransport: Send + Sync + 'static {
 }
 
 impl AgentTransport for AgentClient {
+    fn call_with_deadline(
+        &self,
+        operation: Operation,
+        deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Value, AgentError> {
+        let mut operation = PendingOperation::new(operation);
+        let client = self
+            .with_local_deadline(deadline.clone())
+            .map_err(agent_client_error)?;
+        <Self as AgentTransport>::call_cancellable(&client, operation.take(), cancelled)
+    }
+
+    fn put_kv_stream_with_deadline(
+        &self,
+        header: KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+        deadline: &foks_local_deadline::Deadline,
+    ) -> Result<Value, AgentError> {
+        let client = self
+            .with_local_deadline(deadline.clone())
+            .map_err(agent_client_error)?;
+        <Self as AgentTransport>::put_kv_stream(&client, header, reader)
+    }
+
     fn call(&self, operation: Operation) -> Result<Value, AgentError> {
         <Self as AgentTransport>::call_cancellable(self, operation, &|| false)
     }
@@ -385,6 +441,7 @@ pub fn agent_client_error(error: impl std::borrow::Borrow<foks_agent_client::Err
     match error {
         Error::Cancelled => AgentError::Cancelled,
         Error::DeadlineExceeded => AgentError::DeadlineExceeded,
+        Error::LocalDeadline(_) => ipc(IpcErrorCode::DeadlineClock),
         Error::Ambiguous(cause) => {
             let cause = agent_client_error(cause.as_ref());
             let code = match &cause {

@@ -11,6 +11,7 @@ pub enum BotEnrollmentAction {
     Attempt,
     Cancel,
     Export,
+    CompleteExport,
 }
 #[derive(Clone, Serialize)]
 pub struct BotEnrollmentReport {
@@ -39,6 +40,8 @@ struct PendingBot {
     name: String,
     role: Vec<u8>,
     token: Option<String>,
+    #[serde(default)]
+    export_offered: bool,
     cancelled: bool,
     created_at: u64,
 }
@@ -261,6 +264,7 @@ impl CheckedProfileSession<'_> {
             name: token.name(),
             role: role.encoded()?,
             token: Some(token.export().to_string()),
+            export_offered: false,
             cancelled: false,
             created_at: now_microseconds()?,
         };
@@ -295,6 +299,31 @@ impl CheckedProfileSession<'_> {
                 || o.subject_id != p.device
         }) {
             return Err(Error::InvalidAccount("bot journal binding changed"));
+        }
+        // Completion is strictly local: a premature acknowledgement cannot
+        // prepare, reconcile or submit a remote enrollment.
+        if matches!(action, BotEnrollmentAction::CompleteExport) {
+            if p.cancelled
+                || op
+                    .as_ref()
+                    .is_none_or(|o| o.state != MutationState::Finalized)
+            {
+                return Err(Error::InvalidAccount("bot enrollment is not verified"));
+            }
+            if p.token.is_some() && !p.export_offered {
+                return Err(Error::InvalidAccount(
+                    "bot token export has not been offered",
+                ));
+            }
+            if p.token.is_some() {
+                crate::runtime::check_operation()?;
+                drop(p.token.take().map(Zeroizing::new));
+                p.save(vault)?;
+            }
+            return Ok(BotEnrollmentOutcome {
+                report: p.report(op.as_ref())?,
+                exported: None,
+            });
         }
         let mut protected = self.mutation_store(master)?;
         if matches!(action, BotEnrollmentAction::Cancel) {
@@ -384,12 +413,17 @@ impl CheckedProfileSession<'_> {
             {
                 return Err(Error::InvalidAccount("bot enrollment is not verified"));
             }
-            let secret = p
-                .token
-                .take()
-                .ok_or(Error::InvalidAccount("bot token was already exported"))?;
-            let secret = Zeroizing::new(secret);
-            p.save(vault)?;
+            let secret = Zeroizing::new(
+                p.token
+                    .as_ref()
+                    .ok_or(Error::InvalidAccount("bot token was already exported"))?
+                    .clone(),
+            );
+            if !p.export_offered {
+                crate::runtime::check_operation()?;
+                p.export_offered = true;
+                p.save(vault)?;
+            }
             Some(secret)
         } else {
             None

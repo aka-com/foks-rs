@@ -1,4 +1,3 @@
-use foks_agent_client::AgentClient;
 use foks_agent_proto::{sso::SsoAction, Operation, ResponseResult, SecretString};
 use std::path::{Path, PathBuf};
 #[derive(clap::Subcommand)]
@@ -200,14 +199,14 @@ pub fn run(state: &Path, command: SsoCommand) -> Result<(), Box<dyn std::error::
         ),
     };
     super::mcp::ensure_agent(state)?;
-    let response = AgentClient::new(state.join("foks-rs.sock")).call(Operation::Sso {
+    let response = super::deadline::agent_client(state)?.call(Operation::Sso {
         profile: scope.profile,
         account_alias: scope.account_alias,
         action,
     })?;
     match response.result {
         ResponseResult::Success { value } => {
-            println!("{}", serde_json::to_string_pretty(&value)?);
+            super::deadline::print_agent_value(value)?;
             Ok(())
         }
         ResponseResult::Error { message, .. } => Err(message.into()),

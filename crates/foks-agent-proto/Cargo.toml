@@ -6,6 +6,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+foks-local-deadline = { workspace = true }
 base64 = { workspace = true }
 foks-proto = { workspace = true }
 serde = { workspace = true }

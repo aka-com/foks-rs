@@ -651,6 +651,12 @@ fn one_base_transport_serves_a_profile_until_it_is_dropped() {
 
 #[test]
 fn a_session_carries_read_caches_only_inside_a_read_scope() {
+    let control = crate::request_control::RequestControl::background(
+        Duration::from_secs(5),
+        CancellationToken::new(),
+    )
+    .unwrap();
+    let _control = control.enter().unwrap();
     let temporary = tempfile::tempdir().expect("temporary directory");
     let root = temporary.path().join("state");
     let mut registry = ProfileRegistry::open(&root).expect("registry opens");

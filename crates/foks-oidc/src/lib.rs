@@ -20,6 +20,8 @@ pub const MAX_IDENTITY_SESSIONS: usize = 4;
 
 #[derive(Debug, Error, Eq, PartialEq)]
 pub enum Error {
+    #[error("{0}")]
+    LocalDeadline(#[from] foks_local_deadline::Error),
     #[error("OIDC provider rejected the grant")]
     GrantRejected,
     #[error("OIDC provider is unavailable")]

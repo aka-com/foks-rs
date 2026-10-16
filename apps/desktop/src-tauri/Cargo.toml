@@ -24,6 +24,7 @@ foks-client-app = { workspace = true }
 foks-keystore = { workspace = true }
 foks-yubi = { workspace = true, features = ["hardware"] }
 foks-agent-client = { workspace = true }
+foks-local-deadline = { workspace = true, features = ["clock"] }
 foks-agent-proto = { workspace = true }
 foks-compat-artifact = { workspace = true }
 foks-crypto = { workspace = true }

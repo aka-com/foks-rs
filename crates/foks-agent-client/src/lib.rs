@@ -2,9 +2,11 @@
 
 #![forbid(unsafe_code)]
 
+pub use foks_local_deadline::Deadline;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use foks_agent_proto::{
     KvUploadFrame, KvUploadHeader, KvUploadPayload, Operation, Request, Response,
@@ -17,8 +19,6 @@ pub mod secret_file;
 #[cfg(unix)]
 mod transport;
 
-const DEVICE_PAIRING_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-const CHAT_POLL_TIMEOUT: Duration = Duration::from_secs(60);
 /// One upload frame's plaintext. Byte payloads are base64, so this is the
 /// protocol's own payload bound, which is sized against the frame ceiling
 /// with the envelope reserve held back.
@@ -40,10 +40,21 @@ pub enum Error {
     ResponseBinding,
     #[error("local agent request was cancelled")]
     Cancelled,
+    #[error("{0}")]
+    LocalDeadline(#[source] foks_local_deadline::Error),
     #[error("local agent request deadline exceeded")]
     DeadlineExceeded,
     #[error("local agent mutation outcome is ambiguous: {0}")]
     Ambiguous(Box<Error>),
+}
+
+impl From<foks_local_deadline::Error> for Error {
+    fn from(error: foks_local_deadline::Error) -> Self {
+        match error {
+            foks_local_deadline::Error::Expired => Self::DeadlineExceeded,
+            error => Self::LocalDeadline(error),
+        }
+    }
 }
 
 impl Error {
@@ -67,21 +78,23 @@ impl Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+#[derive(Clone)]
 pub struct AgentClient {
     socket: PathBuf,
-    timeout: Duration,
-    next_id: AtomicU64,
+    timeout: Option<Duration>,
+    deadline: Option<Deadline>,
+    next_id: Arc<AtomicU64>,
 }
-
 impl AgentClient {
     pub fn new(socket: impl AsRef<Path>) -> Self {
         Self {
             socket: socket.as_ref().to_path_buf(),
-            timeout: Duration::from_secs(15),
-            next_id: AtomicU64::new(1),
+            timeout: None,
+            deadline: None,
+            next_id: Arc::new(AtomicU64::new(1)),
         }
     }
-
+    /// Explicit ceiling; it never enlarges the operation's classified budget.
     pub fn set_timeout(&mut self, timeout: Duration) -> Result<()> {
         if timeout.is_zero() || timeout > Duration::from_secs(300) {
             return Err(Error::Io(std::io::Error::new(
@@ -89,37 +102,70 @@ impl AgentClient {
                 "agent timeout is outside supported bounds",
             )));
         }
-        self.timeout = timeout;
+        self.timeout = Some(timeout);
         Ok(())
     }
-
+    pub fn with_operation_deadline(&self, original: Instant) -> Result<Self> {
+        let deadline = match &self.deadline {
+            Some(existing) => existing.shorten(original)?,
+            None => Deadline::capture(original)?,
+        };
+        self.with_local_deadline(deadline)
+    }
+    pub fn with_local_deadline(&self, deadline: Deadline) -> Result<Self> {
+        deadline.check()?;
+        let mut client = self.clone();
+        client.deadline = Some(match &self.deadline {
+            Some(existing) => existing.intersect(&deadline)?,
+            None => deadline,
+        });
+        Ok(client)
+    }
+    fn deadline_for(&self, class: foks_agent_proto::DeadlineClass) -> Result<Deadline> {
+        // Capture BEFORE clock acquisition, encoding, source reads or admission.
+        let cap = self.timeout.unwrap_or(class.cap()).min(class.cap());
+        let original = Instant::now()
+            .checked_add(cap)
+            .ok_or(foks_local_deadline::Error::Range)?;
+        Ok(match &self.deadline {
+            Some(existing) => existing.shorten(original)?,
+            None => Deadline::capture(original)?,
+        })
+    }
     pub fn call(&self, operation: Operation) -> Result<Response> {
         self.call_cancellable(operation, &|| false)
     }
-
-    /// Cancellation closes the IPC socket; a started mutation remains ambiguous.
     pub fn call_cancellable(
+        &self,
+        mut operation: Operation,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Response> {
+        let deadline = match self.deadline_for(operation.deadline_class()) {
+            Ok(d) => d,
+            Err(error) => {
+                operation.zeroize_plaintext();
+                return Err(error);
+            }
+        };
+        self.call_with_context(operation, cancelled, &deadline)
+    }
+    fn call_with_context(
         &self,
         operation: Operation,
         cancelled: &dyn Fn() -> bool,
+        deadline: &Deadline,
     ) -> Result<Response> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let mutation = operation.is_mutation();
-        let timeout = if operation.is_device_pairing_wait() {
-            self.timeout.max(DEVICE_PAIRING_TIMEOUT)
-        } else if operation.is_chat_poll_wait() {
-            self.timeout.max(CHAT_POLL_TIMEOUT)
-        } else {
-            self.timeout
-        };
-        let response = call_platform(
+        let mut response = call_platform(
             &self.socket,
-            timeout,
-            Request::new(id, operation),
+            deadline,
+            Request::new(id, operation, deadline.envelope().clone()),
             mutation,
             cancelled,
         )?;
         if response.id != Some(id) {
+            response.zeroize_plaintext();
             return Err(if mutation {
                 Error::Ambiguous(Box::new(Error::ResponseBinding))
             } else {
@@ -128,7 +174,6 @@ impl AgentClient {
         }
         Ok(response)
     }
-
     pub fn put_kv_stream<R: std::io::Read + ?Sized>(
         &self,
         header: KvUploadHeader,
@@ -136,28 +181,27 @@ impl AgentClient {
     ) -> Result<Response> {
         self.put_kv_stream_cancellable(header, reader, &|| false)
     }
-
-    /// Socket I/O observes a single absolute deadline and cancellation. The
-    /// synchronous source must return promptly from each `Read::read` (use an
-    /// in-memory buffer or local regular file, not a pipe/network reader).
-    /// Rust's arbitrary `Read` cannot be interrupted while inside its method;
-    /// cancellation is checked before and after every source read.
+    /// A source Read is not preemptible. Check both sides, retain ownership and
+    /// never reread the source after an ambiguous operation.
     pub fn put_kv_stream_cancellable<R: std::io::Read + ?Sized>(
         &self,
         header: KvUploadHeader,
         reader: &mut R,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Response> {
-        let deadline = std::time::Instant::now() + self.timeout;
+        let deadline = self.deadline_for(foks_agent_proto::DeadlineClass::Bulk)?;
         if header.adapter.is_none() {
             if let Some(upload_id) = header.upload_id {
-                let prepared = self.call_cancellable(
+                let phase = deadline
+                    .shorten(Instant::now() + foks_agent_proto::DeadlineClass::Ordinary.cap())?;
+                let prepared = self.call_with_context(
                     Operation::PrepareKvUpload {
                         store: header.store.clone(),
                         upload_id,
                         intent: (&header).into(),
                     },
                     cancelled,
+                    &phase,
                 )?;
                 if matches!(
                     &prepared.result,
@@ -168,25 +212,19 @@ impl AgentClient {
                 let expected_upload = upload_id.to_string();
                 match &prepared.result {
                     foks_agent_proto::ResponseResult::Success { value }
-                        if value.get("state").and_then(|value| value.as_str())
+                        if value.get("state").and_then(|v| v.as_str())
                             == Some("awaiting-source")
-                            && value.get("upload_id").and_then(|value| value.as_str())
+                            && value.get("upload_id").and_then(|v| v.as_str())
                                 == Some(expected_upload.as_str()) => {}
                     _ => return Err(Error::ResponseBinding),
                 }
             }
         }
-        check_upload_cancelled(cancelled, deadline)?;
+        check_upload_cancelled(cancelled, &deadline)?;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let response = upload_platform(
-            &self.socket,
-            deadline.saturating_duration_since(std::time::Instant::now()),
-            id,
-            header,
-            reader,
-            cancelled,
-        )?;
+        let mut response = upload_platform(&self.socket, &deadline, id, header, reader, cancelled)?;
         if response.id != Some(id) {
+            response.zeroize_plaintext();
             return Err(Error::Ambiguous(Box::new(Error::ResponseBinding)));
         }
         Ok(response)
@@ -196,15 +234,14 @@ impl AgentClient {
 #[cfg(unix)]
 fn call_platform(
     socket: &Path,
-    timeout: Duration,
+    deadline: &Deadline,
     mut request: Request,
     mutation: bool,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Response> {
     let frame = foks_agent_proto::encode(&request);
     request.operation.zeroize_plaintext();
-    let frame = frame?;
-    let deadline = std::time::Instant::now() + timeout;
+    let frame = Zeroizing::new(frame?);
     check_upload_cancelled(cancelled, deadline)?;
     let mut stream = connect_platform(socket, cancelled, deadline)?;
     check_upload_cancelled(cancelled, deadline)?;
@@ -228,113 +265,118 @@ fn call_platform(
 #[cfg(unix)]
 fn upload_platform<R: std::io::Read + ?Sized>(
     socket: &Path,
-    timeout: Duration,
+    deadline: &Deadline,
     id: u64,
     header: KvUploadHeader,
     reader: &mut R,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Response> {
-    let deadline = std::time::Instant::now() + timeout;
     check_upload_cancelled(cancelled, deadline)?;
     let total = header.total_length;
     let handshake = header.upload_id.is_some() && header.adapter.is_none();
     let mut stream = connect_platform(socket, cancelled, deadline)?;
     check_upload_cancelled(cancelled, deadline)?;
-    transport::write_all(
-        &mut stream,
-        &foks_agent_proto::encode(&Request::new(id, Operation::PutKvStream { header }))?,
-        cancelled,
-        deadline,
-    )?;
-    if handshake {
-        let ready = read_response_cancellable(&mut stream, cancelled, deadline)?;
-        if ready.id != Some(id) {
-            return Err(Error::ResponseBinding);
+    let result = (|| {
+        transport::write_all(
+            &mut stream,
+            &foks_agent_proto::encode(&Request::new(
+                id,
+                Operation::PutKvStream { header },
+                deadline.envelope().clone(),
+            ))?,
+            cancelled,
+            deadline,
+        )?;
+        if handshake {
+            let ready = read_response_cancellable(&mut stream, cancelled, deadline)?;
+            if ready.id != Some(id) {
+                return Err(Error::ResponseBinding);
+            }
+            match &ready.result {
+                foks_agent_proto::ResponseResult::Error { .. } => return Ok(ready),
+                foks_agent_proto::ResponseResult::Success { value }
+                    if value.get("upload_ready").and_then(|v| v.as_bool()) == Some(true) => {}
+                _ => return Err(Error::ResponseBinding),
+            }
         }
-        match &ready.result {
-            foks_agent_proto::ResponseResult::Error { .. } => return Ok(ready),
-            foks_agent_proto::ResponseResult::Success { value }
-                if value.get("upload_ready").and_then(|v| v.as_bool()) == Some(true) => {}
-            _ => return Err(Error::ResponseBinding),
+        let mut buffer = Zeroizing::new(vec![0u8; MAXIMUM_UPLOAD_FRAME_BYTES]);
+        let mut offset = 0u64;
+        while offset < total {
+            check_upload_cancelled(cancelled, deadline)?;
+            let wanted = usize::try_from((total - offset).min(MAXIMUM_UPLOAD_FRAME_BYTES as u64))
+                .map_err(|_| Error::Io(std::io::Error::other("upload length overflow")))?;
+            read_upload_chunk_cancellable(reader, &mut buffer[..wanted], cancelled, deadline)?;
+            let mut frame = KvUploadFrame {
+                version: PROTOCOL_VERSION,
+                id,
+                payload: KvUploadPayload::Chunk {
+                    offset,
+                    content: buffer[..wanted].to_vec(),
+                },
+            };
+            let encoded = foks_agent_proto::encode(&frame);
+            if let KvUploadPayload::Chunk { content, .. } = &mut frame.payload {
+                content.zeroize();
+            }
+            let encoded = Zeroizing::new(encoded?);
+            if let Err(error) = transport::write_all(&mut stream, &encoded, cancelled, deadline) {
+                return match read_response_cancellable(&mut stream, cancelled, deadline) {
+                    Ok(response) if response.id != Some(id) => Err(Error::ResponseBinding),
+                    Ok(response)
+                        if matches!(
+                            &response.result,
+                            foks_agent_proto::ResponseResult::Error { .. }
+                        ) =>
+                    {
+                        Ok(response)
+                    }
+                    Err(cause) => Err(upload_write_failure(error, cause)),
+                    Ok(_) => Err(error),
+                };
+            }
+            offset = offset
+                .checked_add(wanted as u64)
+                .ok_or_else(|| Error::Io(std::io::Error::other("upload offset overflow")))?;
         }
-    }
-    let mut buffer = Zeroizing::new(vec![0u8; MAXIMUM_UPLOAD_FRAME_BYTES]);
-    let mut offset = 0u64;
-    while offset < total {
+        let mut excess = [0u8; 1];
         check_upload_cancelled(cancelled, deadline)?;
-        let wanted = usize::try_from((total - offset).min(MAXIMUM_UPLOAD_FRAME_BYTES as u64))
-            .map_err(|_| Error::Io(std::io::Error::other("upload length overflow")))?;
-        read_upload_chunk_cancellable(reader, &mut buffer[..wanted], cancelled, deadline)?;
-        let mut frame = KvUploadFrame {
+        if reader.read(&mut excess).map_err(Error::UploadSource)? != 0 {
+            excess.zeroize();
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "upload exceeds its declared length",
+            )));
+        }
+        check_upload_cancelled(cancelled, deadline)?;
+        let commit = foks_agent_proto::encode(&KvUploadFrame {
             version: PROTOCOL_VERSION,
             id,
-            payload: KvUploadPayload::Chunk {
-                offset,
-                content: buffer[..wanted].to_vec(),
-            },
-        };
-        let encoded = foks_agent_proto::encode(&frame);
-        if let KvUploadPayload::Chunk { content, .. } = &mut frame.payload {
-            content.zeroize();
-        }
-        let encoded = encoded?;
-        if let Err(error) = transport::write_all(&mut stream, &encoded, cancelled, deadline) {
+            payload: KvUploadPayload::Commit,
+        })?;
+        if let Err(error) = transport::write_all(&mut stream, &commit, cancelled, deadline) {
             return match read_response_cancellable(&mut stream, cancelled, deadline) {
-                Ok(response) if response.id != Some(id) => Err(Error::ResponseBinding),
-                Ok(response)
-                    if matches!(
-                        &response.result,
-                        foks_agent_proto::ResponseResult::Error { .. }
-                    ) =>
-                {
-                    Ok(response)
-                }
-                Err(cause) => Err(upload_write_failure(error, cause)),
-                Ok(_) => Err(error),
+                Ok(response) => Ok(response),
+                Err(cause) => Err(Error::Ambiguous(Box::new(upload_write_failure(
+                    error, cause,
+                )))),
             };
         }
-        offset = offset
-            .checked_add(wanted as u64)
-            .ok_or_else(|| Error::Io(std::io::Error::other("upload offset overflow")))?;
-    }
-    let mut excess = [0u8; 1];
-    check_upload_cancelled(cancelled, deadline)?;
-    if reader.read(&mut excess).map_err(Error::UploadSource)? != 0 {
-        excess.zeroize();
-        return Err(Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "upload exceeds its declared length",
-        )));
-    }
-    check_upload_cancelled(cancelled, deadline)?;
-    let commit = foks_agent_proto::encode(&KvUploadFrame {
-        version: PROTOCOL_VERSION,
-        id,
-        payload: KvUploadPayload::Commit,
-    })?;
-    if let Err(error) = transport::write_all(&mut stream, &commit, cancelled, deadline) {
-        return match read_response_cancellable(&mut stream, cancelled, deadline) {
-            Ok(response) => Ok(response),
-            Err(cause) => Err(Error::Ambiguous(Box::new(upload_write_failure(
-                error, cause,
-            )))),
-        };
-    }
-    read_response_cancellable(&mut stream, cancelled, deadline)
-        .map_err(|error| Error::Ambiguous(Box::new(error)))
+        read_response_cancellable(&mut stream, cancelled, deadline)
+            .map_err(|error| Error::Ambiguous(Box::new(error)))
+    })();
+    result.map_err(|error| match error {
+        Error::Cancelled | Error::DeadlineExceeded | Error::LocalDeadline(_) => {
+            Error::Ambiguous(Box::new(error))
+        }
+        error => error,
+    })
 }
 
-fn check_upload_cancelled(
-    cancelled: &dyn Fn() -> bool,
-    deadline: std::time::Instant,
-) -> Result<()> {
+fn check_upload_cancelled(cancelled: &dyn Fn() -> bool, deadline: &Deadline) -> Result<()> {
     if cancelled() {
         return Err(Error::Cancelled);
     }
-    if std::time::Instant::now() >= deadline {
-        return Err(Error::DeadlineExceeded);
-    }
-    Ok(())
+    deadline.check().map_err(Into::into)
 }
 
 fn upload_write_failure(write: Error, response: Error) -> Error {
@@ -350,7 +392,7 @@ fn read_upload_chunk_cancellable<R: std::io::Read + ?Sized>(
     reader: &mut R,
     mut output: &mut [u8],
     cancelled: &dyn Fn() -> bool,
-    deadline: std::time::Instant,
+    deadline: &Deadline,
 ) -> Result<()> {
     while !output.is_empty() {
         check_upload_cancelled(cancelled, deadline)?;
@@ -375,10 +417,11 @@ fn read_upload_chunk_cancellable<R: std::io::Read + ?Sized>(
 fn connect_platform(
     socket: &Path,
     cancelled: &dyn Fn() -> bool,
-    deadline: std::time::Instant,
+    deadline: &Deadline,
 ) -> Result<std::os::unix::net::UnixStream> {
     use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
 
+    check_upload_cancelled(cancelled, deadline)?;
     let metadata = std::fs::symlink_metadata(socket)?;
     if !metadata.file_type().is_socket()
         || metadata.permissions().mode() & 0o077 != 0
@@ -393,7 +436,7 @@ fn connect_platform(
 fn read_response_cancellable(
     stream: &mut std::os::unix::net::UnixStream,
     cancelled: &dyn Fn() -> bool,
-    deadline: std::time::Instant,
+    deadline: &Deadline,
 ) -> Result<Response> {
     use std::io::{ErrorKind, Read as _};
     stream.set_nonblocking(true)?;
@@ -436,13 +479,18 @@ fn read_response_cancellable(
     frame[..4].copy_from_slice(&prefix);
     read(&mut frame[4..])?;
     check_upload_cancelled(cancelled, deadline)?;
-    Ok(foks_agent_proto::decode_response(&frame)?)
+    let mut response = foks_agent_proto::decode_response(&frame)?;
+    if let Err(error) = check_upload_cancelled(cancelled, deadline) {
+        response.zeroize_plaintext();
+        return Err(error);
+    }
+    Ok(response)
 }
 
 #[cfg(not(unix))]
 fn call_platform(
     _socket: &Path,
-    _timeout: Duration,
+    _deadline: &Deadline,
     mut request: Request,
     _mutation: bool,
     _cancelled: &dyn Fn() -> bool,
@@ -454,7 +502,7 @@ fn call_platform(
 #[cfg(not(unix))]
 fn upload_platform<R: std::io::Read + ?Sized>(
     _socket: &Path,
-    _timeout: Duration,
+    _deadline: &Deadline,
     _id: u64,
     _header: KvUploadHeader,
     _reader: &mut R,
@@ -520,22 +568,34 @@ mod tests {
             }),
             Err(Error::Cancelled)
         ));
-        let (mut stream, _) = listener.accept().unwrap();
-        assert_eq!(stream.read(&mut [0; 1]).unwrap(), 0);
+        listener.set_nonblocking(true).unwrap();
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(1)))
+                    .unwrap();
+                assert_eq!(stream.read(&mut [0; 1]).unwrap(), 0);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) => panic!("unexpected accept error: {error}"),
+        }
     }
 
     #[test]
     fn local_deadlines_are_typed_and_distinct_from_eof() {
         let (mut client, server) = std::os::unix::net::UnixStream::pair().unwrap();
-        let error = read_response_cancellable(&mut client, &|| false, std::time::Instant::now())
-            .unwrap_err();
+        let deadline = Deadline::capture(Instant::now() + Duration::from_millis(1)).unwrap();
+        while Instant::now() < deadline.instant() {
+            std::thread::yield_now();
+        }
+        let error = read_response_cancellable(&mut client, &|| false, &deadline).unwrap_err();
         assert!(matches!(error, Error::DeadlineExceeded));
         assert!(!error.is_connection_loss());
         drop(server);
         let error = read_response_cancellable(
             &mut client,
             &|| false,
-            std::time::Instant::now() + Duration::from_secs(1),
+            &Deadline::capture(std::time::Instant::now() + Duration::from_secs(1)).unwrap(),
         )
         .unwrap_err();
         assert!(error.is_connection_loss(), "{error:?}");
@@ -559,7 +619,7 @@ mod tests {
                     checks.set(checks.get() + 1);
                     checks.get() == cancel_at
                 },
-                std::time::Instant::now() + Duration::from_secs(1),
+                &Deadline::capture(std::time::Instant::now() + Duration::from_secs(1)).unwrap(),
             )
             .unwrap_err();
             assert!(matches!(error, Error::Cancelled));
@@ -649,7 +709,7 @@ mod tests {
             &mut reader,
             &mut output,
             &|| false,
-            std::time::Instant::now() + Duration::from_secs(5),
+            &Deadline::capture(std::time::Instant::now() + Duration::from_secs(5)).unwrap(),
         )
         .unwrap();
         assert_eq!(reader.0, 0);
@@ -812,7 +872,7 @@ mod tests {
                 &mut Reader(&cancelled, false),
                 &|| cancelled.get()
             ),
-            Err(Error::Cancelled)
+            Err(Error::Ambiguous(cause)) if matches!(*cause, Error::Cancelled)
         ));
         server.join().unwrap();
     }
@@ -1024,5 +1084,88 @@ mod chat_cancellation_tests {
             assert!(start.elapsed() < Duration::from_secs(2));
             server.join().unwrap();
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod deadline_context_tests {
+    use super::*;
+    use std::io::{Read as _, Write as _};
+    use std::os::unix::{fs::PermissionsExt as _, net::UnixListener};
+    #[test]
+    fn successive_calls_never_extend_the_original_wire_expiry() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("agent.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let server = std::thread::spawn(move || {
+            let mut envelopes = Vec::new();
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut prefix = [0; 4];
+                stream.read_exact(&mut prefix).unwrap();
+                let mut frame = vec![0; 4 + u32::from_be_bytes(prefix) as usize];
+                frame[..4].copy_from_slice(&prefix);
+                stream.read_exact(&mut frame[4..]).unwrap();
+                let request = foks_agent_proto::decode_request(&frame).unwrap();
+                envelopes.push(request.deadline);
+                stream
+                    .write_all(
+                        &foks_agent_proto::encode(&Response::success(
+                            request.id,
+                            serde_json::json!({}),
+                        ))
+                        .unwrap(),
+                    )
+                    .unwrap();
+            }
+            envelopes
+        });
+        let original = Deadline::capture(Instant::now() + Duration::from_secs(2)).unwrap();
+        let client = AgentClient::new(&socket)
+            .with_local_deadline(original.clone())
+            .unwrap();
+        client.call(Operation::Ping).unwrap();
+        client
+            .with_operation_deadline(Instant::now() + Duration::from_secs(60))
+            .unwrap()
+            .call(Operation::Ping)
+            .unwrap();
+        let envelopes = server.join().unwrap();
+        assert_eq!(envelopes.len(), 2);
+        for envelope in envelopes {
+            assert_eq!(envelope.domain(), original.envelope().domain());
+            // Conservative OS/Instant resampling may shorten by a few ns.
+            assert!(envelope.expires_ns() <= original.envelope().expires_ns());
+        }
+    }
+    #[test]
+    fn expired_bound_client_fails_before_connect_and_keeps_base_unbound() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("agent.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let base = AgentClient::new(&socket);
+        let deadline = Deadline::capture(Instant::now() + Duration::from_millis(5)).unwrap();
+        let client = base.with_local_deadline(deadline.clone()).unwrap();
+        while Instant::now() < deadline.instant() {
+            std::thread::yield_now();
+        }
+        assert!(matches!(
+            client.call(Operation::Ping),
+            Err(Error::DeadlineExceeded)
+        ));
+        assert!(
+            !Error::LocalDeadline(foks_local_deadline::Error::DomainMismatch).is_connection_loss()
+        );
+        assert!(base.deadline.is_none());
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
     }
 }

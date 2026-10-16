@@ -21,7 +21,6 @@ use crate::commands::validation::{
 };
 use foks_agent_proto::{Operation, PendingOperationKind, SecretString};
 use serde::{Deserialize, Serialize};
-use tauri::State;
 use zeroize::Zeroizing;
 
 pub(super) fn yubi_card_dtos(value: serde_json::Value) -> Result<Vec<YubiCardDto>, AgentError> {
@@ -508,7 +507,7 @@ async fn require_complete_yubi(
 pub async fn list_yubi_cards(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
 ) -> Result<Vec<YubiCardDto>, AgentError> {
     require_main_window(&webview)?;
@@ -527,7 +526,7 @@ pub async fn list_yubi_cards(
 pub async fn list_yubi_accounts(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
 ) -> Result<Vec<YubiEnrollmentDto>, AgentError> {
     require_main_window(&webview)?;
@@ -541,7 +540,7 @@ pub async fn list_yubi_accounts(
 pub async fn create_yubi_account(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     alias: String,
     username: String,
@@ -632,7 +631,7 @@ pub async fn create_yubi_account(
 pub async fn resume_yubi_account(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     alias: String,
     pin: String,
@@ -669,7 +668,7 @@ pub async fn resume_yubi_account(
 pub async fn provision_yubi_device(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     account_store_id: String,
     target_alias: String,
     device_name: String,
@@ -750,7 +749,7 @@ pub async fn provision_yubi_device(
 pub async fn sync_yubi_account(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     alias: String,
     pin: String,
@@ -789,7 +788,7 @@ pub async fn sync_yubi_account(
 pub async fn yubi_pin_status(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     alias: String,
 ) -> Result<YubiPinStatusDto, AgentError> {
@@ -811,7 +810,7 @@ pub async fn yubi_pin_status(
 pub async fn change_yubi_pin(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     alias: String,
     old_pin: String,
@@ -891,7 +890,7 @@ async fn yubi_passphrase_operation(
 pub async fn set_yubi_passphrase(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     alias: String,
     pin: String,
@@ -914,7 +913,7 @@ pub async fn set_yubi_passphrase(
 pub async fn change_yubi_passphrase(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     alias: String,
     pin: String,
@@ -936,7 +935,7 @@ pub async fn change_yubi_passphrase(
 pub async fn verify_yubi_passphrase(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     alias: String,
     pin: String,
@@ -961,7 +960,7 @@ pub async fn verify_yubi_passphrase(
 pub async fn change_yubi_puk(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     alias: String,
     old_puk: String,
@@ -1001,7 +1000,7 @@ pub async fn change_yubi_puk(
 pub async fn unblock_yubi_pin(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     alias: String,
     puk: String,
@@ -1053,7 +1052,7 @@ async fn yubi_lifecycle_operation(
 pub async fn rotate_yubi_management_key(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     alias: String,
     pin: String,
@@ -1083,7 +1082,7 @@ pub async fn rotate_yubi_management_key(
 pub async fn resume_yubi_management_key(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     alias: String,
     pin: Option<String>,
@@ -1115,7 +1114,7 @@ pub async fn resume_yubi_management_key(
 pub async fn recover_yubi_management_key(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     account_store_id: String,
     yubi_alias: String,
 ) -> Result<YubiLifecycleDto, AgentError> {
@@ -1138,7 +1137,7 @@ pub async fn recover_yubi_management_key(
 pub async fn recover_yubi_subkey(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     alias: String,
     pin: String,
@@ -1171,7 +1170,7 @@ pub async fn recover_yubi_subkey(
 pub async fn revoke_yubi_device(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     account_store_id: String,
     yubi_alias: String,
     confirmation: String,
@@ -1188,17 +1187,18 @@ pub async fn revoke_yubi_device(
         ));
     }
     require_complete_yubi(&state, account.profile.clone(), &yubi_alias).await?;
-    let transport = state.agent.transport();
+    let transport = state.transport()?;
     let signer_account = account.clone();
-    let devices = tauri::async_runtime::spawn_blocking(move || {
-        load_account_devices(transport.as_ref(), &signer_account)
-    })
-    .await
-    .map_err(|error| {
-        AgentError::unknown(format!(
-            "failed to run security-key revocation preflight: {error}"
-        ))
-    })??;
+    let devices = {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            false,
+            move || load_account_devices(transport.as_ref(), &signer_account),
+            |_| {},
+        )
+        .await
+    }?;
     require_software_revocation_signer(&devices)?;
     let expected = yubi_alias.clone();
     let profile = account.profile;

@@ -1,8 +1,5 @@
 //! An isolated, non-persistent hosted-admin window with no main-window IPC authority.
-use super::{
-    context::AppState,
-    validation::{invalid_request, invalid_response, require_main_window, valid_local_name},
-};
+use super::validation::{invalid_request, invalid_response, require_main_window, valid_local_name};
 use crate::{agent::AgentError, applock::AppLock};
 use foks_agent_proto::{
     admin::{AdminAction, AdminNavigation, AdminPolicy},
@@ -12,7 +9,7 @@ use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex, OnceLock},
 };
-use tauri::{Manager as _, State};
+use tauri::Manager as _;
 use url::Url;
 struct Binding {
     origin: String,
@@ -88,11 +85,12 @@ fn checked_navigation(p: AdminNavigation, expected: &AdminPolicy) -> Result<Url,
 #[tauri::command]
 pub async fn configure_web_admin(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     account_alias: String,
     destination: String,
 ) -> Result<serde_json::Value, AgentError> {
+    let destination = zeroize::Zeroizing::new(destination);
     require_main_window(&webview)?;
     let generation = crate::applock::unlocked_generation(webview.app_handle())?;
     if !valid_local_name(&profile) || !valid_local_name(&account_alias) || destination.len() > 2048
@@ -100,27 +98,40 @@ pub async fn configure_web_admin(
         return Err(invalid_request("Invalid admin configuration."));
     }
     let _mutation = state.begin_mutation()?;
-    let transport = state.agent.transport();
-    tauri::async_runtime::spawn_blocking(move || {
-        super::servers::require_transport_profile(transport.as_ref(), &profile)?;
-        transport
-            .call(Operation::WebAdmin {
-                profile,
-                account_alias,
-                action: AdminAction::Configure { destination },
-            })
-            .map_err(AgentError::from_desktop)
-    })
-    .await
-    .map_err(|_| invalid_request("Admin configuration interrupted."))??;
+    let transport = state.transport()?;
+    {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            true,
+            move || {
+                super::servers::require_transport_profile(transport.as_ref(), &profile)?;
+                transport
+                    .call(Operation::WebAdmin {
+                        profile,
+                        account_alias,
+                        action: AdminAction::Configure {
+                            destination: destination.to_string(),
+                        },
+                    })
+                    .map_err(AgentError::from_desktop)
+            },
+            super::vault::clear_response,
+        )
+        .await
+    }?;
     crate::applock::require_unlocked_generation(webview.app_handle(), generation)?;
     close_all(webview.app_handle());
+    state
+        .deadline()?
+        .check()
+        .map_err(super::deadline::clock_error)?;
     Ok(serde_json::json!({"ok":true}))
 }
 #[tauri::command]
 pub async fn open_web_admin(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     account_alias: String,
     pin: Option<SecretString>,
@@ -135,36 +146,48 @@ pub async fn open_web_admin(
         return Err(invalid_request("Invalid admin account."));
     }
     let _mutation = state.begin_mutation()?;
-    let transport = state.agent.transport();
+    let transport = state.transport()?;
     let expected_alias = account_alias.clone();
-    let url = tauri::async_runtime::spawn_blocking(move || {
-        super::servers::require_transport_profile(transport.as_ref(), &profile)?;
-        let policy = transport
-            .call(Operation::WebAdmin {
-                profile: profile.clone(),
-                account_alias: account_alias.clone(),
-                action: AdminAction::Policy,
-            })
-            .map_err(AgentError::from_desktop)?;
-        let expected: AdminPolicy = serde_json::from_value(policy)
-            .map_err(|_| invalid_response("Invalid admin policy."))?;
-        if expected.profile != profile || expected.account_alias != account_alias {
-            return Err(invalid_response("Admin policy changed account."));
-        }
-        let value = transport
-            .call(Operation::WebAdmin {
-                profile,
-                account_alias,
-                action: AdminAction::Prepare { pin },
-            })
-            .map_err(AgentError::from_desktop)?;
-        let p: AdminNavigation = serde_json::from_value(value)
-            .map_err(|_| invalid_response("Invalid admin handoff."))?;
-        checked_navigation(p, &expected)
-    })
-    .await
-    .map_err(|_| invalid_request("Admin handoff interrupted."))??;
+    let url = {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            true,
+            move || {
+                super::servers::require_transport_profile(transport.as_ref(), &profile)?;
+                let policy = transport
+                    .call(Operation::WebAdmin {
+                        profile: profile.clone(),
+                        account_alias: account_alias.clone(),
+                        action: AdminAction::Policy,
+                    })
+                    .map_err(AgentError::from_desktop)?;
+                let expected: AdminPolicy = serde_json::from_value(policy)
+                    .map_err(|_| invalid_response("Invalid admin policy."))?;
+                if expected.profile != profile || expected.account_alias != account_alias {
+                    return Err(invalid_response("Admin policy changed account."));
+                }
+                let value = transport
+                    .call(Operation::WebAdmin {
+                        profile,
+                        account_alias,
+                        action: AdminAction::Prepare { pin },
+                    })
+                    .map_err(AgentError::from_desktop)?;
+                let p: AdminNavigation = serde_json::from_value(value)
+                    .map_err(|_| invalid_response("Invalid admin handoff."))?;
+                checked_navigation(p, &expected)
+                    .map(|url| zeroize::Zeroizing::new(String::from(url)))
+            },
+            zeroize::Zeroize::zeroize,
+        )
+        .await
+    }?;
     crate::applock::require_unlocked_generation(&app, generation)?;
+    state
+        .deadline()?
+        .check()
+        .map_err(super::deadline::clock_error)?;
     close_all(&app);
     let mut nonce = [0u8; 16];
     getrandom::fill(&mut nonce)
@@ -174,24 +197,34 @@ pub async fn open_web_admin(
         nonce.iter().map(|b| format!("{b:02x}")).collect::<String>()
     );
     let lock = app.state::<Arc<AppLock>>().inner().clone();
+    state
+        .deadline()?
+        .check()
+        .map_err(super::deadline::clock_error)?;
+    let parsed_url = Url::parse(&url).map_err(|_| invalid_response("Invalid admin handoff."))?;
     windows()
         .lock()
         .map_err(|_| invalid_request("Cannot bind admin window."))?
         .insert(
             label.clone(),
             Binding {
-                origin: url.origin().ascii_serialization(),
+                origin: parsed_url.origin().ascii_serialization(),
                 lock,
                 generation,
                 expires: std::time::Instant::now() + std::time::Duration::from_secs(300),
             },
         );
-    let window = tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::External(url))
-        .title(format!("Host administration · {expected_alias}"))
-        .incognito(true)
-        .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
-        .on_download(|_, _| false)
-        .build();
+    if let Err(error) = state.deadline()?.check() {
+        windows().lock().ok().map(|mut m| m.remove(&label));
+        return Err(super::deadline::clock_error(error));
+    }
+    let window =
+        tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::External(parsed_url))
+            .title(format!("Host administration · {expected_alias}"))
+            .incognito(true)
+            .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
+            .on_download(|_, _| false)
+            .build();
     let window = match window {
         Ok(w) => w,
         Err(_) => {
@@ -207,16 +240,19 @@ pub async fn open_web_admin(
             }
         }
     });
-    if crate::applock::require_unlocked_generation(&app, generation).is_err() {
+    let deadline_error = state.deadline()?.check().err();
+    if deadline_error.is_some()
+        || crate::applock::require_unlocked_generation(&app, generation).is_err()
+    {
         // Lock may have drained the registry before build returned. Close the
         // actual handle as well, so that interleaving cannot orphan a window.
         let _ = window.close();
         if let Ok(mut map) = windows().lock() {
             map.remove(&label);
         }
-        return Err(invalid_request(
-            "Application locked before admin navigation.",
-        ));
+        return Err(deadline_error
+            .map(super::deadline::clock_error)
+            .unwrap_or_else(|| invalid_request("Application locked before admin navigation.")));
     }
     let expiring_app = app.clone();
     let expiring_label = label.clone();

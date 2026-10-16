@@ -302,7 +302,7 @@ fn selected_identity_survives_user_and_team_cache_fallbacks() {
             for team in [None, Some(team_id.as_str())] {
                 let put =
                     |path: &str, mut bytes: &[u8], precondition, vault: &mut AccountVault<'_>| {
-                        match team {
+                        let result = match team {
                             None => session.put_kv_file_checked(
                                 "owner",
                                 path,
@@ -327,7 +327,24 @@ fn selected_identity_survives_user_and_team_cache_fallbacks() {
                                 vault,
                                 &master,
                             ),
+                        }?;
+                        // This matrix deliberately performs dozens of uploads.
+                        // Drain durable local spool ownership between operations
+                        // without changing either the quota or the read cache.
+                        let mut cleanup = foks_client_app::AdapterMaintenanceCursor::default();
+                        let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                        loop {
+                            let debt = session.upload_cleanup_debt()?;
+                            if debt.reserved_bytes == 0 {
+                                break;
+                            }
+                            assert!(
+                                std::time::Instant::now() < until,
+                                "cleanup stalled: {debt:?}"
+                            );
+                            session.maintain_adapter_state(&mut cleanup, &master)?;
                         }
+                        Ok::<_, foks_client_app::Error>(result)
                     };
                 let selected = |path: &str, vault: &mut AccountVault<'_>| {
                     let catalog = match team {

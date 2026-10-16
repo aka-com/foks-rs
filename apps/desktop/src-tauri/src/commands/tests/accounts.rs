@@ -15,6 +15,30 @@ pub(super) struct PhaseSixReadTransport {
 }
 
 impl foks_desktop::AgentTransport for PhaseSixReadTransport {
+    fn call_with_deadline(
+        &self,
+        mut operation: foks_agent_proto::Operation,
+        deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        if let Err(error) = deadline.check() {
+            operation.zeroize_plaintext();
+            return Err(foks_desktop::local_deadline_error(error));
+        }
+        self.call_cancellable(operation, cancelled)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        header: foks_agent_proto::KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+        deadline: &foks_local_deadline::Deadline,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        deadline
+            .check()
+            .map_err(foks_desktop::local_deadline_error)?;
+        self.put_kv_stream(header, reader)
+    }
+
     fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
         self.calls.lock().unwrap().push(operation.clone());
         match operation {
@@ -77,6 +101,30 @@ pub(super) struct ReadOnlyPrepareLoss {
 }
 
 impl foks_desktop::AgentTransport for ReadOnlyPrepareLoss {
+    fn call_with_deadline(
+        &self,
+        mut operation: foks_agent_proto::Operation,
+        deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        if let Err(error) = deadline.check() {
+            operation.zeroize_plaintext();
+            return Err(foks_desktop::local_deadline_error(error));
+        }
+        self.call_cancellable(operation, cancelled)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        header: foks_agent_proto::KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+        deadline: &foks_local_deadline::Deadline,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        deadline
+            .check()
+            .map_err(foks_desktop::local_deadline_error)?;
+        self.put_kv_stream(header, reader)
+    }
+
     fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
         self.calls.lock().unwrap().push(operation.clone());
         match operation {
@@ -117,6 +165,30 @@ pub(super) struct AccountsTransport {
 }
 
 impl foks_desktop::AgentTransport for AccountsTransport {
+    fn call_with_deadline(
+        &self,
+        mut operation: foks_agent_proto::Operation,
+        deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        if let Err(error) = deadline.check() {
+            operation.zeroize_plaintext();
+            return Err(foks_desktop::local_deadline_error(error));
+        }
+        self.call_cancellable(operation, cancelled)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        header: foks_agent_proto::KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+        deadline: &foks_local_deadline::Deadline,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        deadline
+            .check()
+            .map_err(foks_desktop::local_deadline_error)?;
+        self.put_kv_stream(header, reader)
+    }
+
     fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
         self.calls.lock().unwrap().push(operation);
         Ok(self.response.clone())
@@ -143,7 +215,9 @@ fn two_profiles_sharing_an_account_alias_get_distinct_store_refs() {
 
     let state = AppState::new(Arc::new(AgentHandle::new(
         "/tmp/unused-foks-agent.sock".into(),
-    )));
+    )))
+    .begin_operation(foks_agent_proto::DeadlineClass::Ordinary)
+    .unwrap();
     let catalog = |stores: Vec<CatalogStoreSummary>| CatalogSnapshot {
         profiles: vec!["home.example".to_owned(), "work.example".to_owned()],
         stores,
@@ -270,6 +344,30 @@ pub(super) struct MixedAccountsTransport {
 }
 
 impl foks_desktop::AgentTransport for MixedAccountsTransport {
+    fn call_with_deadline(
+        &self,
+        mut operation: foks_agent_proto::Operation,
+        deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        if let Err(error) = deadline.check() {
+            operation.zeroize_plaintext();
+            return Err(foks_desktop::local_deadline_error(error));
+        }
+        self.call_cancellable(operation, cancelled)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        header: foks_agent_proto::KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+        deadline: &foks_local_deadline::Deadline,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        deadline
+            .check()
+            .map_err(foks_desktop::local_deadline_error)?;
+        self.put_kv_stream(header, reader)
+    }
+
     fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
         self.calls.lock().unwrap().push(operation.clone());
         match operation {

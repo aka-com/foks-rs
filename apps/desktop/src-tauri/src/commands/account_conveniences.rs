@@ -1,18 +1,15 @@
 //! Native account rename boundary; PINs are transient and handles stay account scoped.
-use super::{
-    context::AppState,
-    validation::{invalid_request, invalid_response, require_main_window, valid_local_name},
-};
+use super::validation::{invalid_request, invalid_response, require_main_window, valid_local_name};
 use crate::agent::AgentError;
 use foks_agent_proto::{
     account::{RenameAction, RenameProgress},
     Operation,
 };
-use tauri::{Manager as _, State};
+use tauri::Manager as _;
 #[tauri::command]
 pub async fn rename_account_request(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     account_alias: String,
     action: Option<RenameAction>,
@@ -32,44 +29,42 @@ pub async fn rename_account_request(
     } else {
         None
     };
-    let transport = state.agent.transport();
+    let transport = state.transport()?;
     if changed {
         state.invalidate_catalog();
     }
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        super::servers::require_transport_profile(transport.as_ref(), &profile)?;
-        let expected = account_alias.clone();
-        let expected_id = action
-            .as_ref()
-            .and_then(|a| a.operation_id())
-            .map(str::to_owned);
-        let operation = match action {
-            Some(action) => Operation::RenameAccount {
-                profile,
-                account_alias,
-                action,
+    let result = {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            changed,
+            move || {
+                super::servers::require_transport_profile(transport.as_ref(), &profile)?;
+                let expected = account_alias.clone();
+                let expected_id = action
+                    .as_ref()
+                    .and_then(|a| a.operation_id())
+                    .map(str::to_owned);
+                let operation = match action {
+                    Some(action) => Operation::RenameAccount {
+                        profile,
+                        account_alias,
+                        action,
+                    },
+                    None => Operation::ListAccountRenames {
+                        profile,
+                        account_alias,
+                    },
+                };
+                let value = transport
+                    .call(operation)
+                    .map_err(AgentError::from_desktop)?;
+                decode_progress(value, changed, &expected, expected_id.as_deref())
             },
-            None => Operation::ListAccountRenames {
-                profile,
-                account_alias,
-            },
-        };
-        let value = transport
-            .call(operation)
-            .map_err(AgentError::from_desktop)?;
-        decode_progress(value, changed, &expected, expected_id.as_deref())
-    })
-    .await
-    .map_err(|_| {
-        if changed {
-            super::execution::ambiguous_worker_failure(
-                &state,
-                "Rename interrupted; refresh its original operation.",
-            )
-        } else {
-            invalid_request("Rename interrupted; refresh its original operation.")
-        }
-    })?
+            |_| {},
+        )
+        .await
+    }
     .map_err(|error| {
         if changed {
             super::execution::observe_mutation_error(&state, error)
@@ -165,7 +160,7 @@ fn local_alias_response(
 #[tauri::command]
 pub async fn set_local_account_alias(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     account_store_id: String,
     label: String,
 ) -> Result<LocalAliasDto, AgentError> {
@@ -176,22 +171,27 @@ pub async fn set_local_account_alias(
     let _mutation = state.begin_mutation()?;
     let account = state.local_account(&account_store_id)?;
     let profile = account.profile.clone();
-    let transport = state.agent.transport();
+    let transport = state.transport()?;
     state.invalidate_alias_metadata(&profile);
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let value = transport
-            .call(Operation::SetLocalAccountAlias {
-                profile: account.profile.clone(),
-                account_alias: account.account_alias.clone(),
-                label: label.clone(),
-            })
-            .map_err(AgentError::from_desktop)?;
-        local_alias_response(value, &account, &label, account_store_id)
-    })
-    .await
-    .map_err(|_| {
-        invalid_request("Local alias update interrupted. Refresh the account before trying again.")
-    })?;
+    let result = {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            true,
+            move || {
+                let value = transport
+                    .call(Operation::SetLocalAccountAlias {
+                        profile: account.profile.clone(),
+                        account_alias: account.account_alias.clone(),
+                        label: label.clone(),
+                    })
+                    .map_err(AgentError::from_desktop)?;
+                local_alias_response(value, &account, &label, account_store_id)
+            },
+            |_| {},
+        )
+        .await
+    };
     state.invalidate_alias_metadata(&profile);
     crate::applock::require_unlocked_generation(webview.app_handle(), generation)?;
     result

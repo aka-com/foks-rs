@@ -492,12 +492,28 @@ fn main() {
 }
 
 fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
-    let call = backend_call_for_command(arguments.command)?;
+    let started = std::time::Instant::now();
+    let original = started
+        .checked_add(std::time::Duration::from_secs(
+            arguments.request_timeout_seconds,
+        ))
+        .ok_or("invalid request deadline")?;
+    let deadline = foks_local_deadline::Deadline::capture(original)?;
+    struct PendingCall(Option<BackendCall>);
+    impl Drop for PendingCall {
+        fn drop(&mut self) {
+            if let Some(BackendCall::Operation(operation)) = &mut self.0 {
+                operation.zeroize_plaintext();
+            }
+        }
+    }
+    let mut call = PendingCall(Some(backend_call_for_command(arguments.command)?));
     let mut client = AgentClient::new(arguments.agent_socket);
     client.set_timeout(std::time::Duration::from_secs(
         arguments.request_timeout_seconds,
     ))?;
-    let response = match call {
+    let client = client.with_local_deadline(deadline.clone())?;
+    let response = match call.0.take().expect("owned backend call") {
         BackendCall::Operation(operation) => client.call(operation)?,
         BackendCall::Upload {
             mut header,
@@ -507,9 +523,21 @@ fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
             client.put_kv_stream(header, &mut source)?
         }
     };
-    match response.result {
+    struct ErasingResponse(foks_agent_proto::Response);
+    impl Drop for ErasingResponse {
+        fn drop(&mut self) {
+            self.0.zeroize_plaintext();
+        }
+    }
+    let response = ErasingResponse(response);
+    deadline.check()?;
+    match &response.0.result {
         ResponseResult::Success { value } => {
-            println!("{}", serde_json::to_string_pretty(&value)?);
+            let output = zeroize::Zeroizing::new(serde_json::to_string_pretty(value)?);
+            deadline.check()?;
+            // A synchronous stdout write already entered cannot be preempted.
+            use std::io::Write as _;
+            writeln!(std::io::stdout().lock(), "{}", output.as_str())?;
             Ok(())
         }
         ResponseResult::Error { code, message, .. } => {

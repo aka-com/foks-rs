@@ -344,17 +344,15 @@ pub fn run(state: &Path, command: InvitationCommand) -> Result<(), Box<dyn std::
         .transpose()?
         .map(|p| SecretString::new(p.expose()));
     super::mcp::ensure_agent(state)?;
-    let response = foks_agent_client::AgentClient::new(state.join("foks-rs.sock")).call(
-        Operation::Invitations {
-            profile: scope.profile,
-            account_alias: scope.account_alias,
-            action,
-            pin,
-        },
-    )?;
+    let response = super::deadline::agent_client(state)?.call(Operation::Invitations {
+        profile: scope.profile,
+        account_alias: scope.account_alias,
+        action,
+        pin,
+    })?;
     match response.result {
         ResponseResult::Success { value } => {
-            println!("{}", serde_json::to_string_pretty(&value)?);
+            super::deadline::print_agent_value(value)?;
             Ok(())
         }
         ResponseResult::Error { message, .. } => Err(message.into()),

@@ -110,6 +110,21 @@ pub struct Deadline {
 }
 impl Deadline {
     /// The caller creates this instant before encoding, admission or clock reads.
+    /// Preserve both coordinates when joining controls from the same clock domain.
+    pub fn intersect(&self, other: &Self) -> Result<Self> {
+        self.intersect_with(other, &SystemClock)
+    }
+    fn intersect_with(&self, other: &Self, clock: &impl Clock) -> Result<Self> {
+        if self.envelope.domain != other.envelope.domain {
+            return Err(Error::DomainMismatch);
+        }
+        let mut merged = self.clone();
+        merged.instant = self.instant.min(other.instant);
+        merged.envelope.expires_ns.0 = self.envelope.expires_ns.0.min(other.envelope.expires_ns.0);
+        merged.check_with(clock)?;
+        Ok(merged)
+    }
+
     pub fn capture(original: Instant) -> Result<Self> {
         Self::capture_with(original, &SystemClock)
     }
@@ -328,6 +343,25 @@ mod tests {
         assert!(matches!(
             Deadline::receive_with(&expired, Duration::from_secs(1), &clock),
             Err(Error::Expired)
+        ));
+    }
+    #[test]
+    fn intersection_keeps_both_earliest_coordinates() {
+        let clock = Fake::new(0);
+        let first = Deadline::capture_with(clock.base + Duration::from_nanos(100), &clock).unwrap();
+        let mut second = first.clone();
+        second.instant = clock.base + Duration::from_nanos(50);
+        second.envelope.expires_ns = Decimal(300);
+        let merged = first.intersect_with(&second, &clock).unwrap();
+        assert_eq!(merged.instant, second.instant);
+        assert_eq!(merged.envelope.expires_ns, first.envelope.expires_ns);
+        let mut wrong = second;
+        wrong.envelope.domain = Domain(crate::DomainValue::Darwin {
+            boot: crate::BootId::parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
+        });
+        assert!(matches!(
+            first.intersect_with(&wrong, &clock),
+            Err(Error::DomainMismatch)
         ));
     }
 }
