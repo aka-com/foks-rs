@@ -3,6 +3,7 @@
   "accepted_a3a_commit": "fee8db31ae8df590e32bc02f8c8de815d9f7ecea",
   "accepted_b1_commit": "23039e209d1b3b129a274dd65fe07f0abfdba8e0",
   "accepted_b2_commit": "d22ff3deedf0f0a87f635aec2317a87410e39110",
+  "accepted_b3_commit": "9151df82364fa60177cb62f6645746ce1aff9b48",
   "base_series": {
     "bytes": 4041,
     "path": "patches/series.json",
@@ -813,7 +814,126 @@
       ],
       "path": "patches/0004-node-frontend.patch",
       "sha256": "2abc6932a06bdcd2e7f946697a3bc4e0919a0df02b66f6defe4377b786d0664e"
+    },
+    {
+      "bytes": 112743,
+      "files": [
+        {
+          "after": {
+            "bytes": 240569,
+            "git_sha1": "0024bb49fdce17c615f5183e9adbcdc4f11a7af5",
+            "sha256": "c19bcf6a1be6cca5a9414cf077c98d036525f3180dd712d51de4a9558f5e506b"
+          },
+          "before": {
+            "bytes": 239462,
+            "git_sha1": "d55b8d2cb45a1db918fbb60c2f0c9224d48917da",
+            "sha256": "f33ede4ab207fecb1bd6aa2552f5333ed1be1a8b66489eda65c7a36821d37408"
+          },
+          "mode": "100644",
+          "path": "crates/celld/actor.rs"
+        },
+        {
+          "after": {
+            "bytes": 38943,
+            "git_sha1": "5362e93f07c4fd9a5cce9f3e9f36a953dd603033",
+            "sha256": "08a88b2b30e02bfc8db75dbde9a2383016631c6602bd062f5690a35942c8266c"
+          },
+          "before": {
+            "bytes": 36948,
+            "git_sha1": "a3f881336f9042d8ab3e6e0ddbfdf399bcc8d295",
+            "sha256": "24881d61da37e3a122516168f88b98ab0177d50bc6d2a7ea2eb552a6949b24a7"
+          },
+          "mode": "100644",
+          "path": "crates/celld/guarded_execution.rs"
+        },
+        {
+          "after": {
+            "bytes": 266509,
+            "git_sha1": "139042b5782b31690480bfc467b46fb6eb788f84",
+            "sha256": "0a70eae12d33c9ff92757c801172581f537c598b73f2a1cadc7d890f04fe02b0"
+          },
+          "before": {
+            "bytes": 231288,
+            "git_sha1": "15dc61d307d166bcc9f8cc5c20c778ceb4bd0a4f",
+            "sha256": "6bc6db5fdfcaf85835d583fbeee9d191d72c4aa60c2118411e1f74075f3e2b79"
+          },
+          "mode": "100644",
+          "path": "crates/celld/guarded_node.rs"
+        },
+        {
+          "after": {
+            "bytes": 35905,
+            "git_sha1": "67a1dd33b5f780b288bdf2a51e07febab201c288",
+            "sha256": "0e021001097a0bbdc7712011e3ec6f76183510b3e3aa3910cc64a0013ad7c55a"
+          },
+          "before": {
+            "bytes": 34751,
+            "git_sha1": "6f160998338dc2f6ef2b0753347cc87d3e841c16",
+            "sha256": "022353ec743af9bf9f3a0206f0bfeb74bf3b9edb5556b972398de1fc7a983c97"
+          },
+          "mode": "100644",
+          "path": "crates/celld/guarded_node/control.rs"
+        },
+        {
+          "after": {
+            "bytes": 41204,
+            "git_sha1": "9383a7ce704f0819036a19546be50a8be4be26db",
+            "sha256": "c0fb11302b69dc540d93f979084ffede7c2d2de697c9051c16e0e589ad7588c7"
+          },
+          "before": {
+            "bytes": 34396,
+            "git_sha1": "cce32ff4174d92d31935b80a4d8cdf96ae201ea2",
+            "sha256": "f844e356dbacc509273acb976083b6328b369090bfe5a9fc781a23b9fffae08d"
+          },
+          "mode": "100644",
+          "path": "crates/celld/guarded_node/output.rs"
+        },
+        {
+          "after": {
+            "bytes": 209977,
+            "git_sha1": "63e089c895957e93ab805113302f2be0c0ac7c79",
+            "sha256": "9c8b9ffda43745e37b17a229c38f866ab3effc1501c9068973655fb5421972da"
+          },
+          "before": {
+            "bytes": 176841,
+            "git_sha1": "55a545cbe147a74378bf07c477837a3a02bf9262",
+            "sha256": "33b8f6cf6e54dfe7dc6f325d30153b1d45c71961432cc4e330c78eb8f0116ebb"
+          },
+          "mode": "100644",
+          "path": "crates/celld/guarded_node/tests.rs"
+        },
+        {
+          "after": {
+            "bytes": 16548,
+            "git_sha1": "407f4cbcb079ff2ce212d217b796239b1abe3e89",
+            "sha256": "7f5d74df30850e8809a7efa9d177d6f0ddb82baae0372c25bae28dc219e69a48"
+          },
+          "before": {
+            "bytes": 13043,
+            "git_sha1": "d898d1283f48ebb667cd3d975823d62fc1f66883",
+            "sha256": "36a31bd75f96849def8f69a9715bde88d89ca971d3658f712bd354bdc49c8bea"
+          },
+          "mode": "100644",
+          "path": "crates/celld/main/guarded.rs"
+        },
+        {
+          "after": {
+            "bytes": 202502,
+            "git_sha1": "3a5678ed5a71bed9f2800e7d174ad039a43279a1",
+            "sha256": "44e0f1cabe47d30009aa605f283f1734b8338a3d42e763bc20ed9a08094b8aeb"
+          },
+          "before": {
+            "bytes": 201812,
+            "git_sha1": "86eab7126c6027c328127aeea977d1a6f9b6d2d1",
+            "sha256": "263bc92683c2e4d020d7483d8477c343f830a99b362c36828d0043cbfffd02ab"
+          },
+          "mode": "100644",
+          "path": "crates/celld/runtime.rs"
+        }
+      ],
+      "path": "patches/0005-node-observations.patch",
+      "sha256": "51d1c9a75e0c2f683c169bb34e1826f40eaeceaff9056b0dceea732f9faa2114"
     }
   ],
-  "profile": "node-qualification"
+  "profile": "node-observations"
 }

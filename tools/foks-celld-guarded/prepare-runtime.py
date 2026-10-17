@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare pinned A1/A2 inputs, A3a nodes and explicit B1/B2/B3 stages.
+"""Prepare pinned A1/A2 inputs, A3a nodes and explicit B1/B2/B3 and P1 stages.
 
 verify checks only the original upstream archive. prepare also applies the closed
 A2 patch in private staging. assets accepts the two reviewed local V8 assets.
@@ -190,10 +190,37 @@ FRONTEND_MODES = {
     "node-qualification": FOUNDATION_MODES["node-foundation"],
     "node-qualification-lifecycle": FOUNDATION_MODES["node-foundation-lifecycle"],
 }
-NODE_STAGES = (FOUNDATION, LIFETIMES, FRONTEND)
-NODE_MODES = {**FOUNDATION_MODES, **LIFETIMES_MODES, **FRONTEND_MODES}
-NODE_BINARY_MODES = ("node-foundation-default", "node-foundation", "node-lifetimes-default", "node-lifetimes", "node-qualification-default", "node-qualification")
-NODE_LIFECYCLE_MODES = ("node-foundation-lifecycle", "node-lifetimes-lifecycle", "node-qualification-lifecycle")
+OBSERVATIONS = "node-observations"
+OBSERVATIONS_BASE = "9151df82364fa60177cb62f6645746ce1aff9b48"
+OBSERVATIONS_PATCH = "patches/0005-node-observations.patch"
+# Distinct from the series JSON envelope; the fixed four-patch prefix plus
+# the fifth-patch ceiling fits this P1-only combined payload bound.
+MAXIMUM_OBSERVATIONS_PATCHES = 1536 * 1024
+OBSERVATIONS_PROFILE = "runtime/evidence/accepted-b3/runtime-node.lock.json"
+OBSERVATIONS_SERIES = "runtime/evidence/accepted-b3/patches/node-series.json"
+OBSERVATIONS_MANIFEST = "runtime/evidence/accepted-b3/prepared-inputs/source-manifest.json"
+OBSERVATIONS_ASSETS = "runtime/evidence/accepted-b3/assets-node-qualification.json"
+OBSERVATIONS_BASE_IMAGES = {
+    "frontend_profile": (OBSERVATIONS_PROFILE, "1d127eb41af8eff863e38e15921dc695854378e6c1f196665a3f4ffca2eb7a0f"),
+    "frontend_series": (OBSERVATIONS_SERIES, "4d5cc7dd369a0ee3371f575d58ed8b73f75403bb723d58977c1f960d367088ce"),
+    "frontend_source_manifest": (OBSERVATIONS_MANIFEST, "46d6fe4d673ff467b2fb420a1e49a06dbbd9e6989f14208c22b1454b49922f07"),
+}
+OBSERVATIONS_ASSET_SHA256 = "4cd70ccf1bcdb80d7cffa8b86ab2eac210b881430f950106fed8e90797059083"
+OBSERVATIONS_PATHS = tuple(sorted((
+    "crates/celld/actor.rs", "crates/celld/guarded_execution.rs",
+    "crates/celld/guarded_node.rs", "crates/celld/guarded_node/control.rs",
+    "crates/celld/guarded_node/output.rs", "crates/celld/guarded_node/tests.rs",
+    "crates/celld/runtime.rs", "crates/celld/main/guarded.rs",
+)))
+OBSERVATIONS_MODES = {
+    "node-observations-default": FOUNDATION_MODES["node-foundation-default"],
+    "node-observations": FOUNDATION_MODES["node-foundation"],
+    "node-observations-lifecycle": FOUNDATION_MODES["node-foundation-lifecycle"],
+}
+NODE_STAGES = (FOUNDATION, LIFETIMES, FRONTEND, OBSERVATIONS)
+NODE_MODES = {**FOUNDATION_MODES, **LIFETIMES_MODES, **FRONTEND_MODES, **OBSERVATIONS_MODES}
+NODE_BINARY_MODES = ("node-foundation-default", "node-foundation", "node-lifetimes-default", "node-lifetimes", "node-qualification-default", "node-qualification", "node-observations-default", "node-observations")
+NODE_LIFECYCLE_MODES = ("node-foundation-lifecycle", "node-lifetimes-lifecycle", "node-qualification-lifecycle", "node-observations-lifecycle")
 FRONTEND_TEST_PREFIX = LIFETIMES_TEST_PREFIX
 FRONTEND_TEST_RENAMES = {
     "b1_foundation_has_no_ready_or_action": "b1_foundation_requires_frontend_for_ready_and_action",
@@ -211,9 +238,24 @@ FRONTEND_TESTS = [FRONTEND_TEST_PREFIX + FRONTEND_TEST_RENAMES.get(name.removepr
     "both_shutdown_modes_require_guarded_drain", "persistent_alias_does_not_self_wake",
     "frontend_layout_ledger",
 )]
+OBSERVATIONS_TESTS = FRONTEND_TESTS + [FRONTEND_TEST_PREFIX + name for name in (
+    'b4_observation_progress_requires_positive_partial_pending',
+    'b4_observation_checked_progress_rejects_overflow',
+    'b4_observation_phase_identity_and_stale_slot',
+    'b4_observation_archive_is_finite',
+    'b4_observation_proof_verdict_is_not_disposal',
+    'b4_observation_c1_required_and_not_required',
+    'b4_observation_processed_inactive_and_disposed_are_distinct',
+    'b4_observation_public_guard_precedes_bank_free',
+    'b4_observation_failed_retirement_retains_public_guard',
+    'b4_observation_scalar_copy_does_not_pin_owner',
+    'b4_observation_contention_refuses_without_false_free',
+    'b4_observation_stream_bounds_and_layouts',
+)]
 FRONTEND_SCENARIOS = ("cold-sync-retire", "failed-turn-gated", "tcp-write-held", "tcp-disconnect", "shutdown-complete", "shutdown-cut")
 FRONTEND_LARGE_SCENARIOS = ("tcp-write-held", "tcp-disconnect", "shutdown-cut")
 FRONTEND_EXCLUSIONS = ["full-process-success", "full-driver-terminal-conjunction", "host-az-recovery", "production-metadata", "whole-node-retirement", "remote-put-termination"]
+OBSERVATIONS_EXCLUSIONS = FRONTEND_EXCLUSIONS.copy()
 FRONTEND_ROLES = ("tcp", "bucket")
 FRONTEND_PORT_ENV = {"tcp": "FOKS_B3_TCP_PORT", "bucket": "FOKS_B3_BUCKET_PORT"}
 FRONTEND_POLICY = '(version 1)\n(allow default)\n(deny network*)\n' + "".join(
@@ -351,7 +393,7 @@ def load_pins(root=ROOT, stage=None):
         if stage not in NODE_STAGES:
             fail("unsupported source stage")
         base = load_pins(root)
-        profile = {FOUNDATION: load_foundation, LIFETIMES: load_lifetimes, FRONTEND: load_frontend}[stage](root, base)
+        profile = {FOUNDATION: load_foundation, LIFETIMES: load_lifetimes, FRONTEND: load_frontend, OBSERVATIONS: load_observations}[stage](root, base)
         return {**base, "profile": stage, "foundation": profile}
     pins = read_json(root / "runtime.lock.json")
     if not isinstance(pins, dict) or (pins.get("format"), pins.get("profile")) not in ((1, A1), (2, A2)) or type(pins.get("format")) is not int or pins.get("target") != TARGET:
@@ -400,6 +442,8 @@ def patch_series(root, pins):
         return lifetimes_series(root, pins["foundation"])
     if pins["profile"] == FRONTEND:
         return frontend_series(root, pins["foundation"])
+    if pins["profile"] == OBSERVATIONS:
+        return observations_series(root, pins["foundation"])
     path = root / "patches/series.json"
     series = read_json(path)
     if file_hash(path) != pins["patch_series_sha256"]:
@@ -440,7 +484,7 @@ def patch_series(root, pins):
 
 def selected_mode(pins, mode):
     if pins["profile"] in NODE_STAGES:
-        modes = {FOUNDATION: FOUNDATION_MODES, LIFETIMES: LIFETIMES_MODES, FRONTEND: FRONTEND_MODES}[pins["profile"]]
+        modes = {FOUNDATION: FOUNDATION_MODES, LIFETIMES: LIFETIMES_MODES, FRONTEND: FRONTEND_MODES, OBSERVATIONS: OBSERVATIONS_MODES}[pins["profile"]]
         if mode not in modes:
             fail("unsupported graph/build mode for selected node profile")
         features = modes[mode]["root_features"]
@@ -457,6 +501,8 @@ def stage_for_mode(mode):
         return LIFETIMES
     if mode in FRONTEND_MODES:
         return FRONTEND
+    if mode in OBSERVATIONS_MODES:
+        return OBSERVATIONS
     if mode not in ("identity", "lifecycle", "node-baseline"):
         fail("unsupported graph/build mode")
     return None
@@ -761,8 +807,11 @@ def accepted_lifetimes(root):
 
 
 def load_frontend(root, base):
+    return validate_frontend(root, base, read_json(root / FOUNDATION_PROFILE), root / FOUNDATION_SERIES)
+
+
+def validate_frontend(root, base, profile, series_path):
     accepted = accepted_lifetimes(root)
-    profile = read_json(root / FOUNDATION_PROFILE)
     closed_fields(profile, ("format", "profile", "target", "accepted_a2_commit", "accepted_a3a_commit", "accepted_b1_commit", "accepted_b2_commit", "base", "pins", "node_series", "cargo_lock", "qualification"), "frontend profile")
     identity = {"format": 1, "profile": FRONTEND, "target": TARGET, "accepted_a2_commit": NODE_BASE, "accepted_a3a_commit": FOUNDATION_BASE, "accepted_b1_commit": LIFETIMES_BASE, "accepted_b2_commit": FRONTEND_BASE}
     exact_json({name: profile[name] for name in identity}, identity, "frontend profile identity")
@@ -793,14 +842,18 @@ def load_frontend(root, base):
     exact_json(qualification["frontend"], frontend_contract(), "frontend protocol policy")
     exact_json(qualification["native_execution"], frontend_native_contract(), "frontend native test policy")
     exact_json(qualification["frontend_layout_evidence"], frontend_layout_contract(), "frontend layout policy")
-    frontend_series(root, profile, accepted)
+    validate_frontend_series(root, profile, accepted, series_path)
     return profile
 
 
 def frontend_series(root, profile, accepted=None):
     accepted = accepted_lifetimes(root) if accepted is None else accepted
-    checked_file(root / FOUNDATION_SERIES, profile["node_series"])
-    series = read_json(root / FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    return validate_frontend_series(root, profile, accepted, root / FOUNDATION_SERIES)
+
+
+def validate_frontend_series(root, profile, accepted, series_path):
+    checked_file(series_path, profile["node_series"])
+    series = read_json(series_path, MAXIMUM_FOUNDATION_SERIES)
     closed_fields(series, ("format", "profile", "accepted_a2_commit", "accepted_a3a_commit", "accepted_b1_commit", "accepted_b2_commit", "base_series", "patches"), "frontend patch series")
     identity = {"format": 1, "profile": FRONTEND, "accepted_a2_commit": NODE_BASE, "accepted_a3a_commit": FOUNDATION_BASE, "accepted_b1_commit": LIFETIMES_BASE, "accepted_b2_commit": FRONTEND_BASE, "base_series": accepted["base"]["patch_series"]}
     exact_json({name: series[name] for name in identity}, identity, "frontend series identity")
@@ -826,6 +879,289 @@ def frontend_series(root, profile, accepted=None):
             validate_image(entry["before"])
         validate_image(entry["after"])
     checked_file(root / FRONTEND_PATCH, selected)
+    return series
+
+
+# Exact P1 policy is separate from the preserved B3 frontend contract.
+def observations_contract():
+    return {'format': 1,
+     'observation_fields': ['sequence',
+                            'a2_generation',
+                            'epoch',
+                            'generation',
+                            'requests',
+                            'durable_ops',
+                            'ownership_ops',
+                            'positions',
+                            'durable_positions',
+                            'seen',
+                            'first',
+                            'tail',
+                            'ordinal',
+                            'native_joined',
+                            'native_disposed',
+                            'roots_joined',
+                            'roots_disposed',
+                            'frame_bytes',
+                            'accepted_bytes',
+                            'positive_pending_bytes',
+                            'write_polls',
+                            'pending_polls',
+                            'tenant',
+                            'bank_slot',
+                            'a2_slot',
+                            'phase',
+                            'summary',
+                            'request_dead',
+                            'public_guard',
+                            'durable_verdicts',
+                            'ownership_verdicts',
+                            'proof_sources',
+                            'release_verdicts',
+                            'c1',
+                            'outcome',
+                            'refusal'],
+     'observe_request_v2': {'length': 16,
+                            'magic': 'FOKSGN01',
+                            'opcode': 2,
+                            'opcode_offset': 9,
+                            'reserved_zero': [12, 13, 14, 15],
+                            'selector1': 'same existing backpressure scenario restriction',
+                            'selector_offset': 11,
+                            'tenant_offset': 10,
+                            'v1': 'exact previous requests and response behavior preserved; v2 Begin refuses',
+                            'version': 2,
+                            'version_offset': 8},
+     'projection': {'0': 'Admitted',
+                    '1': 'PrimaryLocal',
+                    '2': 'AuxLocal',
+                    '3': 'PrimaryDurableSuccess',
+                    '4': 'AuxDurableSuccess',
+                    '5': 'PrimaryOwnershipSuccess',
+                    '6': 'AuxOwnershipSuccess',
+                    '7': 'PrimaryOutputReleased',
+                    '8': 'AuxOutputReleased',
+                    '9': 'DriverJoined',
+                    '10': 'DriverDelivered',
+                    '11': 'C1Required',
+                    '12': 'C1Succeeded',
+                    '13': 'C1NotRequired',
+                    '14': 'ZeroWritePending',
+                    '15': 'PositiveWritePending',
+                    '16': 'SocketClosed',
+                    '17': 'FrameDropped',
+                    '18': 'AnswerDropped',
+                    '19': 'PrimaryFinishProcessed',
+                    '20': 'AuxFinishProcessed',
+                    '21': 'PrimaryInactive',
+                    '22': 'AuxInactive',
+                    '23': 'PrimaryFinishDisposed',
+                    '24': 'AuxFinishDisposed',
+                    '25': 'WorkerDestroyed',
+                    '26': 'C6Succeeded',
+                    '27': 'OriginalRequestDropped',
+                    '28': 'A2Free',
+                    '29': 'PublicGuardDropped',
+                    '30': 'BankFree',
+                    '31': 'Quarantined'},
+     'phase': {'0': 'NeverAdmitted',
+               '1': 'Active',
+               '2': 'Retiring',
+               '3': 'PendingOwner',
+               '4': 'Quarantined',
+               '5': 'Free'},
+     'milestones': {'0': 'Admitted',
+                    '1': 'PrimaryLocal',
+                    '10': 'AuxOutputReleased',
+                    '11': 'DriverJoined',
+                    '12': 'DriverDelivered',
+                    '13': 'C1Required',
+                    '14': 'C1Succeeded',
+                    '15': 'C1NotRequired',
+                    '16': 'ZeroWritePending',
+                    '17': 'PositiveWritePending',
+                    '18': 'SocketClosed',
+                    '19': 'FrameDropped',
+                    '2': 'AuxLocal',
+                    '20': 'AnswerDropped',
+                    '21': 'PrimaryFinishProcessed',
+                    '22': 'AuxFinishProcessed',
+                    '23': 'PrimaryInactive',
+                    '24': 'AuxInactive',
+                    '25': 'PrimaryFinishDisposed',
+                    '26': 'AuxFinishDisposed',
+                    '27': 'AuxSyncDisposed',
+                    '28': 'DispatcherDisposed',
+                    '29': 'WorkerDestroyed',
+                    '3': 'PrimaryOutputSubmitted',
+                    '30': 'C6Succeeded',
+                    '31': 'TerminalConjunction',
+                    '32': 'PayloadsDropped',
+                    '33': 'OriginalRequestDropped',
+                    '34': 'A2Free',
+                    '35': 'PublicGuardDropped',
+                    '36': 'BankFree',
+                    '37': 'Quarantined',
+                    '38': 'CancelProcessed',
+                    '39': 'Retiring',
+                    '4': 'AuxOutputSubmitted',
+                    '5': 'PrimaryDurableSuccess',
+                    '6': 'AuxDurableSuccess',
+                    '7': 'PrimaryOwnershipSuccess',
+                    '8': 'AuxOwnershipSuccess',
+                    '9': 'PrimaryOutputReleased'},
+     'native_indices': {'0': 'DbOpen',
+                        '1': 'RestoredAlarm',
+                        '10': 'OpaqueLowerJob',
+                        '2': 'HydratorOpen',
+                        '3': 'HydratorStep',
+                        '4': 'SyncCapture',
+                        '5': 'Snapshot',
+                        '6': 'WorkerBuild',
+                        '7': 'WorkerDestroy',
+                        '8': 'LocalClose',
+                        '9': 'ReadFile'},
+     'c1': {'failed': 4, 'not_required': 1, 'required': 2, 'succeeded': 3, 'unseen': 0},
+     'outcome': {'local_write_flush_ok': 1, 'transport_failed': 2, 'unseen': 0},
+     'verdict': {'error': 2, 'ok': 1, 'unseen': 0},
+     'proof_source': {'bucket': 2, 'fleet': 1, 'unseen': 0},
+     'refusal': '0 means none; current closed Refusal discriminant+1. Never interpreted as successful disposal.',
+     'structured_stream': {'atomic_snapshot': False,
+                           'chunks_max': 8,
+                           'encoder_capacity': 65536,
+                           'end': 'guarded-observation-end',
+                           'event_array': '64 Option<Event> entries; first count entries present, rest null; '
+                                          'original A2 Event tuples/enum names unchanged.',
+                           'events': 'guarded-a2-events',
+                           'events_max': 16384,
+                           'events_per_chunk': 64,
+                           'events_total': 512,
+                           'header': 'guarded-observation-header',
+                           'header_end_max': 1024,
+                           'item': 'guarded-invocation',
+                           'item_max': 2048,
+                           'items_max': 64,
+                           'native_report_max': 4096,
+                           'stream_max': 264192},
+     'archive': {'entries': 64,
+                 'entry_native_bytes_max': 512,
+                 'native_bytes_max': 32768,
+                 'copy_only': True,
+                 'overwrites': False},
+     'observe_response_v2': {'length': 32,
+                             'magic': 'FOKSGS01',
+                             'version': 2,
+                             'version_offset': 8,
+                             'tenant_offset': 9,
+                             'selector_offset': 10,
+                             'phase_offset': 11,
+                             'sequence': {'offset': 12, 'bytes': 8, 'encoding': 'little-endian'},
+                             'positive_pending_bytes': {'offset': 20, 'bytes': 4, 'encoding': 'little-endian'},
+                             'frame_bytes': {'offset': 24, 'bytes': 4, 'encoding': 'little-endian'},
+                             'projection': {'offset': 28, 'bytes': 4, 'encoding': 'little-endian'}},
+     'field_semantics': {
+         'public_guard': 'Immutable admission provenance: this invocation was admitted with a PublicRequestGuard. This is not a current-live assertion; actual destruction is recorded only by PublicGuardDropped and its first ordinal.',
+         'request_dead': 'Current read-time summary from the existing Weak<Request> witness; false does not prove activity and true does not establish A2 Free, public-guard destruction, or external reuse.',
+         'auxiliary_request': 'Auxiliary fields describe the current actual auxiliary request. On replacement, requests[1] changes; durable_ops[1], ownership_ops[1], positions[1], durable_positions[1], durable_verdicts[1], ownership_verdicts[1], proof_sources[1] and release_verdicts[1] reset. The AuxLocal, AuxOutputSubmitted, AuxDurableSuccess, AuxOwnershipSuccess, AuxOutputReleased, AuxFinishProcessed, AuxInactive, AuxFinishDisposed and AuxSyncDisposed bits and first ordinals reset; the global ordinal remains monotonic. Native/root disposition counts remain invocation-wide.',
+         'disposal_masks': 'roots_disposed records concrete task/channel/result/abandon payload disposal and bookkeeping closure; native_disposed records concrete native child payload disposal. Notification Wakers and remaining context aliases are excluded. Only OriginalRequestDropped and the existing Weak<Request> summary witness final owner-alias destruction before A2Free.'
+     },
+     'release_order': ['OriginalRequestDropped', 'A2Free', 'PublicGuardDropped', 'BankFree']}
+
+
+def observation_layout_contract():
+    return {'prefix': 'FOKS_B4_OBSERVATION_LAYOUT=',
+     'maximum_record_bytes': 4096,
+     'maximum_stderr_bytes': 1048576,
+     'record_fields': ['format', 'layouts', 'retained_bytes', 'a2_event_bytes'],
+     'layout_ids': ['invocation', 'archive', 'held', 'a2_chunk', 'report', 'write_progress', 'registry_arc'],
+     'layout_fields': ['bytes', 'alignment'],
+     'layout_policy': {'invocation': {'ceiling_bytes': 512, 'maximum_alignment': 8},
+                       'archive': {'ceiling_bytes': 32768, 'maximum_alignment': 8},
+                       'held': {'ceiling_bytes': 1024, 'maximum_alignment': 16},
+                       'a2_chunk': {'ceiling_bytes': 4096, 'maximum_alignment': 16},
+                       'report': {'ceiling_bytes': 4096, 'maximum_alignment': 16},
+                       'write_progress': {'ceiling_bytes': 64, 'maximum_alignment': 16},
+                       'registry_arc': {'ceiling_bytes': 65536, 'maximum_alignment': 16}},
+     'archive_entries': 64,
+     'retained_bytes_maximum': 131072,
+     'retained_formula': 'archive.bytes + 65536 + a2_chunk.bytes + 6*invocation.bytes + report.bytes +1024 '
+                         '+a2_event_bytes',
+     'a2_event_bytes': {'capacity': 512, 'ceiling_bytes': 65536, 'same_run': 'B2.fixed.a2_events.bytes'},
+     'registry_arc': 'same-run B2.fixed.effect_registry.arc_bytes'}
+
+
+def accepted_frontend(root):
+    # Historical B3 uses its own immutable profile/series even while the current
+    # outer profile identifies P1. Never infer the predecessor from that file.
+    for path, checksum in OBSERVATIONS_BASE_IMAGES.values():
+        value = read_json(root / path)
+        if file_hash(root / path) != checksum or not isinstance(value, dict):
+            fail("accepted frontend input changed")
+    return validate_frontend(root, load_pins(root), read_json(root / OBSERVATIONS_PROFILE), root / OBSERVATIONS_SERIES)
+
+
+def load_observations(root, base):
+    accepted = accepted_frontend(root)
+    profile = read_json(root / FOUNDATION_PROFILE)
+    closed_fields(profile, ("format", "profile", "target", "accepted_a2_commit", "accepted_a3a_commit", "accepted_b1_commit", "accepted_b2_commit", "accepted_b3_commit", "base", "pins", "node_series", "cargo_lock", "qualification"), "observations profile")
+    identity = {"format": 1, "profile": OBSERVATIONS, "target": TARGET, "accepted_a2_commit": NODE_BASE, "accepted_a3a_commit": FOUNDATION_BASE, "accepted_b1_commit": LIFETIMES_BASE, "accepted_b2_commit": FRONTEND_BASE, "accepted_b3_commit": OBSERVATIONS_BASE}
+    exact_json({name: profile[name] for name in identity}, identity, "observations profile identity")
+    closed_fields(profile["base"], (*FOUNDATION_BASE_IMAGES, *LIFETIMES_BASE_IMAGES, *FRONTEND_BASE_IMAGES, *OBSERVATIONS_BASE_IMAGES), "observations base")
+    exact_json({name: profile["base"][name] for name in accepted["base"]}, accepted["base"], "observations historical base")
+    for name, (path, checksum) in OBSERVATIONS_BASE_IMAGES.items():
+        image = profile["base"][name]
+        foundation_image(image, path)
+        if image["sha256"] != checksum:
+            fail("observations accepted base changed")
+        checked_file(root / path, image)
+    exact_json(profile["pins"], base, "observations inherited pins")
+    exact_json(profile["cargo_lock"], accepted["cargo_lock"], "observations unchanged lock contract")
+    checked_file(root / "Cargo.lock", profile["cargo_lock"]["expected"])
+    foundation_image(profile["node_series"], FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    qualification = profile["qualification"]
+    closed_fields(qualification, ("claim", "source_roster", "tree", "program", "deployments", "tests", "modes", "not_qualified", "layout_evidence", "frontend", "native_execution", "frontend_layout_evidence", "observations", "observation_layout_evidence"), "observations qualification")
+    exact_json({name: qualification[name] for name in ("claim", "source_roster", "not_qualified")}, {"claim": "b4-p1-observation-components-only", "source_roster": list(OBSERVATIONS_PATHS), "not_qualified": OBSERVATIONS_EXCLUSIONS}, "observations scope")
+    tree = qualification["tree"]
+    closed_fields(tree, ("files", "payload_bytes", "inventory_sha256"), "observations tree")
+    if type(tree["files"]) is not int or tree["files"] != accepted["qualification"]["tree"]["files"] or type(tree["payload_bytes"]) is not int or not 0 < tree["payload_bytes"] <= MAXIMUM_FOUNDATION_SOURCE or not isinstance(tree["inventory_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", tree["inventory_sha256"]):
+        fail("invalid observations tree envelope")
+    for name in ("program", "deployments", "layout_evidence", "frontend", "native_execution", "frontend_layout_evidence"):
+        exact_json(qualification[name], accepted["qualification"][name], "observations unchanged " + name)
+    exact_json(qualification["tests"], {"prefix": FRONTEND_TEST_PREFIX, "names": OBSERVATIONS_TESTS, "threads": 1}, "observations test inventory")
+    exact_json(qualification["modes"], OBSERVATIONS_MODES, "observations modes")
+    exact_json(qualification["observations"], observations_contract(), "observations policy")
+    exact_json(qualification["observation_layout_evidence"], observation_layout_contract(), "observations layout policy")
+    observations_series(root, profile, accepted)
+    return profile
+
+
+def observations_series(root, profile, accepted=None):
+    accepted = accepted_frontend(root) if accepted is None else accepted
+    checked_file(root / FOUNDATION_SERIES, profile["node_series"])
+    series = read_json(root / FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    closed_fields(series, ("format", "profile", "accepted_a2_commit", "accepted_a3a_commit", "accepted_b1_commit", "accepted_b2_commit", "accepted_b3_commit", "base_series", "patches"), "observations patch series")
+    identity = {"format": 1, "profile": OBSERVATIONS, "accepted_a2_commit": NODE_BASE, "accepted_a3a_commit": FOUNDATION_BASE, "accepted_b1_commit": LIFETIMES_BASE, "accepted_b2_commit": FRONTEND_BASE, "accepted_b3_commit": OBSERVATIONS_BASE, "base_series": accepted["base"]["patch_series"]}
+    exact_json({name: series[name] for name in identity}, identity, "observations series identity")
+    patches = series["patches"]
+    if not isinstance(patches, list) or len(patches) != 5:
+        fail("observations requires exactly five patches")
+    prefix = validate_frontend_series(root, accepted, accepted_lifetimes(root), root / OBSERVATIONS_SERIES)
+    exact_json(patches[:4], prefix["patches"], "observations immutable patch prefix")
+    selected = patches[4]
+    closed_fields(selected, ("path", "bytes", "sha256", "files"), "observations fifth patch")
+    foundation_image({name: selected[name] for name in ("path", "bytes", "sha256")}, OBSERVATIONS_PATCH, MAXIMUM_FOUNDATION_PATCH)
+    if sum(entry["bytes"] for entry in patches) > MAXIMUM_OBSERVATIONS_PATCHES:
+        fail("observations combined patch payload exceeds allowance")
+    files = selected["files"]
+    if not isinstance(files, list) or len(files) != len(OBSERVATIONS_PATHS) or not set(OBSERVATIONS_PATHS) <= set(FRONTEND_UNION):
+        fail("invalid observations patch roster")
+    for path, entry in zip(OBSERVATIONS_PATHS, files, strict=True):
+        closed_fields(entry, ("path", "mode", "before", "after"), "observations patch file")
+        if entry["path"] != path or entry["mode"] != "100644":
+            fail("observations patch path/order/mode changed")
+        validate_image(entry["before"])
+        validate_image(entry["after"])
+    checked_file(root / OBSERVATIONS_PATCH, selected)
     return series
 
 
@@ -1281,7 +1617,7 @@ def prepare_assets(archive, binding, root=ROOT, stage=None):
 
 
 def foundation_assets(root, pins, base):
-    if pins["profile"] == FRONTEND:
+    if pins["profile"] in (FRONTEND, OBSERVATIONS):
         accepted = accepted_lifetimes(root)
         foundation = accepted_foundation(root)
         historical_foundation = {"format": 1, "profile": FOUNDATION, "input_sha256": file_hash(root / LIFETIMES_PROFILE), "patch_series_sha256": foundation["node_series"]["sha256"], "base_receipt_sha256": file_hash(root / "runtime/artifacts/assets.json"), "assets": base}
@@ -1291,7 +1627,16 @@ def foundation_assets(root, pins, base):
                 fail("accepted component asset receipt changed")
             exact_json(read_json(root / preserved), expected, "accepted component assets")
             checked_file(root / live, {"bytes": (root / preserved).stat().st_size, "sha256": checksum})
-        return {"format": 1, "profile": FRONTEND, "input_sha256": file_hash(root / FOUNDATION_PROFILE), "patch_series_sha256": pins["foundation"]["node_series"]["sha256"], "base_receipt_sha256": file_hash(root / "runtime/artifacts/assets.json"), "foundation_receipt_sha256": LIFETIMES_ASSET_SHA256, "lifetimes_receipt_sha256": FRONTEND_ASSET_SHA256, "assets": base}
+        frontend = pins["foundation"] if pins["profile"] == FRONTEND else accepted_frontend(root)
+        frontend_path = FOUNDATION_PROFILE if pins["profile"] == FRONTEND else OBSERVATIONS_PROFILE
+        historical_frontend = {"format": 1, "profile": FRONTEND, "input_sha256": file_hash(root / frontend_path), "patch_series_sha256": frontend["node_series"]["sha256"], "base_receipt_sha256": file_hash(root / "runtime/artifacts/assets.json"), "foundation_receipt_sha256": LIFETIMES_ASSET_SHA256, "lifetimes_receipt_sha256": FRONTEND_ASSET_SHA256, "assets": base}
+        if pins["profile"] == FRONTEND:
+            return historical_frontend
+        if file_hash(root / OBSERVATIONS_ASSETS) != OBSERVATIONS_ASSET_SHA256:
+            fail("accepted frontend asset receipt changed")
+        exact_json(read_json(root / OBSERVATIONS_ASSETS), historical_frontend, "accepted frontend assets")
+        checked_file(root / "runtime/assets-node-qualification.json", {"bytes": (root / OBSERVATIONS_ASSETS).stat().st_size, "sha256": OBSERVATIONS_ASSET_SHA256})
+        return {"format": 1, "profile": OBSERVATIONS, "input_sha256": file_hash(root / FOUNDATION_PROFILE), "patch_series_sha256": pins["foundation"]["node_series"]["sha256"], "base_receipt_sha256": file_hash(root / "runtime/artifacts/assets.json"), "foundation_receipt_sha256": LIFETIMES_ASSET_SHA256, "lifetimes_receipt_sha256": FRONTEND_ASSET_SHA256, "frontend_receipt_sha256": OBSERVATIONS_ASSET_SHA256, "assets": base}
     if pins["profile"] == LIFETIMES:
         accepted = accepted_foundation(root)
         historical = {"format": 1, "profile": FOUNDATION, "input_sha256": file_hash(root / LIFETIMES_PROFILE), "patch_series_sha256": accepted["node_series"]["sha256"], "base_receipt_sha256": file_hash(root / "runtime/artifacts/assets.json"), "assets": base}
@@ -2535,7 +2880,7 @@ def build_commands(root, toolchain, pins, mode="identity"):
 
 
 def foundation_test_commands(root, toolchain, pins):
-    if pins["profile"] == FRONTEND:
+    if pins["profile"] in (FRONTEND, OBSERVATIONS):
         fail("frontend tests require the bound direct executable and two-port policy")
     selected_mode(pins, pins["profile"])
     prefix = LIFETIMES_TEST_PREFIX if pins["profile"] == LIFETIMES else FOUNDATION_TEST_PREFIX
@@ -2544,9 +2889,9 @@ def foundation_test_commands(root, toolchain, pins):
 
 
 def frontend_test_compile_command(root, toolchain, pins):
-    if pins["profile"] != FRONTEND:
+    if pins["profile"] not in (FRONTEND, OBSERVATIONS):
         fail("frontend compilation requires its exact stage")
-    selected_mode(pins, FRONTEND)
+    selected_mode(pins, pins["profile"])
     return network_command([toolchain / "bin/cargo", "test", "--locked", "--offline", "--manifest-path", str(root / "Cargo.toml"), "--no-default-features", "--package", "foks-celld-guarded", "--package", "celld@0.6.2", "--features", "foks-celld-guarded/node-qualification", "--lib", "-j", "2", "--target", TARGET, "--no-run", "--message-format=json"])
 
 
@@ -2598,9 +2943,9 @@ def frontend_test_environment(environment, ports):
     return {**environment, **{FRONTEND_PORT_ENV[role]: str(ports[role]) for role in FRONTEND_ROLES}}
 
 
-def verify_frontend_test_artifact(stdout_path, graph, root=ROOT):
+def verify_frontend_test_artifact(stdout_path, graph, root=ROOT, stage=FRONTEND):
     target = graph.get("node_test_target")
-    if not isinstance(target, dict) or graph.get("profile") != FRONTEND or graph.get("mode") != FRONTEND:
+    if stage not in (FRONTEND, OBSERVATIONS) or not isinstance(target, dict) or graph.get("profile") != stage or graph.get("mode") != stage:
         fail("missing frontend library test target graph")
     artifacts, finished, consumed = [], [], 0
     path = Path(stdout_path)
@@ -2645,7 +2990,7 @@ def verify_frontend_test_artifact(stdout_path, graph, root=ROOT):
 def foundation_test_output(path, listing, stage=FOUNDATION):
     if stage not in NODE_STAGES:
         fail("unsupported component test stage")
-    expected = {FOUNDATION: FOUNDATION_TESTS, LIFETIMES: LIFETIMES_TESTS, FRONTEND: FRONTEND_TESTS}[stage]
+    expected = {FOUNDATION: FOUNDATION_TESTS, LIFETIMES: LIFETIMES_TESTS, FRONTEND: FRONTEND_TESTS, OBSERVATIONS: OBSERVATIONS_TESTS}[stage]
     return component_test_output(path, listing, expected)
 
 
@@ -2859,13 +3204,43 @@ def frontend_layout_output(path, expected_stderr_sha256):
     return {"record": record, "raw_record_bytes": len(raw_record), "raw_record_sha256": digest(raw_record)}
 
 
+def observation_layout_output(path, expected_stderr_sha256):
+    """P1 measurements are additive, source-bound, and share the old log hash."""
+    policy = observation_layout_contract()
+    record, raw_record = compiled_layout_record(path, expected_stderr_sha256, policy["prefix"].encode("ascii"), policy["maximum_record_bytes"])
+    closed_fields(record, policy["record_fields"], "observation layout record")
+    exact_json(record["format"], 1, "observation layout format")
+    layouts = record["layouts"]
+    closed_fields(layouts, policy["layout_ids"], "observation layouts")
+    for name, limits in policy["layout_policy"].items():
+        entry = layouts[name]
+        closed_fields(entry, policy["layout_fields"], "observation layout")
+        size, alignment = entry["bytes"], entry["alignment"]
+        if type(size) is not int or not 0 < size <= limits["ceiling_bytes"] or type(alignment) is not int or not 0 < alignment <= limits["maximum_alignment"] or alignment & (alignment - 1) or size % alignment:
+            fail("invalid observation layout size or alignment")
+    if layouts["archive"]["bytes"] != 64 * layouts["invocation"]["bytes"] or layouts["archive"]["alignment"] != layouts["invocation"]["alignment"]:
+        fail("observation archive differs from its actual fixed array")
+    events = record["a2_event_bytes"]
+    if type(events) is not int or not 0 < events <= 65536 or events % 512:
+        fail("invalid observation A2 event backing size")
+    # These two measurements name the same actual allocations as B2. A second
+    # smaller row cannot substitute for the already measured backing/Arc.
+    b2 = lifetimes_layout_output(path, expected_stderr_sha256)["record"]["fixed"]
+    if events != b2["a2_events"]["bytes"] or layouts["registry_arc"]["bytes"] != b2["effect_registry"]["arc_bytes"] or layouts["registry_arc"]["alignment"] != max(8, b2["effect_registry"]["alignment"]) or layouts["registry_arc"]["bytes"] < layouts["archive"]["bytes"]:
+        fail("observation and B2 allocation measurements disagree")
+    retained = layouts["archive"]["bytes"] + 65536 + layouts["a2_chunk"]["bytes"] + 6 * layouts["invocation"]["bytes"] + layouts["report"]["bytes"] + 1024 + events
+    if type(record["retained_bytes"]) is not int or record["retained_bytes"] != retained or retained > policy["retained_bytes_maximum"]:
+        fail("observation retained storage exceeds the measured overlap")
+    return {"record": record, "raw_record_bytes": len(raw_record), "raw_record_sha256": digest(raw_record)}
+
+
 def foundation_probe_specs(mode):
     if mode not in NODE_BINARY_MODES:
         fail("unknown node binary probe mode")
     probes = {"version": (["--version"], 0), "help": (["--help"], 0), "invalid-option": (["--foks-guarded-node-qualification"], 1)}
-    if mode == FRONTEND:
+    if mode in (FRONTEND, OBSERVATIONS):
         probes.update({name: (FRONTEND_REFUSALS[name][0], 1) for name in ("frontend-missing-scenario", "frontend-unsupported-scenario")})
-    elif mode == FRONTEND + "-default":
+    elif mode in (FRONTEND + "-default", OBSERVATIONS + "-default"):
         probes["frontend-absent"] = (FRONTEND_REFUSALS["frontend-absent"][0], 1)
     return probes
 
@@ -2911,7 +3286,7 @@ def foundation_probe_output(directory, name, mode=None):
     if name == "version":
         accepted = out == b"celld 0.6.2 (debug)\n" and not err
     elif name == "help":
-        accepted = (len(out), digest(out)) == (FRONTEND_HELP_IMAGE if mode == FRONTEND else FOUNDATION_HELP_IMAGE) and not err
+        accepted = (len(out), digest(out)) == (FRONTEND_HELP_IMAGE if mode in (FRONTEND, OBSERVATIONS) else FOUNDATION_HELP_IMAGE) and not err
     elif name == "invalid-option":
         accepted = not out and err == b"Error: unknown command or option: --foks-guarded-node-qualification; run `celld --help` for usage\n"
     else:
@@ -2924,17 +3299,20 @@ def foundation_probe_output(directory, name, mode=None):
 
 
 def run_frontend_components(focused, root, toolchain, pins, graph, environment, directory, slot):
+    stage = pins["profile"]
+    if stage not in (FRONTEND, OBSERVATIONS):
+        fail("unsupported direct component stage")
     timeout = pins["build"]["timeout_seconds"]
     focused["compile"] = run_owned(frontend_test_compile_command(root, toolchain, pins), root, environment, directory, "tests-compile", slot, timeout, lambda: resource_refusal(root))
     if file_hash(directory / "tests-compile.stdout") != focused["compile"]["stdout_sha256"]:
         fail("frontend compiler output changed after owned command")
-    focused["binary"] = verify_frontend_test_artifact(directory / "tests-compile.stdout", graph, root)
+    focused["binary"] = verify_frontend_test_artifact(directory / "tests-compile.stdout", graph, root, stage)
     binary = Path(focused["binary"]["path"])
     checked_file(binary, focused["binary"])
     focused["list"] = run_owned(frontend_test_command(binary, True), root, environment, directory, "tests-list", slot, timeout, lambda: resource_refusal(root))
     if file_hash(directory / "tests-list.stdout") != focused["list"]["stdout_sha256"]:
         fail("frontend test listing changed after owned command")
-    foundation_test_output(directory / "tests-list.stdout", True, FRONTEND)
+    foundation_test_output(directory / "tests-list.stdout", True, stage)
     checked_file(binary, focused["binary"])
     ports = choose_frontend_ports()
     focused["ports"] = ports
@@ -2947,11 +3325,13 @@ def run_frontend_components(focused, root, toolchain, pins, graph, environment, 
     checked_file(binary, focused["binary"])
     if file_hash(directory / "tests-run.stdout") != focused["run"]["stdout_sha256"]:
         fail("frontend test output changed after owned command")
-    foundation_test_output(directory / "tests-run.stdout", False, FRONTEND)
+    foundation_test_output(directory / "tests-run.stdout", False, stage)
     stderr, checksum = directory / "tests-run.stderr", focused["run"]["stderr_sha256"]
-    focused["layouts"] = foundation_layout_output(stderr, checksum, FRONTEND)
+    focused["layouts"] = foundation_layout_output(stderr, checksum, stage)
     focused["lifetimes_layouts"] = lifetimes_layout_output(stderr, checksum)
     focused["frontend_layouts"] = frontend_layout_output(stderr, checksum)
+    if stage == OBSERVATIONS:
+        focused["observation_layouts"] = observation_layout_output(stderr, checksum)
     focused["transport_tests"] = {}
     for group, names in FRONTEND_TRANSPORT_TESTS.items():
         result = {"names": names.copy(), "threads": 1, "network": "deny-all", "scope": "root-workspace-a0-regression", "manifest": str(root.parents[1] / "Cargo.toml")}
@@ -2982,10 +3362,11 @@ def build_foundation(graph_directory, root, mode):
     toolchain, environment = controlled_environment(root)
     evidence_root = runtime_directory(root) / "evidence"
     evidence_root.mkdir(exist_ok=True)
-    directory = Path(tempfile.mkdtemp(prefix={FOUNDATION: "foundation-", LIFETIMES: "lifetimes-", FRONTEND: "frontend-"}[stage], dir=evidence_root))
+    directory = Path(tempfile.mkdtemp(prefix={FOUNDATION: "foundation-", LIFETIMES: "lifetimes-", FRONTEND: "frontend-", OBSERVATIONS: "observations-"}[stage], dir=evidence_root))
     claims = {"node-foundation-default": "b1-default-bin-regression", "node-foundation": "b1-foundation-component-only", "node-foundation-lifecycle": "b1-a2-lifecycle-regression", "node-lifetimes-default": "b2-default-bin-regression", "node-lifetimes": "b2-lifetimes-components-only", "node-lifetimes-lifecycle": "b2-a2-lifecycle-regression"}
     claims.update({FRONTEND + "-default": "b3-default-bin-regression", FRONTEND: "b3-frontend-components-only", FRONTEND + "-lifecycle": "b3-a2-lifecycle-regression"})
-    receipt = {"format": 1, "profile": stage, "mode": mode, "claim": claims[mode], "status": "incomplete", "source": source, "assets": assets, "profile_sha256": file_hash(root / FOUNDATION_PROFILE), "series_sha256": pins["foundation"]["node_series"]["sha256"], "cargo_lock_sha256": file_hash(root / "Cargo.lock"), "graph_directory": str(Path(graph_directory).resolve()), "graph_sha256": digest(json.dumps(graph, sort_keys=True).encode()), "initial_resources": measured, "not_qualified": FRONTEND_EXCLUSIONS if stage == FRONTEND else FOUNDATION_EXCLUSIONS}
+    claims.update({OBSERVATIONS + "-default": "b4-p1-default-bin-regression", OBSERVATIONS: "b4-p1-observation-components-only", OBSERVATIONS + "-lifecycle": "b4-p1-a2-lifecycle-regression"})
+    receipt = {"format": 1, "profile": stage, "mode": mode, "claim": claims[mode], "status": "incomplete", "source": source, "assets": assets, "profile_sha256": file_hash(root / FOUNDATION_PROFILE), "series_sha256": pins["foundation"]["node_series"]["sha256"], "cargo_lock_sha256": file_hash(root / "Cargo.lock"), "graph_directory": str(Path(graph_directory).resolve()), "graph_sha256": digest(json.dumps(graph, sort_keys=True).encode()), "initial_resources": measured, "not_qualified": OBSERVATIONS_EXCLUSIONS if stage == OBSERVATIONS else FRONTEND_EXCLUSIONS if stage == FRONTEND else FOUNDATION_EXCLUSIONS}
     write_json(directory / "receipt.json", receipt)
     with BuildSlot(root) as slot:
         try:
@@ -3015,11 +3396,11 @@ def build_foundation(graph_directory, root, mode):
                     receipt["probes"][name] = {"command": command, "output": foundation_probe_output(directory, name, mode)}
                     checked_file(binary, receipt["binary"])
                 if mode == stage:
-                    focused = {"prefix": FOUNDATION_TEST_PREFIX if stage == FOUNDATION else LIFETIMES_TEST_PREFIX, "names": {FOUNDATION: FOUNDATION_TESTS, LIFETIMES: LIFETIMES_TESTS, FRONTEND: FRONTEND_TESTS}[stage], "threads": 1}
+                    focused = {"prefix": FOUNDATION_TEST_PREFIX if stage == FOUNDATION else LIFETIMES_TEST_PREFIX, "names": {FOUNDATION: FOUNDATION_TESTS, LIFETIMES: LIFETIMES_TESTS, FRONTEND: FRONTEND_TESTS, OBSERVATIONS: OBSERVATIONS_TESTS}[stage], "threads": 1}
                     receipt["focused_tests"] = focused
-                    if stage == FRONTEND:
+                    if stage in (FRONTEND, OBSERVATIONS):
                         run_frontend_components(focused, root, toolchain, pins, graph, environment, directory, slot)
-                    for name, argv in ({} if stage == FRONTEND else foundation_test_commands(root, toolchain, pins)).items():
+                    for name, argv in ({} if stage in (FRONTEND, OBSERVATIONS) else foundation_test_commands(root, toolchain, pins)).items():
                         focused[name] = run_owned(argv, root, environment, directory, "tests-" + name, slot, pins["build"]["timeout_seconds"], lambda: resource_refusal(root))
                         foundation_test_output(directory / ("tests-" + name + ".stdout"), name == "list", stage)
                         if name == "run":

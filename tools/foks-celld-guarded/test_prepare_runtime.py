@@ -307,6 +307,54 @@ def repin_frontend(root, data, patch_bytes=None):
     (root / p.FOUNDATION_PROFILE).write_text(json.dumps(data["profile"]))
 
 
+@contextmanager
+def observations_fixture(root):
+    """Five explicit patches; B3 profile, source and assets remain historical."""
+    with frontend_fixture(root) as previous:
+        accepted = p.prepare(previous["archive"], root, p.FRONTEND)
+        assets = p.prepare_assets(previous["native"], previous["binding"], root, p.FRONTEND)
+        preserved = root / Path(p.OBSERVATIONS_MANIFEST).parent
+        preserved.mkdir(parents=True)
+        (root / "runtime/source").rename(preserved / "source")
+        (root / "runtime/source-manifest.json").rename(preserved / "source-manifest.json")
+        for original, target in ((p.FOUNDATION_PROFILE, p.OBSERVATIONS_PROFILE), (p.FOUNDATION_SERIES, p.OBSERVATIONS_SERIES), ("runtime/assets-node-qualification.json", p.OBSERVATIONS_ASSETS)):
+            destination = root / target
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes((root / original).read_bytes())
+        accepted_images = {name: foundation_file(root, path) for name, (path, _) in p.OBSERVATIONS_BASE_IMAGES.items()}
+        files, chunks = [], []
+        final = {row["path"]: dict(row) for row in accepted["files"]}
+        for name in p.OBSERVATIONS_PATHS:
+            before = (preserved / "source" / name).read_bytes()
+            after = ("observations " + name + "\n").encode()
+            files.append({"path": name, "mode": "100644", "before": p.image_identity(before), "after": p.image_identity(after)})
+            chunks.append(("--- a/" + name + "\n+++ b/" + name + "\n@@ -1," + str(len(before.splitlines())) + " +1,1 @@\n").encode() + b"".join(b"-" + line for line in before.splitlines(keepends=True)) + b"+" + after)
+            final[name] = {"path": name, "mode": "100644", **p.image_identity(after)}
+        (root / p.OBSERVATIONS_PATCH).write_bytes(b"".join(chunks))
+        rows = sorted(final.values(), key=lambda row: row["path"])
+        series = copy.deepcopy(previous["series"])
+        series.update(profile=p.OBSERVATIONS, accepted_b3_commit=p.OBSERVATIONS_BASE)
+        series["patches"].append({**foundation_file(root, p.OBSERVATIONS_PATCH), "files": files})
+        (root / p.FOUNDATION_SERIES).write_text(json.dumps(series))
+        profile = copy.deepcopy(previous["profile"])
+        profile.update(profile=p.OBSERVATIONS, accepted_b3_commit=p.OBSERVATIONS_BASE, node_series=foundation_file(root, p.FOUNDATION_SERIES))
+        profile["base"].update(accepted_images)
+        profile["qualification"].update(claim="b4-p1-observation-components-only", source_roster=list(p.OBSERVATIONS_PATHS), tree={"files": len(rows), "payload_bytes": sum(row["bytes"] for row in rows), "inventory_sha256": p.digest(json.dumps(rows, sort_keys=True, separators=(",", ":")).encode())}, tests={"prefix": p.FRONTEND_TEST_PREFIX, "names": p.OBSERVATIONS_TESTS.copy(), "threads": 1}, modes=copy.deepcopy(p.OBSERVATIONS_MODES), not_qualified=p.OBSERVATIONS_EXCLUSIONS.copy(), observations=p.observations_contract(), observation_layout_evidence=p.observation_layout_contract())
+        (root / p.FOUNDATION_PROFILE).write_text(json.dumps(profile))
+        base_hashes = {name: (entry["path"], entry["sha256"]) for name, entry in accepted_images.items()}
+        with patch.object(p, "OBSERVATIONS_BASE_IMAGES", base_hashes), patch.object(p, "OBSERVATIONS_ASSET_SHA256", p.file_hash(root / p.OBSERVATIONS_ASSETS)):
+            yield {**previous, "profile": profile, "series": series, "rows": rows, "accepted_b3": accepted, "accepted_b3_profile": previous["profile"], "accepted_b3_assets": assets, "accepted_b3_images": accepted_images}
+
+
+def repin_observations(root, data, patch_bytes=None):
+    if patch_bytes is not None:
+        (root / p.OBSERVATIONS_PATCH).write_bytes(patch_bytes)
+        data["series"]["patches"][4].update(foundation_file(root, p.OBSERVATIONS_PATCH))
+    (root / p.FOUNDATION_SERIES).write_text(json.dumps(data["series"]))
+    data["profile"]["node_series"] = foundation_file(root, p.FOUNDATION_SERIES)
+    (root / p.FOUNDATION_PROFILE).write_text(json.dumps(data["profile"]))
+
+
 class ArchiveTests(unittest.TestCase):
     def test_exact_tree_preparation_reuses_only_identical_source(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2003,6 +2051,353 @@ class FrontendTests(unittest.TestCase):
             for mode in (*p.FOUNDATION_MODES, *p.LIFETIMES_MODES):
                 if not mode.endswith("lifecycle"):
                     self.assertEqual(set(p.foundation_probe_specs(mode)), {"version", "help", "invalid-option"})
+
+
+class ObservationsTests(unittest.TestCase):
+    def test_fifth_patch_roundtrip_preserves_every_accepted_frontend_image(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with observations_fixture(root) as data:
+                names = (p.PATCH_PATH, p.FOUNDATION_PATCH, p.LIFETIMES_PATCH, p.FRONTEND_PATCH, p.OBSERVATIONS_PROFILE, p.OBSERVATIONS_SERIES, p.OBSERVATIONS_MANIFEST, p.OBSERVATIONS_ASSETS)
+                before = {name: (root / name).read_bytes() for name in names}
+                source = p.prepare(data["archive"], root, p.OBSERVATIONS)
+                self.assertEqual(source["files"], data["rows"])
+                self.assertEqual(len(source["files"]), len(data["accepted_b3"]["files"]))
+                self.assertEqual((source["profile"], source["kind"]), (p.OBSERVATIONS, "patched-source"))
+                self.assertEqual(len(p.OBSERVATIONS_PATHS), 8)
+                self.assertEqual(p.prepare(data["archive"], root, p.OBSERVATIONS), source)
+                self.assertEqual(p.accepted_frontend(root), data["accepted_b3_profile"])
+                data["archive"].unlink()
+                self.assertEqual(p.verify_source(root, p.OBSERVATIONS), source)
+                self.assertEqual({name: (root / name).read_bytes() for name in names}, before)
+                for stage in (None, p.FOUNDATION, p.LIFETIMES, p.FRONTEND):
+                    with self.subTest(stage=stage), self.assertRaises(ValueError):
+                        p.verify_source(root, stage)
+
+    def test_frontend_tree_and_manifest_are_not_implicitly_upgraded(self):
+        import shutil
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with observations_fixture(root) as data:
+                previous = root / Path(p.OBSERVATIONS_MANIFEST).parent
+                shutil.copytree(previous / "source", root / "runtime/source")
+                shutil.copyfile(previous / "source-manifest.json", root / "runtime/source-manifest.json")
+                manifest = (root / "runtime/source-manifest.json").read_bytes()
+                with self.assertRaises(ValueError):
+                    p.prepare(data["archive"], root, p.OBSERVATIONS)
+                self.assertEqual((root / "runtime/source-manifest.json").read_bytes(), manifest)
+                self.assertEqual(p.accepted_frontend(root), data["accepted_b3_profile"])
+
+    def test_profile_is_closed_and_does_not_relabel_historical_frontend_policy(self):
+        mutations = (
+            lambda x: x.update(format=True), lambda x: x.update(profile=p.FRONTEND),
+            lambda x: x.update(profile="node-process"), lambda x: x.update(extra=1),
+            lambda x: x.update(accepted_b3_commit="0" * 40),
+            lambda x: x["base"].pop("frontend_series"),
+            lambda x: x["base"]["frontend_profile"].update(path=p.FOUNDATION_PROFILE),
+            lambda x: x["cargo_lock"]["expected"].update(sha256="0" * 64),
+            lambda x: x["qualification"]["tree"].update(files=True),
+            lambda x: x["qualification"]["tree"].update(files=x["qualification"]["tree"]["files"] + 1),
+            lambda x: x["qualification"]["tree"].update(payload_bytes=8388609),
+            lambda x: x["qualification"]["source_roster"].append("crates/celld/main/cli.rs"),
+            lambda x: x["qualification"]["tests"]["names"].pop(),
+            lambda x: x["qualification"]["frontend"]["header"].update(version=2),
+            lambda x: x["qualification"]["frontend"]["limits"].update(control_seconds=15),
+            lambda x: x["qualification"]["native_execution"].update(compile_network="loopback"),
+            lambda x: x["qualification"]["frontend_layout_evidence"].update(watch_allocation_bound=8192),
+            lambda x: x["qualification"]["layout_evidence"]["limits"].update(cleanup_reserve=204800),
+            lambda x: x["qualification"]["observations"].update(extra=1),
+            lambda x: x["qualification"]["observation_layout_evidence"].update(extra=1),
+            lambda x: x["qualification"].update(not_qualified=[]),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with observations_fixture(root) as data:
+                original = copy.deepcopy(data["profile"])
+                for index, mutate in enumerate(mutations):
+                    data["profile"] = copy.deepcopy(original)
+                    mutate(data["profile"])
+                    repin_observations(root, data)
+                    with self.subTest(index=index), self.assertRaises(ValueError):
+                        p.load_pins(root, p.OBSERVATIONS)
+                # Restoring the live profile cannot authorize altered history.
+                data["profile"] = original
+                repin_observations(root, data)
+                for name in (p.OBSERVATIONS_PROFILE, p.OBSERVATIONS_SERIES, p.OBSERVATIONS_MANIFEST):
+                    path = root / name
+                    saved = path.read_bytes()
+                    path.write_bytes(saved + b"\n")
+                    with self.subTest(name=name), self.assertRaises(ValueError):
+                        p.load_pins(root, p.OBSERVATIONS)
+                    path.write_bytes(saved)
+
+    def test_fifth_patch_rejects_prefix_edits_missing_files_and_late_hash_failure(self):
+        mutations = (
+            lambda x: x["patches"][3]["files"][0]["after"].update(sha256="0" * 64),
+            lambda x: x["patches"].pop(),
+            lambda x: x["patches"].append(copy.deepcopy(x["patches"][-1])),
+            lambda x: x["patches"][4].update(bytes=524289),
+            lambda x: x["patches"][4]["files"].reverse(),
+            lambda x: x["patches"][4]["files"].pop(),
+            lambda x: x["patches"][4]["files"][0].update(mode="100755"),
+            lambda x: x["patches"][4]["files"][0].update(before=None),
+            lambda x: x["patches"][4]["files"][0]["before"].update(sha256="0" * 64),
+            lambda x: x["patches"][4]["files"][-1]["after"].update(sha256="0" * 64),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with observations_fixture(root) as data:
+                original = copy.deepcopy(data["series"])
+                for index, mutate in enumerate(mutations):
+                    data["series"] = copy.deepcopy(original)
+                    mutate(data["series"])
+                    repin_observations(root, data)
+                    with self.subTest(index=index), self.assertRaises(ValueError):
+                        p.prepare(data["archive"], root, p.OBSERVATIONS)
+                    self.assertFalse((root / "runtime/source").exists())
+                    self.assertFalse(list((root / "runtime").glob("source-staging-*")))
+                data["series"] = original
+                data["profile"]["qualification"]["tree"]["inventory_sha256"] = "0" * 64
+                repin_observations(root, data)
+                with self.assertRaises(ValueError):
+                    p.prepare(data["archive"], root, p.OBSERVATIONS)
+                self.assertFalse((root / "runtime/source").exists())
+
+    def test_assets_reuse_the_same_archives_and_preserve_three_predecessor_receipts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with observations_fixture(root) as data:
+                old = ("runtime/artifacts/assets.json", "runtime/artifacts/librusty_v8.a", "runtime/assets-node-foundation.json", "runtime/assets-node-lifetimes.json", "runtime/assets-node-qualification.json", p.LIFETIMES_ASSETS, p.FRONTEND_ASSETS, p.OBSERVATIONS_ASSETS)
+                before = {name: (root / name).read_bytes() for name in old}
+                result = p.prepare_assets(data["native"], data["binding"], root, p.OBSERVATIONS)
+                self.assertEqual(result["profile"], p.OBSERVATIONS)
+                self.assertEqual(result["frontend_receipt_sha256"], p.file_hash(root / p.OBSERVATIONS_ASSETS))
+                self.assertEqual(result["assets"], data["accepted_b3_assets"]["assets"])
+                self.assertEqual(p.verify_assets(root, p.OBSERVATIONS), result)
+                self.assertEqual({name: (root / name).read_bytes() for name in old}, before)
+                for name in (p.OBSERVATIONS_ASSETS, "runtime/assets-node-qualification.json", "runtime/assets-node-observations.json"):
+                    path = root / name
+                    saved = path.read_bytes()
+                    path.write_bytes(b"{}\n")
+                    with self.subTest(name=name), self.assertRaises(ValueError):
+                        p.verify_assets(root, p.OBSERVATIONS)
+                    path.write_bytes(saved)
+
+    def test_modes_and_eighty_six_names_are_closed_without_controller_execution(self):
+        self.assertEqual(len(p.OBSERVATIONS_TESTS), 86)
+        self.assertEqual(len(set(p.OBSERVATIONS_TESTS)), 86)
+        self.assertEqual(p.OBSERVATIONS_TESTS[:74], p.FRONTEND_TESTS)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with observations_fixture(root):
+                pins = p.load_pins(root, p.OBSERVATIONS)
+                with patch.object(p, "network_command", side_effect=lambda argv: list(map(str, argv))):
+                    for mode, contract in p.OBSERVATIONS_MODES.items():
+                        self.assertEqual(p.stage_for_mode(mode), p.OBSERVATIONS)
+                        commands = p.build_commands(root, Path("/toolchain"), pins, mode)
+                        self.assertIn("--locked", commands["build"])
+                        self.assertIn("--offline", commands["build"])
+                        self.assertEqual("--features" in commands["build"], bool(contract["root_features"]))
+                        self.assertEqual("lifecycle" in commands, mode.endswith("lifecycle"))
+                    old = {**pins, "profile": p.FRONTEND}
+                    self.assertEqual(p.frontend_test_compile_command(root, Path("/toolchain"), pins), p.frontend_test_compile_command(root, Path("/toolchain"), old))
+                    with self.assertRaises(ValueError):
+                        p.foundation_test_commands(root, Path("/toolchain"), pins)
+                for mode in (*p.FOUNDATION_MODES, *p.LIFETIMES_MODES, *p.FRONTEND_MODES, "identity", "node-baseline", "node-process"):
+                    with self.subTest(mode=mode), self.assertRaises(ValueError):
+                        p.selected_mode(pins, mode)
+            with self.assertRaises(ValueError):
+                p.stage_for_mode("node-process")
+            path = root / "stdout"
+            for listing in (True, False):
+                raw = FrontendTests.render_test_output(p.OBSERVATIONS_TESTS, listing)
+                path.write_text(raw)
+                self.assertEqual(p.foundation_test_output(path, listing, p.OBSERVATIONS), p.OBSERVATIONS_TESTS)
+                for changed in (FrontendTests.render_test_output(p.FRONTEND_TESTS, listing), raw + raw, raw.replace(p.OBSERVATIONS_TESTS[-1], p.OBSERVATIONS_TESTS[0]), raw.replace("86", "85")):
+                    path.write_text(changed)
+                    with self.assertRaises(ValueError):
+                        p.foundation_test_output(path, listing, p.OBSERVATIONS)
+                path.write_text(raw)
+                with self.assertRaises(ValueError):
+                    p.foundation_test_output(path, listing, p.FRONTEND)
+
+    def test_native_artifact_and_feature_probes_require_exact_observations_stage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            binary, graph, message = FrontendTests.artifact_fixture(root)
+            path = root / "compile.stdout"
+            path.write_text(json.dumps(message) + "\n" + json.dumps({"reason": "build-finished", "success": True}) + "\n")
+            with self.assertRaises(ValueError):
+                p.verify_frontend_test_artifact(path, graph, root, p.OBSERVATIONS)
+            graph.update(profile=p.OBSERVATIONS, mode=p.OBSERVATIONS)
+            self.assertEqual(p.verify_frontend_test_artifact(path, graph, root, p.OBSERVATIONS)["sha256"], p.file_hash(binary))
+            with self.assertRaises(ValueError):
+                p.verify_frontend_test_artifact(path, graph, root)
+            for mode in (p.OBSERVATIONS + "-default", p.OBSERVATIONS + "-lifecycle", "node-process"):
+                graph["mode"] = mode
+                with self.subTest(mode=mode), self.assertRaises(ValueError):
+                    p.verify_frontend_test_artifact(path, graph, root, p.OBSERVATIONS)
+            self.assertEqual(p.foundation_probe_specs(p.OBSERVATIONS), p.foundation_probe_specs(p.FRONTEND))
+            self.assertEqual(p.foundation_probe_specs(p.OBSERVATIONS + "-default"), p.foundation_probe_specs(p.FRONTEND + "-default"))
+            for name in ("frontend-missing-scenario", "frontend-unsupported-scenario"):
+                (root / (name + ".stdout")).write_bytes(b"")
+                (root / (name + ".stderr")).write_bytes(p.FRONTEND_REFUSALS[name][1])
+                self.assertEqual(p.foundation_probe_output(root, name, p.OBSERVATIONS), p.foundation_probe_output(root, name, p.FRONTEND))
+
+
+    @staticmethod
+    def b2_layout_record():
+        # The P1 registry actually contains its scalar archive. Keep this
+        # synthetic B2 row internally consistent with the P1 Arc measurement.
+        record = LifetimesTests.layout_record()
+        record["fixed"]["effect_registry"].update(bytes=32752, arc_bytes=32768)
+        return record
+
+    @staticmethod
+    def layout_record():
+        layouts = {"invocation": {"bytes": 256, "alignment": 8}, "archive": {"bytes": 16384, "alignment": 8}, "held": {"bytes": 512, "alignment": 8}, "a2_chunk": {"bytes": 2048, "alignment": 8}, "report": {"bytes": 256, "alignment": 8}, "write_progress": {"bytes": 32, "alignment": 8}, "registry_arc": {"bytes": 32768, "alignment": 8}}
+        return {"format": 1, "layouts": layouts, "retained_bytes": 90880, "a2_event_bytes": 4096}
+
+    def test_observation_layout_keeps_existing_records_and_source_bounds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "stderr"
+            b1 = {**FoundationTests.layout_record(), "cleanup_reserve": 532480}
+            b2 = self.b2_layout_record()
+            records = [(b"FOKS_B1_LAYOUT ", b1), (b"FOKS_B2_LAYOUT ", b2), (b"FOKS_B3_LAYOUT ", FrontendTests.layout_record()), (b"FOKS_B4_OBSERVATION_LAYOUT=", self.layout_record())]
+            raw = b"retained warning\n" + b"".join(prefix + json.dumps(record).encode() + b"\n" for prefix, record in records)
+            path.write_bytes(raw)
+            checksum = p.digest(raw)
+            self.assertEqual(p.foundation_layout_output(path, checksum, p.OBSERVATIONS)["record"], b1)
+            self.assertEqual(p.lifetimes_layout_output(path, checksum)["record"], b2)
+            self.assertEqual(p.frontend_layout_output(path, checksum)["record"], records[2][1])
+            result = p.observation_layout_output(path, checksum)
+            self.assertEqual(result["record"], self.layout_record())
+            self.assertLessEqual(result["raw_record_bytes"], 4096)
+            self.assertEqual(result["raw_record_sha256"], p.digest(records[-1][0] + json.dumps(records[-1][1]).encode() + b"\n"))
+            contract = p.observations_contract()
+            self.assertEqual(contract["observe_request_v2"]["version"], 2)
+            self.assertEqual(contract["observe_request_v2"]["opcode"], 2)
+            self.assertEqual(contract["observe_response_v2"]["length"], 32)
+            self.assertEqual(contract["archive"]["entries"], 64)
+            self.assertEqual(len(contract["milestones"]), 40)
+            self.assertEqual(len(contract["projection"]), 32)
+            self.assertEqual(len(contract["native_indices"]), 11)
+            self.assertEqual(contract["release_order"], ["OriginalRequestDropped", "A2Free", "PublicGuardDropped", "BankFree"])
+            self.assertEqual(contract["structured_stream"]["stream_max"], 264192)
+            self.assertEqual(p.observation_layout_contract()["retained_bytes_maximum"], 131072)
+            self.assertEqual(p.frontend_contract()["header"]["version"], 1)
+            path.write_bytes(raw.replace(b"retained", b"changed!"))
+            with self.assertRaises(ValueError):
+                p.observation_layout_output(path, checksum)
+
+    def test_observation_layout_rejects_forged_arrays_totals_and_tags(self):
+        malformed = []
+        for field in self.layout_record():
+            record = self.layout_record()
+            del record[field]
+            malformed.append(record)
+        for field, value in (("format", True), ("format", 2), ("extra", 0), ("retained_bytes", True), ("retained_bytes", 90881), ("retained_bytes", 131073), ("a2_event_bytes", False), ("a2_event_bytes", 4097), ("a2_event_bytes", 8192)):
+            record = self.layout_record()
+            record[field] = value
+            malformed.append(record)
+        for name in self.layout_record()["layouts"]:
+            record = self.layout_record()
+            del record["layouts"][name]
+            malformed.append(record)
+            for field, value in (("bytes", 0), ("bytes", -1), ("bytes", True), ("bytes", 65537), ("alignment", True), ("alignment", 0), ("alignment", 3), ("alignment", 32), ("extra", 0)):
+                record = self.layout_record()
+                record["layouts"][name][field] = value
+                malformed.append(record)
+        for name, values in (("archive", {"bytes": 16392}), ("archive", {"alignment": 4}), ("invocation", {"bytes": 513, "alignment": 1}), ("write_progress", {"bytes": 65, "alignment": 1}), ("registry_arc", {"bytes": 32760})):
+            record = self.layout_record()
+            record["layouts"][name].update(values)
+            malformed.append(record)
+        record = self.layout_record()
+        record["layouts"]["unreviewed"] = {"bytes": 8, "alignment": 8}
+        malformed.append(record)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "stderr"
+            b2_raw = b"FOKS_B2_LAYOUT " + json.dumps(self.b2_layout_record()).encode() + b"\n"
+            def observe(record, backing=b2_raw):
+                raw = backing + b"FOKS_B4_OBSERVATION_LAYOUT=" + json.dumps(record).encode() + b"\n"
+                path.write_bytes(raw)
+                return p.observation_layout_output(path, p.digest(raw))
+            self.assertEqual(observe(self.layout_record())["record"], self.layout_record())
+            for index, record in enumerate(malformed):
+                with self.subTest(index=index), self.assertRaises(ValueError):
+                    observe(record)
+            # Even individually allowed allocations cannot exceed the measured
+            # retained overlap, and the old B2 row must name the same backing.
+            b2 = self.b2_layout_record()
+            b2["fixed"]["a2_events"]["bytes"] = 65536
+            record = self.layout_record()
+            record.update(a2_event_bytes=65536, retained_bytes=152320)
+            with self.assertRaises(ValueError):
+                observe(record, b"FOKS_B2_LAYOUT " + json.dumps(b2).encode() + b"\n")
+            with self.assertRaises(ValueError):
+                observe(self.layout_record(), b"")
+            valid = b"FOKS_B4_OBSERVATION_LAYOUT=" + json.dumps(self.layout_record()).encode() + b"\n"
+            for changed in (valid + valid, b"prefix " + valid, valid[:-1], valid.replace(b"\n", b"\r\n"), valid.replace(b'"format": 1', b'"format": 1, "format": 1'), valid.replace(b'"retained_bytes": 90880', b'"retained_bytes": 90880.0'), b"FOKS_B4_OBSERVATION_LAYOUT=" + b" " * 4096 + json.dumps(self.layout_record()).encode() + b"\n"):
+                raw = b2_raw + changed
+                path.write_bytes(raw)
+                with self.assertRaises(ValueError):
+                    p.observation_layout_output(path, p.digest(raw))
+            raw = b2_raw + valid + b"x" * 1048576
+            path.write_bytes(raw)
+            with self.assertRaises(ValueError):
+                p.observation_layout_output(path, p.digest(raw))
+
+    def test_owned_runner_requires_four_records_from_the_same_stderr(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            binary, graph, message = FrontendTests.artifact_fixture(root)
+            graph.update(profile=p.OBSERVATIONS, mode=p.OBSERVATIONS)
+            evidence = root / "evidence"
+            evidence.mkdir()
+            b1 = {**FoundationTests.layout_record(), "cleanup_reserve": 532480}
+            records = [(b"FOKS_B1_LAYOUT ", b1), (b"FOKS_B2_LAYOUT ", self.b2_layout_record()), (b"FOKS_B3_LAYOUT ", FrontendTests.layout_record()), (b"FOKS_B4_OBSERVATION_LAYOUT=", self.layout_record())]
+            stderr = b"".join(prefix + json.dumps(record).encode() + b"\n" for prefix, record in records)
+            calls = []
+            def owned(argv, cwd, environment, selected_directory, name, slot, timeout, monitor):
+                calls.append((name, list(map(str, argv)), environment.copy(), slot, timeout))
+                self.assertEqual((cwd, selected_directory), (root, evidence))
+                if name == "tests-compile":
+                    out = json.dumps(message) + "\n" + json.dumps({"reason": "build-finished", "success": True}) + "\n"
+                else:
+                    names = p.OBSERVATIONS_TESTS if name.startswith("tests-") else p.FRONTEND_TRANSPORT_TESTS[name.split("-")[1]]
+                    out = FrontendTests.render_test_output(names, name.endswith("list"))
+                (evidence / (name + ".stdout")).write_text(out)
+                (evidence / (name + ".stderr")).write_bytes(stderr if name == "tests-run" else b"")
+                return {"stdout_sha256": p.file_hash(evidence / (name + ".stdout")), "stderr_sha256": p.file_hash(evidence / (name + ".stderr")), "cleanup_complete": True}
+            ports, slot = {"tcp": 23001, "bucket": 23002}, object()
+            pins = {"profile": p.OBSERVATIONS, "build": {"timeout_seconds": 1800}}
+            with patch.object(p, "run_owned", side_effect=owned), patch.object(p, "choose_frontend_ports", return_value=ports), patch.object(p, "network_command", side_effect=lambda argv: ["DENY-ALL", *map(str, argv)]):
+                focused = {}
+                p.run_frontend_components(focused, root, Path("/toolchain"), pins, graph, {"HOME": "/fixture"}, evidence, slot)
+            self.assertEqual([row[0] for row in calls], ["tests-compile", "tests-list", "tests-run", "transport-deadline-list", "transport-deadline-run", "transport-memory-list", "transport-memory-run"])
+            for name, argv, environment, actual_slot, timeout in calls:
+                self.assertIs(actual_slot, slot)
+                self.assertEqual(timeout, 1800)
+                if name == "tests-run":
+                    self.assertEqual(argv[0], "/usr/bin/sandbox-exec")
+                    self.assertEqual(environment["FOKS_B3_TCP_PORT"], "23001")
+                    self.assertEqual(environment["FOKS_B3_BUCKET_PORT"], "23002")
+                else:
+                    self.assertEqual(argv[0], "DENY-ALL")
+                    self.assertEqual(environment, {"HOME": "/fixture"})
+            self.assertEqual(focused["binary"]["sha256"], p.file_hash(binary))
+            self.assertEqual(focused["run"]["stderr_sha256"], p.digest(stderr))
+            for field, (_, record) in zip(("layouts", "lifetimes_layouts", "frontend_layouts", "observation_layouts"), records, strict=True):
+                self.assertEqual(focused[field]["record"], record)
+            for result in focused["transport_tests"].values():
+                self.assertEqual(result["scope"], "root-workspace-a0-regression")
+            # A successfully reported native command without P1's actual record
+            # cannot inherit the prior three layout claims as P1 evidence.
+            stderr = b"".join(prefix + json.dumps(record).encode() + b"\n" for prefix, record in records[:3])
+            calls.clear()
+            with patch.object(p, "run_owned", side_effect=owned), patch.object(p, "choose_frontend_ports", return_value=ports), patch.object(p, "network_command", side_effect=lambda argv: ["DENY-ALL", *map(str, argv)]), self.assertRaises(ValueError):
+                p.run_frontend_components({}, root, Path("/toolchain"), pins, graph, {}, evidence, slot)
+            self.assertEqual([row[0] for row in calls], ["tests-compile", "tests-list", "tests-run"])
 
 
 class AssetTests(unittest.TestCase):

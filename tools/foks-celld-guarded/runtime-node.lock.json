@@ -3,6 +3,7 @@
   "accepted_a3a_commit": "fee8db31ae8df590e32bc02f8c8de815d9f7ecea",
   "accepted_b1_commit": "23039e209d1b3b129a274dd65fe07f0abfdba8e0",
   "accepted_b2_commit": "d22ff3deedf0f0a87f635aec2317a87410e39110",
+  "accepted_b3_commit": "9151df82364fa60177cb62f6645746ce1aff9b48",
   "base": {
     "foundation_profile": {
       "bytes": 13181,
@@ -18,6 +19,21 @@
       "bytes": 71282,
       "path": "runtime/evidence/accepted-b1/prepared-inputs/source-manifest.json",
       "sha256": "e59f9ce8ef088f8da741ddaf8e8ee488bfba27d508948bab55d0495b73728de2"
+    },
+    "frontend_profile": {
+      "bytes": 38281,
+      "path": "runtime/evidence/accepted-b3/runtime-node.lock.json",
+      "sha256": "1d127eb41af8eff863e38e15921dc695854378e6c1f196665a3f4ffca2eb7a0f"
+    },
+    "frontend_series": {
+      "bytes": 30660,
+      "path": "runtime/evidence/accepted-b3/patches/node-series.json",
+      "sha256": "4d5cc7dd369a0ee3371f575d58ed8b73f75403bb723d58977c1f960d367088ce"
+    },
+    "frontend_source_manifest": {
+      "bytes": 71795,
+      "path": "runtime/evidence/accepted-b3/prepared-inputs/source-manifest.json",
+      "sha256": "46d6fe4d673ff467b2fb420a1e49a06dbbd9e6989f14208c22b1454b49922f07"
     },
     "lifetimes_profile": {
       "bytes": 30152,
@@ -79,9 +95,9 @@
   },
   "format": 1,
   "node_series": {
-    "bytes": 30660,
+    "bytes": 35243,
     "path": "patches/node-series.json",
-    "sha256": "4d5cc7dd369a0ee3371f575d58ed8b73f75403bb723d58977c1f960d367088ce"
+    "sha256": "7722cf0db5432d56c4bbba7ea06e553bbbae9c7e8be6c074090eab4aee64f72a"
   },
   "pins": {
     "build": {
@@ -254,9 +270,9 @@
       "version": "152.1.0"
     }
   },
-  "profile": "node-qualification",
+  "profile": "node-observations",
   "qualification": {
-    "claim": "b3-frontend-components-only",
+    "claim": "b4-p1-observation-components-only",
     "deployments": {
       "fixture": {
         "prefix": "deploy/foks-guarded-node-fixture/1fdd2523a443ea95",
@@ -972,7 +988,7 @@
       }
     },
     "modes": {
-      "node-qualification": {
+      "node-observations": {
         "celld_features": [
           "foks-guarded-node-qualification",
           "foks-guarded-qualification"
@@ -986,13 +1002,13 @@
           "node-qualification"
         ]
       },
-      "node-qualification-default": {
+      "node-observations-default": {
         "celld_features": [],
         "celld_foks_edges": [],
         "direct_root_tokio": false,
         "root_features": []
       },
-      "node-qualification-lifecycle": {
+      "node-observations-lifecycle": {
         "celld_features": [
           "foks-guarded-qualification"
         ],
@@ -1068,6 +1084,314 @@
       "whole-node-retirement",
       "remote-put-termination"
     ],
+    "observation_layout_evidence": {
+      "a2_event_bytes": {
+        "capacity": 512,
+        "ceiling_bytes": 65536,
+        "same_run": "B2.fixed.a2_events.bytes"
+      },
+      "archive_entries": 64,
+      "layout_fields": [
+        "bytes",
+        "alignment"
+      ],
+      "layout_ids": [
+        "invocation",
+        "archive",
+        "held",
+        "a2_chunk",
+        "report",
+        "write_progress",
+        "registry_arc"
+      ],
+      "layout_policy": {
+        "a2_chunk": {
+          "ceiling_bytes": 4096,
+          "maximum_alignment": 16
+        },
+        "archive": {
+          "ceiling_bytes": 32768,
+          "maximum_alignment": 8
+        },
+        "held": {
+          "ceiling_bytes": 1024,
+          "maximum_alignment": 16
+        },
+        "invocation": {
+          "ceiling_bytes": 512,
+          "maximum_alignment": 8
+        },
+        "registry_arc": {
+          "ceiling_bytes": 65536,
+          "maximum_alignment": 16
+        },
+        "report": {
+          "ceiling_bytes": 4096,
+          "maximum_alignment": 16
+        },
+        "write_progress": {
+          "ceiling_bytes": 64,
+          "maximum_alignment": 16
+        }
+      },
+      "maximum_record_bytes": 4096,
+      "maximum_stderr_bytes": 1048576,
+      "prefix": "FOKS_B4_OBSERVATION_LAYOUT=",
+      "record_fields": [
+        "format",
+        "layouts",
+        "retained_bytes",
+        "a2_event_bytes"
+      ],
+      "registry_arc": "same-run B2.fixed.effect_registry.arc_bytes",
+      "retained_bytes_maximum": 131072,
+      "retained_formula": "archive.bytes + 65536 + a2_chunk.bytes + 6*invocation.bytes + report.bytes +1024 +a2_event_bytes"
+    },
+    "observations": {
+      "archive": {
+        "copy_only": true,
+        "entries": 64,
+        "entry_native_bytes_max": 512,
+        "native_bytes_max": 32768,
+        "overwrites": false
+      },
+      "c1": {
+        "failed": 4,
+        "not_required": 1,
+        "required": 2,
+        "succeeded": 3,
+        "unseen": 0
+      },
+      "field_semantics": {
+        "auxiliary_request": "Auxiliary fields describe the current actual auxiliary request. On replacement, requests[1] changes; durable_ops[1], ownership_ops[1], positions[1], durable_positions[1], durable_verdicts[1], ownership_verdicts[1], proof_sources[1] and release_verdicts[1] reset. The AuxLocal, AuxOutputSubmitted, AuxDurableSuccess, AuxOwnershipSuccess, AuxOutputReleased, AuxFinishProcessed, AuxInactive, AuxFinishDisposed and AuxSyncDisposed bits and first ordinals reset; the global ordinal remains monotonic. Native/root disposition counts remain invocation-wide.",
+        "disposal_masks": "roots_disposed records concrete task/channel/result/abandon payload disposal and bookkeeping closure; native_disposed records concrete native child payload disposal. Notification Wakers and remaining context aliases are excluded. Only OriginalRequestDropped and the existing Weak<Request> summary witness final owner-alias destruction before A2Free.",
+        "public_guard": "Immutable admission provenance: this invocation was admitted with a PublicRequestGuard. This is not a current-live assertion; actual destruction is recorded only by PublicGuardDropped and its first ordinal.",
+        "request_dead": "Current read-time summary from the existing Weak<Request> witness; false does not prove activity and true does not establish A2 Free, public-guard destruction, or external reuse."
+      },
+      "format": 1,
+      "milestones": {
+        "0": "Admitted",
+        "1": "PrimaryLocal",
+        "10": "AuxOutputReleased",
+        "11": "DriverJoined",
+        "12": "DriverDelivered",
+        "13": "C1Required",
+        "14": "C1Succeeded",
+        "15": "C1NotRequired",
+        "16": "ZeroWritePending",
+        "17": "PositiveWritePending",
+        "18": "SocketClosed",
+        "19": "FrameDropped",
+        "2": "AuxLocal",
+        "20": "AnswerDropped",
+        "21": "PrimaryFinishProcessed",
+        "22": "AuxFinishProcessed",
+        "23": "PrimaryInactive",
+        "24": "AuxInactive",
+        "25": "PrimaryFinishDisposed",
+        "26": "AuxFinishDisposed",
+        "27": "AuxSyncDisposed",
+        "28": "DispatcherDisposed",
+        "29": "WorkerDestroyed",
+        "3": "PrimaryOutputSubmitted",
+        "30": "C6Succeeded",
+        "31": "TerminalConjunction",
+        "32": "PayloadsDropped",
+        "33": "OriginalRequestDropped",
+        "34": "A2Free",
+        "35": "PublicGuardDropped",
+        "36": "BankFree",
+        "37": "Quarantined",
+        "38": "CancelProcessed",
+        "39": "Retiring",
+        "4": "AuxOutputSubmitted",
+        "5": "PrimaryDurableSuccess",
+        "6": "AuxDurableSuccess",
+        "7": "PrimaryOwnershipSuccess",
+        "8": "AuxOwnershipSuccess",
+        "9": "PrimaryOutputReleased"
+      },
+      "native_indices": {
+        "0": "DbOpen",
+        "1": "RestoredAlarm",
+        "10": "OpaqueLowerJob",
+        "2": "HydratorOpen",
+        "3": "HydratorStep",
+        "4": "SyncCapture",
+        "5": "Snapshot",
+        "6": "WorkerBuild",
+        "7": "WorkerDestroy",
+        "8": "LocalClose",
+        "9": "ReadFile"
+      },
+      "observation_fields": [
+        "sequence",
+        "a2_generation",
+        "epoch",
+        "generation",
+        "requests",
+        "durable_ops",
+        "ownership_ops",
+        "positions",
+        "durable_positions",
+        "seen",
+        "first",
+        "tail",
+        "ordinal",
+        "native_joined",
+        "native_disposed",
+        "roots_joined",
+        "roots_disposed",
+        "frame_bytes",
+        "accepted_bytes",
+        "positive_pending_bytes",
+        "write_polls",
+        "pending_polls",
+        "tenant",
+        "bank_slot",
+        "a2_slot",
+        "phase",
+        "summary",
+        "request_dead",
+        "public_guard",
+        "durable_verdicts",
+        "ownership_verdicts",
+        "proof_sources",
+        "release_verdicts",
+        "c1",
+        "outcome",
+        "refusal"
+      ],
+      "observe_request_v2": {
+        "length": 16,
+        "magic": "FOKSGN01",
+        "opcode": 2,
+        "opcode_offset": 9,
+        "reserved_zero": [
+          12,
+          13,
+          14,
+          15
+        ],
+        "selector1": "same existing backpressure scenario restriction",
+        "selector_offset": 11,
+        "tenant_offset": 10,
+        "v1": "exact previous requests and response behavior preserved; v2 Begin refuses",
+        "version": 2,
+        "version_offset": 8
+      },
+      "observe_response_v2": {
+        "frame_bytes": {
+          "bytes": 4,
+          "encoding": "little-endian",
+          "offset": 24
+        },
+        "length": 32,
+        "magic": "FOKSGS01",
+        "phase_offset": 11,
+        "positive_pending_bytes": {
+          "bytes": 4,
+          "encoding": "little-endian",
+          "offset": 20
+        },
+        "projection": {
+          "bytes": 4,
+          "encoding": "little-endian",
+          "offset": 28
+        },
+        "selector_offset": 10,
+        "sequence": {
+          "bytes": 8,
+          "encoding": "little-endian",
+          "offset": 12
+        },
+        "tenant_offset": 9,
+        "version": 2,
+        "version_offset": 8
+      },
+      "outcome": {
+        "local_write_flush_ok": 1,
+        "transport_failed": 2,
+        "unseen": 0
+      },
+      "phase": {
+        "0": "NeverAdmitted",
+        "1": "Active",
+        "2": "Retiring",
+        "3": "PendingOwner",
+        "4": "Quarantined",
+        "5": "Free"
+      },
+      "projection": {
+        "0": "Admitted",
+        "1": "PrimaryLocal",
+        "10": "DriverDelivered",
+        "11": "C1Required",
+        "12": "C1Succeeded",
+        "13": "C1NotRequired",
+        "14": "ZeroWritePending",
+        "15": "PositiveWritePending",
+        "16": "SocketClosed",
+        "17": "FrameDropped",
+        "18": "AnswerDropped",
+        "19": "PrimaryFinishProcessed",
+        "2": "AuxLocal",
+        "20": "AuxFinishProcessed",
+        "21": "PrimaryInactive",
+        "22": "AuxInactive",
+        "23": "PrimaryFinishDisposed",
+        "24": "AuxFinishDisposed",
+        "25": "WorkerDestroyed",
+        "26": "C6Succeeded",
+        "27": "OriginalRequestDropped",
+        "28": "A2Free",
+        "29": "PublicGuardDropped",
+        "3": "PrimaryDurableSuccess",
+        "30": "BankFree",
+        "31": "Quarantined",
+        "4": "AuxDurableSuccess",
+        "5": "PrimaryOwnershipSuccess",
+        "6": "AuxOwnershipSuccess",
+        "7": "PrimaryOutputReleased",
+        "8": "AuxOutputReleased",
+        "9": "DriverJoined"
+      },
+      "proof_source": {
+        "bucket": 2,
+        "fleet": 1,
+        "unseen": 0
+      },
+      "refusal": "0 means none; current closed Refusal discriminant+1. Never interpreted as successful disposal.",
+      "release_order": [
+        "OriginalRequestDropped",
+        "A2Free",
+        "PublicGuardDropped",
+        "BankFree"
+      ],
+      "structured_stream": {
+        "atomic_snapshot": false,
+        "chunks_max": 8,
+        "encoder_capacity": 65536,
+        "end": "guarded-observation-end",
+        "event_array": "64 Option<Event> entries; first count entries present, rest null; original A2 Event tuples/enum names unchanged.",
+        "events": "guarded-a2-events",
+        "events_max": 16384,
+        "events_per_chunk": 64,
+        "events_total": 512,
+        "header": "guarded-observation-header",
+        "header_end_max": 1024,
+        "item": "guarded-invocation",
+        "item_max": 2048,
+        "items_max": 64,
+        "native_report_max": 4096,
+        "stream_max": 264192
+      },
+      "verdict": {
+        "error": 2,
+        "ok": 1,
+        "unseen": 0
+      }
+    },
     "program": {
       "fixture_js": {
         "bytes": 1905,
@@ -1092,19 +1416,12 @@
     },
     "source_roster": [
       "crates/celld/actor.rs",
-      "crates/celld/actor/local_request.rs",
-      "crates/celld/cell_dispatch.rs",
       "crates/celld/guarded_execution.rs",
       "crates/celld/guarded_node.rs",
       "crates/celld/guarded_node/control.rs",
       "crates/celld/guarded_node/output.rs",
       "crates/celld/guarded_node/tests.rs",
-      "crates/celld/host_channels.rs",
-      "crates/celld/lib.rs",
-      "crates/celld/main.rs",
-      "crates/celld/main/cli.rs",
       "crates/celld/main/guarded.rs",
-      "crates/celld/node_log.rs",
       "crates/celld/runtime.rs"
     ],
     "tests": {
@@ -1182,15 +1499,27 @@
         "guarded_execution::node::tests::b3_gate_dispatch_disposal_fence",
         "guarded_execution::node::tests::b3_both_shutdown_modes_require_guarded_drain",
         "guarded_execution::node::tests::b3_persistent_alias_does_not_self_wake",
-        "guarded_execution::node::tests::b3_frontend_layout_ledger"
+        "guarded_execution::node::tests::b3_frontend_layout_ledger",
+        "guarded_execution::node::tests::b4_observation_progress_requires_positive_partial_pending",
+        "guarded_execution::node::tests::b4_observation_checked_progress_rejects_overflow",
+        "guarded_execution::node::tests::b4_observation_phase_identity_and_stale_slot",
+        "guarded_execution::node::tests::b4_observation_archive_is_finite",
+        "guarded_execution::node::tests::b4_observation_proof_verdict_is_not_disposal",
+        "guarded_execution::node::tests::b4_observation_c1_required_and_not_required",
+        "guarded_execution::node::tests::b4_observation_processed_inactive_and_disposed_are_distinct",
+        "guarded_execution::node::tests::b4_observation_public_guard_precedes_bank_free",
+        "guarded_execution::node::tests::b4_observation_failed_retirement_retains_public_guard",
+        "guarded_execution::node::tests::b4_observation_scalar_copy_does_not_pin_owner",
+        "guarded_execution::node::tests::b4_observation_contention_refuses_without_false_free",
+        "guarded_execution::node::tests::b4_observation_stream_bounds_and_layouts"
       ],
       "prefix": "guarded_execution::node::tests::",
       "threads": 1
     },
     "tree": {
       "files": 288,
-      "inventory_sha256": "9498438bb1b3b9bb7a31d4ffcbc986c8e85ac1dcc1c828525b8bd8f849039069",
-      "payload_bytes": 7239729
+      "inventory_sha256": "671152e04891c4584d457c836bc3102f222c50df7745edec4272602d089473ac",
+      "payload_bytes": 7323345
     }
   },
   "target": "aarch64-apple-darwin"
