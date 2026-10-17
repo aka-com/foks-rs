@@ -396,6 +396,46 @@ def process_fixture(root):
             yield {**previous, "profile": profile, "series": series, "rows": rows, "accepted_p1": accepted, "accepted_p1_profile": previous["profile"], "accepted_p1_assets": assets, "accepted_p1_images": accepted_images}
 
 
+@contextmanager
+def main_work_fixture(root):
+    """Append four replacements to a preserved, exact synthetic P2 prefix."""
+    with process_fixture(root) as previous:
+        accepted = p.prepare(previous["archive"], root, p.PROCESS)
+        assets = p.prepare_assets(previous["native"], previous["binding"], root, p.PROCESS)
+        preserved = root / Path(p.MAIN_WORK_MANIFEST).parent
+        preserved.mkdir(parents=True)
+        (root / "runtime/source").rename(preserved / "source")
+        (root / "runtime/source-manifest.json").rename(root / p.MAIN_WORK_MANIFEST)
+        for original, target in ((p.FOUNDATION_PROFILE, p.MAIN_WORK_PROFILE), (p.FOUNDATION_SERIES, p.MAIN_WORK_SERIES), ("runtime/assets-node-process.json", p.MAIN_WORK_ASSETS)):
+            destination = root / target
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes((root / original).read_bytes())
+        images = {name: foundation_file(root, path) for name, (path, _) in p.MAIN_WORK_BASE_IMAGES.items()}
+        rows = {row["path"]: dict(row) for row in accepted["files"]}
+        files, chunks = [], []
+        for name in p.MAIN_WORK_PATHS:
+            before = (preserved / "source" / name).read_bytes()
+            after = ("main-work " + name + "\n").encode()
+            old_lines = before.splitlines(keepends=True)
+            files.append({"path": name, "mode": "100644", "before": p.image_identity(before), "after": p.image_identity(after)})
+            chunks.append(("--- a/" + name + "\n+++ b/" + name + "\n@@ -1," + str(len(old_lines)) + " +1,1 @@\n").encode() + b"".join(b"-" + line for line in old_lines) + b"+" + after)
+            rows[name] = {"path": name, "mode": "100644", **p.image_identity(after)}
+        (root / p.MAIN_WORK_PATCH).write_bytes(b"".join(chunks))
+        final = sorted(rows.values(), key=lambda row: row["path"])
+        series = copy.deepcopy(previous["series"])
+        series.update(profile=p.MAIN_WORK, accepted_b4_p2_commit=p.MAIN_WORK_BASE)
+        series["patches"].append({**foundation_file(root, p.MAIN_WORK_PATCH), "files": files})
+        (root / p.FOUNDATION_SERIES).write_text(json.dumps(series))
+        profile = copy.deepcopy(previous["profile"])
+        profile.update(profile=p.MAIN_WORK, accepted_b4_p2_commit=p.MAIN_WORK_BASE, node_series=foundation_file(root, p.FOUNDATION_SERIES))
+        profile["base"].update(images)
+        profile["qualification"].update(claim="b4-main-work-components-only", source_roster=list(p.MAIN_WORK_PATHS), tree={"files": len(final), "payload_bytes": sum(row["bytes"] for row in final), "inventory_sha256": p.digest(json.dumps(final, sort_keys=True, separators=(",", ":")).encode())}, modes=copy.deepcopy(p.MAIN_WORK_MODES), main_work=copy.deepcopy(p.MAIN_WORK_POLICY))
+        (root / p.FOUNDATION_PROFILE).write_text(json.dumps(profile))
+        hashes = {name: (entry["path"], entry["sha256"]) for name, entry in images.items()}
+        with patch.object(p, "MAIN_WORK_BASE_IMAGES", hashes):
+            yield {**previous, "profile": profile, "series": series, "rows": final, "accepted_p2": accepted, "accepted_p2_profile": previous["profile"], "accepted_p2_assets": assets}
+
+
 def repin_process(root, data, patch_bytes=None):
     if patch_bytes is not None:
         (root / p.PROCESS_PATCH).write_bytes(patch_bytes)
@@ -3964,6 +4004,155 @@ print('external parent allowed-port control passed; unlisted listen denied',deni
         self.assertNotIn('tcp "127.0.0.1:', p.NODE_POLICY)
         self.assertNotIn('tcp "*:', p.NODE_POLICY)
         self.assertEqual(p.network_command(["/bin/true"])[2], "(version 1) (allow default) (deny network*)")
+
+
+class MainWorkTests(unittest.TestCase):
+    def test_seventh_patch_preserves_exact_p2_prefix_and_complete_tree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with main_work_fixture(root) as data:
+                names = (p.MAIN_WORK_PROFILE, p.MAIN_WORK_SERIES, p.MAIN_WORK_MANIFEST, p.MAIN_WORK_ASSETS, p.PROCESS_PATCH)
+                before = {name: (root / name).read_bytes() for name in names}
+                source = p.prepare(data["archive"], root, p.MAIN_WORK)
+                self.assertEqual(source["files"], data["rows"])
+                self.assertEqual(len(source["files"]), len(data["accepted_p2"]["files"]))
+                self.assertEqual(p.accepted_process(root), data["accepted_p2_profile"])
+                self.assertEqual(p.prepare(data["archive"], root, p.MAIN_WORK), source)
+                self.assertEqual(p.verify_source(root, p.MAIN_WORK), source)
+                self.assertEqual({name: (root / name).read_bytes() for name in names}, before)
+                for old in p.NODE_STAGES[:-1]:
+                    with self.subTest(old=old), self.assertRaises(ValueError):
+                        p.verify_source(root, old)
+
+    def test_main_work_rejects_changed_preimages_prefix_policy_and_roster(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with main_work_fixture(root) as data:
+                original_profile = (root / p.FOUNDATION_PROFILE).read_bytes()
+                original_series = (root / p.FOUNDATION_SERIES).read_bytes()
+                changes = [
+                    lambda x: x.update(accepted_b4_p2_commit="0" * 40),
+                    lambda x: x["qualification"]["main_work"].update(individual_bytes=16384),
+                    lambda x: x["qualification"]["main_work"].update(aggregate_retained_bytes=131073),
+                    lambda x: x["qualification"]["tests"]["names"].pop(),
+                    lambda x: x["qualification"]["modes"][p.MAIN_WORK + "-lifecycle"].update(root_features=["node-qualification"]),
+                    lambda x: x["qualification"]["source_roster"].reverse(),
+                ]
+                for index, change in enumerate(changes):
+                    value = json.loads(original_profile)
+                    change(value)
+                    (root / p.FOUNDATION_PROFILE).write_text(json.dumps(value))
+                    with self.subTest(index=index), self.assertRaises(ValueError):
+                        p.load_pins(root, p.MAIN_WORK)
+                (root / p.FOUNDATION_PROFILE).write_bytes(original_profile)
+                for index, change in enumerate((lambda x: x["patches"][5]["files"][0]["after"].update(sha256="0" * 64), lambda x: x["patches"][6]["files"][0]["before"].update(sha256="0" * 64), lambda x: x["patches"][6]["files"].reverse(), lambda x: x["patches"].pop())):
+                    value = json.loads(original_series)
+                    change(value)
+                    (root / p.FOUNDATION_SERIES).write_text(json.dumps(value))
+                    profile = json.loads(original_profile)
+                    profile["node_series"] = foundation_file(root, p.FOUNDATION_SERIES)
+                    (root / p.FOUNDATION_PROFILE).write_text(json.dumps(profile))
+                    with self.subTest(series=index), self.assertRaises(ValueError):
+                        p.load_pins(root, p.MAIN_WORK)
+                (root / p.FOUNDATION_PROFILE).write_bytes(original_profile)
+                (root / p.FOUNDATION_SERIES).write_bytes(original_series)
+                for name in (p.MAIN_WORK_PROFILE, p.MAIN_WORK_SERIES, p.MAIN_WORK_MANIFEST, p.MAIN_WORK_ASSETS):
+                    raw = (root / name).read_bytes()
+                    (root / name).write_bytes(raw + b" ")
+                    with self.subTest(image=name), self.assertRaises(ValueError):
+                        p.load_pins(root, p.MAIN_WORK)
+                    (root / name).write_bytes(raw)
+                p.load_pins(root, p.MAIN_WORK)
+
+    def test_main_work_assets_and_modes_keep_historical_semantics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with main_work_fixture(root) as data:
+                pins = p.load_pins(root, p.MAIN_WORK)
+                old_assets = (root / p.MAIN_WORK_ASSETS).read_bytes()
+                result = p.prepare_assets(data["native"], data["binding"], root, p.MAIN_WORK)
+                self.assertEqual(result["profile"], p.MAIN_WORK)
+                self.assertEqual(result["process_receipt_sha256"], p.file_hash(root / p.MAIN_WORK_ASSETS))
+                self.assertEqual(p.verify_assets(root, p.MAIN_WORK), result)
+                self.assertEqual((root / p.MAIN_WORK_ASSETS).read_bytes(), old_assets)
+                for mode, contract in p.MAIN_WORK_MODES.items():
+                    self.assertEqual(p.stage_for_mode(mode), p.MAIN_WORK)
+                    self.assertEqual(p.selected_mode(pins, mode), ["--features", "foks-celld-guarded/" + contract["root_features"][0]] if contract["root_features"] else [])
+                for mode in p.PROCESS_MODES:
+                    with self.subTest(mode=mode), self.assertRaises(ValueError):
+                        p.selected_mode(pins, mode)
+                with patch.object(p, "network_command", side_effect=lambda argv: list(map(str, argv))):
+                    bin_commands = p.build_commands(root, Path("/toolchain"), pins, p.MAIN_WORK_BIN_TEST)
+                    self.assertEqual(set(bin_commands), {"build"})
+                    self.assertIn("--no-run", bin_commands["build"])
+                    self.assertIn("--bin", bin_commands["build"])
+                    self.assertNotIn("--lib", bin_commands["build"])
+                    commands = p.build_commands(root, Path("/toolchain"), pins, p.MAIN_WORK + "-lifecycle")
+                    self.assertIn("lifecycle", commands)
+                    self.assertIn("foks-celld-guarded/lifecycle", commands["lifecycle"])
+                    self.assertNotIn("foks-celld-guarded/node-qualification", commands["lifecycle"])
+                # The unchanged library roster and typed retained parser remain separate.
+                self.assertEqual(len(p.PROCESS_TESTS), 123)
+                self.assertEqual(pins["foundation"]["qualification"]["process_layout_evidence"], p.process_layout_contract())
+
+    def test_binary_artifact_and_exact_one_test_refuse_library_or_skipped_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            binary, graph, message = FrontendTests.artifact_fixture(root)
+            target = dict(graph["node_test_target"])
+            target.update(kind=["bin"], crate_types=["bin"], src_path=str(root / "runtime/source/crates/celld/main.rs"))
+            graph.update(profile=p.MAIN_WORK, mode=p.MAIN_WORK_BIN_TEST, node_bin_test_target=target)
+            message["target"].update({name: target[name] for name in ("name", "kind", "crate_types", "src_path")})
+            path = root / "compile.stdout"
+            path.write_text(json.dumps(message) + "\n" + json.dumps({"reason": "build-finished", "success": True}) + "\n")
+            self.assertEqual(p.verify_frontend_test_artifact(path, graph, root, p.MAIN_WORK)["sha256"], p.file_hash(binary))
+            changed = copy.deepcopy(message)
+            changed["target"].update(kind=["lib"], crate_types=["lib"])
+            path.write_text(json.dumps(changed) + "\n" + json.dumps({"reason": "build-finished", "success": True}) + "\n")
+            with self.assertRaises(ValueError):
+                p.verify_frontend_test_artifact(path, graph, root, p.MAIN_WORK)
+            # Same real artifact reader and owned command path used by build_foundation.
+            path.write_text(json.dumps(message) + "\n" + json.dumps({"reason": "build-finished", "success": True}) + "\n")
+            (root / "build.stdout").write_bytes(path.read_bytes())
+            pins = {"profile": p.MAIN_WORK, "build": {"timeout_seconds": 300}}
+            calls = []
+            def owned(argv, actual_root, environment, evidence, label, slot, timeout, refusal):
+                self.assertEqual(actual_root, root)
+                self.assertEqual(timeout, 300)
+                self.assertEqual(argv[0], "DENY-ALL")
+                self.assertIn("--exact", argv)
+                calls.append(label)
+                name = p.MAIN_WORK_BIN_TESTS[0]
+                raw = name + ": test\n\n1 test, 0 benchmarks\n" if label.endswith("list") else "running 1 test\ntest " + name + " ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 17 filtered out; finished in 0.01s\n"
+                output = evidence / (label + ".stdout")
+                output.write_text(raw)
+                return {"stdout_sha256": p.file_hash(output)}
+            receipt = {"build": {"stdout_sha256": p.file_hash(root / "build.stdout")}}
+            with patch.object(p, "run_owned", side_effect=owned), patch.object(p, "network_command", side_effect=lambda argv: ["DENY-ALL", *map(str, argv)]):
+                self.assertEqual(p.run_main_work_binary_tests(receipt, root, pins, graph, {}, root, object()), binary)
+            self.assertEqual(calls, ["binary-tests-list", "binary-tests-run"])
+            receipt["build"]["stdout_sha256"] = "0" * 64
+            with patch.object(p, "run_owned") as command, self.assertRaises(ValueError):
+                p.run_main_work_binary_tests(receipt, root, pins, graph, {}, root, object())
+            command.assert_not_called()
+            receipt["build"]["stdout_sha256"] = p.file_hash(root / "build.stdout")
+            def changed_owned(*args):
+                result = owned(*args)
+                (root / (calls[-1] + ".stdout")).write_bytes(b"changed after command\n")
+                return result
+            with patch.object(p, "run_owned", side_effect=changed_owned), patch.object(p, "network_command", side_effect=lambda argv: ["DENY-ALL", *map(str, argv)]), self.assertRaises(ValueError):
+                p.run_main_work_binary_tests(receipt, root, pins, graph, {}, root, object())
+            name = p.MAIN_WORK_BIN_TESTS[0]
+            path = root / "tests.stdout"
+            for listing, raw in ((True, name + ": test\n\n1 test, 0 benchmarks\n"), (False, "running 1 test\ntest " + name + " ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 17 filtered out; finished in 0.01s\n")):
+                path.write_text(raw)
+                self.assertEqual(p.main_work_test_output(path, listing), [name])
+                for bad in (raw + raw, raw.replace(name, name + "_other"), raw.replace(" ... ok", " ... ignored"), raw.replace("1 passed", "0 passed").replace("0 ignored", "1 ignored")):
+                    if bad == raw:
+                        continue
+                    path.write_text(bad)
+                    with self.assertRaises(ValueError):
+                        p.main_work_test_output(path, listing)
 
 
 if __name__ == "__main__":

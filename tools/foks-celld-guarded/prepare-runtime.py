@@ -249,10 +249,40 @@ PROCESS_MODES = {
     "node-process": FOUNDATION_MODES["node-foundation"],
     "node-process-lifecycle": FOUNDATION_MODES["node-foundation-lifecycle"],
 }
-NODE_STAGES = (FOUNDATION, LIFETIMES, FRONTEND, OBSERVATIONS, PROCESS)
-NODE_MODES = {**FOUNDATION_MODES, **LIFETIMES_MODES, **FRONTEND_MODES, **OBSERVATIONS_MODES, **PROCESS_MODES}
-NODE_BINARY_MODES = ("node-foundation-default", "node-foundation", "node-lifetimes-default", "node-lifetimes", "node-qualification-default", "node-qualification", "node-observations-default", "node-observations", "node-process-default", "node-process")
-NODE_LIFECYCLE_MODES = ("node-foundation-lifecycle", "node-lifetimes-lifecycle", "node-qualification-lifecycle", "node-observations-lifecycle", "node-process-lifecycle")
+MAIN_WORK = "node-main-work"
+MAIN_WORK_BASE = "2e226249358568bd136796775378dd7cd8100651"
+MAIN_WORK_PATCH = "patches/0007-node-main-work.patch"
+# Only these two new preimages are copied; accepted-b4-p2 remains immutable.
+MAIN_WORK_PROFILE = "runtime/evidence/accepted-b4-p2-main-work-base/runtime-node.lock.json"
+MAIN_WORK_SERIES = "runtime/evidence/accepted-b4-p2-main-work-base/patches/node-series.json"
+MAIN_WORK_MANIFEST = "runtime/evidence/accepted-b4-p2/prepared-inputs/source-manifest.json"
+MAIN_WORK_ASSETS = "runtime/evidence/accepted-b4-p2/prepared-inputs/assets-node-process.json"
+MAIN_WORK_BASE_IMAGES = {
+    "process_profile": (MAIN_WORK_PROFILE, "8b34426241db7dcd45146c528262329a633103f7c3c44aa9634e97269513c51b"),
+    "process_series": (MAIN_WORK_SERIES, "034b19a0b9314602f5c5f092fdf556fc7ae65e4d9b76f5efbc2e3dd652c08750"),
+    "process_source_manifest": (MAIN_WORK_MANIFEST, "3b5af6b3193ed97596e5e7493a67cf5982e0844dfae4dcc5c0fa9fab806411bc"),
+    "process_assets": (MAIN_WORK_ASSETS, "78cf9997b619cd982655093622d6e6d48c621452b504ee35bcacf5271db4f58e"),
+}
+MAIN_WORK_PATHS = tuple(sorted((
+    "crates/celld/guarded_node.rs", "crates/celld/guarded_node/qualification.rs",
+    "crates/celld/guarded_node/tests.rs", "crates/celld/main/guarded.rs",
+)))
+MAIN_WORK_BIN_TEST = MAIN_WORK + "-bin-test"
+MAIN_WORK_BIN_TESTS = ["guarded::tests::guarded_reload_main_work_fits_qualified_fixture"]
+MAIN_WORK_POLICY = {
+    "individual_bytes": 12288, "aggregate_retained_bytes": 131072,
+    "maximum_alignment": 16, "binary_tests": MAIN_WORK_BIN_TESTS,
+}
+MAIN_WORK_MODES = {
+    MAIN_WORK: FOUNDATION_MODES["node-foundation"],
+    MAIN_WORK + "-default": FOUNDATION_MODES["node-foundation-default"],
+    MAIN_WORK + "-lifecycle": FOUNDATION_MODES["node-foundation-lifecycle"],
+    MAIN_WORK_BIN_TEST: FOUNDATION_MODES["node-foundation"],
+}
+NODE_STAGES = (FOUNDATION, LIFETIMES, FRONTEND, OBSERVATIONS, PROCESS, MAIN_WORK)
+NODE_MODES = {**FOUNDATION_MODES, **LIFETIMES_MODES, **FRONTEND_MODES, **OBSERVATIONS_MODES, **PROCESS_MODES, **MAIN_WORK_MODES}
+NODE_BINARY_MODES = ("node-foundation-default", "node-foundation", "node-lifetimes-default", "node-lifetimes", "node-qualification-default", "node-qualification", "node-observations-default", "node-observations", "node-process-default", "node-process", MAIN_WORK, MAIN_WORK + "-default")
+NODE_LIFECYCLE_MODES = ("node-foundation-lifecycle", "node-lifetimes-lifecycle", "node-qualification-lifecycle", "node-observations-lifecycle", "node-process-lifecycle", MAIN_WORK + "-lifecycle")
 FRONTEND_TEST_PREFIX = LIFETIMES_TEST_PREFIX
 FRONTEND_TEST_RENAMES = {
     "b1_foundation_has_no_ready_or_action": "b1_foundation_requires_frontend_for_ready_and_action",
@@ -1634,7 +1664,7 @@ def load_pins(root=ROOT, stage=None):
         if stage not in NODE_STAGES:
             fail("unsupported source stage")
         base = load_pins(root)
-        profile = {FOUNDATION: load_foundation, LIFETIMES: load_lifetimes, FRONTEND: load_frontend, OBSERVATIONS: load_observations, PROCESS: load_process}[stage](root, base)
+        profile = {FOUNDATION: load_foundation, LIFETIMES: load_lifetimes, FRONTEND: load_frontend, OBSERVATIONS: load_observations, PROCESS: load_process, MAIN_WORK: load_main_work}[stage](root, base)
         return {**base, "profile": stage, "foundation": profile}
     pins = read_json(root / "runtime.lock.json")
     if not isinstance(pins, dict) or (pins.get("format"), pins.get("profile")) not in ((1, A1), (2, A2)) or type(pins.get("format")) is not int or pins.get("target") != TARGET:
@@ -1687,6 +1717,8 @@ def patch_series(root, pins):
         return observations_series(root, pins["foundation"])
     if pins["profile"] == PROCESS:
         return process_series(root, pins["foundation"])
+    if pins["profile"] == MAIN_WORK:
+        return main_work_series(root, pins["foundation"])
     path = root / "patches/series.json"
     series = read_json(path)
     if file_hash(path) != pins["patch_series_sha256"]:
@@ -1727,7 +1759,7 @@ def patch_series(root, pins):
 
 def selected_mode(pins, mode):
     if pins["profile"] in NODE_STAGES:
-        modes = {FOUNDATION: FOUNDATION_MODES, LIFETIMES: LIFETIMES_MODES, FRONTEND: FRONTEND_MODES, OBSERVATIONS: OBSERVATIONS_MODES, PROCESS: PROCESS_MODES}[pins["profile"]]
+        modes = {FOUNDATION: FOUNDATION_MODES, LIFETIMES: LIFETIMES_MODES, FRONTEND: FRONTEND_MODES, OBSERVATIONS: OBSERVATIONS_MODES, PROCESS: PROCESS_MODES, MAIN_WORK: MAIN_WORK_MODES}[pins["profile"]]
         if mode not in modes:
             fail("unsupported graph/build mode for selected node profile")
         features = modes[mode]["root_features"]
@@ -1748,6 +1780,8 @@ def stage_for_mode(mode):
         return OBSERVATIONS
     if mode in PROCESS_MODES:
         return PROCESS
+    if mode in MAIN_WORK_MODES:
+        return MAIN_WORK
     if mode not in ("identity", "lifecycle", "node-baseline"):
         fail("unsupported graph/build mode")
     return None
@@ -2438,9 +2472,9 @@ def process_frontend_contract():
     return copy.deepcopy(PROCESS_FRONTEND_CONTRACT)
 
 
-def load_process(root, base):
+def load_process(root, base, profile_path=FOUNDATION_PROFILE, series_path=FOUNDATION_SERIES):
     accepted = accepted_observations(root)
-    profile = read_json(root / FOUNDATION_PROFILE)
+    profile = read_json(root / profile_path)
     closed_fields(profile, ("format", "profile", "target", "accepted_a2_commit", "accepted_a3a_commit", "accepted_b1_commit", "accepted_b2_commit", "accepted_b3_commit", "accepted_b4_p1_commit", "base", "pins", "node_series", "cargo_lock", "qualification"), "process profile")
     identity = {"format": 1, "profile": PROCESS, "target": TARGET, "accepted_a2_commit": NODE_BASE, "accepted_a3a_commit": FOUNDATION_BASE, "accepted_b1_commit": LIFETIMES_BASE, "accepted_b2_commit": FRONTEND_BASE, "accepted_b3_commit": OBSERVATIONS_BASE, "accepted_b4_p1_commit": PROCESS_BASE}
     exact_json({name: profile[name] for name in identity}, identity, "process profile identity")
@@ -2470,14 +2504,14 @@ def load_process(root, base):
     exact_json(qualification["modes"], PROCESS_MODES, "process modes")
     exact_json(qualification["process"], process_contract(), "process policy")
     exact_json(qualification["process_layout_evidence"], process_layout_contract(), "process layout policy")
-    process_series(root, profile, accepted)
+    process_series(root, profile, accepted, series_path)
     return profile
 
 
-def process_series(root, profile, accepted=None):
+def process_series(root, profile, accepted=None, series_path=FOUNDATION_SERIES):
     accepted = accepted_observations(root) if accepted is None else accepted
-    checked_file(root / FOUNDATION_SERIES, profile["node_series"])
-    series = read_json(root / FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    checked_file(root / series_path, profile["node_series"])
+    series = read_json(root / series_path, MAXIMUM_FOUNDATION_SERIES)
     closed_fields(series, ("format", "profile", "accepted_a2_commit", "accepted_a3a_commit", "accepted_b1_commit", "accepted_b2_commit", "accepted_b3_commit", "accepted_b4_p1_commit", "base_series", "patches"), "process patch series")
     identity = {"format": 1, "profile": PROCESS, "accepted_a2_commit": NODE_BASE, "accepted_a3a_commit": FOUNDATION_BASE, "accepted_b1_commit": LIFETIMES_BASE, "accepted_b2_commit": FRONTEND_BASE, "accepted_b3_commit": OBSERVATIONS_BASE, "accepted_b4_p1_commit": PROCESS_BASE, "base_series": accepted["base"]["patch_series"]}
     exact_json({name: series[name] for name in identity}, identity, "process series identity")
@@ -2505,6 +2539,81 @@ def process_series(root, profile, accepted=None):
             validate_image(entry["before"])
         validate_image(entry["after"])
     checked_file(root / PROCESS_PATCH, selected)
+    return series
+
+
+def accepted_process(root):
+    for path, checksum in MAIN_WORK_BASE_IMAGES.values():
+        if file_hash(root / path) != checksum:
+            fail("main-work accepted process image changed")
+    return load_process(root, load_pins(root), MAIN_WORK_PROFILE, MAIN_WORK_SERIES)
+
+
+def load_main_work(root, base):
+    accepted = accepted_process(root)
+    profile = read_json(root / FOUNDATION_PROFILE)
+    closed_fields(profile, (*accepted, "accepted_b4_p2_commit"), "main-work profile")
+    identity = {name: value for name, value in accepted.items() if name.startswith("accepted_")}
+    identity.update(format=1, profile=MAIN_WORK, target=TARGET, accepted_b4_p2_commit=MAIN_WORK_BASE)
+    exact_json({name: profile[name] for name in identity}, identity, "main-work identity")
+    closed_fields(profile["base"], (*accepted["base"], *MAIN_WORK_BASE_IMAGES), "main-work base")
+    exact_json({name: profile["base"][name] for name in accepted["base"]}, accepted["base"], "main-work historical base")
+    for name, (path, checksum) in MAIN_WORK_BASE_IMAGES.items():
+        image = profile["base"][name]
+        foundation_image(image, path)
+        if image["sha256"] != checksum:
+            fail("main-work accepted base changed")
+        checked_file(root / path, image)
+    exact_json(profile["pins"], base, "main-work inherited pins")
+    exact_json(profile["cargo_lock"], accepted["cargo_lock"], "main-work unchanged lock")
+    checked_file(root / "Cargo.lock", profile["cargo_lock"]["expected"])
+    foundation_image(profile["node_series"], FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    qualification = profile["qualification"]
+    closed_fields(qualification, (*accepted["qualification"], "main_work"), "main-work qualification")
+    changed = {"claim", "source_roster", "tree", "modes"}
+    exact_json({name: qualification[name] for name in accepted["qualification"] if name not in changed}, {name: value for name, value in accepted["qualification"].items() if name not in changed}, "main-work unchanged process policies")
+    exact_json({name: qualification[name] for name in ("claim", "source_roster", "modes", "main_work")}, {"claim": "b4-main-work-components-only", "source_roster": list(MAIN_WORK_PATHS), "modes": MAIN_WORK_MODES, "main_work": MAIN_WORK_POLICY}, "main-work scope")
+    tree = qualification["tree"]
+    closed_fields(tree, ("files", "payload_bytes", "inventory_sha256"), "main-work tree")
+    if type(tree["files"]) is not int or tree["files"] != accepted["qualification"]["tree"]["files"] or type(tree["payload_bytes"]) is not int or not 0 < tree["payload_bytes"] <= MAXIMUM_FOUNDATION_SOURCE or not isinstance(tree["inventory_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", tree["inventory_sha256"]):
+        fail("invalid main-work tree envelope")
+    main_work_series(root, profile, accepted)
+    return profile
+
+
+def main_work_series(root, profile, accepted=None):
+    accepted = accepted_process(root) if accepted is None else accepted
+    checked_file(root / FOUNDATION_SERIES, profile["node_series"])
+    series = read_json(root / FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    prefix = process_series(root, accepted, series_path=MAIN_WORK_SERIES)
+    closed_fields(series, (*prefix, "accepted_b4_p2_commit"), "main-work series")
+    identity = {name: value for name, value in prefix.items() if name != "patches"}
+    identity.update(profile=MAIN_WORK, accepted_b4_p2_commit=MAIN_WORK_BASE)
+    exact_json({name: series[name] for name in identity}, identity, "main-work series identity")
+    patches = series["patches"]
+    if not isinstance(patches, list) or len(patches) != 7:
+        fail("main-work requires exactly seven patches")
+    exact_json(patches[:6], prefix["patches"], "main-work immutable process prefix")
+    selected = patches[6]
+    closed_fields(selected, ("path", "bytes", "sha256", "files"), "main-work seventh patch")
+    foundation_image({name: selected[name] for name in ("path", "bytes", "sha256")}, MAIN_WORK_PATCH, MAXIMUM_FOUNDATION_PATCH)
+    if sum(entry["bytes"] for entry in patches) > MAXIMUM_PROCESS_PATCHES:
+        fail("main-work combined patch payload exceeds unchanged allowance")
+    files = selected["files"]
+    if not isinstance(files, list) or len(files) != len(MAIN_WORK_PATHS):
+        fail("invalid main-work patch roster")
+    manifest = read_json(root / MAIN_WORK_MANIFEST)
+    original = {row["path"]: row for row in manifest["files"]}
+    if len(original) != accepted["qualification"]["tree"]["files"]:
+        fail("invalid accepted process source inventory")
+    for path, entry in zip(MAIN_WORK_PATHS, files, strict=True):
+        closed_fields(entry, ("path", "mode", "before", "after"), "main-work patch file")
+        if entry["path"] != path or entry["mode"] != "100644" or path not in original:
+            fail("main-work patch path/order/mode changed")
+        validate_image(entry["before"])
+        validate_image(entry["after"])
+        exact_json(entry["before"], {name: original[path][name] for name in ("bytes", "sha256", "git_sha1")}, "main-work accepted P2 preimage")
+    checked_file(root / MAIN_WORK_PATCH, selected)
     return series
 
 
@@ -2960,7 +3069,7 @@ def prepare_assets(archive, binding, root=ROOT, stage=None):
 
 
 def foundation_assets(root, pins, base):
-    if pins["profile"] in (FRONTEND, OBSERVATIONS, PROCESS):
+    if pins["profile"] in (FRONTEND, OBSERVATIONS, PROCESS, MAIN_WORK):
         accepted = accepted_lifetimes(root)
         foundation = accepted_foundation(root)
         historical_foundation = {"format": 1, "profile": FOUNDATION, "input_sha256": file_hash(root / LIFETIMES_PROFILE), "patch_series_sha256": foundation["node_series"]["sha256"], "base_receipt_sha256": file_hash(root / "runtime/artifacts/assets.json"), "assets": base}
@@ -2988,7 +3097,14 @@ def foundation_assets(root, pins, base):
             fail("accepted observations asset receipt changed")
         exact_json(read_json(root / PROCESS_ASSETS), historical_observations, "accepted observations assets")
         checked_file(root / "runtime/assets-node-observations.json", {"bytes": (root / PROCESS_ASSETS).stat().st_size, "sha256": PROCESS_ASSET_SHA256})
-        return {"format": 1, "profile": PROCESS, "input_sha256": file_hash(root / FOUNDATION_PROFILE), "patch_series_sha256": pins["foundation"]["node_series"]["sha256"], "base_receipt_sha256": file_hash(root / "runtime/artifacts/assets.json"), "foundation_receipt_sha256": LIFETIMES_ASSET_SHA256, "lifetimes_receipt_sha256": FRONTEND_ASSET_SHA256, "frontend_receipt_sha256": OBSERVATIONS_ASSET_SHA256, "observations_receipt_sha256": PROCESS_ASSET_SHA256, "assets": base}
+        process = accepted_process(root) if pins["profile"] == MAIN_WORK else pins["foundation"]
+        process_path = MAIN_WORK_PROFILE if pins["profile"] == MAIN_WORK else FOUNDATION_PROFILE
+        historical_process = {"format": 1, "profile": PROCESS, "input_sha256": file_hash(root / process_path), "patch_series_sha256": process["node_series"]["sha256"], "base_receipt_sha256": file_hash(root / "runtime/artifacts/assets.json"), "foundation_receipt_sha256": LIFETIMES_ASSET_SHA256, "lifetimes_receipt_sha256": FRONTEND_ASSET_SHA256, "frontend_receipt_sha256": OBSERVATIONS_ASSET_SHA256, "observations_receipt_sha256": PROCESS_ASSET_SHA256, "assets": base}
+        if pins["profile"] == PROCESS:
+            return historical_process
+        exact_json(read_json(root / MAIN_WORK_ASSETS), historical_process, "accepted process assets")
+        checked_file(root / "runtime/assets-node-process.json", profile_image := {"bytes": (root / MAIN_WORK_ASSETS).stat().st_size, "sha256": file_hash(root / MAIN_WORK_ASSETS)})
+        return {**historical_process, "profile": MAIN_WORK, "input_sha256": file_hash(root / FOUNDATION_PROFILE), "patch_series_sha256": pins["foundation"]["node_series"]["sha256"], "process_receipt_sha256": profile_image["sha256"]}
     if pins["profile"] == LIFETIMES:
         accepted = accepted_foundation(root)
         historical = {"format": 1, "profile": FOUNDATION, "input_sha256": file_hash(root / LIFETIMES_PROFILE), "patch_series_sha256": accepted["node_series"]["sha256"], "base_receipt_sha256": file_hash(root / "runtime/artifacts/assets.json"), "assets": base}
@@ -4212,6 +4328,8 @@ def tool_identity(root, directory, slot, environment, toolchain):
 
 def build_commands(root, toolchain, pins, mode="identity"):
     features = selected_mode(pins, mode)
+    if mode == MAIN_WORK_BIN_TEST:
+        return {"build": network_command([toolchain / "bin/cargo", "test", "--locked", "--offline", "--manifest-path", str(root / "Cargo.toml"), "--no-default-features", "--package", "foks-celld-guarded", "--package", "celld@0.6.2", *features, "--bin", "celld", "-j", "2", "--target", TARGET, "--no-run", "--message-format=json"])}
     if mode == "node-baseline" or mode in NODE_BINARY_MODES:
         shared = ["--locked", "--offline", "--manifest-path", str(root / "Cargo.toml"), "--no-default-features", "--package", "foks-celld-guarded", "--package", "celld@0.6.2", *features, "--bin", "celld", "-j", "2", "--target", TARGET]
         cargo = toolchain / "bin/cargo"
@@ -4232,7 +4350,7 @@ def build_commands(root, toolchain, pins, mode="identity"):
 
 
 def foundation_test_commands(root, toolchain, pins):
-    if pins["profile"] in (FRONTEND, OBSERVATIONS, PROCESS):
+    if pins["profile"] in (FRONTEND, OBSERVATIONS, PROCESS, MAIN_WORK):
         fail("frontend tests require the bound direct executable and two-port policy")
     selected_mode(pins, pins["profile"])
     prefix = LIFETIMES_TEST_PREFIX if pins["profile"] == LIFETIMES else FOUNDATION_TEST_PREFIX
@@ -4241,7 +4359,7 @@ def foundation_test_commands(root, toolchain, pins):
 
 
 def frontend_test_compile_command(root, toolchain, pins):
-    if pins["profile"] not in (FRONTEND, OBSERVATIONS, PROCESS):
+    if pins["profile"] not in (FRONTEND, OBSERVATIONS, PROCESS, MAIN_WORK):
         fail("frontend compilation requires its exact stage")
     selected_mode(pins, pins["profile"])
     return network_command([toolchain / "bin/cargo", "test", "--locked", "--offline", "--manifest-path", str(root / "Cargo.toml"), "--no-default-features", "--package", "foks-celld-guarded", "--package", "celld@0.6.2", "--features", "foks-celld-guarded/node-qualification", "--lib", "-j", "2", "--target", TARGET, "--no-run", "--message-format=json"])
@@ -4296,8 +4414,10 @@ def frontend_test_environment(environment, ports):
 
 
 def verify_frontend_test_artifact(stdout_path, graph, root=ROOT, stage=FRONTEND):
-    target = graph.get("node_test_target")
-    if stage not in (FRONTEND, OBSERVATIONS, PROCESS) or not isinstance(target, dict) or graph.get("profile") != stage or graph.get("mode") != stage:
+    binary_test = stage == MAIN_WORK and graph.get("mode") == MAIN_WORK_BIN_TEST
+    target = graph.get("node_bin_test_target" if binary_test else "node_test_target")
+    expected_mode = MAIN_WORK_BIN_TEST if binary_test else stage
+    if stage not in (FRONTEND, OBSERVATIONS, PROCESS, MAIN_WORK) or not isinstance(target, dict) or graph.get("profile") != stage or graph.get("mode") != expected_mode:
         fail("missing frontend library test target graph")
     artifacts, finished, consumed = [], [], 0
     path = Path(stdout_path)
@@ -4339,10 +4459,28 @@ def verify_frontend_test_artifact(stdout_path, graph, root=ROOT, stage=FRONTEND)
     return {"path": str(binary), "bytes": image["bytes"], "sha256": image["sha256"], "artifact": target.copy()}
 
 
+def main_work_test_output(path, listing):
+    # Rust libtest uses singular wording for this separate fixed binary test.
+    if type(listing) is not bool:
+        fail("invalid main-work binary test output kind")
+    path = Path(path)
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 1024 * 1024:
+        fail("invalid main-work binary test output")
+    lines = [line for line in path.read_text().splitlines() if line]
+    name = MAIN_WORK_BIN_TESTS[0]
+    if listing:
+        valid = lines == [name + ": test", "1 test, 0 benchmarks"]
+    else:
+        valid = len(lines) == 3 and lines[:2] == ["running 1 test", "test " + name + " ... ok"] and re.fullmatch(r"test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out; finished in [0-9]+\.[0-9]+s", lines[2]) is not None
+    if not valid:
+        fail("main-work requires the exact separate binary test with no skips")
+    return MAIN_WORK_BIN_TESTS.copy()
+
+
 def foundation_test_output(path, listing, stage=FOUNDATION):
     if stage not in NODE_STAGES:
         fail("unsupported component test stage")
-    expected = {FOUNDATION: FOUNDATION_TESTS, LIFETIMES: LIFETIMES_TESTS, FRONTEND: FRONTEND_TESTS, OBSERVATIONS: OBSERVATIONS_TESTS, PROCESS: PROCESS_TESTS}[stage]
+    expected = {FOUNDATION: FOUNDATION_TESTS, LIFETIMES: LIFETIMES_TESTS, FRONTEND: FRONTEND_TESTS, OBSERVATIONS: OBSERVATIONS_TESTS, PROCESS: PROCESS_TESTS, MAIN_WORK: PROCESS_TESTS}[stage]
     return component_test_output(path, listing, expected)
 
 
@@ -4632,10 +4770,10 @@ def foundation_probe_specs(mode):
     if mode not in NODE_BINARY_MODES:
         fail("unknown node binary probe mode")
     probes = {"version": (["--version"], 0), "help": (["--help"], 0), "invalid-option": (["--foks-guarded-node-qualification"], 1)}
-    if mode in (FRONTEND, OBSERVATIONS, PROCESS):
-        probes.update({name: ((PROCESS_REFUSALS if mode == PROCESS else FRONTEND_REFUSALS)[name][0], 1) for name in ("frontend-missing-scenario", "frontend-unsupported-scenario")})
-    elif mode in (FRONTEND + "-default", OBSERVATIONS + "-default", PROCESS + "-default"):
-        probes["frontend-absent"] = ((PROCESS_REFUSALS if mode == PROCESS + "-default" else FRONTEND_REFUSALS)["frontend-absent"][0], 1)
+    if mode in (FRONTEND, OBSERVATIONS, PROCESS, MAIN_WORK):
+        probes.update({name: ((PROCESS_REFUSALS if mode in (PROCESS, MAIN_WORK) else FRONTEND_REFUSALS)[name][0], 1) for name in ("frontend-missing-scenario", "frontend-unsupported-scenario")})
+    elif mode in (FRONTEND + "-default", OBSERVATIONS + "-default", PROCESS + "-default", MAIN_WORK + "-default"):
+        probes["frontend-absent"] = ((PROCESS_REFUSALS if mode in (PROCESS + "-default", MAIN_WORK + "-default") else FRONTEND_REFUSALS)["frontend-absent"][0], 1)
     return probes
 
 
@@ -4680,11 +4818,11 @@ def foundation_probe_output(directory, name, mode=None):
     if name == "version":
         accepted = out == b"celld 0.6.2 (debug)\n" and not err
     elif name == "help":
-        accepted = (len(out), digest(out)) == (PROCESS_HELP_IMAGE if mode == PROCESS else FRONTEND_HELP_IMAGE if mode in (FRONTEND, OBSERVATIONS) else FOUNDATION_HELP_IMAGE) and not err
+        accepted = (len(out), digest(out)) == (PROCESS_HELP_IMAGE if mode in (PROCESS, MAIN_WORK) else FRONTEND_HELP_IMAGE if mode in (FRONTEND, OBSERVATIONS) else FOUNDATION_HELP_IMAGE) and not err
     elif name == "invalid-option":
         accepted = not out and err == b"Error: unknown command or option: --foks-guarded-node-qualification; run `celld --help` for usage\n"
     else:
-        accepted = not out and err == (PROCESS_REFUSALS if mode in (PROCESS, PROCESS + "-default") else FRONTEND_REFUSALS)[name][1]
+        accepted = not out and err == (PROCESS_REFUSALS if mode in (PROCESS, PROCESS + "-default", MAIN_WORK, MAIN_WORK + "-default") else FRONTEND_REFUSALS)[name][1]
     if not accepted:
         fail("foundation binary probe outcome mismatch: " + name)
     # Raw files are untouched; these hashes/lengths refer to them, not to the
@@ -4694,7 +4832,7 @@ def foundation_probe_output(directory, name, mode=None):
 
 def run_frontend_components(focused, root, toolchain, pins, graph, environment, directory, slot):
     stage = pins["profile"]
-    if stage not in (FRONTEND, OBSERVATIONS, PROCESS):
+    if stage not in (FRONTEND, OBSERVATIONS, PROCESS, MAIN_WORK):
         fail("unsupported direct component stage")
     timeout = pins["build"]["timeout_seconds"]
     focused["compile"] = run_owned(frontend_test_compile_command(root, toolchain, pins), root, environment, directory, "tests-compile", slot, timeout, lambda: resource_refusal(root))
@@ -4724,9 +4862,9 @@ def run_frontend_components(focused, root, toolchain, pins, graph, environment, 
     focused["layouts"] = foundation_layout_output(stderr, checksum, stage)
     focused["lifetimes_layouts"] = lifetimes_layout_output(stderr, checksum)
     focused["frontend_layouts"] = frontend_layout_output(stderr, checksum)
-    if stage in (OBSERVATIONS, PROCESS):
+    if stage in (OBSERVATIONS, PROCESS, MAIN_WORK):
         focused["observation_layouts"] = observation_layout_output(stderr, checksum)
-    if stage == PROCESS:
+    if stage in (PROCESS, MAIN_WORK):
         focused["process_layouts"] = process_layout_output(stderr, checksum)
     focused["transport_tests"] = {}
     for group, names in FRONTEND_TRANSPORT_TESTS.items():
@@ -4740,6 +4878,26 @@ def run_frontend_components(focused, root, toolchain, pins, graph, environment, 
                 fail("frontend transport test output changed after owned command")
             component_test_output(path, action == "list", names)
     checked_file(binary, focused["binary"])
+
+
+def run_main_work_binary_tests(receipt, root, pins, graph, environment, directory, slot):
+    if pins["profile"] != MAIN_WORK or graph.get("mode") != MAIN_WORK_BIN_TEST:
+        fail("main-work binary tests require the exact separate mode")
+    if file_hash(directory / "build.stdout") != receipt["build"]["stdout_sha256"]:
+        fail("main-work compiler output changed after owned command")
+    receipt["binary"] = verify_frontend_test_artifact(directory / "build.stdout", graph, root, MAIN_WORK)
+    binary = Path(receipt["binary"]["path"])
+    receipt["binary_tests"] = {"names": MAIN_WORK_BIN_TESTS.copy(), "threads": 1}
+    for name, arguments in (("list", [MAIN_WORK_BIN_TESTS[0], "--exact", "--list"]), ("run", [MAIN_WORK_BIN_TESTS[0], "--exact", "--test-threads=1"])):
+        checked_file(binary, receipt["binary"])
+        command = run_owned(network_command([binary, *arguments]), root, environment, directory, "binary-tests-" + name, slot, pins["build"]["timeout_seconds"], lambda: resource_refusal(root))
+        receipt["binary_tests"][name] = command
+        output = directory / ("binary-tests-" + name + ".stdout")
+        if file_hash(output) != command["stdout_sha256"]:
+            fail("main-work binary test output changed after owned command")
+        main_work_test_output(output, name == "list")
+        checked_file(binary, receipt["binary"])
+    return binary
 
 
 def build_foundation(graph_directory, root, mode):
@@ -4758,20 +4916,23 @@ def build_foundation(graph_directory, root, mode):
     toolchain, environment = controlled_environment(root)
     evidence_root = runtime_directory(root) / "evidence"
     evidence_root.mkdir(exist_ok=True)
-    directory = Path(tempfile.mkdtemp(prefix={FOUNDATION: "foundation-", LIFETIMES: "lifetimes-", FRONTEND: "frontend-", OBSERVATIONS: "observations-", PROCESS: "process-"}[stage], dir=evidence_root))
+    directory = Path(tempfile.mkdtemp(prefix={FOUNDATION: "foundation-", LIFETIMES: "lifetimes-", FRONTEND: "frontend-", OBSERVATIONS: "observations-", PROCESS: "process-", MAIN_WORK: "main-work-"}[stage], dir=evidence_root))
     claims = {"node-foundation-default": "b1-default-bin-regression", "node-foundation": "b1-foundation-component-only", "node-foundation-lifecycle": "b1-a2-lifecycle-regression", "node-lifetimes-default": "b2-default-bin-regression", "node-lifetimes": "b2-lifetimes-components-only", "node-lifetimes-lifecycle": "b2-a2-lifecycle-regression"}
     claims.update({FRONTEND + "-default": "b3-default-bin-regression", FRONTEND: "b3-frontend-components-only", FRONTEND + "-lifecycle": "b3-a2-lifecycle-regression"})
     claims.update({OBSERVATIONS + "-default": "b4-p1-default-bin-regression", OBSERVATIONS: "b4-p1-observation-components-only", OBSERVATIONS + "-lifecycle": "b4-p1-a2-lifecycle-regression"})
     claims.update({PROCESS + "-default": "b4-p2-default-bin-regression", PROCESS: "b4-p2-process-components-only", PROCESS + "-lifecycle": "b4-p2-a2-lifecycle-regression"})
-    receipt = {"format": 1, "profile": stage, "mode": mode, "claim": claims[mode], "status": "incomplete", "source": source, "assets": assets, "profile_sha256": file_hash(root / FOUNDATION_PROFILE), "series_sha256": pins["foundation"]["node_series"]["sha256"], "cargo_lock_sha256": file_hash(root / "Cargo.lock"), "graph_directory": str(Path(graph_directory).resolve()), "graph_sha256": digest(json.dumps(graph, sort_keys=True).encode()), "initial_resources": measured, "not_qualified": PROCESS_EXCLUSIONS if stage == PROCESS else OBSERVATIONS_EXCLUSIONS if stage == OBSERVATIONS else FRONTEND_EXCLUSIONS if stage == FRONTEND else FOUNDATION_EXCLUSIONS}
+    claims.update({MAIN_WORK: "b4-main-work-components-only", MAIN_WORK + "-default": "b4-main-work-default-bin-regression", MAIN_WORK + "-lifecycle": "b4-main-work-a2-lifecycle-regression", MAIN_WORK_BIN_TEST: "b4-main-work-binary-layout-regression"})
+    receipt = {"format": 1, "profile": stage, "mode": mode, "claim": claims[mode], "status": "incomplete", "source": source, "assets": assets, "profile_sha256": file_hash(root / FOUNDATION_PROFILE), "series_sha256": pins["foundation"]["node_series"]["sha256"], "cargo_lock_sha256": file_hash(root / "Cargo.lock"), "graph_directory": str(Path(graph_directory).resolve()), "graph_sha256": digest(json.dumps(graph, sort_keys=True).encode()), "initial_resources": measured, "not_qualified": PROCESS_EXCLUSIONS if stage in (PROCESS, MAIN_WORK) else OBSERVATIONS_EXCLUSIONS if stage == OBSERVATIONS else FRONTEND_EXCLUSIONS if stage == FRONTEND else FOUNDATION_EXCLUSIONS}
     write_json(directory / "receipt.json", receipt)
     with BuildSlot(root) as slot:
         try:
             receipt["tools"] = tool_identity(root, directory, slot, environment, toolchain)
             commands = build_commands(root, toolchain, pins, mode)
-            for name in ("build", "clippy"):
+            for name in (("build",) if mode == MAIN_WORK_BIN_TEST else ("build", "clippy")):
                 receipt[name] = run_owned(commands[name], root, environment, directory, name, slot, pins["build"]["timeout_seconds"], lambda: resource_refusal(root))
-            if mode in NODE_LIFECYCLE_MODES:
+            if mode == MAIN_WORK_BIN_TEST:
+                binary = run_main_work_binary_tests(receipt, root, pins, graph, environment, directory, slot)
+            elif mode in NODE_LIFECYCLE_MODES:
                 binary = root / "runtime/target" / TARGET / "debug/foks-celld-guarded"
                 image, _ = stable_fixture_file(binary, 4 * 1024**3)
                 if not image["bytes"] or not image["mode"] & 0o111:
@@ -4793,11 +4954,11 @@ def build_foundation(graph_directory, root, mode):
                     receipt["probes"][name] = {"command": command, "output": foundation_probe_output(directory, name, mode)}
                     checked_file(binary, receipt["binary"])
                 if mode == stage:
-                    focused = {"prefix": FOUNDATION_TEST_PREFIX if stage == FOUNDATION else LIFETIMES_TEST_PREFIX, "names": {FOUNDATION: FOUNDATION_TESTS, LIFETIMES: LIFETIMES_TESTS, FRONTEND: FRONTEND_TESTS, OBSERVATIONS: OBSERVATIONS_TESTS, PROCESS: PROCESS_TESTS}[stage], "threads": 1}
+                    focused = {"prefix": FOUNDATION_TEST_PREFIX if stage == FOUNDATION else LIFETIMES_TEST_PREFIX, "names": {FOUNDATION: FOUNDATION_TESTS, LIFETIMES: LIFETIMES_TESTS, FRONTEND: FRONTEND_TESTS, OBSERVATIONS: OBSERVATIONS_TESTS, PROCESS: PROCESS_TESTS, MAIN_WORK: PROCESS_TESTS}[stage], "threads": 1}
                     receipt["focused_tests"] = focused
-                    if stage in (FRONTEND, OBSERVATIONS, PROCESS):
+                    if stage in (FRONTEND, OBSERVATIONS, PROCESS, MAIN_WORK):
                         run_frontend_components(focused, root, toolchain, pins, graph, environment, directory, slot)
-                    for name, argv in ({} if stage in (FRONTEND, OBSERVATIONS, PROCESS) else foundation_test_commands(root, toolchain, pins)).items():
+                    for name, argv in ({} if stage in (FRONTEND, OBSERVATIONS, PROCESS, MAIN_WORK) else foundation_test_commands(root, toolchain, pins)).items():
                         focused[name] = run_owned(argv, root, environment, directory, "tests-" + name, slot, pins["build"]["timeout_seconds"], lambda: resource_refusal(root))
                         foundation_test_output(directory / ("tests-" + name + ".stdout"), name == "list", stage)
                         if name == "run":

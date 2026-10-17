@@ -5,6 +5,7 @@
   "accepted_b2_commit": "d22ff3deedf0f0a87f635aec2317a87410e39110",
   "accepted_b3_commit": "9151df82364fa60177cb62f6645746ce1aff9b48",
   "accepted_b4_p1_commit": "66090566c0ffcccc12e2d1c2bc9917f2f84019c4",
+  "accepted_b4_p2_commit": "2e226249358568bd136796775378dd7cd8100651",
   "base": {
     "foundation_profile": {
       "bytes": 13181,
@@ -76,6 +77,26 @@
       "path": "patches/series.json",
       "sha256": "bf15b77b32416914a1d96426aa58fc65d1b436e0645c73dcc11ad91f6e9c0ea6"
     },
+    "process_assets": {
+      "bytes": 971,
+      "path": "runtime/evidence/accepted-b4-p2/prepared-inputs/assets-node-process.json",
+      "sha256": "78cf9997b619cd982655093622d6e6d48c621452b504ee35bcacf5271db4f58e"
+    },
+    "process_profile": {
+      "bytes": 96464,
+      "path": "runtime/evidence/accepted-b4-p2-main-work-base/runtime-node.lock.json",
+      "sha256": "8b34426241db7dcd45146c528262329a633103f7c3c44aa9634e97269513c51b"
+    },
+    "process_series": {
+      "bytes": 42853,
+      "path": "runtime/evidence/accepted-b4-p2-main-work-base/patches/node-series.json",
+      "sha256": "034b19a0b9314602f5c5f092fdf556fc7ae65e4d9b76f5efbc2e3dd652c08750"
+    },
+    "process_source_manifest": {
+      "bytes": 72053,
+      "path": "runtime/evidence/accepted-b4-p2/prepared-inputs/source-manifest.json",
+      "sha256": "3b5af6b3193ed97596e5e7493a67cf5982e0844dfae4dcc5c0fa9fab806411bc"
+    },
     "runtime_lock": {
       "bytes": 6545,
       "path": "runtime.lock.json",
@@ -111,9 +132,9 @@
   },
   "format": 1,
   "node_series": {
-    "bytes": 42853,
+    "bytes": 45292,
     "path": "patches/node-series.json",
-    "sha256": "034b19a0b9314602f5c5f092fdf556fc7ae65e4d9b76f5efbc2e3dd652c08750"
+    "sha256": "ebc848f4d7c0b0fcab482ebca27ebf2cd4a7ab4b74d975b46f24979f8d1220c4"
   },
   "pins": {
     "build": {
@@ -286,9 +307,9 @@
       "version": "152.1.0"
     }
   },
-  "profile": "node-process",
+  "profile": "node-main-work",
   "qualification": {
-    "claim": "b4-p2-process-components-only",
+    "claim": "b4-main-work-components-only",
     "deployments": {
       "fixture": {
         "prefix": "deploy/foks-guarded-node-fixture/1fdd2523a443ea95",
@@ -1119,8 +1140,16 @@
         }
       }
     },
+    "main_work": {
+      "aggregate_retained_bytes": 131072,
+      "binary_tests": [
+        "guarded::tests::guarded_reload_main_work_fits_qualified_fixture"
+      ],
+      "individual_bytes": 12288,
+      "maximum_alignment": 16
+    },
     "modes": {
-      "node-process": {
+      "node-main-work": {
         "celld_features": [
           "foks-guarded-node-qualification",
           "foks-guarded-qualification"
@@ -1134,13 +1163,27 @@
           "node-qualification"
         ]
       },
-      "node-process-default": {
+      "node-main-work-bin-test": {
+        "celld_features": [
+          "foks-guarded-node-qualification",
+          "foks-guarded-qualification"
+        ],
+        "celld_foks_edges": [
+          "foks-hosted-transport",
+          "foks-metadata-core"
+        ],
+        "direct_root_tokio": false,
+        "root_features": [
+          "node-qualification"
+        ]
+      },
+      "node-main-work-default": {
         "celld_features": [],
         "celld_foks_edges": [],
         "direct_root_tokio": false,
         "root_features": []
       },
-      "node-process-lifecycle": {
+      "node-main-work-lifecycle": {
         "celld_features": [
           "foks-guarded-qualification"
         ],
@@ -2994,20 +3037,10 @@
       }
     },
     "source_roster": [
-      "crates/celld/actor.rs",
-      "crates/celld/actor/effects.rs",
-      "crates/celld/actor/production.rs",
-      "crates/celld/cell_dispatch.rs",
       "crates/celld/guarded_node.rs",
-      "crates/celld/guarded_node/control.rs",
-      "crates/celld/guarded_node/output.rs",
       "crates/celld/guarded_node/qualification.rs",
       "crates/celld/guarded_node/tests.rs",
-      "crates/celld/js/storage_ops.rs",
-      "crates/celld/main.rs",
-      "crates/celld/main/cli.rs",
-      "crates/celld/main/guarded.rs",
-      "crates/celld/runtime.rs"
+      "crates/celld/main/guarded.rs"
     ],
     "tests": {
       "names": [
@@ -3140,8 +3173,8 @@
     },
     "tree": {
       "files": 289,
-      "inventory_sha256": "83febb634aaccde24ee14ff74a13db01c17beafac139da1cb217ea2dae2cdc0b",
-      "payload_bytes": 7549708
+      "inventory_sha256": "1ab55bf79e7937681ed5032afcf3a7a5c2c5d5766d47280f63f66e304e9e4769",
+      "payload_bytes": 7555472
     }
   },
   "target": "aarch64-apple-darwin"

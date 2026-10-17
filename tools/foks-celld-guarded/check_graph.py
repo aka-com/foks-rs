@@ -28,6 +28,7 @@ LIFETIMES_SOURCE_PATHS = (preparation.LIFETIMES_PATCH, preparation.LIFETIMES_PRO
 FRONTEND_SOURCE_PATHS = (preparation.FRONTEND_PATCH, preparation.FRONTEND_PROFILE, preparation.FRONTEND_SERIES, preparation.FRONTEND_MANIFEST, preparation.FRONTEND_ASSETS, "runtime/assets-node-lifetimes.json")
 OBSERVATIONS_SOURCE_PATHS = (preparation.OBSERVATIONS_PATCH, preparation.OBSERVATIONS_PROFILE, preparation.OBSERVATIONS_SERIES, preparation.OBSERVATIONS_MANIFEST, preparation.OBSERVATIONS_ASSETS, "runtime/assets-node-qualification.json")
 PROCESS_SOURCE_PATHS = (preparation.PROCESS_PATCH, preparation.PROCESS_PROFILE, preparation.PROCESS_SERIES, preparation.PROCESS_MANIFEST, preparation.PROCESS_ASSETS, "runtime/assets-node-observations.json")
+MAIN_WORK_SOURCE_PATHS = (preparation.MAIN_WORK_PATCH, preparation.MAIN_WORK_PROFILE, preparation.MAIN_WORK_SERIES, preparation.MAIN_WORK_MANIFEST, preparation.MAIN_WORK_ASSETS, "runtime/assets-node-process.json")
 
 
 def fail(message):
@@ -229,15 +230,17 @@ def graph_report(metadata, pins, mode="identity", source_root=ROOT):
             fail("default/lifecycle celld subclosure includes FOKS integration")
         preparation.foundation_lock(source_root, pins)
         report["foundation"] = {"profile_sha256": preparation.file_hash(source_root / preparation.FOUNDATION_PROFILE), "series_sha256": pins["foundation"]["node_series"]["sha256"], "accepted_a3a_commit": preparation.FOUNDATION_BASE, "cargo_lock_sha256": preparation.file_hash(source_root / "Cargo.lock"), "celld_foks_edges": sorted(actual_edges), "declared_foks_edges": declared}
-        if pins["profile"] in (preparation.LIFETIMES, preparation.FRONTEND, preparation.OBSERVATIONS, preparation.PROCESS):
+        if pins["profile"] in (preparation.LIFETIMES, preparation.FRONTEND, preparation.OBSERVATIONS, preparation.PROCESS, preparation.MAIN_WORK):
             report["foundation"].update(accepted_b1_commit=preparation.LIFETIMES_BASE, accepted_b1_images={name: pins["foundation"]["base"][name] for name in preparation.LIFETIMES_BASE_IMAGES})
-        if pins["profile"] in (preparation.FRONTEND, preparation.OBSERVATIONS, preparation.PROCESS):
+        if pins["profile"] in (preparation.FRONTEND, preparation.OBSERVATIONS, preparation.PROCESS, preparation.MAIN_WORK):
             report["foundation"].update(accepted_b2_commit=preparation.FRONTEND_BASE, accepted_b2_images={name: pins["foundation"]["base"][name] for name in preparation.FRONTEND_BASE_IMAGES})
-        if pins["profile"] in (preparation.OBSERVATIONS, preparation.PROCESS):
+        if pins["profile"] in (preparation.OBSERVATIONS, preparation.PROCESS, preparation.MAIN_WORK):
             report["foundation"].update(accepted_b3_commit=preparation.OBSERVATIONS_BASE, accepted_b3_images={name: pins["foundation"]["base"][name] for name in preparation.OBSERVATIONS_BASE_IMAGES})
-        if pins["profile"] == preparation.PROCESS:
+        if pins["profile"] in (preparation.PROCESS, preparation.MAIN_WORK):
             report["foundation"].update(accepted_b4_p1_commit=preparation.PROCESS_BASE, accepted_b4_p1_images={name: pins["foundation"]["base"][name] for name in preparation.PROCESS_BASE_IMAGES})
-    if mode == "node-baseline" or mode in preparation.NODE_BINARY_MODES:
+        if pins["profile"] == preparation.MAIN_WORK:
+            report["foundation"].update(accepted_b4_p2_commit=preparation.MAIN_WORK_BASE, accepted_b4_p2_images={name: pins["foundation"]["base"][name] for name in preparation.MAIN_WORK_BASE_IMAGES})
+    if mode == "node-baseline" or mode in preparation.NODE_BINARY_MODES or mode == preparation.MAIN_WORK_BIN_TEST:
         celld_closure = closure([celld])
         if (not foundation or not foundation["celld_foks_edges"]) and any(packages[identity]["name"].startswith("foks-") for identity in celld_closure):
             fail("ordinary celld binary subclosure includes FOKS integration")
@@ -256,7 +259,9 @@ def graph_report(metadata, pins, mode="identity", source_root=ROOT):
             fail("ordinary celld binary target changed")
         report["node_target"] = {"package_id": celld, **{key: target[key] for key in ("name", "kind", "crate_types", "src_path")}, "features": foundation["celld_features"] if foundation else []}
         report["node_subclosure"] = sorted(celld_closure)
-        if pins["profile"] in (preparation.FRONTEND, preparation.OBSERVATIONS, preparation.PROCESS):
+        if mode == preparation.MAIN_WORK_BIN_TEST:
+            report["node_bin_test_target"] = report["node_target"].copy()
+        if pins["profile"] in (preparation.FRONTEND, preparation.OBSERVATIONS, preparation.PROCESS, preparation.MAIN_WORK) and mode != preparation.MAIN_WORK_BIN_TEST:
             libraries = [item for item in targets if isinstance(item, dict) and item.get("kind") == ["lib"]]
             if len(libraries) != 1:
                 fail("missing or ambiguous frontend library target")
@@ -277,7 +282,7 @@ def regular_files(directory):
 
 
 def frontend_transport_inputs(root, mode):
-    if mode not in (preparation.FRONTEND, preparation.OBSERVATIONS, preparation.PROCESS):
+    if mode not in (preparation.FRONTEND, preparation.OBSERVATIONS, preparation.PROCESS, preparation.MAIN_WORK):
         return set()
     repo = root.parents[1]
     members = tomllib.loads((repo / "Cargo.toml").read_text()).get("workspace", {}).get("members")
@@ -310,10 +315,11 @@ def source_paths(pins, mode="identity"):
         SOURCE_PATHS
         + (A2_SOURCE_PATHS if pins["profile"] in (preparation.A2, *preparation.NODE_STAGES) else ())
         + (FOUNDATION_SOURCE_PATHS if pins["profile"] in preparation.NODE_STAGES else ())
-        + (LIFETIMES_SOURCE_PATHS if pins["profile"] in (preparation.LIFETIMES, preparation.FRONTEND, preparation.OBSERVATIONS, preparation.PROCESS) else ())
-        + (FRONTEND_SOURCE_PATHS if pins["profile"] in (preparation.FRONTEND, preparation.OBSERVATIONS, preparation.PROCESS) else ())
-        + (OBSERVATIONS_SOURCE_PATHS if pins["profile"] in (preparation.OBSERVATIONS, preparation.PROCESS) else ())
-        + (PROCESS_SOURCE_PATHS if pins["profile"] == preparation.PROCESS else ())
+        + (LIFETIMES_SOURCE_PATHS if pins["profile"] in (preparation.LIFETIMES, preparation.FRONTEND, preparation.OBSERVATIONS, preparation.PROCESS, preparation.MAIN_WORK) else ())
+        + (FRONTEND_SOURCE_PATHS if pins["profile"] in (preparation.FRONTEND, preparation.OBSERVATIONS, preparation.PROCESS, preparation.MAIN_WORK) else ())
+        + (OBSERVATIONS_SOURCE_PATHS if pins["profile"] in (preparation.OBSERVATIONS, preparation.PROCESS, preparation.MAIN_WORK) else ())
+        + (PROCESS_SOURCE_PATHS if pins["profile"] in (preparation.PROCESS, preparation.MAIN_WORK) else ())
+        + (MAIN_WORK_SOURCE_PATHS if pins["profile"] == preparation.MAIN_WORK else ())
         + (("node.lock.json", "run-node.py", "test_run_node.py") if mode == "node-baseline" else ())
     )
 
