@@ -1,7 +1,23 @@
 {
   "accepted_a2_commit": "dca38eecb08263a3594f70025df7a309ed3682a5",
   "accepted_a3a_commit": "fee8db31ae8df590e32bc02f8c8de815d9f7ecea",
+  "accepted_b1_commit": "23039e209d1b3b129a274dd65fe07f0abfdba8e0",
   "base": {
+    "foundation_profile": {
+      "bytes": 13181,
+      "path": "runtime/evidence/accepted-b1/runtime-node.lock.json",
+      "sha256": "71347fc8ddb07d3fe894f02f0c7733fa247ebdfcadbe5acceadfa646c1230612"
+    },
+    "foundation_series": {
+      "bytes": 11180,
+      "path": "runtime/evidence/accepted-b1/patches/node-series.json",
+      "sha256": "6716ff40c680dddfc597ee0ce708e3a0140d3dd9fd81c925d97d54162bfa6073"
+    },
+    "foundation_source_manifest": {
+      "bytes": 71282,
+      "path": "runtime/evidence/accepted-b1/prepared-inputs/source-manifest.json",
+      "sha256": "e59f9ce8ef088f8da741ddaf8e8ee488bfba27d508948bab55d0495b73728de2"
+    },
     "node_profile": {
       "bytes": 35289,
       "path": "node.lock.json",
@@ -47,9 +63,9 @@
   },
   "format": 1,
   "node_series": {
-    "bytes": 11180,
+    "bytes": 22719,
     "path": "patches/node-series.json",
-    "sha256": "6716ff40c680dddfc597ee0ce708e3a0140d3dd9fd81c925d97d54162bfa6073"
+    "sha256": "f7e5d4dc073cabbc7dcdec17e798163881f04da2a60952c8dae53f960577622e"
   },
   "pins": {
     "build": {
@@ -222,9 +238,9 @@
       "version": "152.1.0"
     }
   },
-  "profile": "node-foundation",
+  "profile": "node-lifetimes",
   "qualification": {
-    "claim": "b1-foundation-only",
+    "claim": "b2-lifetimes-components-only",
     "deployments": {
       "fixture": {
         "prefix": "deploy/foks-guarded-node-fixture/1fdd2523a443ea95",
@@ -235,8 +251,564 @@
         "version": "b19584ba0ac8c37f"
       }
     },
+    "layout_evidence": {
+      "arc_convention": "repr-c-two-atomic-usize",
+      "constructor_fields": [
+        "capture_bytes",
+        "capture_alignment",
+        "future_bytes",
+        "future_alignment",
+        "result_bytes",
+        "result_alignment",
+        "channel_payload_bytes",
+        "channel_payload_alignment",
+        "channel_bound_bytes",
+        "owned_capacity_bound_bytes",
+        "admitted_overlap_bytes",
+        "ceiling_bytes",
+        "creation_limit",
+        "lanes",
+        "bucket"
+      ],
+      "constructor_policy": {
+        "future/gate_dispatch": {
+          "bucket": "inline-observation",
+          "ceiling_bytes": 8192,
+          "creation_limit": {},
+          "lanes": [],
+          "rule": "I"
+        },
+        "future/storage_sync": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "F3": "cumulative"
+          },
+          "lanes": [
+            "F3"
+          ],
+          "rule": "R"
+        },
+        "inline/publish": {
+          "bucket": "inline-observation",
+          "ceiling_bytes": 8192,
+          "creation_limit": {
+            "F6": "inline"
+          },
+          "lanes": [
+            "F6"
+          ],
+          "rule": "I"
+        },
+        "native/db_open": {
+          "bucket": "invocation",
+          "ceiling_bytes": 512,
+          "creation_limit": {
+            "F6": "cumulative"
+          },
+          "lanes": [
+            "F6"
+          ],
+          "rule": "N"
+        },
+        "native/hydrator_open": {
+          "bucket": "invocation",
+          "ceiling_bytes": 512,
+          "creation_limit": {
+            "F0": "cumulative"
+          },
+          "lanes": [
+            "F0"
+          ],
+          "rule": "N"
+        },
+        "native/hydrator_step": {
+          "bucket": "invocation",
+          "ceiling_bytes": 512,
+          "creation_limit": {
+            "F0": "cumulative"
+          },
+          "lanes": [
+            "F0"
+          ],
+          "rule": "N"
+        },
+        "native/local_close": {
+          "bucket": "invocation",
+          "ceiling_bytes": 512,
+          "creation_limit": {
+            "C6": 16
+          },
+          "lanes": [
+            "C6"
+          ],
+          "rule": "N"
+        },
+        "native/opaque_lower_job": {
+          "bucket": "invocation",
+          "ceiling_bytes": 512,
+          "creation_limit": {
+            "F2": "cumulative"
+          },
+          "lanes": [
+            "F2"
+          ],
+          "rule": "N"
+        },
+        "native/read_file": {
+          "bucket": "invocation",
+          "ceiling_bytes": 512,
+          "creation_limit": {
+            "F2": "cumulative"
+          },
+          "lanes": [
+            "F2"
+          ],
+          "rule": "N"
+        },
+        "native/restored_alarm": {
+          "bucket": "invocation",
+          "ceiling_bytes": 512,
+          "creation_limit": {
+            "F6": "cumulative"
+          },
+          "lanes": [
+            "F6"
+          ],
+          "rule": "N"
+        },
+        "native/snapshot": {
+          "bucket": "invocation",
+          "ceiling_bytes": 512,
+          "creation_limit": {
+            "C6": 16
+          },
+          "lanes": [
+            "C6"
+          ],
+          "rule": "N"
+        },
+        "native/sync_capture": {
+          "bucket": "invocation",
+          "ceiling_bytes": 512,
+          "creation_limit": {
+            "C0": 16,
+            "C1": 16,
+            "C6": 16,
+            "F1": "cumulative"
+          },
+          "lanes": [
+            "F1",
+            "C0",
+            "C1",
+            "C6"
+          ],
+          "rule": "N"
+        },
+        "native/worker_build": {
+          "bucket": "invocation",
+          "ceiling_bytes": 512,
+          "creation_limit": {
+            "F6": "cumulative"
+          },
+          "lanes": [
+            "F6"
+          ],
+          "rule": "N"
+        },
+        "native/worker_destroy": {
+          "bucket": "invocation",
+          "ceiling_bytes": 512,
+          "creation_limit": {
+            "C2": 16
+          },
+          "lanes": [
+            "C2"
+          ],
+          "rule": "N"
+        },
+        "root/adopt": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "C4": 1
+          },
+          "lanes": [
+            "C4"
+          ],
+          "rule": "R"
+        },
+        "root/aux_await_durable": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "F5": "cumulative"
+          },
+          "lanes": [
+            "F5"
+          ],
+          "rule": "R"
+        },
+        "root/aux_verify_ownership": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "F5": "cumulative"
+          },
+          "lanes": [
+            "F5"
+          ],
+          "rule": "R"
+        },
+        "root/cancel": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "C7": 1
+          },
+          "lanes": [
+            "C7"
+          ],
+          "rule": "R"
+        },
+        "root/capacity_read": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "F6": "cumulative"
+          },
+          "lanes": [
+            "F6"
+          ],
+          "rule": "R"
+        },
+        "root/compaction": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "F2": "cumulative"
+          },
+          "lanes": [
+            "F2"
+          ],
+          "rule": "R"
+        },
+        "root/driver": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "F3": "cumulative"
+          },
+          "lanes": [
+            "F3"
+          ],
+          "rule": "R"
+        },
+        "root/ensure_durable": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "C0": 1
+          },
+          "lanes": [
+            "C0"
+          ],
+          "rule": "R"
+        },
+        "root/hydration": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "F0": "cumulative"
+          },
+          "lanes": [
+            "F0"
+          ],
+          "rule": "R"
+        },
+        "root/local_retirement": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "C6": 1
+          },
+          "lanes": [
+            "C6"
+          ],
+          "rule": "R"
+        },
+        "root/node_lease_read": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "F6": "cumulative"
+          },
+          "lanes": [
+            "F6"
+          ],
+          "rule": "R"
+        },
+        "root/owner_cas": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "F6": "cumulative"
+          },
+          "lanes": [
+            "F6"
+          ],
+          "rule": "R"
+        },
+        "root/owner_read": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "F6": "cumulative"
+          },
+          "lanes": [
+            "F6"
+          ],
+          "rule": "R"
+        },
+        "root/primary_await_durable": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "F4": "cumulative"
+          },
+          "lanes": [
+            "F4"
+          ],
+          "rule": "R"
+        },
+        "root/primary_verify_ownership": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "F4": "cumulative"
+          },
+          "lanes": [
+            "F4"
+          ],
+          "rule": "R"
+        },
+        "root/release": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "C3": 1
+          },
+          "lanes": [
+            "C3"
+          ],
+          "rule": "R"
+        },
+        "root/restore": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "F6": "cumulative"
+          },
+          "lanes": [
+            "F6"
+          ],
+          "rule": "R"
+        },
+        "root/start_runtime": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "F6": "cumulative"
+          },
+          "lanes": [
+            "F6"
+          ],
+          "rule": "R"
+        },
+        "root/stop": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "C2": 1
+          },
+          "lanes": [
+            "C2"
+          ],
+          "rule": "R"
+        },
+        "root/sync": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "F1": "cumulative"
+          },
+          "lanes": [
+            "F1"
+          ],
+          "rule": "R"
+        },
+        "root/terminal_proof": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "C1": 1
+          },
+          "lanes": [
+            "C1"
+          ],
+          "rule": "R"
+        },
+        "root/wake": {
+          "bucket": "invocation",
+          "ceiling_bytes": 57344,
+          "creation_limit": {
+            "C5": 1,
+            "F7": "cumulative"
+          },
+          "lanes": [
+            "F7",
+            "C5"
+          ],
+          "rule": "R"
+        }
+      },
+      "control_fields": [
+        "bytes",
+        "alignment",
+        "ceiling_bytes"
+      ],
+      "control_names": [
+        "cancel",
+        "primary_finish",
+        "aux_finish",
+        "retirement"
+      ],
+      "fixed_fields": [
+        "bytes",
+        "alignment",
+        "arc_bytes",
+        "bucket"
+      ],
+      "fixed_policy": {
+        "a2_cancellation": {
+          "arc": true,
+          "bucket": "invocation",
+          "ceiling_bytes": 64
+        },
+        "a2_capacity": {
+          "arc": true,
+          "bucket": "process",
+          "ceiling_bytes": 65536
+        },
+        "a2_control": {
+          "arc": true,
+          "bucket": "invocation",
+          "ceiling_bytes": 4096
+        },
+        "a2_events": {
+          "arc": false,
+          "bucket": "process",
+          "ceiling_bytes": 65536
+        },
+        "activity_completion": {
+          "arc": false,
+          "bucket": "inline-observation",
+          "ceiling_bytes": 8192
+        },
+        "control_cell": {
+          "arc": false,
+          "bucket": "inline-observation",
+          "ceiling_bytes": 2048
+        },
+        "effect_registry": {
+          "arc": true,
+          "bucket": "process",
+          "ceiling_bytes": 65536
+        },
+        "epoch_attachment": {
+          "arc": false,
+          "bucket": "inline-observation",
+          "ceiling_bytes": 1024
+        },
+        "epoch_jobs": {
+          "arc": true,
+          "bucket": "invocation",
+          "ceiling_bytes": 65536
+        },
+        "generation_pin": {
+          "arc": false,
+          "bucket": "inline-observation",
+          "ceiling_bytes": 4096
+        },
+        "invocation_record": {
+          "arc": true,
+          "bucket": "invocation",
+          "ceiling_bytes": 1048576
+        },
+        "job_context": {
+          "arc": false,
+          "bucket": "inline-observation",
+          "ceiling_bytes": 4096
+        },
+        "native_child_cell": {
+          "arc": false,
+          "bucket": "inline-observation",
+          "ceiling_bytes": 4096
+        },
+        "node_control": {
+          "arc": false,
+          "bucket": "inline-observation",
+          "ceiling_bytes": 4096
+        },
+        "node_runtime": {
+          "arc": false,
+          "bucket": "inline-observation",
+          "ceiling_bytes": 8192
+        },
+        "root_cell": {
+          "arc": false,
+          "bucket": "inline-observation",
+          "ceiling_bytes": 8192
+        }
+      },
+      "limits": {
+        "a2_event_capacity": 512,
+        "cleanup_child_creation_limit": 16,
+        "cleanup_child_wrapper_bytes": 512,
+        "cleanup_owned_capacity_bytes": 8192,
+        "cleanup_reserve": 532480,
+        "cleanup_root_bytes": 65536,
+        "cleanup_roots": 8,
+        "controls": 4,
+        "forward_roots": 8,
+        "maximum_alignment": 16,
+        "maximum_wrapper_handles": 32,
+        "native_children_per_root": 1,
+        "typed_root_payload_bytes": 49152
+      },
+      "maximum_stderr_bytes": 1048576,
+      "record_fields": [
+        "format",
+        "claim",
+        "arc_convention",
+        "fixed",
+        "constructors",
+        "controls",
+        "limits"
+      ],
+      "records": {
+        "b1": {
+          "maximum_bytes": 4096,
+          "tag": "FOKS_B1_LAYOUT "
+        },
+        "b2": {
+          "maximum_bytes": 65536,
+          "tag": "FOKS_B2_LAYOUT "
+        }
+      }
+    },
     "modes": {
-      "node-foundation": {
+      "node-lifetimes": {
         "celld_features": [
           "foks-guarded-node-qualification",
           "foks-guarded-qualification"
@@ -250,13 +822,13 @@
           "node-qualification"
         ]
       },
-      "node-foundation-default": {
+      "node-lifetimes-default": {
         "celld_features": [],
         "celld_foks_edges": [],
         "direct_root_tokio": false,
         "root_features": []
       },
-      "node-foundation-lifecycle": {
+      "node-lifetimes-lifecycle": {
         "celld_features": [
           "foks-guarded-qualification"
         ],
@@ -297,20 +869,27 @@
       }
     },
     "source_roster": [
-      "crates/celld/Cargo.toml",
       "crates/celld/actor.rs",
       "crates/celld/actor/effects.rs",
+      "crates/celld/actor/local_request.rs",
+      "crates/celld/actor/production.rs",
+      "crates/celld/asyncrt.rs",
+      "crates/celld/cell_dispatch.rs",
+      "crates/celld/cell_runtime.rs",
       "crates/celld/generation.rs",
       "crates/celld/guarded_execution.rs",
       "crates/celld/guarded_node.rs",
       "crates/celld/guarded_node/control.rs",
       "crates/celld/guarded_node/tests.rs",
+      "crates/celld/host_channels.rs",
       "crates/celld/js.rs",
+      "crates/celld/js/guarded.rs",
       "crates/celld/js/guarded_node.rs",
+      "crates/celld/js/storage_ops.rs",
       "crates/celld/lib.rs",
-      "crates/celld/runtime.rs",
-      "crates/logic/lib.rs",
-      "crates/logic/types.rs"
+      "crates/celld/ltx_repl.rs",
+      "crates/celld/ltx_replication.rs",
+      "crates/celld/runtime.rs"
     ],
     "tests": {
       "names": [
@@ -334,15 +913,47 @@
         "guarded_execution::node::tests::b1_resident_gate_duplicate_is_inert",
         "guarded_execution::node::tests::b1_soft_swap_gate_and_ordinary_gate_regression",
         "guarded_execution::node::tests::b1_inactive_observation_is_not_processed_finish",
-        "guarded_execution::node::tests::b1_foundation_has_no_ready_or_action"
+        "guarded_execution::node::tests::b1_foundation_has_no_ready_or_action",
+        "guarded_execution::node::tests::b2_effect_inventory_is_closed",
+        "guarded_execution::node::tests::b2_original_origin_cannot_be_rebound",
+        "guarded_execution::node::tests::b2_forward_saturation_preserves_cleanup",
+        "guarded_execution::node::tests::b2_cleanup_credit_and_child_layout_ledger",
+        "guarded_execution::node::tests::b2_actual_task_handle_outlives_delivery_wrapper",
+        "guarded_execution::node::tests::b2_native_child_outlives_dropped_await",
+        "guarded_execution::node::tests::b2_result_channel_disposal_precedes_reuse",
+        "guarded_execution::node::tests::b2_panic_and_unknown_result_quarantine",
+        "guarded_execution::node::tests::b2_cleanup_retry_does_not_replenish_credit",
+        "guarded_execution::node::tests::b2_stale_effect_cannot_complete_new_epoch",
+        "guarded_execution::node::tests::b2_generation_pin_blocks_drained_removal",
+        "guarded_execution::node::tests::b2_retired_generation_refuses_new_pin",
+        "guarded_execution::node::tests::b2_canonical_adoption_binding_has_real_path_epoch_vfs",
+        "guarded_execution::node::tests::b2_dedicated_driver_join_precedes_slot_consumption",
+        "guarded_execution::node::tests::b2_guarded_resident_refuses_ordinary_worker_routes",
+        "guarded_execution::node::tests::b2_sync_origin_uses_actual_parent_and_sample",
+        "guarded_execution::node::tests::b2_sync_auxiliary_is_single_flight",
+        "guarded_execution::node::tests::b2_sync_parent_binding_matrix",
+        "guarded_execution::node::tests::b2_finish_processed_is_not_inactive",
+        "guarded_execution::node::tests::b2_finish_delivery_loss_retains_control",
+        "guarded_execution::node::tests::b2_failed_turn_keeps_output_ticket_semantics",
+        "guarded_execution::node::tests::b2_epoch_attachment_precedes_activation_work",
+        "guarded_execution::node::tests::b2_bucket_registration_cannot_change_while_attached",
+        "guarded_execution::node::tests::b2_hydration_join_precedes_vfs_unregister",
+        "guarded_execution::node::tests::b2_sync_wait_timeout_keeps_native_work_owned",
+        "guarded_execution::node::tests::b2_compaction_cancel_keeps_native_result_owned",
+        "guarded_execution::node::tests::b2_guarded_background_queue_is_bounded",
+        "guarded_execution::node::tests::b2_cell_snapshot_holds_epoch_retirement",
+        "guarded_execution::node::tests::b2_native_close_failure_after_worker_drop_holds_slot",
+        "guarded_execution::node::tests::b2_retirement_requires_every_conjunct",
+        "guarded_execution::node::tests::b2_original_deadline_denies_new_work_but_allows_reserved_cleanup",
+        "guarded_execution::node::tests::b2_lifetimes_has_no_ready_action_or_frontend"
       ],
-      "prefix": "guarded_execution::node::tests::b1_",
+      "prefix": "guarded_execution::node::tests::",
       "threads": 1
     },
     "tree": {
       "files": 286,
-      "inventory_sha256": "17eeb47a1ccf164af95b3b26b6d75bcfffbfc97cc289a6226434f39dffff7b40",
-      "payload_bytes": 6524494
+      "inventory_sha256": "b6f56b07244b18685a4977e0da68e53a37bfc0053bd4b9412933c46e050998db",
+      "payload_bytes": 7101033
     }
   },
   "target": "aarch64-apple-darwin"

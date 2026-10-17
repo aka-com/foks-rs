@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare and qualify pinned A1/A2 inputs and the closed A3a node baseline.
+"""Prepare pinned A1/A2 inputs, A3a nodes and explicit B1/B2 component stages.
 
 verify checks only the original upstream archive. prepare also applies the closed
 A2 patch in private staging. assets accepts the two reviewed local V8 assets.
@@ -107,8 +107,117 @@ FOUNDATION_MEMORY_WARNING = re.compile(
     rb"error=`name` or `mib` specifies an unknown/invalid value\.\n"
 )
 MAXIMUM_FOUNDATION_PATCH = 512 * 1024
+# B2 alone needs the larger source diff; immutable prefix caps stay unchanged.
+MAXIMUM_LIFETIMES_PATCH = 768 * 1024
 MAXIMUM_FOUNDATION_SERIES = 1536 * 1024
 MAXIMUM_FOUNDATION_SOURCE = 8 * 1024 * 1024
+LIFETIMES = "node-lifetimes"
+LIFETIMES_BASE = "23039e209d1b3b129a274dd65fe07f0abfdba8e0"
+LIFETIMES_PATCH = "patches/0003-node-lifetimes.patch"
+LIFETIMES_PROFILE = "runtime/evidence/accepted-b1/runtime-node.lock.json"
+LIFETIMES_SERIES = "runtime/evidence/accepted-b1/patches/node-series.json"
+LIFETIMES_MANIFEST = "runtime/evidence/accepted-b1/prepared-inputs/source-manifest.json"
+LIFETIMES_ASSETS = "runtime/evidence/accepted-b1/assets-node-foundation.json"
+LIFETIMES_BASE_IMAGES = {
+    "foundation_profile": (LIFETIMES_PROFILE, "71347fc8ddb07d3fe894f02f0c7733fa247ebdfcadbe5acceadfa646c1230612"),
+    "foundation_series": (LIFETIMES_SERIES, "6716ff40c680dddfc597ee0ce708e3a0140d3dd9fd81c925d97d54162bfa6073"),
+    "foundation_source_manifest": (LIFETIMES_MANIFEST, "e59f9ce8ef088f8da741ddaf8e8ee488bfba27d508948bab55d0495b73728de2"),
+}
+LIFETIMES_ASSET_SHA256 = "4bf32d523d6406c92be8f66ee2a1f7c6dbb77d8e7e09610bd14cdd26fbaaac1c"
+LIFETIMES_LOCK_SHA256 = "e05fe62986b04425769de96caae00224aeafa9513a9c38468a81410c28d65053"
+LIFETIMES_PATHS = tuple(sorted((
+    "crates/celld/guarded_execution.rs", "crates/celld/guarded_node.rs",
+    "crates/celld/guarded_node/control.rs", "crates/celld/guarded_node/tests.rs",
+    "crates/celld/generation.rs", "crates/celld/cell_runtime.rs", "crates/celld/actor.rs",
+    "crates/celld/asyncrt.rs", "crates/celld/lib.rs",
+    "crates/celld/actor/local_request.rs", "crates/celld/actor/effects.rs", "crates/celld/actor/production.rs",
+    "crates/celld/host_channels.rs", "crates/celld/cell_dispatch.rs", "crates/celld/runtime.rs",
+    "crates/celld/js.rs", "crates/celld/js/storage_ops.rs", "crates/celld/js/guarded.rs",
+    "crates/celld/js/guarded_node.rs", "crates/celld/ltx_repl.rs", "crates/celld/ltx_replication.rs",
+)))
+LIFETIMES_MODES = {
+    "node-lifetimes-default": FOUNDATION_MODES["node-foundation-default"],
+    "node-lifetimes": FOUNDATION_MODES["node-foundation"],
+    "node-lifetimes-lifecycle": FOUNDATION_MODES["node-foundation-lifecycle"],
+}
+NODE_STAGES = (FOUNDATION, LIFETIMES)
+NODE_MODES = {**FOUNDATION_MODES, **LIFETIMES_MODES}
+NODE_BINARY_MODES = ("node-foundation-default", "node-foundation", "node-lifetimes-default", "node-lifetimes")
+NODE_LIFECYCLE_MODES = ("node-foundation-lifecycle", "node-lifetimes-lifecycle")
+LIFETIMES_TEST_PREFIX = "guarded_execution::node::tests::"
+LIFETIMES_TESTS = FOUNDATION_TESTS + [LIFETIMES_TEST_PREFIX + "b2_" + name for name in (
+    "effect_inventory_is_closed", "original_origin_cannot_be_rebound",
+    "forward_saturation_preserves_cleanup", "cleanup_credit_and_child_layout_ledger",
+    "actual_task_handle_outlives_delivery_wrapper", "native_child_outlives_dropped_await",
+    "result_channel_disposal_precedes_reuse", "panic_and_unknown_result_quarantine",
+    "cleanup_retry_does_not_replenish_credit", "stale_effect_cannot_complete_new_epoch",
+    "generation_pin_blocks_drained_removal", "retired_generation_refuses_new_pin",
+    "canonical_adoption_binding_has_real_path_epoch_vfs", "dedicated_driver_join_precedes_slot_consumption",
+    "guarded_resident_refuses_ordinary_worker_routes", "sync_origin_uses_actual_parent_and_sample",
+    "sync_auxiliary_is_single_flight", "sync_parent_binding_matrix",
+    "finish_processed_is_not_inactive", "finish_delivery_loss_retains_control",
+    "failed_turn_keeps_output_ticket_semantics", "epoch_attachment_precedes_activation_work",
+    "bucket_registration_cannot_change_while_attached", "hydration_join_precedes_vfs_unregister",
+    "sync_wait_timeout_keeps_native_work_owned", "compaction_cancel_keeps_native_result_owned",
+    "guarded_background_queue_is_bounded", "cell_snapshot_holds_epoch_retirement",
+    "native_close_failure_after_worker_drop_holds_slot", "retirement_requires_every_conjunct",
+    "original_deadline_denies_new_work_but_allows_reserved_cleanup", "lifetimes_has_no_ready_action_or_frontend",
+)]
+# These are source-derived policies, never measurements or caller-supplied caps.
+LIFETIMES_FIXED_POLICY = {
+    "node_control": ("inline-observation", False, 4096),
+    "invocation_record": ("invocation", True, 1048576),
+    "effect_registry": ("process", True, 65536),
+    "root_cell": ("inline-observation", False, 8192),
+    "native_child_cell": ("inline-observation", False, 4096),
+    "control_cell": ("inline-observation", False, 2048),
+    "activity_completion": ("inline-observation", False, 8192),
+    "epoch_jobs": ("invocation", True, 65536),
+    "epoch_attachment": ("inline-observation", False, 1024),
+    "generation_pin": ("inline-observation", False, 4096),
+    "node_runtime": ("inline-observation", False, 8192),
+    "job_context": ("inline-observation", False, 4096),
+    "a2_capacity": ("process", True, 65536),
+    "a2_control": ("invocation", True, 4096),
+    "a2_cancellation": ("invocation", True, 64),
+    "a2_events": ("process", False, 65536),
+}
+LIFETIMES_CONSTRUCTOR_POLICY = {
+    "root/owner_read": ("R", ("F6",)), "root/node_lease_read": ("R", ("F6",)),
+    "root/capacity_read": ("R", ("F6",)), "root/owner_cas": ("R", ("F6",)),
+    "root/restore": ("R", ("F6",)), "root/start_runtime": ("R", ("F6",)),
+    "root/driver": ("R", ("F3",)), "root/primary_await_durable": ("R", ("F4",)),
+    "root/primary_verify_ownership": ("R", ("F4",)), "root/aux_await_durable": ("R", ("F5",)),
+    "root/aux_verify_ownership": ("R", ("F5",)), "root/hydration": ("R", ("F0",)),
+    "root/sync": ("R", ("F1",)), "root/compaction": ("R", ("F2",)),
+    "root/terminal_proof": ("R", ("C1",)), "root/ensure_durable": ("R", ("C0",)),
+    "root/wake": ("R", ("F7", "C5")), "root/stop": ("R", ("C2",)),
+    "root/release": ("R", ("C3",)), "root/adopt": ("R", ("C4",)),
+    "root/local_retirement": ("R", ("C6",)), "root/cancel": ("R", ("C7",)),
+    "native/db_open": ("N", ("F6",)), "native/restored_alarm": ("N", ("F6",)),
+    "native/worker_build": ("N", ("F6",)), "native/hydrator_open": ("N", ("F0",)),
+    "native/hydrator_step": ("N", ("F0",)), "native/sync_capture": ("N", ("F1", "C0", "C1", "C6")),
+    "native/snapshot": ("N", ("C6",)), "native/local_close": ("N", ("C6",)),
+    "native/worker_destroy": ("N", ("C2",)), "native/read_file": ("N", ("F2",)),
+    "native/opaque_lower_job": ("N", ("F2",)), "inline/publish": ("I", ("F6",)),
+    "future/storage_sync": ("R", ("F3",)), "future/gate_dispatch": ("I", ()),
+}
+LIFETIMES_LAYOUT_FIELDS = ("format", "claim", "arc_convention", "fixed", "constructors", "controls", "limits")
+LIFETIMES_FIXED_FIELDS = ("bytes", "alignment", "arc_bytes", "bucket")
+LIFETIMES_CONSTRUCTOR_FIELDS = (
+    "capture_bytes", "capture_alignment", "future_bytes", "future_alignment", "result_bytes", "result_alignment",
+    "channel_payload_bytes", "channel_payload_alignment", "channel_bound_bytes", "owned_capacity_bound_bytes",
+    "admitted_overlap_bytes", "ceiling_bytes", "creation_limit", "lanes", "bucket",
+)
+LIFETIMES_CONTROL_NAMES = ("cancel", "primary_finish", "aux_finish", "retirement")
+LIFETIMES_CONTROL_FIELDS = ("bytes", "alignment", "ceiling_bytes")
+LIFETIMES_LIMITS = {
+    "forward_roots": 8, "cleanup_roots": 8, "controls": 4, "native_children_per_root": 1,
+    "maximum_wrapper_handles": 32, "cleanup_reserve": 532480, "cleanup_root_bytes": 65536,
+    "cleanup_child_creation_limit": 16, "cleanup_child_wrapper_bytes": 512,
+    "typed_root_payload_bytes": 49152, "cleanup_owned_capacity_bytes": 8192, "maximum_alignment": 16,
+    "a2_event_capacity": 512,
+}
 
 
 def fail(message):
@@ -174,11 +283,11 @@ def relative_name(value):
 
 def load_pins(root=ROOT, stage=None):
     if stage is not None:
-        if stage != FOUNDATION:
+        if stage not in NODE_STAGES:
             fail("unsupported source stage")
         base = load_pins(root)
-        profile = load_foundation(root, base)
-        return {**base, "profile": FOUNDATION, "foundation": profile}
+        profile = load_foundation(root, base) if stage == FOUNDATION else load_lifetimes(root, base)
+        return {**base, "profile": stage, "foundation": profile}
     pins = read_json(root / "runtime.lock.json")
     if not isinstance(pins, dict) or (pins.get("format"), pins.get("profile")) not in ((1, A1), (2, A2)) or type(pins.get("format")) is not int or pins.get("target") != TARGET:
         fail("unsupported input profile")
@@ -222,6 +331,8 @@ def validate_image(value, git=True, positive=False):
 def patch_series(root, pins):
     if pins["profile"] == FOUNDATION:
         return foundation_series(root, pins["foundation"])
+    if pins["profile"] == LIFETIMES:
+        return lifetimes_series(root, pins["foundation"])
     path = root / "patches/series.json"
     series = read_json(path)
     if file_hash(path) != pins["patch_series_sha256"]:
@@ -261,10 +372,11 @@ def patch_series(root, pins):
 
 
 def selected_mode(pins, mode):
-    if pins["profile"] == FOUNDATION:
-        if mode not in FOUNDATION_MODES:
-            fail("unsupported graph/build mode for foundation profile")
-        features = FOUNDATION_MODES[mode]["root_features"]
+    if pins["profile"] in NODE_STAGES:
+        modes = FOUNDATION_MODES if pins["profile"] == FOUNDATION else LIFETIMES_MODES
+        if mode not in modes:
+            fail("unsupported graph/build mode for selected node profile")
+        features = modes[mode]["root_features"]
         return ["--features", "foks-celld-guarded/" + features[0]] if features else []
     if mode not in ("identity", "lifecycle", "node-baseline") or (mode != "identity" and pins["profile"] != A2):
         fail("unsupported graph/build mode for input profile")
@@ -274,6 +386,8 @@ def selected_mode(pins, mode):
 def stage_for_mode(mode):
     if mode in FOUNDATION_MODES:
         return FOUNDATION
+    if mode in LIFETIMES_MODES:
+        return LIFETIMES
     if mode not in ("identity", "lifecycle", "node-baseline"):
         fail("unsupported graph/build mode")
     return None
@@ -293,6 +407,12 @@ def exact_json(actual, expected, label):
 
 def load_foundation(root, base):
     profile = read_json(root / FOUNDATION_PROFILE)
+    return validate_foundation(root, base, profile, root / FOUNDATION_SERIES)
+
+
+def validate_foundation(root, base, profile, series_path):
+    # Only the two fixed loaders supply this path: current B1 or preserved B1.
+    # No CLI/profile value chooses which historical bytes are trusted.
     closed_fields(profile, ("format", "profile", "target", "accepted_a2_commit", "accepted_a3a_commit", "base", "pins", "node_series", "cargo_lock", "qualification"), "foundation profile")
     if type(profile["format"]) is not int or profile["format"] != 1 or profile["profile"] != FOUNDATION or profile["target"] != TARGET or profile["accepted_a2_commit"] != NODE_BASE or profile["accepted_a3a_commit"] != FOUNDATION_BASE or base["profile"] != A2:
         fail("invalid foundation profile identity")
@@ -335,13 +455,17 @@ def load_foundation(root, base):
             fail("invalid foundation deployment identity")
     exact_json(qualification["tests"], {"prefix": FOUNDATION_TEST_PREFIX, "names": FOUNDATION_TESTS, "threads": 1}, "foundation test inventory")
     exact_json(qualification["modes"], FOUNDATION_MODES, "foundation modes")
-    foundation_series(root, profile)
+    validate_foundation_series(root, profile, series_path)
     return profile
 
 
 def foundation_series(root, profile):
-    checked_file(root / FOUNDATION_SERIES, profile["node_series"])
-    series = read_json(root / FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    return validate_foundation_series(root, profile, root / FOUNDATION_SERIES)
+
+
+def validate_foundation_series(root, profile, series_path):
+    checked_file(series_path, profile["node_series"])
+    series = read_json(series_path, MAXIMUM_FOUNDATION_SERIES)
     closed_fields(series, ("format", "profile", "accepted_a2_commit", "accepted_a3a_commit", "base_series", "patches"), "foundation patch series")
     if type(series["format"]) is not int or series["format"] != 1 or series["profile"] != FOUNDATION or series["accepted_a2_commit"] != NODE_BASE or series["accepted_a3a_commit"] != FOUNDATION_BASE:
         fail("invalid foundation series identity")
@@ -379,10 +503,112 @@ def foundation_series(root, profile):
 
 
 def foundation_lock(root, pins):
-    """Preparation can precede lock materialization; graph/build cannot."""
-    if pins["profile"] == FOUNDATION:
+    """Only B1 preparation may precede lock materialization; graph/build cannot."""
+    if pins["profile"] in NODE_STAGES:
         return checked_file(root / "Cargo.lock", pins["foundation"]["cargo_lock"]["expected"])
     return root / "Cargo.lock"
+
+
+def lifetimes_constructor_policy(rule, lanes):
+    return {
+        "rule": rule, "lanes": list(lanes),
+        "creation_limit": {lane: "inline" if rule == "I" else "cumulative" if lane.startswith("F") else 16 if rule == "N" else 1 for lane in lanes},
+        "bucket": "inline-observation" if rule == "I" else "invocation",
+        "ceiling_bytes": {"R": 57344, "N": 512, "I": 8192}[rule],
+    }
+
+
+def lifetimes_layout_contract():
+    """The closed source contract contains policy, never measured type sizes."""
+    return {
+        "maximum_stderr_bytes": 1024 * 1024,
+        "records": {"b1": {"tag": "FOKS_B1_LAYOUT ", "maximum_bytes": 4096}, "b2": {"tag": "FOKS_B2_LAYOUT ", "maximum_bytes": 65536}},
+        "record_fields": list(LIFETIMES_LAYOUT_FIELDS), "fixed_fields": list(LIFETIMES_FIXED_FIELDS),
+        "constructor_fields": list(LIFETIMES_CONSTRUCTOR_FIELDS), "control_fields": list(LIFETIMES_CONTROL_FIELDS),
+        "fixed_policy": {name: {"bucket": bucket, "arc": arc, "ceiling_bytes": ceiling} for name, (bucket, arc, ceiling) in LIFETIMES_FIXED_POLICY.items()},
+        "constructor_policy": {name: lifetimes_constructor_policy(rule, lanes) for name, (rule, lanes) in LIFETIMES_CONSTRUCTOR_POLICY.items()},
+        "control_names": list(LIFETIMES_CONTROL_NAMES), "arc_convention": "repr-c-two-atomic-usize",
+        "limits": dict(LIFETIMES_LIMITS),
+    }
+
+
+def accepted_foundation(root):
+    # Hash-bound immutable prefix: never validate B1 against the new working
+    # runtime-node.lock or node-series, which intentionally identify B2.
+    for path, checksum in LIFETIMES_BASE_IMAGES.values():
+        image = read_json(root / path)
+        if file_hash(root / path) != checksum:
+            fail("accepted foundation input changed")
+        if not isinstance(image, dict):
+            fail("invalid accepted foundation input")
+    base = load_pins(root)
+    return validate_foundation(root, base, read_json(root / LIFETIMES_PROFILE), root / LIFETIMES_SERIES)
+
+
+def load_lifetimes(root, base):
+    accepted = accepted_foundation(root)
+    profile = read_json(root / FOUNDATION_PROFILE)
+    closed_fields(profile, ("format", "profile", "target", "accepted_a2_commit", "accepted_a3a_commit", "accepted_b1_commit", "base", "pins", "node_series", "cargo_lock", "qualification"), "lifetimes profile")
+    identity = {"format": 1, "profile": LIFETIMES, "target": TARGET, "accepted_a2_commit": NODE_BASE, "accepted_a3a_commit": FOUNDATION_BASE, "accepted_b1_commit": LIFETIMES_BASE}
+    exact_json({name: profile[name] for name in identity}, identity, "lifetimes profile identity")
+    closed_fields(profile["base"], (*FOUNDATION_BASE_IMAGES, *LIFETIMES_BASE_IMAGES), "lifetimes base")
+    exact_json({name: profile["base"][name] for name in FOUNDATION_BASE_IMAGES}, accepted["base"], "lifetimes historical base")
+    for name, (path, checksum) in LIFETIMES_BASE_IMAGES.items():
+        entry = profile["base"][name]
+        foundation_image(entry, path)
+        if entry["sha256"] != checksum:
+            fail("lifetimes accepted base changed")
+        checked_file(root / path, entry)
+    exact_json(profile["pins"], base, "lifetimes inherited pins")
+    exact_json(profile["cargo_lock"], accepted["cargo_lock"], "lifetimes unchanged lock contract")
+    if profile["cargo_lock"]["expected"]["sha256"] != LIFETIMES_LOCK_SHA256:
+        fail("lifetimes accepted lock changed")
+    # Unlike B1's pre-resolution source preparation, every B2 action requires
+    # the already accepted lock. The historical before-image grants no access.
+    checked_file(root / "Cargo.lock", profile["cargo_lock"]["expected"])
+    foundation_image(profile["node_series"], FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    qualification = profile["qualification"]
+    closed_fields(qualification, ("claim", "source_roster", "tree", "program", "deployments", "tests", "modes", "not_qualified", "layout_evidence"), "lifetimes qualification")
+    exact_json({name: qualification[name] for name in ("claim", "source_roster", "not_qualified")}, {"claim": "b2-lifetimes-components-only", "source_roster": list(LIFETIMES_PATHS), "not_qualified": FOUNDATION_EXCLUSIONS}, "lifetimes scope")
+    tree = qualification["tree"]
+    closed_fields(tree, ("files", "payload_bytes", "inventory_sha256"), "lifetimes tree")
+    if type(tree["files"]) is not int or tree["files"] != accepted["qualification"]["tree"]["files"] or type(tree["payload_bytes"]) is not int or not 0 < tree["payload_bytes"] <= MAXIMUM_FOUNDATION_SOURCE or not isinstance(tree["inventory_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", tree["inventory_sha256"]):
+        fail("invalid lifetimes tree envelope")
+    for name in ("program", "deployments"):
+        exact_json(qualification[name], accepted["qualification"][name], "lifetimes unchanged " + name)
+    exact_json(qualification["tests"], {"prefix": LIFETIMES_TEST_PREFIX, "names": LIFETIMES_TESTS, "threads": 1}, "lifetimes test inventory")
+    exact_json(qualification["modes"], LIFETIMES_MODES, "lifetimes modes")
+    exact_json(qualification["layout_evidence"], lifetimes_layout_contract(), "lifetimes layout policy")
+    lifetimes_series(root, profile, accepted)
+    return profile
+
+
+def lifetimes_series(root, profile, accepted=None):
+    accepted = accepted_foundation(root) if accepted is None else accepted
+    checked_file(root / FOUNDATION_SERIES, profile["node_series"])
+    series = read_json(root / FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    closed_fields(series, ("format", "profile", "accepted_a2_commit", "accepted_a3a_commit", "accepted_b1_commit", "base_series", "patches"), "lifetimes patch series")
+    identity = {"format": 1, "profile": LIFETIMES, "accepted_a2_commit": NODE_BASE, "accepted_a3a_commit": FOUNDATION_BASE, "accepted_b1_commit": LIFETIMES_BASE, "base_series": accepted["base"]["patch_series"]}
+    exact_json({name: series[name] for name in identity}, identity, "lifetimes series identity")
+    patches = series["patches"]
+    if not isinstance(patches, list) or len(patches) != 3:
+        fail("lifetimes requires exactly three patches")
+    prefix = validate_foundation_series(root, accepted, root / LIFETIMES_SERIES)
+    exact_json(patches[:2], prefix["patches"], "lifetimes immutable patch prefix")
+    selected = patches[2]
+    closed_fields(selected, ("path", "bytes", "sha256", "files"), "lifetimes third patch")
+    foundation_image({name: selected[name] for name in ("path", "bytes", "sha256")}, LIFETIMES_PATCH, MAXIMUM_LIFETIMES_PATCH)
+    files = selected["files"]
+    if not isinstance(files, list) or len(files) != len(LIFETIMES_PATHS):
+        fail("invalid lifetimes patch roster")
+    for path, entry in zip(LIFETIMES_PATHS, files, strict=True):
+        closed_fields(entry, ("path", "mode", "before", "after"), "lifetimes patch file")
+        if entry["path"] != path or entry["mode"] != "100644":
+            fail("lifetimes patch path/order/mode changed")
+        validate_image(entry["before"])
+        validate_image(entry["after"])
+    checked_file(root / LIFETIMES_PATCH, selected)
+    return series
 
 
 def inventory(root, pins):
@@ -444,7 +670,7 @@ def parse_patch(root, pins, upstream):
         changes = parse_one_patch(root, selected, current)
         parsed.extend(changes)
         current = postimage_inventory(current, changes)
-    if pins["profile"] == FOUNDATION:
+    if pins["profile"] in NODE_STAGES:
         files = [row for row in current.values() if row["type"] == "blob"]
         tree = pins["foundation"]["qualification"]["tree"]
         if len(files) != tree["files"] or sum(row["size"] for row in files) != tree["payload_bytes"]:
@@ -560,8 +786,8 @@ def source_manifest(root, pins, files, prepared):
     value = {"format": 1, "input_sha256": file_hash(root / "runtime.lock.json"), "archive_sha256": pins["upstream"]["archive_sha256"], "tree": pins["upstream"]["tree"], "patch_series_sha256": pins["patch_series_sha256"], "files": sorted(files, key=lambda item: item["path"])}
     if pins["profile"] == A2:
         value.update(format=2, profile=A2, kind="patched-source" if prepared else "upstream-archive-only")
-    elif pins["profile"] == FOUNDATION:
-        value.update(format=3, profile=FOUNDATION, kind="patched-source" if prepared else "upstream-archive-only", input_sha256=file_hash(root / FOUNDATION_PROFILE), base_input_sha256=file_hash(root / "runtime.lock.json"), patch_series_sha256=pins["foundation"]["node_series"]["sha256"])
+    elif pins["profile"] in NODE_STAGES:
+        value.update(format=3, profile=pins["profile"], kind="patched-source" if prepared else "upstream-archive-only", input_sha256=file_hash(root / FOUNDATION_PROFILE), base_input_sha256=file_hash(root / "runtime.lock.json"), patch_series_sha256=pins["foundation"]["node_series"]["sha256"])
         if prepared:
             actual = {"files": len(value["files"]), "payload_bytes": sum(row["bytes"] for row in value["files"]), "inventory_sha256": digest(json.dumps(value["files"], sort_keys=True, separators=(",", ":")).encode())}
             if actual != pins["foundation"]["qualification"]["tree"]:
@@ -765,7 +991,7 @@ def prepare(archive, root=ROOT, stage=None):
     try:
         original = inspect_archive(archive, root, staging, stage)
         pins = load_pins(root, stage)
-        if file_hash(root / (FOUNDATION_PROFILE if stage == FOUNDATION else "runtime.lock.json")) != original["input_sha256"]:
+        if file_hash(root / (FOUNDATION_PROFILE if stage in NODE_STAGES else "runtime.lock.json")) != original["input_sha256"]:
             fail("input changed during archive preparation")
         upstream = inventory(root, pins)
         patches = parse_patch(root, pins, upstream)
@@ -807,7 +1033,7 @@ def prepare_assets(archive, binding, root=ROOT, stage=None):
         pins = load_pins(root, stage)
         base = prepare_assets(archive, binding, root)
         expected = foundation_assets(root, pins, base)
-        path = runtime_directory(root) / "assets-node-foundation.json"
+        path = runtime_directory(root) / ("assets-" + pins["profile"] + ".json")
         if not path.exists() and not path.is_symlink():
             write_json(path, expected)
         return verify_assets(root, stage)
@@ -837,6 +1063,17 @@ def prepare_assets(archive, binding, root=ROOT, stage=None):
 
 
 def foundation_assets(root, pins, base):
+    if pins["profile"] == LIFETIMES:
+        accepted = accepted_foundation(root)
+        historical = {"format": 1, "profile": FOUNDATION, "input_sha256": file_hash(root / LIFETIMES_PROFILE), "patch_series_sha256": accepted["node_series"]["sha256"], "base_receipt_sha256": file_hash(root / "runtime/artifacts/assets.json"), "assets": base}
+        preserved = read_json(root / LIFETIMES_ASSETS)
+        if file_hash(root / LIFETIMES_ASSETS) != LIFETIMES_ASSET_SHA256:
+            fail("accepted foundation asset receipt changed")
+        exact_json(preserved, historical, "accepted foundation assets")
+        # The original receipt remains at its original path too. Native
+        # archives are reused without copying or relabeling historical proof.
+        checked_file(root / "runtime/assets-node-foundation.json", {"bytes": (root / LIFETIMES_ASSETS).stat().st_size, "sha256": LIFETIMES_ASSET_SHA256})
+        return {"format": 1, "profile": LIFETIMES, "input_sha256": file_hash(root / FOUNDATION_PROFILE), "patch_series_sha256": pins["foundation"]["node_series"]["sha256"], "base_receipt_sha256": file_hash(root / "runtime/artifacts/assets.json"), "foundation_receipt_sha256": LIFETIMES_ASSET_SHA256, "assets": base}
     return {"format": 1, "profile": FOUNDATION, "input_sha256": file_hash(root / FOUNDATION_PROFILE), "patch_series_sha256": pins["foundation"]["node_series"]["sha256"], "base_receipt_sha256": file_hash(root / "runtime/artifacts/assets.json"), "assets": base}
 
 
@@ -844,7 +1081,7 @@ def verify_assets(root=ROOT, stage=None):
     if stage is not None:
         pins = load_pins(root, stage)
         expected = foundation_assets(root, pins, verify_assets(root))
-        exact_json(read_json(root / "runtime/assets-node-foundation.json"), expected, "foundation native asset receipt")
+        exact_json(read_json(root / ("runtime/assets-" + pins["profile"] + ".json")), expected, "foundation native asset receipt")
         return expected
     pins = load_pins(root)
     v8 = pins["v8"]
@@ -964,14 +1201,14 @@ def upstream_edges(metadata, reached, root=ROOT, mode="identity"):
     packages = {package["id"]: package for package in metadata["packages"]}
     nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
     allowed = set()
-    if stage_for_mode(mode) == FOUNDATION:
-        pins = load_pins(root, FOUNDATION)
+    if stage_for_mode(mode) in NODE_STAGES:
+        pins = load_pins(root, stage_for_mode(mode))
         selected_mode(pins, mode)
         foundation_lock(root, pins)
         # The graph's independent declaration validator also checks optional
         # features/renames. This exception never applies to an unrelated local
         # edge, package, mode, registry identity or upstream dependency.
-        for name in FOUNDATION_MODES[mode]["celld_foks_edges"]:
+        for name in NODE_MODES[mode]["celld_foks_edges"]:
             allowed.add((name, "0.4.0", None))
     checked = []
     for identity in sorted(reached):
@@ -2049,7 +2286,7 @@ def tool_identity(root, directory, slot, environment, toolchain):
 
 def build_commands(root, toolchain, pins, mode="identity"):
     features = selected_mode(pins, mode)
-    if mode == "node-baseline" or mode in ("node-foundation-default", "node-foundation"):
+    if mode == "node-baseline" or mode in NODE_BINARY_MODES:
         shared = ["--locked", "--offline", "--manifest-path", str(root / "Cargo.toml"), "--no-default-features", "--package", "foks-celld-guarded", "--package", "celld@0.6.2", *features, "--bin", "celld", "-j", "2", "--target", TARGET]
         cargo = toolchain / "bin/cargo"
         return {
@@ -2061,20 +2298,25 @@ def build_commands(root, toolchain, pins, mode="identity"):
     cargo = toolchain / "bin/cargo"
     commands = {
         "build": network_command([cargo, "build", *shared, *binary]),
-        "clippy": network_command([cargo, "clippy", *shared, *(["--all-targets"] if mode in ("lifecycle", "node-foundation-lifecycle") else binary), "--", "-D", "warnings"]),
+        "clippy": network_command([cargo, "clippy", *shared, *(["--all-targets"] if mode == "lifecycle" or mode in NODE_LIFECYCLE_MODES else binary), "--", "-D", "warnings"]),
     }
-    if mode in ("lifecycle", "node-foundation-lifecycle"):
+    if mode == "lifecycle" or mode in NODE_LIFECYCLE_MODES:
         commands["lifecycle"] = network_command([cargo, "test", *shared, "--test", "lifecycle", "--", "--test-threads=1", "--nocapture"])
     return commands
 
 
 def foundation_test_commands(root, toolchain, pins):
-    selected_mode(pins, "node-foundation")
-    shared = [toolchain / "bin/cargo", "test", "--locked", "--offline", "--manifest-path", str(root / "Cargo.toml"), "--no-default-features", "--package", "foks-celld-guarded", "--package", "celld@0.6.2", "--features", "foks-celld-guarded/node-qualification", "--lib", "-j", "2", "--target", TARGET, FOUNDATION_TEST_PREFIX, "--"]
+    selected_mode(pins, pins["profile"])
+    prefix = LIFETIMES_TEST_PREFIX if pins["profile"] == LIFETIMES else FOUNDATION_TEST_PREFIX
+    shared = [toolchain / "bin/cargo", "test", "--locked", "--offline", "--manifest-path", str(root / "Cargo.toml"), "--no-default-features", "--package", "foks-celld-guarded", "--package", "celld@0.6.2", "--features", "foks-celld-guarded/node-qualification", "--lib", "-j", "2", "--target", TARGET, prefix, "--"]
     return {"list": network_command([*shared, "--list"]), "run": network_command([*shared, "--test-threads=1"])}
 
 
-def foundation_test_output(path, listing):
+def foundation_test_output(path, listing, stage=FOUNDATION):
+    if stage not in NODE_STAGES:
+        fail("unsupported component test stage")
+    expected = LIFETIMES_TESTS if stage == LIFETIMES else FOUNDATION_TESTS
+    count = len(expected)
     path = Path(path)
     if path.is_symlink() or not path.is_file() or path.stat().st_size > 1024 * 1024:
         fail("invalid foundation test output")
@@ -2083,23 +2325,23 @@ def foundation_test_output(path, listing):
     for line in lines:
         if listing and line.endswith(": test"):
             names.append(line[:-6])
-        elif listing and line == "21 tests, 0 benchmarks":
+        elif listing and line == str(count) + " tests, 0 benchmarks":
             totals.append(line)
         elif not listing and line.startswith("test ") and line.endswith(" ... ok"):
             names.append(line[5:-7])
-        elif not listing and line == "running 21 tests":
+        elif not listing and line == "running " + str(count) + " tests":
             totals.append(line)
-        elif not listing and re.fullmatch(r"test result: ok\. 21 passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out; finished in [0-9]+\.[0-9]+s", line):
+        elif not listing and re.fullmatch(r"test result: ok\. " + str(count) + r" passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out; finished in [0-9]+\.[0-9]+s", line):
             totals.append(line)
         else:
             fail("unexpected foundation test output")
-    if sorted(names) != sorted(FOUNDATION_TESTS) or len(names) != 21 or len(totals) != (1 if listing else 2):
+    if sorted(names) != sorted(expected) or len(names) != count or len(totals) != (1 if listing else 2):
         fail("foundation tests missing, duplicated, ignored or incomplete")
     return names
 
 
-def foundation_layout_output(path, expected_stderr_sha256):
-    """Bind one compiled-layout record to the unchanged owned-command stderr."""
+def compiled_layout_record(path, expected_stderr_sha256, prefix, maximum_record):
+    """Read one fixed-tag record from the unchanged owned-command stderr."""
     if not isinstance(expected_stderr_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_stderr_sha256):
         fail("invalid foundation layout stderr hash")
     path = Path(path)
@@ -2125,13 +2367,12 @@ def foundation_layout_output(path, expected_stderr_sha256):
     if digest(raw) != expected_stderr_sha256:
         fail("foundation layout stderr differs from owned command")
 
-    prefix = b"FOKS_B1_LAYOUT "
     lines = raw.split(b"\n")
     records = []
     for index, line in enumerate(lines):
-        if b"FOKS_B1_LAYOUT" not in line:
+        if prefix.rstrip(b" ") not in line:
             continue
-        if index == len(lines) - 1 or not line.startswith(prefix) or b"\r" in line or len(line) + 1 > 4096:
+        if index == len(lines) - 1 or not line.startswith(prefix) or b"\r" in line or len(line) + 1 > maximum_record:
             fail("invalid foundation layout record framing")
         records.append(line + b"\n")
     if len(records) != 1:
@@ -2150,7 +2391,16 @@ def foundation_layout_output(path, expected_stderr_sha256):
         fail("foundation layout numbers must be finite integers")
 
     record = json.loads(raw_record[len(prefix):-1].decode("utf-8"), object_pairs_hook=unique, parse_float=refuse_number, parse_constant=refuse_number)
-    fixed = {"format": 1, "claim": "b1-native-layouts-only", "arc_convention": "repr-c-two-atomic-usize", "role_caps": [1024 * 1024, 8 * 1024 * 1024, 64 * 1024], "role_counts": [1, 2, 1], "cleanup_reserve": 200 * 1024, "weak_limit": 66}
+    return record, raw_record
+
+
+def foundation_layout_output(path, expected_stderr_sha256, stage=FOUNDATION):
+    """Keep the accepted B1 schema while recording this build's actual sizes."""
+    if type(stage) is not str or stage not in NODE_STAGES:
+        fail("unsupported foundation layout stage")
+    cleanup_reserve = 204800 if stage == FOUNDATION else LIFETIMES_LIMITS["cleanup_reserve"]
+    record, raw_record = compiled_layout_record(path, expected_stderr_sha256, b"FOKS_B1_LAYOUT ", 4096)
+    fixed = {"format": 1, "claim": "b1-native-layouts-only", "arc_convention": "repr-c-two-atomic-usize", "role_caps": [1024 * 1024, 8 * 1024 * 1024, 64 * 1024], "role_counts": [1, 2, 1], "cleanup_reserve": cleanup_reserve, "weak_limit": 66}
     closed_fields(record, (*fixed, "layouts", "initial_process_debt"), "foundation layout record")
     exact_json({name: record[name] for name in fixed}, fixed, "foundation layout contract")
     layout_names = ("request_arc", "control_arc", "registry_arc", "owner_factory", "original_owner", "header_cell", "cleanup_credits", "control_observation", "node_arc")
@@ -2167,6 +2417,75 @@ def foundation_layout_output(path, expected_stderr_sha256):
     debt = 67 * layouts["request_arc"]["bytes"] + layouts["control_arc"]["bytes"] + layouts["registry_arc"]["bytes"]
     if type(record["initial_process_debt"]) is not int or record["initial_process_debt"] != debt:
         fail("foundation initial process debt differs from measured layouts")
+    return {"record": record, "raw_record_bytes": len(raw_record), "raw_record_sha256": digest(raw_record)}
+
+
+def lifetimes_layout_output(path, expected_stderr_sha256):
+    """Validate real compiled layouts against the closed B2 admission table."""
+    record, raw_record = compiled_layout_record(path, expected_stderr_sha256, b"FOKS_B2_LAYOUT ", 65536)
+    closed_fields(record, LIFETIMES_LAYOUT_FIELDS, "lifetimes layout record")
+    fixed = {"format": 1, "claim": "b2-constructor-layouts-only", "arc_convention": "repr-c-two-atomic-usize", "limits": LIFETIMES_LIMITS}
+    exact_json({name: record[name] for name in fixed}, fixed, "lifetimes layout contract")
+
+    def layout(size, alignment, ceiling, positive=False):
+        # All operands are bounded before addition. On the pinned 64-bit
+        # target the largest permitted total is far below usize overflow.
+        if type(size) is not int or not int(positive) <= size <= ceiling or type(alignment) is not int or not 0 < alignment <= 16 or alignment & (alignment - 1) or size % alignment or (not size and alignment != 1):
+            fail("invalid lifetimes layout size or alignment")
+
+    def round_up(value, alignment):
+        return (value + alignment - 1) // alignment * alignment
+
+    closed_fields(record["fixed"], LIFETIMES_FIXED_POLICY, "lifetimes fixed layouts")
+    for name, (bucket, arc, ceiling) in LIFETIMES_FIXED_POLICY.items():
+        entry = record["fixed"][name]
+        closed_fields(entry, LIFETIMES_FIXED_FIELDS, "lifetimes fixed layout")
+        size, alignment = entry["bytes"], entry["alignment"]
+        layout(size, alignment, ceiling, positive=True)
+        arc_bytes = round_up(round_up(16, alignment) + size, max(8, alignment)) if arc else 0
+        if arc_bytes > ceiling or (name == "a2_events" and size % 512):
+            fail("lifetimes fixed allocation exceeds its policy")
+        exact_json({key: entry[key] for key in ("arc_bytes", "bucket")}, {"arc_bytes": arc_bytes, "bucket": bucket}, "lifetimes fixed allocation policy")
+
+    closed_fields(record["constructors"], LIFETIMES_CONSTRUCTOR_POLICY, "lifetimes constructors")
+    for name, (rule, lanes) in LIFETIMES_CONSTRUCTOR_POLICY.items():
+        entry = record["constructors"][name]
+        closed_fields(entry, LIFETIMES_CONSTRUCTOR_FIELDS, "lifetimes constructor")
+        component_ceiling = {"R": 49152, "I": 8192, "N": 512}[rule]
+        for field in ("capture", "future", "result", "channel_payload"):
+            layout(entry[field + "_bytes"], entry[field + "_alignment"], component_ceiling)
+        capture, future, result, payload = (entry[field + "_bytes"] for field in ("capture", "future", "result", "channel_payload"))
+        typed = capture + future + result
+        policy = lifetimes_constructor_policy(rule, lanes)
+        if rule == "I":
+            if payload or typed > 8192:
+                fail("lifetimes inline constructor has a channel or exceeds layout allowance")
+            channel, owned, overlap = 0, 0, 0
+        else:
+            if not payload:
+                fail("lifetimes allocated result channel has no payload layout")
+            channel = 80 + round_up(payload, 16)
+            if rule == "R":
+                if typed > 49152 or channel > 8192:
+                    fail("lifetimes root exceeds typed or owned partition")
+                owned = 8192 - channel
+                overlap = typed + channel + owned
+            else:
+                if future:
+                    fail("lifetimes native child cannot own an async future")
+                owned = 0
+                overlap = capture + result + channel
+            if overlap > policy["ceiling_bytes"]:
+                fail("lifetimes constructor overlap exceeds admitted ceiling")
+        expected = {key: value for key, value in policy.items() if key != "rule"}
+        expected.update(channel_bound_bytes=channel, owned_capacity_bound_bytes=owned, admitted_overlap_bytes=overlap)
+        exact_json({key: entry[key] for key in expected}, expected, "lifetimes constructor policy")
+
+    closed_fields(record["controls"], LIFETIMES_CONTROL_NAMES, "lifetimes controls")
+    for entry in record["controls"].values():
+        closed_fields(entry, LIFETIMES_CONTROL_FIELDS, "lifetimes control")
+        layout(entry["bytes"], entry["alignment"], 2048, positive=True)
+        exact_json(entry["ceiling_bytes"], 2048, "lifetimes control ceiling")
     return {"record": record, "raw_record_bytes": len(raw_record), "raw_record_sha256": digest(raw_record)}
 
 
@@ -2220,10 +2539,13 @@ def foundation_probe_output(directory, name):
 
 def build_foundation(graph_directory, root, mode):
     import check_graph
-    pins = load_pins(root, FOUNDATION)
+    stage = stage_for_mode(mode)
+    if stage not in NODE_STAGES:
+        fail("unsupported node component build stage")
+    pins = load_pins(root, stage)
     selected_mode(pins, mode)
     foundation_lock(root, pins)
-    source, assets = verify_source(root, FOUNDATION), verify_assets(root, FOUNDATION)
+    source, assets = verify_source(root, stage), verify_assets(root, stage)
     graph = check_graph.verify(graph_directory, root, mode)
     refusal, measured = resource_refusal(root, initial=True)
     if refusal:
@@ -2231,9 +2553,9 @@ def build_foundation(graph_directory, root, mode):
     toolchain, environment = controlled_environment(root)
     evidence_root = runtime_directory(root) / "evidence"
     evidence_root.mkdir(exist_ok=True)
-    directory = Path(tempfile.mkdtemp(prefix="foundation-", dir=evidence_root))
-    claims = {"node-foundation-default": "b1-default-bin-regression", "node-foundation": "b1-foundation-component-only", "node-foundation-lifecycle": "b1-a2-lifecycle-regression"}
-    receipt = {"format": 1, "profile": FOUNDATION, "mode": mode, "claim": claims[mode], "status": "incomplete", "source": source, "assets": assets, "profile_sha256": file_hash(root / FOUNDATION_PROFILE), "series_sha256": pins["foundation"]["node_series"]["sha256"], "cargo_lock_sha256": file_hash(root / "Cargo.lock"), "graph_directory": str(Path(graph_directory).resolve()), "graph_sha256": digest(json.dumps(graph, sort_keys=True).encode()), "initial_resources": measured, "not_qualified": FOUNDATION_EXCLUSIONS}
+    directory = Path(tempfile.mkdtemp(prefix="lifetimes-" if stage == LIFETIMES else "foundation-", dir=evidence_root))
+    claims = {"node-foundation-default": "b1-default-bin-regression", "node-foundation": "b1-foundation-component-only", "node-foundation-lifecycle": "b1-a2-lifecycle-regression", "node-lifetimes-default": "b2-default-bin-regression", "node-lifetimes": "b2-lifetimes-components-only", "node-lifetimes-lifecycle": "b2-a2-lifecycle-regression"}
+    receipt = {"format": 1, "profile": stage, "mode": mode, "claim": claims[mode], "status": "incomplete", "source": source, "assets": assets, "profile_sha256": file_hash(root / FOUNDATION_PROFILE), "series_sha256": pins["foundation"]["node_series"]["sha256"], "cargo_lock_sha256": file_hash(root / "Cargo.lock"), "graph_directory": str(Path(graph_directory).resolve()), "graph_sha256": digest(json.dumps(graph, sort_keys=True).encode()), "initial_resources": measured, "not_qualified": FOUNDATION_EXCLUSIONS}
     write_json(directory / "receipt.json", receipt)
     with BuildSlot(root) as slot:
         try:
@@ -2241,7 +2563,7 @@ def build_foundation(graph_directory, root, mode):
             commands = build_commands(root, toolchain, pins, mode)
             for name in ("build", "clippy"):
                 receipt[name] = run_owned(commands[name], root, environment, directory, name, slot, pins["build"]["timeout_seconds"], lambda: resource_refusal(root))
-            if mode == "node-foundation-lifecycle":
+            if mode in NODE_LIFECYCLE_MODES:
                 binary = root / "runtime/target" / TARGET / "debug/foks-celld-guarded"
                 image, _ = stable_fixture_file(binary, 4 * 1024**3)
                 if not image["bytes"] or not image["mode"] & 0o111:
@@ -2262,16 +2584,18 @@ def build_foundation(graph_directory, root, mode):
                     command = run_owned(network_command([binary, flag]), root, environment, directory, name, slot, 15, lambda: resource_refusal(root), maximum_log_bytes=65536, expected_exit_code=1 if name == "invalid-option" else 0)
                     receipt["probes"][name] = {"command": command, "output": foundation_probe_output(directory, name)}
                     checked_file(binary, receipt["binary"])
-                if mode == "node-foundation":
-                    focused = {"prefix": FOUNDATION_TEST_PREFIX, "names": FOUNDATION_TESTS, "threads": 1}
+                if mode == stage:
+                    focused = {"prefix": LIFETIMES_TEST_PREFIX if stage == LIFETIMES else FOUNDATION_TEST_PREFIX, "names": LIFETIMES_TESTS if stage == LIFETIMES else FOUNDATION_TESTS, "threads": 1}
                     receipt["focused_tests"] = focused
                     for name, argv in foundation_test_commands(root, toolchain, pins).items():
                         focused[name] = run_owned(argv, root, environment, directory, "tests-" + name, slot, pins["build"]["timeout_seconds"], lambda: resource_refusal(root))
-                        foundation_test_output(directory / ("tests-" + name + ".stdout"), name == "list")
+                        foundation_test_output(directory / ("tests-" + name + ".stdout"), name == "list", stage)
                         if name == "run":
-                            focused["layouts"] = foundation_layout_output(directory / "tests-run.stderr", focused[name]["stderr_sha256"])
+                            focused["layouts"] = foundation_layout_output(directory / "tests-run.stderr", focused[name]["stderr_sha256"], stage)
+                            if stage == LIFETIMES:
+                                focused["lifetimes_layouts"] = lifetimes_layout_output(directory / "tests-run.stderr", focused[name]["stderr_sha256"])
             checked_file(binary, receipt["binary"])
-            if verify_source(root, FOUNDATION) != source or verify_assets(root, FOUNDATION) != assets or check_graph.verify(graph_directory, root, mode) != graph:
+            if verify_source(root, stage) != source or verify_assets(root, stage) != assets or check_graph.verify(graph_directory, root, mode) != graph:
                 fail("foundation qualification inputs changed")
             if config_inputs(root) != receipt["tools"]["cargo_configs"] or any(file_hash(path) != expected for path, expected in receipt["tools"]["native_tools"].items()):
                 fail("foundation native tools/configuration changed")
@@ -2292,7 +2616,7 @@ def build_foundation(graph_directory, root, mode):
 
 
 def build(graph_directory, root=ROOT, mode="identity"):
-    if stage_for_mode(mode) == FOUNDATION:
+    if stage_for_mode(mode) in NODE_STAGES:
         return build_foundation(graph_directory, root, mode)
     if mode == "node-baseline":
         return build_node(graph_directory, root)
@@ -2365,16 +2689,16 @@ def main():
         help_text = "validate only the immutable upstream archive" if name == "verify" else "validate archive and publish the reviewed prepared postimage"
         operation = sub.add_parser(name, help=help_text)
         operation.add_argument("archive", type=Path)
-        operation.add_argument("--stage", choices=(FOUNDATION,))
+        operation.add_argument("--stage", choices=NODE_STAGES)
     assets = sub.add_parser("assets")
     assets.add_argument("archive", type=Path)
     assets.add_argument("binding", type=Path)
-    assets.add_argument("--stage", choices=(FOUNDATION,))
-    sub.add_parser("verify-source").add_argument("--stage", choices=(FOUNDATION,))
-    sub.add_parser("verify-assets").add_argument("--stage", choices=(FOUNDATION,))
+    assets.add_argument("--stage", choices=NODE_STAGES)
+    sub.add_parser("verify-source").add_argument("--stage", choices=NODE_STAGES)
+    sub.add_parser("verify-assets").add_argument("--stage", choices=NODE_STAGES)
     build_parser = sub.add_parser("build")
     build_parser.add_argument("graph_directory", type=Path)
-    build_parser.add_argument("--mode", choices=("identity", "lifecycle", "node-baseline", *FOUNDATION_MODES), default="identity")
+    build_parser.add_argument("--mode", choices=("identity", "lifecycle", "node-baseline", *NODE_MODES), default="identity")
     args = parser.parse_args()
     try:
         if args.operation == "verify":

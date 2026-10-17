@@ -23,6 +23,7 @@ SQLITE = {"rusqlite", "libsqlite3-sys", "sqlite-vec"}
 SOURCE_PATHS = (".gitignore", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "runtime.lock.json", "upstream-tree.json", "prepare-runtime.py", "test_prepare_runtime.py", "check_graph.py", "test_check_graph.py", "patches/series.json", "src/main.rs")
 A2_SOURCE_PATHS = ("src/lifecycle.rs", "tests/lifecycle.rs", preparation.PATCH_PATH)
 FOUNDATION_SOURCE_PATHS = (preparation.FOUNDATION_PROFILE, preparation.FOUNDATION_SERIES, preparation.FOUNDATION_PATCH, "node.lock.json", preparation.FOUNDATION_MANIFEST)
+LIFETIMES_SOURCE_PATHS = (preparation.LIFETIMES_PATCH, preparation.LIFETIMES_PROFILE, preparation.LIFETIMES_SERIES, preparation.LIFETIMES_MANIFEST, preparation.LIFETIMES_ASSETS, "runtime/assets-node-foundation.json")
 
 
 def fail(message):
@@ -39,7 +40,7 @@ def commands(root, toolchain, mode="identity"):
     cargo = str(toolchain / "bin/cargo")
     return {
         "metadata": preparation.network_command([cargo, "metadata", *shared, "--format-version", "1", "--filter-platform", TARGET]),
-        "tree": preparation.network_command([cargo, "tree", *shared, *(["--package", FIXTURE, "--package", "celld@0.6.2"] if mode == "node-baseline" or mode in preparation.FOUNDATION_MODES else []), "--target", TARGET, "--edges", "normal,build,features"]),
+        "tree": preparation.network_command([cargo, "tree", *shared, *(["--package", FIXTURE, "--package", "celld@0.6.2"] if mode == "node-baseline" or mode in preparation.NODE_MODES else []), "--target", TARGET, "--edges", "normal,build,features"]),
     }
 
 
@@ -89,7 +90,7 @@ def foundation_declarations(package, outer, source_root):
 
 
 def graph_report(metadata, pins, mode="identity", source_root=ROOT):
-    if pins.get("target") != TARGET or pins.get("profile") not in (preparation.A1, preparation.A2, preparation.FOUNDATION):
+    if pins.get("target") != TARGET or pins.get("profile") not in (preparation.A1, preparation.A2, *preparation.NODE_STAGES):
         fail("missing or unexpected target/profile")
     preparation.selected_mode(pins, mode)
     if not isinstance(metadata, dict) or metadata.get("version") != 1:
@@ -179,7 +180,7 @@ def graph_report(metadata, pins, mode="identity", source_root=ROOT):
             fail("unexpected engine/package version: " + name)
         return identity
 
-    foundation = preparation.FOUNDATION_MODES.get(mode)
+    foundation = preparation.NODE_MODES.get(mode)
     exact(FIXTURE, foundation["root_features"] if foundation else ["lifecycle"] if mode == "lifecycle" else [])
     celld = exact("celld", foundation["celld_features"] if foundation else ["foks-guarded-qualification"] if mode == "lifecycle" else [], pins["upstream"]["version"])
     core = exact("foks-metadata-core", ["owned-list"])
@@ -200,7 +201,7 @@ def graph_report(metadata, pins, mode="identity", source_root=ROOT):
             fail("SQLite/native dependency in FOKS transport/core subclosure")
     if "tokio" not in {packages[identity]["name"] for identity in fokscore}:
         fail("missing actual transport runtime dependency")
-    if pins["profile"] in (preparation.A2, preparation.FOUNDATION):
+    if pins["profile"] in (preparation.A2, *preparation.NODE_STAGES):
         tokio = exact("tokio", version="1.53.1")
         if packages[tokio]["source"] != preparation.CRATES_IO:
             fail("Tokio is not the pinned registry source")
@@ -220,13 +221,15 @@ def graph_report(metadata, pins, mode="identity", source_root=ROOT):
                 actual_edges.append(package["name"])
         if sorted(actual_edges) != foundation["celld_foks_edges"]:
             fail("active celld FOKS edges do not match selected mode")
-        if mode != "node-foundation" and any(packages[identity]["name"].startswith("foks-") for identity in closure([celld])):
+        if not foundation["celld_foks_edges"] and any(packages[identity]["name"].startswith("foks-") for identity in closure([celld])):
             fail("default/lifecycle celld subclosure includes FOKS integration")
         preparation.foundation_lock(source_root, pins)
         report["foundation"] = {"profile_sha256": preparation.file_hash(source_root / preparation.FOUNDATION_PROFILE), "series_sha256": pins["foundation"]["node_series"]["sha256"], "accepted_a3a_commit": preparation.FOUNDATION_BASE, "cargo_lock_sha256": preparation.file_hash(source_root / "Cargo.lock"), "celld_foks_edges": sorted(actual_edges), "declared_foks_edges": declared}
-    if mode == "node-baseline" or mode in ("node-foundation-default", "node-foundation"):
+        if pins["profile"] == preparation.LIFETIMES:
+            report["foundation"].update(accepted_b1_commit=preparation.LIFETIMES_BASE, accepted_b1_images={name: pins["foundation"]["base"][name] for name in preparation.LIFETIMES_BASE_IMAGES})
+    if mode == "node-baseline" or mode in preparation.NODE_BINARY_MODES:
         celld_closure = closure([celld])
-        if mode != "node-foundation" and any(packages[identity]["name"].startswith("foks-") for identity in celld_closure):
+        if (not foundation or not foundation["celld_foks_edges"]) and any(packages[identity]["name"].startswith("foks-") for identity in celld_closure):
             fail("ordinary celld binary subclosure includes FOKS integration")
         package = packages[celld]
         expected = source_root / "runtime/source/crates/celld"
@@ -271,7 +274,7 @@ def candidate_inputs(root, mode="identity"):
 
 def source_paths(pins, mode="identity"):
     preparation.selected_mode(pins, mode)
-    return SOURCE_PATHS + (A2_SOURCE_PATHS if pins["profile"] in (preparation.A2, preparation.FOUNDATION) else ()) + (FOUNDATION_SOURCE_PATHS if pins["profile"] == preparation.FOUNDATION else ()) + (("node.lock.json", "run-node.py", "test_run_node.py") if mode == "node-baseline" else ())
+    return SOURCE_PATHS + (A2_SOURCE_PATHS if pins["profile"] in (preparation.A2, *preparation.NODE_STAGES) else ()) + (FOUNDATION_SOURCE_PATHS if pins["profile"] in preparation.NODE_STAGES else ()) + (LIFETIMES_SOURCE_PATHS if pins["profile"] == preparation.LIFETIMES else ()) + (("node.lock.json", "run-node.py", "test_run_node.py") if mode == "node-baseline" else ())
 
 
 def selected_inputs(metadata, reached, root, mode="identity"):
@@ -415,7 +418,7 @@ def main():
     for name in ("collect", "verify"):
         operation = sub.add_parser(name)
         operation.add_argument("directory", type=Path)
-        operation.add_argument("--mode", choices=("identity", "lifecycle", "node-baseline", *preparation.FOUNDATION_MODES), default="identity")
+        operation.add_argument("--mode", choices=("identity", "lifecycle", "node-baseline", *preparation.NODE_MODES), default="identity")
     args = parser.parse_args()
     try:
         report = collect(args.directory, mode=args.mode) if args.operation == "collect" else verify(args.directory, mode=args.mode)

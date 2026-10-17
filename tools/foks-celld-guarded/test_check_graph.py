@@ -1,6 +1,6 @@
 """Closed graph/lock evidence tests; no Cargo invocation or dependency fetch."""
 import copy
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import json
 from pathlib import Path
 import tempfile
@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 import check_graph as c
-from test_prepare_runtime import a2_fixture, foundation_fixture, historical_pins, p
+from test_prepare_runtime import a2_fixture, foundation_fixture, lifetimes_fixture, historical_pins, p
 
 
 def fixture(mode="identity", profile=c.preparation.A1):
@@ -55,12 +55,16 @@ def add_package(metadata, name, version="1.0.0", identity=None, features=None, s
 @contextmanager
 def foundation_graph_fixture(root, mode):
     root.parent.mkdir(parents=True, exist_ok=True)
-    with foundation_fixture(root) as data, patch.object(c.preparation, "FOUNDATION_BASE_IMAGES", p.FOUNDATION_BASE_IMAGES), patch.object(c.preparation, "FOUNDATION_LOCK_BEFORE", p.FOUNDATION_LOCK_BEFORE):
-        p.prepare(data["archive"], root, p.FOUNDATION)
+    stage = p.LIFETIMES if mode in p.LIFETIMES_MODES else p.FOUNDATION
+    fixture_source = lifetimes_fixture if stage == p.LIFETIMES else foundation_fixture
+    with fixture_source(root) as data, ExitStack() as stack:
+        for name in ("FOUNDATION_BASE_IMAGES", "FOUNDATION_LOCK_BEFORE", "LIFETIMES_BASE_IMAGES", "LIFETIMES_LOCK_SHA256", "LIFETIMES_ASSET_SHA256"):
+            stack.enter_context(patch.object(c.preparation, name, getattr(p, name)))
+        p.prepare(data["archive"], root, stage)
         (root / "Cargo.lock").write_bytes(data["expected_lock"])
-        pins = c.preparation.load_pins(root, p.FOUNDATION)
+        pins = c.preparation.load_pins(root, stage)
         metadata, _ = fixture("lifecycle" if mode.endswith("lifecycle") else "identity", p.A2)
-        contract = p.FOUNDATION_MODES[mode]
+        contract = p.NODE_MODES[mode]
         for node in metadata["resolve"]["nodes"]:
             if node["id"] == c.FIXTURE:
                 node["features"] = contract["root_features"].copy()
@@ -674,6 +678,158 @@ class FoundationGraphTests(unittest.TestCase):
                     edge(altered, "tokio", "foks-metadata-core")
                     with self.assertRaisesRegex(ValueError, "replaced or extended"):
                         c.preparation.upstream_edges(altered, reached, root, "node-foundation")
+
+
+class LifetimesGraphTests(unittest.TestCase):
+    def test_all_three_lifetimes_modes_bind_the_same_declared_edges_and_selected_activity(self):
+        for mode, contract in p.LIFETIMES_MODES.items():
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "tools/fixture"
+                with foundation_graph_fixture(root, mode) as (metadata, pins, data):
+                    report = c.graph_report(metadata, pins, mode, root)
+                    self.assertEqual(report["profile"], p.LIFETIMES)
+                    self.assertEqual(report["foundation"]["accepted_b1_commit"], p.LIFETIMES_BASE)
+                    self.assertEqual(report["foundation"]["accepted_b1_images"], data["accepted_images"])
+                    self.assertEqual(report["foundation"]["declared_foks_edges"], p.FOUNDATION_EDGES)
+                    self.assertEqual(report["foundation"]["celld_foks_edges"], contract["celld_foks_edges"])
+                    self.assertEqual(report["foundation"]["cargo_lock_sha256"], p.file_hash(root / "Cargo.lock"))
+                    self.assertFalse({"rusqlite", "libsqlite3-sys"} & set(report["foks_subclosure"]))
+                    if mode.endswith("lifecycle"):
+                        self.assertNotIn("node_target", report)
+                    else:
+                        self.assertEqual(report["node_target"]["features"], contract["celld_features"])
+                    for other in ("identity", "lifecycle", "node-baseline", *p.FOUNDATION_MODES, *p.LIFETIMES_MODES):
+                        if other != mode:
+                            with self.subTest(other=other), self.assertRaises(ValueError):
+                                c.graph_report(metadata, pins, other, root)
+
+    def test_lifetimes_modes_do_not_relax_declarations_active_edges_or_binary_target(self):
+        for mode in p.LIFETIMES_MODES:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "tools/fixture"
+                with foundation_graph_fixture(root, mode) as (metadata, pins, _):
+                    def celld(data):
+                        return next(package for package in data["packages"] if package["name"] == "celld")
+                    mutations = (
+                        lambda data: celld(data)["dependencies"][0].update(optional=False),
+                        lambda data: celld(data)["dependencies"][0].update(optional=1),
+                        lambda data: celld(data)["dependencies"][0].update(features=["test-support"]),
+                        lambda data: celld(data)["dependencies"][0].update(kind="build"),
+                        lambda data: celld(data)["dependencies"][0].update(path="/unreviewed"),
+                        lambda data: next(row for row in data["resolve"]["nodes"] if row["id"] == "foks-metadata-core")["features"].append("native"),
+                        lambda data: edge(data, "foks-metadata-core", "libsqlite3-sys"),
+                    )
+                    for index, mutate in enumerate(mutations):
+                        altered = copy.deepcopy(metadata)
+                        mutate(altered)
+                        with self.subTest(mode=mode, index=index), self.assertRaises(ValueError):
+                            c.graph_report(altered, pins, mode, root)
+                    altered = copy.deepcopy(metadata)
+                    if mode == "node-lifetimes":
+                        deps = next(row for row in altered["resolve"]["nodes"] if row["id"] == "celld")["deps"]
+                        deps[:] = [dep for dep in deps if dep["pkg"] != "foks-metadata-core"]
+                    else:
+                        edge(altered, "celld", "foks-metadata-core")
+                    with self.assertRaisesRegex(ValueError, "active celld FOKS"):
+                        c.graph_report(altered, pins, mode, root)
+                    if not mode.endswith("lifecycle"):
+                        altered = copy.deepcopy(metadata)
+                        celld(altered)["targets"][0]["src_path"] = str(root / "runtime/source/crates/celld/other.rs")
+                        with self.assertRaisesRegex(ValueError, "binary target"):
+                            c.graph_report(altered, pins, mode, root)
+
+    def test_commands_select_the_actual_locked_mode_and_exact_target(self):
+        for mode in p.LIFETIMES_MODES:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "tools/fixture"
+                with foundation_graph_fixture(root, mode), patch.object(c.preparation, "network_command", side_effect=lambda argv: list(map(str, argv))):
+                    commands = c.commands(root, Path("/toolchain"), mode)
+                    for name, argv in commands.items():
+                        self.assertIn("--locked", argv)
+                        self.assertIn("--offline", argv)
+                        self.assertIn("--no-default-features", argv)
+                        self.assertEqual(argv[argv.index("--manifest-path") + 1], str(root / "Cargo.toml"))
+                        target = "--filter-platform" if name == "metadata" else "--target"
+                        self.assertEqual(argv[argv.index(target) + 1], c.TARGET)
+                        self.assertEqual("--features" in argv, mode != "node-lifetimes-default")
+                        if "--features" in argv:
+                            self.assertEqual(argv[argv.index("--features") + 1], "foks-celld-guarded/" + p.LIFETIMES_MODES[mode]["root_features"][0])
+                    self.assertEqual(commands["tree"].count("--package"), 2)
+                    self.assertIn("celld@0.6.2", commands["tree"])
+
+    def test_source_inputs_include_the_unchanged_prefix_and_all_accepted_receipts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            root = repo / "tools/fixture"
+            with foundation_graph_fixture(root, "node-lifetimes") as (metadata, pins, _):
+                for name in c.source_paths(pins, "node-lifetimes"):
+                    path = root / name
+                    if not path.exists():
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_bytes(("reviewed " + name + "\n").encode())
+                (repo / "Cargo.toml").write_bytes(b"reviewed workspace\n")
+                baseline = repo / pins["foks_additional_versions"]["baseline_lock"]
+                baseline.parent.mkdir(parents=True, exist_ok=True)
+                baseline.write_bytes(b"reviewed baseline lock\n")
+                for name in p.FOUNDATION_EDGES:
+                    path = repo / "crates" / name / "Cargo.toml"
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(b"reviewed FOKS manifest\n")
+                report = c.graph_report(metadata, pins, "node-lifetimes", root)
+                reached = {row["id"] for row in report["packages"]}
+                with patch.object(c.preparation, "config_inputs", return_value={}):
+                    before = c.candidate_inputs(root, "node-lifetimes")
+                    selected = c.selected_inputs(metadata, reached, root, "node-lifetimes")
+                self.assertTrue(all(before.get(path) == checksum for path, checksum in selected.items()))
+                for name in (*c.A2_SOURCE_PATHS, *c.FOUNDATION_SOURCE_PATHS, *c.LIFETIMES_SOURCE_PATHS):
+                    self.assertIn(str(root / name), selected)
+                self.assertNotIn("run-node.py", c.source_paths(pins, "node-lifetimes"))
+                for old in ("identity", "lifecycle", "node-baseline", *p.FOUNDATION_MODES):
+                    with self.subTest(old=old), self.assertRaises(ValueError):
+                        c.source_paths(pins, old)
+
+    def test_missing_mode_or_relabelled_graph_refuses_before_tool_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tools/fixture"
+            with foundation_graph_fixture(root, "node-lifetimes"):
+                evidence = root / "evidence"
+                evidence.mkdir()
+                record = {"format": 1, "target": p.TARGET, "profile": p.LIFETIMES, "manifest": str(root / "Cargo.toml"), "cwd": str(root)}
+                for changed in ({}, {"mode": "node-foundation"}, {"profile": p.FOUNDATION, "mode": "node-lifetimes"}, {"target": "other", "mode": "node-lifetimes"}):
+                    (evidence / "evidence.json").write_text(json.dumps({**record, **changed}))
+                    with patch.object(c.preparation, "controlled_environment") as environment, self.assertRaises(ValueError):
+                        c.verify(evidence, root, "node-lifetimes")
+                    environment.assert_not_called()
+
+    def test_stale_lock_or_changed_preserved_prefix_refuses_before_cargo(self):
+        for changed in ("Cargo.lock", p.LIFETIMES_PROFILE, p.LIFETIMES_SERIES, p.LIFETIMES_MANIFEST):
+            with self.subTest(path=changed), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "tools/fixture"
+                with foundation_graph_fixture(root, "node-lifetimes"):
+                    path = root / changed
+                    path.write_bytes(path.read_bytes() + b"\n")
+                    with patch.object(c.preparation, "run_owned") as execute, self.assertRaises(ValueError):
+                        c.collect(root / "refused-graph", root, "node-lifetimes")
+                    execute.assert_not_called()
+
+    def test_lifetimes_upstream_edge_exception_still_has_only_two_exact_local_edges(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tools/fixture"
+            with foundation_graph_fixture(root, "node-lifetimes") as (metadata, _, _):
+                packages = {row["id"]: row for row in metadata["packages"]}
+                locked = {(row["name"], row["version"], row["source"]): {"name": row["name"], "version": row["version"], "source": row["source"]} for row in packages.values() if row["name"] in ("celld", "v8", "rusqlite", "sqlite-vec", "tokio", "libsqlite3-sys")}
+                locked[("celld", "0.6.2", None)]["dependencies"] = ["v8", "rusqlite", "sqlite-vec", "tokio"]
+                locked[("rusqlite", "0.31.0", p.CRATES_IO)]["dependencies"] = ["libsqlite3-sys"]
+                with patch.object(c.preparation, "lock_inventory", return_value=locked):
+                    result = c.preparation.upstream_edges(metadata, set(packages), root, "node-lifetimes")
+                    self.assertTrue({("celld", name) for name in p.FOUNDATION_EDGES} <= {(row["from"], row["to"]) for row in result})
+                    for mode in ("node-lifetimes-default", "node-lifetimes-lifecycle"):
+                        with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, "replaced or extended"):
+                            c.preparation.upstream_edges(metadata, set(packages), root, mode)
+                    altered = copy.deepcopy(metadata)
+                    edge(altered, "tokio", "foks-metadata-core")
+                    with self.assertRaisesRegex(ValueError, "replaced or extended"):
+                        c.preparation.upstream_edges(altered, set(packages), root, "node-lifetimes")
 
 
 class LockTests(unittest.TestCase):

@@ -148,9 +148,10 @@ foks-metadata-core = { path = "../../../../../../crates/foks-metadata-core", opt
 
 
 @contextmanager
-def foundation_fixture(root):
+def foundation_fixture(root, additional_contents=None):
     """Synthetic two-patch source; never reads or replaces actual runtime/source."""
     extra = {name: ("upstream " + name + "\n").encode() for name in p.FOUNDATION_PATHS if name not in p.PATCH_PATHS and name not in p.FOUNDATION_ADDITIONS}
+    extra.update(additional_contents or {})
     pins, archive, base_series, _, _ = a2_fixture(root, extra)
     native, binding = root / "v8.gz", root / "binding.rs"
     native.write_bytes(gzip.compress(b"!<arch>\n" + b"native" * 100))
@@ -198,6 +199,56 @@ def repin_foundation(root, data, patch_bytes=None):
     if patch_bytes is not None:
         (root / p.FOUNDATION_PATCH).write_bytes(patch_bytes)
         data["series"]["patches"][1].update(foundation_file(root, p.FOUNDATION_PATCH))
+    (root / p.FOUNDATION_SERIES).write_text(json.dumps(data["series"]))
+    data["profile"]["node_series"] = foundation_file(root, p.FOUNDATION_SERIES)
+    (root / p.FOUNDATION_PROFILE).write_text(json.dumps(data["profile"]))
+
+
+@contextmanager
+def lifetimes_fixture(root):
+    """A full synthetic immutable B1 prefix followed by twenty-one B2 edits."""
+    extra = {name: ("upstream " + name + "\n").encode() for name in p.LIFETIMES_PATHS if name not in p.FOUNDATION_PATHS and name not in p.PATCH_PATHS}
+    with foundation_fixture(root, extra) as previous:
+        (root / "Cargo.lock").write_bytes(previous["expected_lock"])
+        accepted = p.prepare(previous["archive"], root, p.FOUNDATION)
+        assets = p.prepare_assets(previous["native"], previous["binding"], root, p.FOUNDATION)
+        preserved = root / Path(p.LIFETIMES_MANIFEST).parent
+        preserved.mkdir(parents=True)
+        (root / "runtime/source").rename(preserved / "source")
+        (root / "runtime/source-manifest.json").rename(preserved / "source-manifest.json")
+        for original, target in ((p.FOUNDATION_PROFILE, p.LIFETIMES_PROFILE), (p.FOUNDATION_SERIES, p.LIFETIMES_SERIES), ("runtime/assets-node-foundation.json", p.LIFETIMES_ASSETS)):
+            destination = root / target
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes((root / original).read_bytes())
+        accepted_images = {name: foundation_file(root, path) for name, (path, _) in p.LIFETIMES_BASE_IMAGES.items()}
+        files, chunks = [], []
+        final = {row["path"]: dict(row) for row in accepted["files"]}
+        for name in p.LIFETIMES_PATHS:
+            before = (preserved / "source" / name).read_bytes()
+            after = ("lifetimes " + name + "\n").encode()
+            files.append({"path": name, "mode": "100644", "before": p.image_identity(before), "after": p.image_identity(after)})
+            chunks.append(("--- a/" + name + "\n+++ b/" + name + "\n@@ -1," + str(len(before.splitlines())) + " +1,1 @@\n").encode() + b"".join(b"-" + line for line in before.splitlines(keepends=True)) + b"+" + after)
+            final[name] = {"path": name, "mode": "100644", **p.image_identity(after)}
+        (root / p.LIFETIMES_PATCH).write_bytes(b"".join(chunks))
+        rows = sorted(final.values(), key=lambda row: row["path"])
+        series = copy.deepcopy(previous["series"])
+        series.update(profile=p.LIFETIMES, accepted_b1_commit=p.LIFETIMES_BASE)
+        series["patches"].append({**foundation_file(root, p.LIFETIMES_PATCH), "files": files})
+        (root / p.FOUNDATION_SERIES).write_text(json.dumps(series))
+        profile = copy.deepcopy(previous["profile"])
+        profile.update(profile=p.LIFETIMES, accepted_b1_commit=p.LIFETIMES_BASE, node_series=foundation_file(root, p.FOUNDATION_SERIES))
+        profile["base"].update(accepted_images)
+        profile["qualification"].update(claim="b2-lifetimes-components-only", source_roster=list(p.LIFETIMES_PATHS), tree={"files": len(rows), "payload_bytes": sum(row["bytes"] for row in rows), "inventory_sha256": p.digest(json.dumps(rows, sort_keys=True, separators=(",", ":")).encode())}, tests={"prefix": p.LIFETIMES_TEST_PREFIX, "names": p.LIFETIMES_TESTS.copy(), "threads": 1}, modes=copy.deepcopy(p.LIFETIMES_MODES), layout_evidence=p.lifetimes_layout_contract())
+        (root / p.FOUNDATION_PROFILE).write_text(json.dumps(profile))
+        base_hashes = {name: (entry["path"], entry["sha256"]) for name, entry in accepted_images.items()}
+        with patch.object(p, "LIFETIMES_BASE_IMAGES", base_hashes), patch.object(p, "LIFETIMES_LOCK_SHA256", p.digest(previous["expected_lock"])), patch.object(p, "LIFETIMES_ASSET_SHA256", p.file_hash(root / p.LIFETIMES_ASSETS)):
+            yield {**previous, "profile": profile, "series": series, "rows": rows, "accepted_b1": accepted, "accepted_b1_profile": previous["profile"], "accepted_b1_assets": assets, "accepted_images": accepted_images}
+
+
+def repin_lifetimes(root, data, patch_bytes=None):
+    if patch_bytes is not None:
+        (root / p.LIFETIMES_PATCH).write_bytes(patch_bytes)
+        data["series"]["patches"][2].update(foundation_file(root, p.LIFETIMES_PATCH))
     (root / p.FOUNDATION_SERIES).write_text(json.dumps(data["series"]))
     data["profile"]["node_series"] = foundation_file(root, p.FOUNDATION_SERIES)
     (root / p.FOUNDATION_PROFILE).write_text(json.dumps(data["profile"]))
@@ -823,6 +874,26 @@ class FoundationTests(unittest.TestCase):
             maxima["initial_process_debt"] = 67 * 4096 + 2 * 65536
             self.assertEqual(observe(encode(maxima))["record"], maxima)
 
+            # Stage comes from the validated build, never from the record.
+            # The default remains the exact historical B1 reserve.
+            for stage, reserve, other in ((p.FOUNDATION, 204800, p.LIFETIMES), (p.LIFETIMES, 532480, p.FOUNDATION)):
+                staged = {**record, "cleanup_reserve": reserve}
+                raw = encode(staged)
+                path.write_bytes(raw)
+                checksum = hashlib.sha256(raw).hexdigest()
+                self.assertEqual(p.foundation_layout_output(path, checksum, stage)["record"], staged)
+                for rejected_stage in (other, None, "", "node-lifetimes-default", "unreviewed", True, 1, [], {}):
+                    with self.subTest(stage=stage, rejected_stage=rejected_stage), self.assertRaises(ValueError):
+                        p.foundation_layout_output(path, checksum, rejected_stage)
+                if stage == p.LIFETIMES:
+                    with self.assertRaises(ValueError):
+                        p.foundation_layout_output(path, checksum)
+                for wrong in (reserve + 1, float(reserve), True):
+                    bad = encode({**staged, "cleanup_reserve": wrong})
+                    path.write_bytes(bad)
+                    with self.subTest(stage=stage, reserve=wrong), self.assertRaises(ValueError):
+                        p.foundation_layout_output(path, hashlib.sha256(bad).hexdigest(), stage)
+
             malformed = []
             for key in record:
                 changed = copy.deepcopy(record)
@@ -1024,6 +1095,465 @@ class FoundationTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "command failed"):
                     p.run_owned(argv, root, {}, root, "unexpected", slot, 5)
                 self.assertTrue(slot.clean)
+
+
+class LifetimesTests(unittest.TestCase):
+    def test_three_patch_roundtrip_preserves_the_accepted_prefix(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with lifetimes_fixture(root) as data:
+                preserved = {name: (root / name).read_bytes() for name in (p.PATCH_PATH, p.FOUNDATION_PATCH, p.LIFETIMES_PROFILE, p.LIFETIMES_SERIES, p.LIFETIMES_MANIFEST, p.LIFETIMES_ASSETS)}
+                original = p.inspect_archive(data["archive"], root, stage=p.LIFETIMES)
+                self.assertEqual((original["profile"], original["kind"]), (p.LIFETIMES, "upstream-archive-only"))
+                source = p.prepare(data["archive"], root, p.LIFETIMES)
+                self.assertEqual(source["files"], data["rows"])
+                self.assertEqual(source["format"], 3)
+                self.assertEqual(source["kind"], "patched-source")
+                self.assertEqual(source["input_sha256"], p.file_hash(root / p.FOUNDATION_PROFILE))
+                self.assertEqual(source["patch_series_sha256"], p.file_hash(root / p.FOUNDATION_SERIES))
+                self.assertEqual(p.prepare(data["archive"], root, p.LIFETIMES), source)
+                pins = p.load_pins(root, p.LIFETIMES)
+                changes = p.parse_patch(root, pins, p.inventory(root, pins))
+                self.assertEqual(sum(entry["path"] == "crates/celld/guarded_execution.rs" for entry, _ in changes), 3)
+                self.assertEqual(len(p.LIFETIMES_PATHS), 21)
+                self.assertIn("crates/celld/lib.rs", p.LIFETIMES_PATHS)
+                self.assertEqual(sum(entry["path"] == "crates/celld/lib.rs" for entry, _ in changes), 3)
+                self.assertEqual(sum(entry["path"] == "crates/celld/asyncrt.rs" for entry, _ in changes), 1)
+                self.assertEqual(sum(row["path"] == "crates/celld/asyncrt.rs" for row in source["files"]), 1)
+                data["archive"].unlink()
+                self.assertEqual(p.verify_source(root, p.LIFETIMES), source)
+                self.assertEqual({name: (root / name).read_bytes() for name in preserved}, preserved)
+                for stage in (None, p.FOUNDATION):
+                    with self.subTest(stage=stage), self.assertRaises(ValueError):
+                        p.verify_source(root, stage)
+
+    def test_prepared_foundation_is_not_implicitly_upgraded(self):
+        import shutil
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with lifetimes_fixture(root) as data:
+                preserved = root / Path(p.LIFETIMES_MANIFEST).parent
+                shutil.copytree(preserved / "source", root / "runtime/source")
+                shutil.copyfile(preserved / "source-manifest.json", root / "runtime/source-manifest.json")
+                before = {str(path.relative_to(root / "runtime")): path.read_bytes() for path in (root / "runtime/source").rglob("*") if path.is_file()}
+                manifest = (root / "runtime/source-manifest.json").read_bytes()
+                with self.assertRaises(ValueError):
+                    p.prepare(data["archive"], root, p.LIFETIMES)
+                self.assertEqual((root / "runtime/source-manifest.json").read_bytes(), manifest)
+                self.assertEqual({str(path.relative_to(root / "runtime")): path.read_bytes() for path in (root / "runtime/source").rglob("*") if path.is_file()}, before)
+
+    def test_profile_is_closed_and_cannot_relabel_old_inputs_or_policy(self):
+        mutations = (
+            lambda x: x.update(format=True), lambda x: x.update(profile=p.FOUNDATION),
+            lambda x: x.update(extra=0), lambda x: x.pop("accepted_b1_commit"),
+            lambda x: x.update(accepted_b1_commit="0" * 40),
+            lambda x: x["base"].pop("foundation_series"),
+            lambda x: x["base"]["foundation_profile"].update(path=p.FOUNDATION_PROFILE),
+            lambda x: x["base"]["foundation_source_manifest"].update(sha256="0" * 64),
+            lambda x: x["pins"]["build"].update(timeout_seconds=99999),
+            lambda x: x["cargo_lock"]["expected"].update(sha256="0" * 64),
+            lambda x: x["qualification"].update(claim="guarded-readiness"),
+            lambda x: x["qualification"]["source_roster"].append("crates/celld/main.rs"),
+            lambda x: x["qualification"]["source_roster"].remove("crates/celld/asyncrt.rs"),
+            lambda x: x["qualification"]["tree"].update(files=True),
+            lambda x: x["qualification"]["tree"].update(payload_bytes=p.MAXIMUM_FOUNDATION_SOURCE + 1),
+            lambda x: x["qualification"]["tree"].update(inventory_sha256="A" * 64),
+            lambda x: x["qualification"]["program"]["fixture_js"].update(bytes=1),
+            lambda x: x["qualification"]["deployments"]["primary"].update(version="0" * 16),
+            lambda x: x["qualification"]["tests"].update(prefix=p.FOUNDATION_TEST_PREFIX),
+            lambda x: x["qualification"]["tests"].update(threads=True),
+            lambda x: x["qualification"]["tests"]["names"].pop(),
+            lambda x: x["qualification"]["modes"]["node-lifetimes-default"].update(direct_root_tokio=0),
+            lambda x: x["qualification"]["not_qualified"].pop(),
+            lambda x: x["qualification"]["layout_evidence"]["limits"].update(cleanup_child_creation_limit=17),
+            lambda x: x["qualification"]["layout_evidence"]["limits"].update(cleanup_reserve=204800),
+            lambda x: x["qualification"]["layout_evidence"]["limits"].update(cleanup_root_bytes=24576),
+            lambda x: x["qualification"]["layout_evidence"]["limits"].update(typed_root_payload_bytes=8192),
+            lambda x: x["qualification"]["layout_evidence"]["fixed_policy"]["a2_cancellation"].update(arc=1),
+            lambda x: x["qualification"]["layout_evidence"]["constructor_policy"]["future/storage_sync"].update(rule="I"),
+            lambda x: x["qualification"]["layout_evidence"]["constructor_policy"]["root/driver"].update(ceiling_bytes=16384),
+            lambda x: x["qualification"]["layout_evidence"]["constructor_policy"]["future/gate_dispatch"].update(ceiling_bytes=57344),
+            lambda x: x["qualification"]["layout_evidence"]["constructor_policy"]["native/sync_capture"].update(ceiling_bytes=57344),
+        )
+        for index, mutate in enumerate(mutations):
+            with self.subTest(index=index), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with lifetimes_fixture(root) as data:
+                    mutate(data["profile"])
+                    repin_lifetimes(root, data)
+                    with self.assertRaises(ValueError):
+                        p.load_pins(root, p.LIFETIMES)
+
+    def test_immutable_prefix_and_actual_lock_are_required_for_every_stage_action(self):
+        cases = [path for path, _ in p.LIFETIMES_BASE_IMAGES.values()] + [p.PATCH_PATH, p.FOUNDATION_PATCH, "Cargo.lock"]
+        for name in cases:
+            with self.subTest(path=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with lifetimes_fixture(root) as data:
+                    path = root / name
+                    if name == "Cargo.lock":
+                        # The exact formerly admissible B1 before-image is
+                        # historical only; this refusal precedes preparation.
+                        path.write_bytes(b'version = 3\n[[package]]\nname = "celld"\nversion = "0.6.2"\ndependencies = []\n')
+                        self.assertEqual(p.file_hash(path), data["profile"]["cargo_lock"]["before"]["sha256"])
+                    else:
+                        path.write_bytes(path.read_bytes() + b"\n")
+                    for operation in (
+                        lambda: p.load_pins(root, p.LIFETIMES),
+                        lambda: p.inspect_archive(data["archive"], root, stage=p.LIFETIMES),
+                        lambda: p.prepare(data["archive"], root, p.LIFETIMES),
+                        lambda: p.prepare_assets(data["native"], data["binding"], root, p.LIFETIMES),
+                    ):
+                        with self.assertRaises(ValueError):
+                            operation()
+                    self.assertFalse((root / "runtime/source").exists())
+                    self.assertFalse((root / "runtime/assets-node-lifetimes.json").exists())
+
+    def test_third_patch_cannot_change_prefix_add_files_or_exceed_caps(self):
+        mutations = (
+            lambda x: x.update(format=True), lambda x: x.pop("accepted_b1_commit"),
+            lambda x: x.update(accepted_b1_commit="0" * 40), lambda x: x["patches"].reverse(),
+            lambda x: x["patches"].pop(), lambda x: x["patches"].append(copy.deepcopy(x["patches"][2])),
+            lambda x: x["patches"][0]["files"][0]["after"].update(sha256="0" * 64),
+            lambda x: x["patches"][1]["files"][0]["after"].update(sha256="0" * 64),
+            lambda x: x["patches"][2].update(path="patches/other.patch"),
+            lambda x: x["patches"][2].update(bytes=p.MAXIMUM_LIFETIMES_PATCH + 1),
+            lambda x: x["patches"][2]["files"].reverse(),
+            lambda x: x["patches"][2].update(files=[row for row in x["patches"][2]["files"] if row["path"] != "crates/celld/asyncrt.rs"]),
+            lambda x: x["patches"][2]["files"][0].update(path="crates/celld/main.rs"),
+            lambda x: x["patches"][2]["files"][0].update(mode="100755"),
+            lambda x: x["patches"][2]["files"][0].update(before=None),
+            lambda x: x["patches"][2]["files"][0]["after"].update(bytes=p.MAXIMUM_POSTIMAGE + 1),
+        )
+        for index, mutate in enumerate(mutations):
+            with self.subTest(index=index), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with lifetimes_fixture(root) as data:
+                    mutate(data["series"])
+                    repin_lifetimes(root, data)
+                    with self.assertRaises(ValueError):
+                        p.prepare(data["archive"], root, p.LIFETIMES)
+                    self.assertFalse((root / "runtime/source").exists())
+
+        # Build actual valid diffs at each boundary. Padding is replacement
+        # file content across two existing paths, never ignored patch garbage.
+        for size in (p.MAXIMUM_FOUNDATION_PATCH + 1, p.MAXIMUM_LIFETIMES_PATCH, p.MAXIMUM_LIFETIMES_PATCH + 1):
+            with self.subTest(patch_bytes=size), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with lifetimes_fixture(root) as data:
+                    initial = (root / p.LIFETIMES_PATCH).read_bytes()
+                    padding = size - len(initial)
+                    self.assertGreater(padding, 0)
+                    extras = dict(zip(p.LIFETIMES_PATHS[:2], (padding // 2, padding - padding // 2), strict=True))
+                    predecessor = root / Path(p.LIFETIMES_MANIFEST).parent / "source"
+                    final = {row["path"]: dict(row) for row in data["rows"]}
+                    chunks = []
+                    for row in data["series"]["patches"][2]["files"]:
+                        name = row["path"]
+                        before = (predecessor / name).read_bytes()
+                        after = ("lifetimes " + name).encode() + b"x" * extras.get(name, 0) + b"\n"
+                        self.assertLessEqual(len(after), p.MAXIMUM_POSTIMAGE)
+                        row["after"] = p.image_identity(after)
+                        chunks.append(("--- a/" + name + "\n+++ b/" + name + "\n@@ -1," + str(len(before.splitlines())) + " +1,1 @@\n").encode() + b"".join(b"-" + line for line in before.splitlines(keepends=True)) + b"+" + after)
+                        final[name] = {"path": name, "mode": "100644", **p.image_identity(after)}
+                    patch_bytes = b"".join(chunks)
+                    self.assertEqual(len(patch_bytes), size)
+                    rows = sorted(final.values(), key=lambda row: row["path"])
+                    data["profile"]["qualification"]["tree"] = {"files": len(rows), "payload_bytes": sum(row["bytes"] for row in rows), "inventory_sha256": p.digest(json.dumps(rows, sort_keys=True, separators=(",", ":")).encode())}
+                    repin_lifetimes(root, data, patch_bytes)
+                    if size <= p.MAXIMUM_LIFETIMES_PATCH:
+                        prepared = p.prepare(data["archive"], root, p.LIFETIMES)
+                        self.assertEqual(prepared["files"], rows)
+                        self.assertEqual(p.verify_source(root, p.LIFETIMES), prepared)
+                    else:
+                        with self.assertRaises(ValueError):
+                            p.prepare(data["archive"], root, p.LIFETIMES)
+                        self.assertFalse((root / "runtime/source").exists())
+                        self.assertFalse((root / "runtime/source-manifest.json").exists())
+
+    def test_late_prefix_hash_postimage_and_final_inventory_must_agree(self):
+        for mutation in ("wrong-predecessor", "sha-only", "inventory", "payload", "source", "enqueue-source", "late-patch"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with lifetimes_fixture(root) as data:
+                    if mutation != "wrong-predecessor":
+                        p.prepare(data["archive"], root, p.LIFETIMES)
+                    row = next(entry for entry in data["series"]["patches"][2]["files"] if entry["path"] == "crates/celld/guarded_execution.rs")
+                    if mutation == "wrong-predecessor":
+                        row["before"] = copy.deepcopy(next(entry for entry in data["series"]["patches"][0]["files"] if entry["path"] == row["path"])["after"])
+                    elif mutation == "sha-only":
+                        row["before"]["sha256"] = "0" * 64
+                    elif mutation == "inventory":
+                        data["profile"]["qualification"]["tree"]["inventory_sha256"] = "0" * 64
+                    elif mutation == "payload":
+                        data["profile"]["qualification"]["tree"]["payload_bytes"] += 1
+                    elif mutation == "source":
+                        (root / "runtime/source" / row["path"]).write_bytes(b"changed\n")
+                    elif mutation == "enqueue-source":
+                        (root / "runtime/source/crates/celld/asyncrt.rs").write_bytes(b"changed\n")
+                    else:
+                        last = data["series"]["patches"][2]["files"][-1]
+                        last["after"]["sha256"] = "0" * 64
+                    repin_lifetimes(root, data)
+                    with self.assertRaises(ValueError):
+                        p.prepare(data["archive"], root, p.LIFETIMES)
+
+    def test_native_assets_are_reused_with_a_new_receipt_and_immutable_old_receipts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with lifetimes_fixture(root) as data:
+                paths = [*sorted((root / "runtime/artifacts").iterdir()), root / p.LIFETIMES_ASSETS, root / "runtime/assets-node-foundation.json"]
+                before = {str(path): (path.read_bytes(), path.stat().st_ino) for path in paths}
+                result = p.prepare_assets(data["native"], data["binding"], root, p.LIFETIMES)
+                self.assertEqual(result["profile"], p.LIFETIMES)
+                self.assertEqual(result["assets"], p.verify_assets(root))
+                self.assertEqual(result["foundation_receipt_sha256"], p.file_hash(root / p.LIFETIMES_ASSETS))
+                self.assertEqual(result, p.verify_assets(root, p.LIFETIMES))
+                self.assertEqual({str(path): (path.read_bytes(), path.stat().st_ino) for path in paths}, before)
+                receipt = root / "runtime/assets-node-lifetimes.json"
+                changed = copy.deepcopy(result)
+                changed["format"] = True
+                receipt.write_text(json.dumps(changed))
+                with self.assertRaises(ValueError):
+                    p.verify_assets(root, p.LIFETIMES)
+                receipt.write_text(json.dumps(result))
+                for path in (root / p.LIFETIMES_ASSETS, root / "runtime/assets-node-foundation.json", root / "runtime/artifacts/librusty_v8.a"):
+                    old = path.read_bytes()
+                    path.write_bytes(old + b"x")
+                    with self.subTest(path=str(path)), self.assertRaises(ValueError):
+                        p.verify_assets(root, p.LIFETIMES)
+                    path.write_bytes(old)
+
+    def test_modes_commands_and_exact_fifty_three_test_inventory(self):
+        pins = {**historical_pins(), "profile": p.LIFETIMES}
+        self.assertEqual(len(p.LIFETIMES_TESTS), 53)
+        self.assertEqual(len(set(p.LIFETIMES_TESTS)), 53)
+        self.assertEqual(p.LIFETIMES_TESTS[:21], p.FOUNDATION_TESTS)
+        with patch.object(p, "network_command", side_effect=lambda argv: list(map(str, argv))):
+            for mode, contract in p.LIFETIMES_MODES.items():
+                self.assertEqual(p.stage_for_mode(mode), p.LIFETIMES)
+                commands = p.build_commands(Path("/fixture"), Path("/toolchain"), pins, mode)
+                for name in ("build", "clippy"):
+                    argv = commands[name]
+                    self.assertEqual(argv[argv.index("--target") + 1], p.TARGET)
+                    self.assertIn("--locked", argv)
+                    self.assertIn("--offline", argv)
+                    self.assertEqual("--features" in argv, bool(contract["root_features"]))
+                    if contract["root_features"]:
+                        self.assertEqual(argv[argv.index("--features") + 1], "foks-celld-guarded/" + contract["root_features"][0])
+                if mode.endswith("lifecycle"):
+                    self.assertIn("--all-targets", commands["clippy"])
+                    self.assertIn("lifecycle", commands["lifecycle"])
+                    self.assertIn("--test-threads=1", commands["lifecycle"])
+                else:
+                    self.assertEqual(commands["build"].count("--package"), 2)
+                    self.assertEqual(commands["build"][commands["build"].index("--bin") + 1], "celld")
+                    self.assertNotIn("lifecycle", commands)
+            tests = p.foundation_test_commands(Path("/fixture"), Path("/toolchain"), pins)
+            self.assertIn(p.LIFETIMES_TEST_PREFIX, tests["list"])
+            self.assertNotIn(p.FOUNDATION_TEST_PREFIX, tests["list"])
+            self.assertIn("--test-threads=1", tests["run"])
+            self.assertIn("--lib", tests["run"])
+            self.assertIn("--list", tests["list"])
+            for old in ("identity", "lifecycle", "node-baseline", *p.FOUNDATION_MODES):
+                with self.subTest(old=old), self.assertRaises(ValueError):
+                    p.selected_mode(pins, old)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "output"
+            outputs = {
+                True: "".join(name + ": test\n" for name in p.LIFETIMES_TESTS) + "\n53 tests, 0 benchmarks\n",
+                False: "running 53 tests\n" + "".join("test " + name + " ... ok\n" for name in p.LIFETIMES_TESTS) + "\ntest result: ok. 53 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s\n",
+            }
+            for listing, raw in outputs.items():
+                path.write_text(raw)
+                self.assertEqual(p.foundation_test_output(path, listing, p.LIFETIMES), p.LIFETIMES_TESTS)
+                for changed in (raw.replace(p.LIFETIMES_TESTS[-1], "unreviewed"), raw + raw, raw.replace("53", "52"), raw.replace(p.LIFETIMES_TESTS[-1], p.LIFETIMES_TESTS[0]), raw + "ignored\n", raw.replace("0 ignored", "1 ignored")):
+                    if changed == raw:
+                        continue
+                    path.write_text(changed)
+                    with self.subTest(listing=listing), self.assertRaises(ValueError):
+                        p.foundation_test_output(path, listing, p.LIFETIMES)
+                path.write_text(raw)
+                with self.assertRaises(ValueError):
+                    p.foundation_test_output(path, listing)
+
+    @staticmethod
+    def layout_record():
+        fixed = {name: {"bytes": 32, "alignment": 8, "arc_bytes": 48 if arc else 0, "bucket": bucket} for name, (bucket, arc, _) in p.LIFETIMES_FIXED_POLICY.items()}
+        fixed["a2_cancellation"].update(bytes=1, alignment=1, arc_bytes=24)
+        fixed["a2_events"].update(bytes=4096)
+        constructors = {}
+        for name, (rule, lanes) in p.LIFETIMES_CONSTRUCTOR_POLICY.items():
+            constructors[name] = {
+                "capture_bytes": 32, "capture_alignment": 8, "future_bytes": 16 if rule == "R" else 0, "future_alignment": 8 if rule == "R" else 1,
+                "result_bytes": 16, "result_alignment": 8, "channel_payload_bytes": 0 if rule == "I" else 24, "channel_payload_alignment": 1 if rule == "I" else 8,
+                "channel_bound_bytes": 0 if rule == "I" else 112, "owned_capacity_bound_bytes": 8080 if rule == "R" else 0,
+                "admitted_overlap_bytes": {"R": 8256, "N": 160, "I": 0}[rule], "ceiling_bytes": {"R": 57344, "N": 512, "I": 8192}[rule],
+                "creation_limit": {lane: "inline" if rule == "I" else "cumulative" if lane.startswith("F") else 16 if rule == "N" else 1 for lane in lanes},
+                "lanes": list(lanes), "bucket": "inline-observation" if rule == "I" else "invocation",
+            }
+        return {"format": 1, "claim": "b2-constructor-layouts-only", "arc_convention": "repr-c-two-atomic-usize", "fixed": fixed, "constructors": constructors, "controls": {name: {"bytes": 32, "alignment": 8, "ceiling_bytes": 2048} for name in p.LIFETIMES_CONTROL_NAMES}, "limits": dict(p.LIFETIMES_LIMITS)}
+
+    def test_compiled_lifetimes_layout_records_bind_additive_and_inline_rules(self):
+        record = self.layout_record()
+        self.assertEqual((len(record["fixed"]), len(record["constructors"])), (16, 36))
+        self.assertEqual(record["constructors"]["root/wake"]["creation_limit"], {"F7": "cumulative", "C5": 1})
+        self.assertEqual(record["constructors"]["native/sync_capture"]["creation_limit"], {"F1": "cumulative", "C0": 16, "C1": 16, "C6": 16})
+        self.assertEqual(record["constructors"]["future/gate_dispatch"]["lanes"], [])
+        self.assertEqual((record["limits"]["typed_root_payload_bytes"], record["limits"]["cleanup_root_bytes"], record["limits"]["cleanup_reserve"]), (49152, 65536, 532480))
+        b1_record = {**FoundationTests.layout_record(), "cleanup_reserve": 532480}
+        b1 = b"FOKS_B1_LAYOUT " + json.dumps(b1_record).encode() + b"\n"
+        prefix = b"FOKS_B2_LAYOUT "
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "tests-run.stderr"
+
+            def observe(value):
+                tagged = prefix + json.dumps(value, separators=(",", ":")).encode() + b"\n"
+                raw = b"Cargo output\n" + b1 + tagged + b"native diagnostic\n"
+                path.write_bytes(raw)
+                result = p.lifetimes_layout_output(path, hashlib.sha256(raw).hexdigest())
+                self.assertEqual(result, {"record": value, "raw_record_bytes": len(tagged), "raw_record_sha256": hashlib.sha256(tagged).hexdigest()})
+                self.assertEqual(p.foundation_layout_output(path, hashlib.sha256(raw).hexdigest(), p.LIFETIMES)["record"], b1_record)
+                self.assertEqual(path.read_bytes(), raw)
+                return result
+
+            observe(record)
+            maxima = copy.deepcopy(record)
+            for name, (_, arc, ceiling) in p.LIFETIMES_FIXED_POLICY.items():
+                maxima["fixed"][name].update(bytes=ceiling - 16 if arc else ceiling, alignment=16, arc_bytes=ceiling if arc else 0)
+            for name, (rule, _) in p.LIFETIMES_CONSTRUCTOR_POLICY.items():
+                entry = maxima["constructors"][name]
+                entry.update(capture_bytes={"N": 400, "I": 8192, "R": 49152}[rule], capture_alignment=16, future_bytes=0, future_alignment=1, result_bytes=0, result_alignment=1)
+                if rule == "R":
+                    entry.update(channel_payload_bytes=8112, channel_payload_alignment=16, channel_bound_bytes=8192, owned_capacity_bound_bytes=0, admitted_overlap_bytes=57344)
+                elif rule == "N":
+                    entry.update(channel_payload_bytes=32, channel_payload_alignment=16, admitted_overlap_bytes=512)
+            for entry in maxima["controls"].values():
+                entry.update(bytes=2048, alignment=16)
+            observe(maxima)
+
+            # Every R row admits the same actual full-future bound, including
+            # cleanup lanes and the separately charged storage-sync future.
+            for name, (rule, _) in p.LIFETIMES_CONSTRUCTOR_POLICY.items():
+                if rule != "R":
+                    continue
+                for field in ("capture", "future", "result"):
+                    boundary = copy.deepcopy(record)
+                    entry = boundary["constructors"][name]
+                    entry.update(capture_bytes=0, capture_alignment=1, future_bytes=0, future_alignment=1, result_bytes=0, result_alignment=1, admitted_overlap_bytes=57344)
+                    entry.update({field + "_bytes": 49152, field + "_alignment": 16})
+                    observe(boundary)
+                    entry.update({field + "_bytes": 49153, field + "_alignment": 1, "admitted_overlap_bytes": 57345})
+                    with self.subTest(name=name, field=field), self.assertRaises(ValueError):
+                        observe(boundary)
+
+            malformed = []
+            for field in record:
+                altered = copy.deepcopy(record)
+                del altered[field]
+                malformed.append(("missing " + field, altered))
+            for field, value in (("format", True), ("claim", "ready"), ("arc_convention", "other"), ("extra", 0)):
+                malformed.append(("top " + field, {**record, field: value}))
+            for section in ("fixed", "constructors", "controls"):
+                for name in record[section]:
+                    altered = copy.deepcopy(record)
+                    del altered[section][name]
+                    malformed.append(("missing " + name, altered))
+                altered = copy.deepcopy(record)
+                altered[section]["unreviewed"] = next(iter(altered[section].values()))
+                malformed.append(("extra " + section, altered))
+            for key in record["limits"]:
+                for value in (True, record["limits"][key] + 1):
+                    altered = copy.deepcopy(record)
+                    altered["limits"][key] = value
+                    malformed.append(("limit " + key, altered))
+            for name, original in record["fixed"].items():
+                for field, value in (("bytes", 0), ("bytes", -1), ("bytes", True), ("bytes", 1048577), ("alignment", 0), ("alignment", True), ("alignment", 3), ("alignment", 32), ("arc_bytes", original["arc_bytes"] + 8), ("arc_bytes", False), ("bucket", "unreviewed"), ("extra", 0)):
+                    altered = copy.deepcopy(record)
+                    altered["fixed"][name][field] = value
+                    malformed.append((name + " " + field, altered))
+            altered = copy.deepcopy(record)
+            altered["fixed"]["a2_events"]["bytes"] = 4104
+            malformed.append(("event backing cardinality", altered))
+            for name, original in record["constructors"].items():
+                changes = [(field, original[field] + 1) for field in ("channel_bound_bytes", "owned_capacity_bound_bytes", "admitted_overlap_bytes", "ceiling_bytes")]
+                changes += [("capture_bytes", True), ("capture_bytes", -1), ("capture_bytes", 33), ("capture_bytes", 1 << 64), ("future_bytes", 49153), ("channel_payload_bytes", 1 << 64), ("result_alignment", 3), ("channel_payload_alignment", 32), ("lanes", [] if original["lanes"] else ["F5"]), ("creation_limit", {} if original["creation_limit"] else {"F5": 1}), ("bucket", "process"), ("extra", 0)]
+                for field, value in changes:
+                    altered = copy.deepcopy(record)
+                    altered["constructors"][name][field] = value
+                    malformed.append((name + " " + field, altered))
+            for section, name in (("fixed", "invocation_record"), ("constructors", "root/driver"), ("controls", "retirement")):
+                for field in record[section][name]:
+                    altered = copy.deepcopy(record)
+                    del altered[section][name][field]
+                    malformed.append(("missing row field " + section + " " + field, altered))
+            for name in record["controls"]:
+                for field, value in (("bytes", 2056), ("bytes", False), ("alignment", 32), ("ceiling_bytes", 4096), ("extra", 0)):
+                    altered = copy.deepcopy(record)
+                    altered["controls"][name][field] = value
+                    malformed.append((name + " " + field, altered))
+            for label, value in malformed:
+                with self.subTest(case=label), self.assertRaises(ValueError):
+                    observe(value)
+
+    def test_compiled_lifetimes_records_reject_forged_overlap_even_with_consistent_policy_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "stderr"
+            mutations = (
+                ("root/driver", {"capture_bytes": 49128, "admitted_overlap_bytes": 57352}),
+                ("root/driver", {"capture_bytes": 49121, "capture_alignment": 1, "admitted_overlap_bytes": 57345}),
+                ("root/driver", {"channel_payload_bytes": 8120, "channel_bound_bytes": 8208, "owned_capacity_bound_bytes": -16}),
+                ("native/sync_capture", {"future_bytes": 8, "future_alignment": 8}),
+                ("native/sync_capture", {"capture_bytes": 392, "result_bytes": 16, "admitted_overlap_bytes": 520}),
+                ("inline/publish", {"channel_payload_bytes": 8, "channel_payload_alignment": 8}),
+                ("future/gate_dispatch", {"capture_bytes": 8192, "result_bytes": 16}),
+                ("future/storage_sync", {"channel_payload_bytes": 0, "channel_payload_alignment": 1, "channel_bound_bytes": 0, "owned_capacity_bound_bytes": 8192}),
+                ("root/wake", {"creation_limit": {"F7": "cumulative", "C5": True}}),
+                ("native/sync_capture", {"lanes": ["F1", "C1", "C0", "C6"]}),
+            )
+            for name, changed in mutations:
+                record = self.layout_record()
+                record["constructors"][name].update(changed)
+                raw = b"FOKS_B2_LAYOUT " + json.dumps(record).encode() + b"\n"
+                path.write_bytes(raw)
+                with self.subTest(name=name, changed=changed), self.assertRaises(ValueError):
+                    p.lifetimes_layout_output(path, p.digest(raw))
+
+    def test_compiled_lifetimes_stderr_is_bounded_hash_bound_and_strictly_framed(self):
+        prefix = b"FOKS_B2_LAYOUT "
+        tagged = prefix + json.dumps(self.layout_record(), separators=(",", ":")).encode() + b"\n"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "stderr"
+            padded = tagged[:-1] + b" " * (65536 - len(tagged)) + b"\n"
+            self.assertEqual(len(padded), 65536)
+            path.write_bytes(padded)
+            self.assertEqual(p.lifetimes_layout_output(path, p.digest(padded))["raw_record_bytes"], 65536)
+            malformed = (
+                b"ordinary output\n", tagged + tagged, b" " + tagged, tagged[:-1], tagged.replace(b"\n", b"\r\n"),
+                tagged.replace(prefix, b"FOKS_B2_LAYOUT\t", 1), prefix + b"\xff\n", prefix + b"[]\n",
+                tagged.replace(b'"format":1', b'"format":1,"format":1', 1),
+                tagged.replace(b'"bytes":32', b'"bytes":32,"bytes":32', 1),
+                tagged.replace(b'"bytes":32', b'"bytes":1e999', 1),
+                tagged.replace(b'"bytes":32', b'"bytes":32.0', 1),
+                tagged.replace(b'"bytes":32', b'"bytes":NaN', 1),
+                padded[:-1] + b" \n", b"x" * (1024 * 1024) + b"\n" + tagged,
+            )
+            for index, raw in enumerate(malformed):
+                path.write_bytes(raw)
+                with self.subTest(index=index), self.assertRaises(ValueError):
+                    p.lifetimes_layout_output(path, p.digest(raw))
+            raw = b"Cargo diagnostic\n" + tagged
+            path.write_bytes(raw)
+            for expected in (None, True, "A" * 64, "0" * 64):
+                with self.subTest(expected=expected), self.assertRaises(ValueError):
+                    p.lifetimes_layout_output(path, expected)
+            path.write_bytes(b"other diagnostic\n" + tagged)
+            with self.assertRaisesRegex(ValueError, "differs from owned command"):
+                p.lifetimes_layout_output(path, p.digest(raw))
+            link = Path(directory) / "link"
+            link.symlink_to(path)
+            with self.assertRaises(ValueError):
+                p.lifetimes_layout_output(link, p.file_hash(path))
 
 
 class AssetTests(unittest.TestCase):
