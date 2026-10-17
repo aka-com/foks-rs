@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare pinned A1/A2 inputs, A3a nodes and explicit B1/B2 component stages.
+"""Prepare pinned A1/A2 inputs, A3a nodes and explicit B1/B2/B3 stages.
 
 verify checks only the original upstream archive. prepare also applies the closed
 A2 patch in private staging. assets accepts the two reviewed local V8 assets.
@@ -140,10 +140,6 @@ LIFETIMES_MODES = {
     "node-lifetimes": FOUNDATION_MODES["node-foundation"],
     "node-lifetimes-lifecycle": FOUNDATION_MODES["node-foundation-lifecycle"],
 }
-NODE_STAGES = (FOUNDATION, LIFETIMES)
-NODE_MODES = {**FOUNDATION_MODES, **LIFETIMES_MODES}
-NODE_BINARY_MODES = ("node-foundation-default", "node-foundation", "node-lifetimes-default", "node-lifetimes")
-NODE_LIFECYCLE_MODES = ("node-foundation-lifecycle", "node-lifetimes-lifecycle")
 LIFETIMES_TEST_PREFIX = "guarded_execution::node::tests::"
 LIFETIMES_TESTS = FOUNDATION_TESTS + [LIFETIMES_TEST_PREFIX + "b2_" + name for name in (
     "effect_inventory_is_closed", "original_origin_cannot_be_rebound",
@@ -163,6 +159,75 @@ LIFETIMES_TESTS = FOUNDATION_TESTS + [LIFETIMES_TEST_PREFIX + "b2_" + name for n
     "native_close_failure_after_worker_drop_holds_slot", "retirement_requires_every_conjunct",
     "original_deadline_denies_new_work_but_allows_reserved_cleanup", "lifetimes_has_no_ready_action_or_frontend",
 )]
+FRONTEND = "node-qualification"
+FRONTEND_BASE = "d22ff3deedf0f0a87f635aec2317a87410e39110"
+FRONTEND_PATCH = "patches/0004-node-frontend.patch"
+FRONTEND_PROFILE = "runtime/evidence/accepted-b2/runtime-node.lock.json"
+FRONTEND_SERIES = "runtime/evidence/accepted-b2/patches/node-series.json"
+FRONTEND_MANIFEST = "runtime/evidence/accepted-b2/prepared-inputs/source-manifest.json"
+FRONTEND_ASSETS = "runtime/evidence/accepted-b2/assets-node-lifetimes.json"
+FRONTEND_BASE_IMAGES = {
+    "lifetimes_profile": (FRONTEND_PROFILE, "b005ea3af86f1a09243184f359321d51ba1f81caf4aff34d22e377de32d359d3"),
+    "lifetimes_series": (FRONTEND_SERIES, "f7e5d4dc073cabbc7dcdec17e798163881f04da2a60952c8dae53f960577622e"),
+    "lifetimes_source_manifest": (FRONTEND_MANIFEST, "b06b21c3014d4745e8ef1898a0165affd8f67026bb07962ff75188cafb5e3890"),
+}
+FRONTEND_ASSET_SHA256 = "53710086f7a73a54bb44ba00aae50ccaa060a10a3ff62ccd63ce4b67a9705dc6"
+FRONTEND_ADDITIONS = frozenset(("crates/celld/main/guarded.rs", "crates/celld/guarded_node/output.rs"))
+FRONTEND_UNION = tuple(sorted(set(FOUNDATION_PATHS) | set(LIFETIMES_PATHS) | {
+    "crates/celld/main.rs", "crates/celld/main/cli.rs", "crates/celld/node_log.rs", *FRONTEND_ADDITIONS,
+}))
+# Exact fourth-patch roster; the immutable three-patch prefix stays separate.
+FRONTEND_PATHS = tuple(sorted((
+    "crates/celld/main.rs", "crates/celld/main/cli.rs", "crates/celld/main/guarded.rs",
+    "crates/celld/lib.rs", "crates/celld/node_log.rs", "crates/celld/guarded_node.rs",
+    "crates/celld/guarded_node/control.rs", "crates/celld/guarded_node/output.rs",
+    "crates/celld/guarded_node/tests.rs", "crates/celld/runtime.rs", "crates/celld/actor.rs",
+    "crates/celld/actor/local_request.rs", "crates/celld/cell_dispatch.rs",
+    "crates/celld/host_channels.rs", "crates/celld/guarded_execution.rs",
+)))
+FRONTEND_MODES = {
+    "node-qualification-default": FOUNDATION_MODES["node-foundation-default"],
+    "node-qualification": FOUNDATION_MODES["node-foundation"],
+    "node-qualification-lifecycle": FOUNDATION_MODES["node-foundation-lifecycle"],
+}
+NODE_STAGES = (FOUNDATION, LIFETIMES, FRONTEND)
+NODE_MODES = {**FOUNDATION_MODES, **LIFETIMES_MODES, **FRONTEND_MODES}
+NODE_BINARY_MODES = ("node-foundation-default", "node-foundation", "node-lifetimes-default", "node-lifetimes", "node-qualification-default", "node-qualification")
+NODE_LIFECYCLE_MODES = ("node-foundation-lifecycle", "node-lifetimes-lifecycle", "node-qualification-lifecycle")
+FRONTEND_TEST_PREFIX = LIFETIMES_TEST_PREFIX
+FRONTEND_TEST_RENAMES = {
+    "b1_foundation_has_no_ready_or_action": "b1_foundation_requires_frontend_for_ready_and_action",
+    "b2_lifetimes_has_no_ready_action_or_frontend": "b2_lifetimes_requires_frontend_for_ready_and_action",
+}
+FRONTEND_TESTS = [FRONTEND_TEST_PREFIX + FRONTEND_TEST_RENAMES.get(name.removeprefix(FRONTEND_TEST_PREFIX), name.removeprefix(FRONTEND_TEST_PREFIX)) for name in LIFETIMES_TESTS] + [FRONTEND_TEST_PREFIX + "b3_" + name for name in (
+    "header_closed_matrix", "header_eof_and_original_deadline", "tenants_share_two_slots",
+    "stop_admission_preserves_existing_owner", "output_reservation_is_one_shot",
+    "output_owner_survives_pending_write", "tcp_pending_then_complete",
+    "tcp_disconnect_disposes_before_retirement", "flush_pending_then_complete",
+    "cancel_already_set_refuses_write", "canonical_cancel_during_write",
+    "canonical_cancel_during_flush", "output_original_deadline", "bucket_probe_positive",
+    "bucket_probe_transport_refusal", "bucket_probe_contract_refusal",
+    "public_guard_survives_pending_owner", "gate_dispatch_disposal_fence",
+    "both_shutdown_modes_require_guarded_drain", "persistent_alias_does_not_self_wake",
+    "frontend_layout_ledger",
+)]
+FRONTEND_SCENARIOS = ("cold-sync-retire", "failed-turn-gated", "tcp-write-held", "tcp-disconnect", "shutdown-complete", "shutdown-cut")
+FRONTEND_LARGE_SCENARIOS = ("tcp-write-held", "tcp-disconnect", "shutdown-cut")
+FRONTEND_EXCLUSIONS = ["full-process-success", "full-driver-terminal-conjunction", "host-az-recovery", "production-metadata", "whole-node-retirement", "remote-put-termination"]
+FRONTEND_ROLES = ("tcp", "bucket")
+FRONTEND_PORT_ENV = {"tcp": "FOKS_B3_TCP_PORT", "bucket": "FOKS_B3_BUCKET_PORT"}
+FRONTEND_POLICY = '(version 1)\n(allow default)\n(deny network*)\n' + "".join(
+    "(allow network-" + direction + " " + " ".join('(' + address + ' tcp "localhost:{' + role + '}")' for role in FRONTEND_ROLES) + ")\n"
+    for direction, address in (("bind", "local"), ("inbound", "local"), ("outbound", "remote"))
+)
+FRONTEND_HELP_IMAGE = (8104, "f24c444c1931fae236d53eff71f236200adc448a196c2649587182930a20eb97")
+FRONTEND_REFUSALS = {
+    "frontend-missing-scenario": (["foks-guarded-node"], b"Error: foks-guarded-node requires a closed scenario\n"),
+    "frontend-unsupported-scenario": (["foks-guarded-node", "unsupported"], b"Error: unsupported foks-guarded-node scenario\n"),
+    "frontend-absent": (["foks-guarded-node", "cold-sync-retire"], b"Error: unknown command or option: foks-guarded-node; run `celld --help` for usage\n"),
+}
+
+
 # These are source-derived policies, never measurements or caller-supplied caps.
 LIFETIMES_FIXED_POLICY = {
     "node_control": ("inline-observation", False, 4096),
@@ -286,7 +351,7 @@ def load_pins(root=ROOT, stage=None):
         if stage not in NODE_STAGES:
             fail("unsupported source stage")
         base = load_pins(root)
-        profile = load_foundation(root, base) if stage == FOUNDATION else load_lifetimes(root, base)
+        profile = {FOUNDATION: load_foundation, LIFETIMES: load_lifetimes, FRONTEND: load_frontend}[stage](root, base)
         return {**base, "profile": stage, "foundation": profile}
     pins = read_json(root / "runtime.lock.json")
     if not isinstance(pins, dict) or (pins.get("format"), pins.get("profile")) not in ((1, A1), (2, A2)) or type(pins.get("format")) is not int or pins.get("target") != TARGET:
@@ -333,6 +398,8 @@ def patch_series(root, pins):
         return foundation_series(root, pins["foundation"])
     if pins["profile"] == LIFETIMES:
         return lifetimes_series(root, pins["foundation"])
+    if pins["profile"] == FRONTEND:
+        return frontend_series(root, pins["foundation"])
     path = root / "patches/series.json"
     series = read_json(path)
     if file_hash(path) != pins["patch_series_sha256"]:
@@ -373,7 +440,7 @@ def patch_series(root, pins):
 
 def selected_mode(pins, mode):
     if pins["profile"] in NODE_STAGES:
-        modes = FOUNDATION_MODES if pins["profile"] == FOUNDATION else LIFETIMES_MODES
+        modes = {FOUNDATION: FOUNDATION_MODES, LIFETIMES: LIFETIMES_MODES, FRONTEND: FRONTEND_MODES}[pins["profile"]]
         if mode not in modes:
             fail("unsupported graph/build mode for selected node profile")
         features = modes[mode]["root_features"]
@@ -388,6 +455,8 @@ def stage_for_mode(mode):
         return FOUNDATION
     if mode in LIFETIMES_MODES:
         return LIFETIMES
+    if mode in FRONTEND_MODES:
+        return FRONTEND
     if mode not in ("identity", "lifecycle", "node-baseline"):
         fail("unsupported graph/build mode")
     return None
@@ -546,8 +615,11 @@ def accepted_foundation(root):
 
 
 def load_lifetimes(root, base):
+    return validate_lifetimes(root, base, read_json(root / FOUNDATION_PROFILE), root / FOUNDATION_SERIES)
+
+
+def validate_lifetimes(root, base, profile, series_path):
     accepted = accepted_foundation(root)
-    profile = read_json(root / FOUNDATION_PROFILE)
     closed_fields(profile, ("format", "profile", "target", "accepted_a2_commit", "accepted_a3a_commit", "accepted_b1_commit", "base", "pins", "node_series", "cargo_lock", "qualification"), "lifetimes profile")
     identity = {"format": 1, "profile": LIFETIMES, "target": TARGET, "accepted_a2_commit": NODE_BASE, "accepted_a3a_commit": FOUNDATION_BASE, "accepted_b1_commit": LIFETIMES_BASE}
     exact_json({name: profile[name] for name in identity}, identity, "lifetimes profile identity")
@@ -579,14 +651,18 @@ def load_lifetimes(root, base):
     exact_json(qualification["tests"], {"prefix": LIFETIMES_TEST_PREFIX, "names": LIFETIMES_TESTS, "threads": 1}, "lifetimes test inventory")
     exact_json(qualification["modes"], LIFETIMES_MODES, "lifetimes modes")
     exact_json(qualification["layout_evidence"], lifetimes_layout_contract(), "lifetimes layout policy")
-    lifetimes_series(root, profile, accepted)
+    validate_lifetimes_series(root, profile, accepted, series_path)
     return profile
 
 
 def lifetimes_series(root, profile, accepted=None):
     accepted = accepted_foundation(root) if accepted is None else accepted
-    checked_file(root / FOUNDATION_SERIES, profile["node_series"])
-    series = read_json(root / FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    return validate_lifetimes_series(root, profile, accepted, root / FOUNDATION_SERIES)
+
+
+def validate_lifetimes_series(root, profile, accepted, series_path):
+    checked_file(series_path, profile["node_series"])
+    series = read_json(series_path, MAXIMUM_FOUNDATION_SERIES)
     closed_fields(series, ("format", "profile", "accepted_a2_commit", "accepted_a3a_commit", "accepted_b1_commit", "base_series", "patches"), "lifetimes patch series")
     identity = {"format": 1, "profile": LIFETIMES, "accepted_a2_commit": NODE_BASE, "accepted_a3a_commit": FOUNDATION_BASE, "accepted_b1_commit": LIFETIMES_BASE, "base_series": accepted["base"]["patch_series"]}
     exact_json({name: series[name] for name in identity}, identity, "lifetimes series identity")
@@ -608,6 +684,148 @@ def lifetimes_series(root, profile, accepted=None):
         validate_image(entry["before"])
         validate_image(entry["after"])
     checked_file(root / LIFETIMES_PATCH, selected)
+    return series
+
+
+def frontend_contract():
+    return {
+        "scenarios": list(FRONTEND_SCENARIOS), "large_output_scenarios": list(FRONTEND_LARGE_SCENARIOS),
+        "header": {"bytes": 16, "retained_bytes": 17, "magic": "FOKSGN01", "version": 1, "tenant_ordinals": [0, 1, 2], "reserved_zero_bytes": 4, "requires_write_half_eof": True},
+        "commands": {"begin": {"opcode": 1, "phases": [0]}, "observe": {"opcode": 2, "phases": [0, 1], "pending_phase": 1}, "release_refused": 3},
+        "response": {"magic": "FOKSGO01", "version": 1, "base_bytes": 32, "status": {"success": 0, "gated_handler_failure": 1}, "length_encoding": "u32-le", "payload_bytes": 12, "failure_payload_zero": True, "large_tail": "repeated-actual-payload", "driver_or_proof_failure_publishes": False},
+        "limits": {"connections": 4, "dispatchers": 2, "slots": 2, "request_seconds": 15, "control_seconds": 1, "ordinary_frame_bytes": 32, "maximum_frame_bytes": 4 * 1024**2, "process_bytes": 1024**2, "invocation_bytes": 8 * 1024**2, "report_bytes": 128 * 1024, "encoded_report_bytes": 65536},
+        "retirement_ticket": "scalar-process-registry-sequence-no-record-weak",
+        "output_allocation": "one-shot-original-debt-and-a0-response-pool",
+        "control_allocation": "original-control-owner-and-a0-control-pool",
+    }
+
+
+FRONTEND_TRANSPORT_TESTS = {
+    "deadline": ["deadline::tests::" + name for name in (
+        "expired_scope_rejects_new_work_and_nested_cleanup_restores_it",
+        "scope_restores_context_after_unwind_and_never_extends_budget",
+        "absolute_deadline_preserves_original_instant_and_expiry",
+    )],
+    "memory": ["memory::tests::qualification_" + name for name in (
+        "output_retains_capacity_and_leaves_control_available",
+        "reservations_reject_failed_owner_without_new_charges",
+        "output_preserves_small_fallback_but_control_does_not",
+    )],
+}
+
+
+def frontend_native_contract():
+    return {
+        "package": "celld@0.6.2", "target": TARGET, "target_kind": "lib", "artifact_profile_test": True,
+        "features": list(FRONTEND_MODES[FRONTEND]["celld_features"]), "jobs": 2,
+        "compile_network": "deny-all", "list_network": "deny-all",
+        "compile_args": ["--no-run", "--message-format=json"],
+        "list_args": [FRONTEND_TEST_PREFIX, "--list"], "run_args": [FRONTEND_TEST_PREFIX, "--test-threads=1"],
+        "run_network": {"address": "127.0.0.1", "roles": list(FRONTEND_ROLES), "environment": FRONTEND_PORT_ENV.copy(), "template": FRONTEND_POLICY, "sandbox_executable": "/usr/bin/sandbox-exec", "ipv6_qualified": False},
+        "transport_tests": {"package": "foks-hosted-transport", "target_kind": "lib", "feature": "qualification", "network": "deny-all", "names": {name: list(names) for name, names in FRONTEND_TRANSPORT_TESTS.items()}},
+    }
+
+
+FRONTEND_LAYOUT_POLICY = {
+    "frontend/connection": {"count": 4, "bucket": "process", "ceiling_bytes": 65536},
+    "frontend/gate_dispatch": {"count": 2, "bucket": "process", "ceiling_bytes": 8192},
+    "output/send": {"count": 1, "bucket": "invocation", "ceiling_bytes": 49152},
+}
+FRONTEND_FIXED_LAYOUTS = ("watch_sender", "watch_receiver", "retirement_observation", "public_request_guard")
+FRONTEND_WATCH_COMPONENTS = ("notify", "rwlock_bool", "atomic_usize")
+FRONTEND_CONSTRUCTOR_FIELDS = ("capture_bytes", "capture_align", "future_bytes", "future_align", "result_bytes", "result_align", "typed_bytes")
+FRONTEND_PROCESS_PRECHARGE = {"frontend": 262144, "dispatcher": 16384, "report": 131072, "serialization": 65536}
+FRONTEND_LAYOUT_FIELDS = ("format", "claim", "constructors", "fixed", "watch_components", "watch_derived_bytes", "watch_allocation_bound", "frame_bytes", "process_precharge", "original_invocation_limit")
+
+
+def frontend_layout_contract():
+    return {
+        "prefix": "FOKS_B3_LAYOUT ", "maximum_record_bytes": 16384, "maximum_stderr_bytes": 1048576,
+        "record_fields": list(FRONTEND_LAYOUT_FIELDS), "claim": "b3-frontend-layouts-only",
+        "constructor_fields": list(FRONTEND_CONSTRUCTOR_FIELDS), "constructor_policy": {name: policy.copy() for name, policy in FRONTEND_LAYOUT_POLICY.items()},
+        "fixed_names": list(FRONTEND_FIXED_LAYOUTS), "fixed_fields": ["bytes", "align"], "fixed_ceiling_bytes": 4096,
+        "watch_components": list(FRONTEND_WATCH_COMPONENTS), "watch_formula": "9*round16(notify)+round16(rwlock_bool)+6*round16(atomic_usize)",
+        "watch_allocation_bound": 4096, "frame_bytes": [32, 4194304], "process_precharge": FRONTEND_PROCESS_PRECHARGE.copy(),
+        "original_invocation_limit": 8388608,
+    }
+
+
+def accepted_lifetimes(root):
+    # Preserved B2 is validated against its own exact profile and series. The
+    # mutable B3 profile cannot relabel a historical input or native receipt.
+    for path, checksum in FRONTEND_BASE_IMAGES.values():
+        value = read_json(root / path)
+        if file_hash(root / path) != checksum or not isinstance(value, dict):
+            fail("accepted lifetimes input changed")
+    return validate_lifetimes(root, load_pins(root), read_json(root / FRONTEND_PROFILE), root / FRONTEND_SERIES)
+
+
+def load_frontend(root, base):
+    accepted = accepted_lifetimes(root)
+    profile = read_json(root / FOUNDATION_PROFILE)
+    closed_fields(profile, ("format", "profile", "target", "accepted_a2_commit", "accepted_a3a_commit", "accepted_b1_commit", "accepted_b2_commit", "base", "pins", "node_series", "cargo_lock", "qualification"), "frontend profile")
+    identity = {"format": 1, "profile": FRONTEND, "target": TARGET, "accepted_a2_commit": NODE_BASE, "accepted_a3a_commit": FOUNDATION_BASE, "accepted_b1_commit": LIFETIMES_BASE, "accepted_b2_commit": FRONTEND_BASE}
+    exact_json({name: profile[name] for name in identity}, identity, "frontend profile identity")
+    closed_fields(profile["base"], (*FOUNDATION_BASE_IMAGES, *LIFETIMES_BASE_IMAGES, *FRONTEND_BASE_IMAGES), "frontend base")
+    exact_json({name: profile["base"][name] for name in accepted["base"]}, accepted["base"], "frontend historical base")
+    for name, (path, checksum) in FRONTEND_BASE_IMAGES.items():
+        image = profile["base"][name]
+        foundation_image(image, path)
+        if image["sha256"] != checksum:
+            fail("frontend accepted base changed")
+        checked_file(root / path, image)
+    exact_json(profile["pins"], base, "frontend inherited pins")
+    exact_json(profile["cargo_lock"], accepted["cargo_lock"], "frontend unchanged lock contract")
+    checked_file(root / "Cargo.lock", profile["cargo_lock"]["expected"])
+    foundation_image(profile["node_series"], FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    qualification = profile["qualification"]
+    closed_fields(qualification, ("claim", "source_roster", "tree", "program", "deployments", "tests", "modes", "not_qualified", "layout_evidence", "frontend", "native_execution", "frontend_layout_evidence"), "frontend qualification")
+    exact_json({name: qualification[name] for name in ("claim", "source_roster", "not_qualified")}, {"claim": "b3-frontend-components-only", "source_roster": list(FRONTEND_PATHS), "not_qualified": FRONTEND_EXCLUSIONS}, "frontend scope")
+    tree = qualification["tree"]
+    closed_fields(tree, ("files", "payload_bytes", "inventory_sha256"), "frontend tree")
+    if type(tree["files"]) is not int or tree["files"] != accepted["qualification"]["tree"]["files"] + len(FRONTEND_ADDITIONS) or type(tree["payload_bytes"]) is not int or not 0 < tree["payload_bytes"] <= MAXIMUM_FOUNDATION_SOURCE or not isinstance(tree["inventory_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", tree["inventory_sha256"]):
+        fail("invalid frontend tree envelope")
+    for name in ("program", "deployments"):
+        exact_json(qualification[name], accepted["qualification"][name], "frontend unchanged " + name)
+    exact_json(qualification["tests"], {"prefix": FRONTEND_TEST_PREFIX, "names": FRONTEND_TESTS, "threads": 1}, "frontend test inventory")
+    exact_json(qualification["modes"], FRONTEND_MODES, "frontend modes")
+    exact_json(qualification["layout_evidence"], lifetimes_layout_contract(), "frontend retained B2 layout policy")
+    exact_json(qualification["frontend"], frontend_contract(), "frontend protocol policy")
+    exact_json(qualification["native_execution"], frontend_native_contract(), "frontend native test policy")
+    exact_json(qualification["frontend_layout_evidence"], frontend_layout_contract(), "frontend layout policy")
+    frontend_series(root, profile, accepted)
+    return profile
+
+
+def frontend_series(root, profile, accepted=None):
+    accepted = accepted_lifetimes(root) if accepted is None else accepted
+    checked_file(root / FOUNDATION_SERIES, profile["node_series"])
+    series = read_json(root / FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    closed_fields(series, ("format", "profile", "accepted_a2_commit", "accepted_a3a_commit", "accepted_b1_commit", "accepted_b2_commit", "base_series", "patches"), "frontend patch series")
+    identity = {"format": 1, "profile": FRONTEND, "accepted_a2_commit": NODE_BASE, "accepted_a3a_commit": FOUNDATION_BASE, "accepted_b1_commit": LIFETIMES_BASE, "accepted_b2_commit": FRONTEND_BASE, "base_series": accepted["base"]["patch_series"]}
+    exact_json({name: series[name] for name in identity}, identity, "frontend series identity")
+    patches = series["patches"]
+    if not isinstance(patches, list) or len(patches) != 4:
+        fail("frontend requires exactly four patches")
+    prefix = validate_lifetimes_series(root, accepted, accepted_foundation(root), root / FRONTEND_SERIES)
+    exact_json(patches[:3], prefix["patches"], "frontend immutable patch prefix")
+    selected = patches[3]
+    closed_fields(selected, ("path", "bytes", "sha256", "files"), "frontend fourth patch")
+    foundation_image({name: selected[name] for name in ("path", "bytes", "sha256")}, FRONTEND_PATCH, MAXIMUM_FOUNDATION_PATCH)
+    files = selected["files"]
+    if not isinstance(files, list) or len(files) != len(FRONTEND_PATHS) or not set(FRONTEND_PATHS) <= set(FRONTEND_UNION):
+        fail("invalid frontend patch roster")
+    for path, entry in zip(FRONTEND_PATHS, files, strict=True):
+        closed_fields(entry, ("path", "mode", "before", "after"), "frontend patch file")
+        if entry["path"] != path or entry["mode"] != "100644":
+            fail("frontend patch path/order/mode changed")
+        if path in FRONTEND_ADDITIONS:
+            if entry["before"] is not None:
+                fail("frontend addition has a preimage")
+        else:
+            validate_image(entry["before"])
+        validate_image(entry["after"])
+    checked_file(root / FRONTEND_PATCH, selected)
     return series
 
 
@@ -1063,6 +1281,17 @@ def prepare_assets(archive, binding, root=ROOT, stage=None):
 
 
 def foundation_assets(root, pins, base):
+    if pins["profile"] == FRONTEND:
+        accepted = accepted_lifetimes(root)
+        foundation = accepted_foundation(root)
+        historical_foundation = {"format": 1, "profile": FOUNDATION, "input_sha256": file_hash(root / LIFETIMES_PROFILE), "patch_series_sha256": foundation["node_series"]["sha256"], "base_receipt_sha256": file_hash(root / "runtime/artifacts/assets.json"), "assets": base}
+        historical = {"format": 1, "profile": LIFETIMES, "input_sha256": file_hash(root / FRONTEND_PROFILE), "patch_series_sha256": accepted["node_series"]["sha256"], "base_receipt_sha256": file_hash(root / "runtime/artifacts/assets.json"), "foundation_receipt_sha256": LIFETIMES_ASSET_SHA256, "assets": base}
+        for preserved, live, checksum, expected in ((LIFETIMES_ASSETS, "runtime/assets-node-foundation.json", LIFETIMES_ASSET_SHA256, historical_foundation), (FRONTEND_ASSETS, "runtime/assets-node-lifetimes.json", FRONTEND_ASSET_SHA256, historical)):
+            if file_hash(root / preserved) != checksum:
+                fail("accepted component asset receipt changed")
+            exact_json(read_json(root / preserved), expected, "accepted component assets")
+            checked_file(root / live, {"bytes": (root / preserved).stat().st_size, "sha256": checksum})
+        return {"format": 1, "profile": FRONTEND, "input_sha256": file_hash(root / FOUNDATION_PROFILE), "patch_series_sha256": pins["foundation"]["node_series"]["sha256"], "base_receipt_sha256": file_hash(root / "runtime/artifacts/assets.json"), "foundation_receipt_sha256": LIFETIMES_ASSET_SHA256, "lifetimes_receipt_sha256": FRONTEND_ASSET_SHA256, "assets": base}
     if pins["profile"] == LIFETIMES:
         accepted = accepted_foundation(root)
         historical = {"format": 1, "profile": FOUNDATION, "input_sha256": file_hash(root / LIFETIMES_PROFILE), "patch_series_sha256": accepted["node_series"]["sha256"], "base_receipt_sha256": file_hash(root / "runtime/artifacts/assets.json"), "assets": base}
@@ -2306,16 +2535,122 @@ def build_commands(root, toolchain, pins, mode="identity"):
 
 
 def foundation_test_commands(root, toolchain, pins):
+    if pins["profile"] == FRONTEND:
+        fail("frontend tests require the bound direct executable and two-port policy")
     selected_mode(pins, pins["profile"])
     prefix = LIFETIMES_TEST_PREFIX if pins["profile"] == LIFETIMES else FOUNDATION_TEST_PREFIX
     shared = [toolchain / "bin/cargo", "test", "--locked", "--offline", "--manifest-path", str(root / "Cargo.toml"), "--no-default-features", "--package", "foks-celld-guarded", "--package", "celld@0.6.2", "--features", "foks-celld-guarded/node-qualification", "--lib", "-j", "2", "--target", TARGET, prefix, "--"]
     return {"list": network_command([*shared, "--list"]), "run": network_command([*shared, "--test-threads=1"])}
 
 
+def frontend_test_compile_command(root, toolchain, pins):
+    if pins["profile"] != FRONTEND:
+        fail("frontend compilation requires its exact stage")
+    selected_mode(pins, FRONTEND)
+    return network_command([toolchain / "bin/cargo", "test", "--locked", "--offline", "--manifest-path", str(root / "Cargo.toml"), "--no-default-features", "--package", "foks-celld-guarded", "--package", "celld@0.6.2", "--features", "foks-celld-guarded/node-qualification", "--lib", "-j", "2", "--target", TARGET, "--no-run", "--message-format=json"])
+
+
+def frontend_transport_commands(root, toolchain, name):
+    if name not in FRONTEND_TRANSPORT_TESTS:
+        fail("unknown frontend transport test group")
+    prefix = "deadline::tests::" if name == "deadline" else "memory::tests::qualification_"
+    # Cargo must test this dev-dependency-bearing package in its own workspace.
+    # These are root-workspace A0 regressions, not celld dependency-graph tests.
+    # Keep its different lock/profile artifacts separate while retaining the
+    # same aggregate target-directory resource ceiling and owned cleanup.
+    shared = [toolchain / "bin/cargo", "test", "--locked", "--offline", "--manifest-path", str(root.parents[1] / "Cargo.toml"), "--no-default-features", "--package", "foks-hosted-transport", "--features", "qualification", "--lib", "-j", "2", "--target", TARGET, "--target-dir", str(root / "runtime/target/transport-regression"), prefix, "--"]
+    return {"list": network_command([*shared, "--list"]), "run": network_command([*shared, "--test-threads=1"])}
+
+
+def validate_frontend_ports(ports):
+    if not isinstance(ports, dict) or set(ports) != set(FRONTEND_ROLES) or any(type(value) is not int or not 1024 <= value <= 65535 for value in ports.values()) or len(set(ports.values())) != 2:
+        fail("invalid closed frontend port allocation")
+
+
+def choose_frontend_ports():
+    # Reserve both distinct ports together. Release immediately before child
+    # execution; a collision at the actual bind fails the run, without retry.
+    with contextlib.ExitStack() as held:
+        ports = {}
+        for role in FRONTEND_ROLES:
+            listener = held.enter_context(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
+            listener.bind(("127.0.0.1", 0))
+            ports[role] = listener.getsockname()[1]
+        validate_frontend_ports(ports)
+        return ports
+
+
+def frontend_test_command(binary, listing, ports=None):
+    if type(listing) is not bool:
+        fail("invalid frontend test command kind")
+    if listing:
+        if ports is not None:
+            fail("frontend test listing cannot use runtime ports")
+        return network_command([binary, FRONTEND_TEST_PREFIX, "--list"])
+    validate_frontend_ports(ports)
+    return ["/usr/bin/sandbox-exec", "-p", FRONTEND_POLICY.format(**ports), str(binary), FRONTEND_TEST_PREFIX, "--test-threads=1"]
+
+
+def frontend_test_environment(environment, ports):
+    validate_frontend_ports(ports)
+    if any(key.startswith("FOKS_B3_") for key in environment):
+        fail("ambient frontend test configuration is forbidden")
+    return {**environment, **{FRONTEND_PORT_ENV[role]: str(ports[role]) for role in FRONTEND_ROLES}}
+
+
+def verify_frontend_test_artifact(stdout_path, graph, root=ROOT):
+    target = graph.get("node_test_target")
+    if not isinstance(target, dict) or graph.get("profile") != FRONTEND or graph.get("mode") != FRONTEND:
+        fail("missing frontend library test target graph")
+    artifacts, finished, consumed = [], [], 0
+    path = Path(stdout_path)
+    if path.is_symlink() or not path.is_file():
+        fail("invalid frontend compiler output")
+    with path.open("rb") as stream:
+        while line := stream.readline(4 * 1024 * 1024 + 1):
+            consumed += len(line)
+            if consumed > 128 * 1024 * 1024 or len(line) > 4 * 1024 * 1024:
+                fail("frontend compiler message allowance exceeded")
+            message = node_json(line)
+            if not isinstance(message, dict):
+                fail("unclassified frontend compiler message")
+            if message.get("reason") == "compiler-artifact" and message.get("executable") is not None:
+                actual = message.get("target", {})
+                if message.get("package_id") != target["package_id"] or message.get("features") != target["features"] or any(actual.get(key) != target[key] for key in ("name", "kind", "crate_types", "src_path")) or message.get("profile", {}).get("test") is not True or not isinstance(message["executable"], str):
+                    fail("unexpected frontend test executable artifact")
+                artifacts.append(message["executable"])
+            elif message.get("reason") == "build-finished":
+                if type(message.get("success")) is not bool:
+                    fail("frontend compiler completion is not a boolean")
+                finished.append(message["success"])
+            elif message.get("reason") not in ("compiler-artifact", "compiler-message", "build-script-executed"):
+                fail("unclassified frontend compiler message reason")
+    if len(artifacts) != 1 or finished != [True]:
+        fail("missing unique successful frontend test artifact")
+    binary = Path(artifacts[0])
+    directory = root / "runtime/target" / TARGET / "debug/deps"
+    if binary.parent != directory or not re.fullmatch(r"celld-[0-9a-f]{16}", binary.name):
+        fail("frontend test executable escapes the exact target directory")
+    for parent in (root / "runtime", root / "runtime/target", root / "runtime/target" / TARGET, directory.parent, directory):
+        if parent.is_symlink() or not parent.is_dir():
+            fail("frontend test target directory is not regular")
+    if binary.resolve() != binary:
+        fail("frontend test artifact is not canonical")
+    image, _ = stable_fixture_file(binary, 4 * 1024**3)
+    if not image["bytes"] or not image["mode"] & 0o111:
+        fail("frontend test artifact is not executable")
+    return {"path": str(binary), "bytes": image["bytes"], "sha256": image["sha256"], "artifact": target.copy()}
+
+
 def foundation_test_output(path, listing, stage=FOUNDATION):
     if stage not in NODE_STAGES:
         fail("unsupported component test stage")
-    expected = LIFETIMES_TESTS if stage == LIFETIMES else FOUNDATION_TESTS
+    expected = {FOUNDATION: FOUNDATION_TESTS, LIFETIMES: LIFETIMES_TESTS, FRONTEND: FRONTEND_TESTS}[stage]
+    return component_test_output(path, listing, expected)
+
+
+def component_test_output(path, listing, expected):
+    # Fixed caller inventories only. The output is never used to choose tests.
     count = len(expected)
     path = Path(path)
     if path.is_symlink() or not path.is_file() or path.stat().st_size > 1024 * 1024:
@@ -2489,8 +2824,57 @@ def lifetimes_layout_output(path, expected_stderr_sha256):
     return {"record": record, "raw_record_bytes": len(raw_record), "raw_record_sha256": digest(raw_record)}
 
 
-def foundation_probe_output(directory, name):
-    if name not in ("version", "help", "invalid-option"):
+def frontend_layout_output(path, expected_stderr_sha256):
+    record, raw_record = compiled_layout_record(path, expected_stderr_sha256, b"FOKS_B3_LAYOUT ", 16384)
+    closed_fields(record, FRONTEND_LAYOUT_FIELDS, "frontend layout record")
+    fixed = {"format": 1, "claim": "b3-frontend-layouts-only", "watch_allocation_bound": 4096, "frame_bytes": [32, 4194304], "process_precharge": FRONTEND_PROCESS_PRECHARGE, "original_invocation_limit": 8388608}
+    exact_json({name: record[name] for name in fixed}, fixed, "frontend layout contract")
+
+    def layout(size, alignment, ceiling, positive=False):
+        if type(size) is not int or not int(positive) <= size <= ceiling or type(alignment) is not int or not 0 < alignment <= 16 or alignment & (alignment - 1) or size % alignment or (size == 0 and alignment != 1):
+            fail("invalid frontend layout size or alignment")
+
+    closed_fields(record["constructors"], FRONTEND_LAYOUT_POLICY, "frontend constructors")
+    for name, policy in FRONTEND_LAYOUT_POLICY.items():
+        entry = record["constructors"][name]
+        closed_fields(entry, FRONTEND_CONSTRUCTOR_FIELDS, "frontend constructor")
+        for field in ("capture", "future", "result"):
+            layout(entry[field + "_bytes"], entry[field + "_align"], policy["ceiling_bytes"])
+        typed = entry["capture_bytes"] + entry["future_bytes"] + entry["result_bytes"]
+        if type(entry["typed_bytes"]) is not int or entry["typed_bytes"] != typed or typed > policy["ceiling_bytes"]:
+            fail("frontend constructor exceeds additive typed allowance")
+    for field, names in (("fixed", FRONTEND_FIXED_LAYOUTS), ("watch_components", FRONTEND_WATCH_COMPONENTS)):
+        closed_fields(record[field], names, "frontend " + field)
+        for entry in record[field].values():
+            closed_fields(entry, ("bytes", "align"), "frontend fixed layout")
+            layout(entry["bytes"], entry["align"], 4096, positive=True)
+    components = record["watch_components"]
+    # Public selected-type measurements bound the private Tokio Shared<bool>:
+    # nine Notify, the RwLock<bool>, three atomics, one optional index, and
+    # two Arc counters. Rounding each constituent to 16 covers all padding.
+    rounded = {name: (entry["bytes"] + 15) // 16 * 16 for name, entry in components.items()}
+    derived = 9 * rounded["notify"] + rounded["rwlock_bool"] + 6 * rounded["atomic_usize"]
+    if components["atomic_usize"] != {"bytes": 8, "align": 8} or type(record["watch_derived_bytes"]) is not int or record["watch_derived_bytes"] != derived or derived > 4096:
+        fail("frontend watch allocation bound is not supported by its constituents")
+    return {"record": record, "raw_record_bytes": len(raw_record), "raw_record_sha256": digest(raw_record)}
+
+
+def foundation_probe_specs(mode):
+    if mode not in NODE_BINARY_MODES:
+        fail("unknown node binary probe mode")
+    probes = {"version": (["--version"], 0), "help": (["--help"], 0), "invalid-option": (["--foks-guarded-node-qualification"], 1)}
+    if mode == FRONTEND:
+        probes.update({name: (FRONTEND_REFUSALS[name][0], 1) for name in ("frontend-missing-scenario", "frontend-unsupported-scenario")})
+    elif mode == FRONTEND + "-default":
+        probes["frontend-absent"] = (FRONTEND_REFUSALS["frontend-absent"][0], 1)
+    return probes
+
+
+def foundation_probe_output(directory, name, mode=None):
+    if mode is not None and mode not in NODE_BINARY_MODES:
+        fail("unknown node binary probe mode")
+    allowed = foundation_probe_specs(mode) if mode is not None else ("version", "help", "invalid-option")
+    if name not in allowed:
         fail("unknown foundation binary probe")
     outputs = {}
     for stream in ("stdout", "stderr"):
@@ -2507,7 +2891,7 @@ def foundation_probe_output(directory, name):
     if err.startswith(FOUNDATION_JEMALLOC_WARNING):
         warnings.append({"id": "jemalloc-background-thread-unsupported", "stream": "stderr", "line": 1, "text": FOUNDATION_JEMALLOC_WARNING.decode("ascii").removesuffix("\n")})
         err = err[len(FOUNDATION_JEMALLOC_WARNING):]
-    if name != "invalid-option":
+    if name in ("version", "help"):
         # main parses Action before installing tracing and calling
         # memory::tune_allocator. Its single warning is therefore impossible
         # for a parse refusal. For help/version, the lossy asynchronous writer
@@ -2527,14 +2911,59 @@ def foundation_probe_output(directory, name):
     if name == "version":
         accepted = out == b"celld 0.6.2 (debug)\n" and not err
     elif name == "help":
-        accepted = (len(out), digest(out)) == FOUNDATION_HELP_IMAGE and not err
-    else:
+        accepted = (len(out), digest(out)) == (FRONTEND_HELP_IMAGE if mode == FRONTEND else FOUNDATION_HELP_IMAGE) and not err
+    elif name == "invalid-option":
         accepted = not out and err == b"Error: unknown command or option: --foks-guarded-node-qualification; run `celld --help` for usage\n"
+    else:
+        accepted = not out and err == FRONTEND_REFUSALS[name][1]
     if not accepted:
         fail("foundation binary probe outcome mismatch: " + name)
     # Raw files are untouched; these hashes/lengths refer to them, not to the
     # temporary exact-warning projection used by the outcome comparison.
     return {"stdout_bytes": len(outputs["stdout"]), "stdout_sha256": digest(outputs["stdout"]), "stderr_bytes": len(outputs["stderr"]), "stderr_sha256": digest(outputs["stderr"]), "recognized_warnings": warnings}
+
+
+def run_frontend_components(focused, root, toolchain, pins, graph, environment, directory, slot):
+    timeout = pins["build"]["timeout_seconds"]
+    focused["compile"] = run_owned(frontend_test_compile_command(root, toolchain, pins), root, environment, directory, "tests-compile", slot, timeout, lambda: resource_refusal(root))
+    if file_hash(directory / "tests-compile.stdout") != focused["compile"]["stdout_sha256"]:
+        fail("frontend compiler output changed after owned command")
+    focused["binary"] = verify_frontend_test_artifact(directory / "tests-compile.stdout", graph, root)
+    binary = Path(focused["binary"]["path"])
+    checked_file(binary, focused["binary"])
+    focused["list"] = run_owned(frontend_test_command(binary, True), root, environment, directory, "tests-list", slot, timeout, lambda: resource_refusal(root))
+    if file_hash(directory / "tests-list.stdout") != focused["list"]["stdout_sha256"]:
+        fail("frontend test listing changed after owned command")
+    foundation_test_output(directory / "tests-list.stdout", True, FRONTEND)
+    checked_file(binary, focused["binary"])
+    ports = choose_frontend_ports()
+    focused["ports"] = ports
+    focused["port_environment"] = {FRONTEND_PORT_ENV[role]: str(ports[role]) for role in FRONTEND_ROLES}
+    focused["network_policy_sha256"] = digest(FRONTEND_POLICY.format(**ports).encode())
+    # Save the chosen policy/ports before launching. Ownership stays with the
+    # same slot and supervisor; only this direct test child gets loopback.
+    write_json(directory / "frontend-test-inputs.json", {"binary": focused["binary"], "ports": ports, "environment": focused["port_environment"], "policy": FRONTEND_POLICY.format(**ports)})
+    focused["run"] = run_owned(frontend_test_command(binary, False, ports), root, frontend_test_environment(environment, ports), directory, "tests-run", slot, timeout, lambda: resource_refusal(root))
+    checked_file(binary, focused["binary"])
+    if file_hash(directory / "tests-run.stdout") != focused["run"]["stdout_sha256"]:
+        fail("frontend test output changed after owned command")
+    foundation_test_output(directory / "tests-run.stdout", False, FRONTEND)
+    stderr, checksum = directory / "tests-run.stderr", focused["run"]["stderr_sha256"]
+    focused["layouts"] = foundation_layout_output(stderr, checksum, FRONTEND)
+    focused["lifetimes_layouts"] = lifetimes_layout_output(stderr, checksum)
+    focused["frontend_layouts"] = frontend_layout_output(stderr, checksum)
+    focused["transport_tests"] = {}
+    for group, names in FRONTEND_TRANSPORT_TESTS.items():
+        result = {"names": names.copy(), "threads": 1, "network": "deny-all", "scope": "root-workspace-a0-regression", "manifest": str(root.parents[1] / "Cargo.toml")}
+        focused["transport_tests"][group] = result
+        for action, argv in frontend_transport_commands(root, toolchain, group).items():
+            name = "transport-" + group + "-" + action
+            result[action] = run_owned(argv, root, environment, directory, name, slot, timeout, lambda: resource_refusal(root))
+            path = directory / (name + ".stdout")
+            if file_hash(path) != result[action]["stdout_sha256"]:
+                fail("frontend transport test output changed after owned command")
+            component_test_output(path, action == "list", names)
+    checked_file(binary, focused["binary"])
 
 
 def build_foundation(graph_directory, root, mode):
@@ -2553,9 +2982,10 @@ def build_foundation(graph_directory, root, mode):
     toolchain, environment = controlled_environment(root)
     evidence_root = runtime_directory(root) / "evidence"
     evidence_root.mkdir(exist_ok=True)
-    directory = Path(tempfile.mkdtemp(prefix="lifetimes-" if stage == LIFETIMES else "foundation-", dir=evidence_root))
+    directory = Path(tempfile.mkdtemp(prefix={FOUNDATION: "foundation-", LIFETIMES: "lifetimes-", FRONTEND: "frontend-"}[stage], dir=evidence_root))
     claims = {"node-foundation-default": "b1-default-bin-regression", "node-foundation": "b1-foundation-component-only", "node-foundation-lifecycle": "b1-a2-lifecycle-regression", "node-lifetimes-default": "b2-default-bin-regression", "node-lifetimes": "b2-lifetimes-components-only", "node-lifetimes-lifecycle": "b2-a2-lifecycle-regression"}
-    receipt = {"format": 1, "profile": stage, "mode": mode, "claim": claims[mode], "status": "incomplete", "source": source, "assets": assets, "profile_sha256": file_hash(root / FOUNDATION_PROFILE), "series_sha256": pins["foundation"]["node_series"]["sha256"], "cargo_lock_sha256": file_hash(root / "Cargo.lock"), "graph_directory": str(Path(graph_directory).resolve()), "graph_sha256": digest(json.dumps(graph, sort_keys=True).encode()), "initial_resources": measured, "not_qualified": FOUNDATION_EXCLUSIONS}
+    claims.update({FRONTEND + "-default": "b3-default-bin-regression", FRONTEND: "b3-frontend-components-only", FRONTEND + "-lifecycle": "b3-a2-lifecycle-regression"})
+    receipt = {"format": 1, "profile": stage, "mode": mode, "claim": claims[mode], "status": "incomplete", "source": source, "assets": assets, "profile_sha256": file_hash(root / FOUNDATION_PROFILE), "series_sha256": pins["foundation"]["node_series"]["sha256"], "cargo_lock_sha256": file_hash(root / "Cargo.lock"), "graph_directory": str(Path(graph_directory).resolve()), "graph_sha256": digest(json.dumps(graph, sort_keys=True).encode()), "initial_resources": measured, "not_qualified": FRONTEND_EXCLUSIONS if stage == FRONTEND else FOUNDATION_EXCLUSIONS}
     write_json(directory / "receipt.json", receipt)
     with BuildSlot(root) as slot:
         try:
@@ -2579,15 +3009,17 @@ def build_foundation(graph_directory, root, mode):
                 receipt["binary"] = verify_node_artifact(directory / "build.stdout", graph, root)
                 binary = Path(receipt["binary"]["path"])
                 receipt["probes"] = {}
-                for name, flag in (("version", "--version"), ("help", "--help"), ("invalid-option", "--foks-guarded-node-qualification")):
+                for name, (arguments, expected_exit) in foundation_probe_specs(mode).items():
                     checked_file(binary, receipt["binary"])
-                    command = run_owned(network_command([binary, flag]), root, environment, directory, name, slot, 15, lambda: resource_refusal(root), maximum_log_bytes=65536, expected_exit_code=1 if name == "invalid-option" else 0)
-                    receipt["probes"][name] = {"command": command, "output": foundation_probe_output(directory, name)}
+                    command = run_owned(network_command([binary, *arguments]), root, environment, directory, name, slot, 15, lambda: resource_refusal(root), maximum_log_bytes=65536, expected_exit_code=expected_exit)
+                    receipt["probes"][name] = {"command": command, "output": foundation_probe_output(directory, name, mode)}
                     checked_file(binary, receipt["binary"])
                 if mode == stage:
-                    focused = {"prefix": LIFETIMES_TEST_PREFIX if stage == LIFETIMES else FOUNDATION_TEST_PREFIX, "names": LIFETIMES_TESTS if stage == LIFETIMES else FOUNDATION_TESTS, "threads": 1}
+                    focused = {"prefix": FOUNDATION_TEST_PREFIX if stage == FOUNDATION else LIFETIMES_TEST_PREFIX, "names": {FOUNDATION: FOUNDATION_TESTS, LIFETIMES: LIFETIMES_TESTS, FRONTEND: FRONTEND_TESTS}[stage], "threads": 1}
                     receipt["focused_tests"] = focused
-                    for name, argv in foundation_test_commands(root, toolchain, pins).items():
+                    if stage == FRONTEND:
+                        run_frontend_components(focused, root, toolchain, pins, graph, environment, directory, slot)
+                    for name, argv in ({} if stage == FRONTEND else foundation_test_commands(root, toolchain, pins)).items():
                         focused[name] = run_owned(argv, root, environment, directory, "tests-" + name, slot, pins["build"]["timeout_seconds"], lambda: resource_refusal(root))
                         foundation_test_output(directory / ("tests-" + name + ".stdout"), name == "list", stage)
                         if name == "run":

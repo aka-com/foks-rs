@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import re
 import sys
 import tomllib
 
@@ -24,6 +25,7 @@ SOURCE_PATHS = (".gitignore", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml",
 A2_SOURCE_PATHS = ("src/lifecycle.rs", "tests/lifecycle.rs", preparation.PATCH_PATH)
 FOUNDATION_SOURCE_PATHS = (preparation.FOUNDATION_PROFILE, preparation.FOUNDATION_SERIES, preparation.FOUNDATION_PATCH, "node.lock.json", preparation.FOUNDATION_MANIFEST)
 LIFETIMES_SOURCE_PATHS = (preparation.LIFETIMES_PATCH, preparation.LIFETIMES_PROFILE, preparation.LIFETIMES_SERIES, preparation.LIFETIMES_MANIFEST, preparation.LIFETIMES_ASSETS, "runtime/assets-node-foundation.json")
+FRONTEND_SOURCE_PATHS = (preparation.FRONTEND_PATCH, preparation.FRONTEND_PROFILE, preparation.FRONTEND_SERIES, preparation.FRONTEND_MANIFEST, preparation.FRONTEND_ASSETS, "runtime/assets-node-lifetimes.json")
 
 
 def fail(message):
@@ -225,8 +227,10 @@ def graph_report(metadata, pins, mode="identity", source_root=ROOT):
             fail("default/lifecycle celld subclosure includes FOKS integration")
         preparation.foundation_lock(source_root, pins)
         report["foundation"] = {"profile_sha256": preparation.file_hash(source_root / preparation.FOUNDATION_PROFILE), "series_sha256": pins["foundation"]["node_series"]["sha256"], "accepted_a3a_commit": preparation.FOUNDATION_BASE, "cargo_lock_sha256": preparation.file_hash(source_root / "Cargo.lock"), "celld_foks_edges": sorted(actual_edges), "declared_foks_edges": declared}
-        if pins["profile"] == preparation.LIFETIMES:
+        if pins["profile"] in (preparation.LIFETIMES, preparation.FRONTEND):
             report["foundation"].update(accepted_b1_commit=preparation.LIFETIMES_BASE, accepted_b1_images={name: pins["foundation"]["base"][name] for name in preparation.LIFETIMES_BASE_IMAGES})
+        if pins["profile"] == preparation.FRONTEND:
+            report["foundation"].update(accepted_b2_commit=preparation.FRONTEND_BASE, accepted_b2_images={name: pins["foundation"]["base"][name] for name in preparation.FRONTEND_BASE_IMAGES})
     if mode == "node-baseline" or mode in preparation.NODE_BINARY_MODES:
         celld_closure = closure([celld])
         if (not foundation or not foundation["celld_foks_edges"]) and any(packages[identity]["name"].startswith("foks-") for identity in celld_closure):
@@ -246,6 +250,14 @@ def graph_report(metadata, pins, mode="identity", source_root=ROOT):
             fail("ordinary celld binary target changed")
         report["node_target"] = {"package_id": celld, **{key: target[key] for key in ("name", "kind", "crate_types", "src_path")}, "features": foundation["celld_features"] if foundation else []}
         report["node_subclosure"] = sorted(celld_closure)
+        if pins["profile"] == preparation.FRONTEND:
+            libraries = [item for item in targets if isinstance(item, dict) and item.get("kind") == ["lib"]]
+            if len(libraries) != 1:
+                fail("missing or ambiguous frontend library target")
+            library = libraries[0]
+            if library.get("name") != "celld" or library.get("crate_types") != ["lib"] or library.get("src_path") != str(expected / "lib.rs") or library.get("required-features", []) != []:
+                fail("frontend library target changed")
+            report["node_test_target"] = {"package_id": celld, **{key: library[key] for key in ("name", "kind", "crate_types", "src_path")}, "features": foundation["celld_features"]}
     return report
 
 
@@ -258,11 +270,25 @@ def regular_files(directory):
             yield path
 
 
+def frontend_transport_inputs(root, mode):
+    if mode != preparation.FRONTEND:
+        return set()
+    repo = root.parents[1]
+    members = tomllib.loads((repo / "Cargo.toml").read_text()).get("workspace", {}).get("members")
+    if not isinstance(members, list) or not 1 <= len(members) <= 64 or any(not isinstance(member, str) or len(member) > 256 or not re.fullmatch(r"[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)+", member) for member in members) or len(set(members)) != len(members):
+        fail("unsupported root workspace member inventory")
+    paths = {repo / "Cargo.lock", *(repo / member / "Cargo.toml" for member in members)}
+    for path in paths:
+        if path.is_symlink() or not path.is_file() or path.resolve() != path:
+            fail("non-regular root workspace test input")
+    return paths
+
+
 def candidate_inputs(root, mode="identity"):
     """Snapshot before Cargo; the selected local subset must already be bound."""
     repo = root.parents[1]
     pins = preparation.load_pins(root, preparation.stage_for_mode(mode))
-    paths = {repo / "Cargo.toml", *(root / name for name in source_paths(pins, mode))}
+    paths = {repo / "Cargo.toml", *(root / name for name in source_paths(pins, mode)), *frontend_transport_inputs(root, mode)}
     paths.add(repo / pins["foks_additional_versions"]["baseline_lock"])
     for directory in (repo / "crates").iterdir():
         if directory.is_dir() and (directory / "Cargo.toml").is_file():
@@ -274,13 +300,13 @@ def candidate_inputs(root, mode="identity"):
 
 def source_paths(pins, mode="identity"):
     preparation.selected_mode(pins, mode)
-    return SOURCE_PATHS + (A2_SOURCE_PATHS if pins["profile"] in (preparation.A2, *preparation.NODE_STAGES) else ()) + (FOUNDATION_SOURCE_PATHS if pins["profile"] in preparation.NODE_STAGES else ()) + (LIFETIMES_SOURCE_PATHS if pins["profile"] == preparation.LIFETIMES else ()) + (("node.lock.json", "run-node.py", "test_run_node.py") if mode == "node-baseline" else ())
+    return SOURCE_PATHS + (A2_SOURCE_PATHS if pins["profile"] in (preparation.A2, *preparation.NODE_STAGES) else ()) + (FOUNDATION_SOURCE_PATHS if pins["profile"] in preparation.NODE_STAGES else ()) + (LIFETIMES_SOURCE_PATHS if pins["profile"] in (preparation.LIFETIMES, preparation.FRONTEND) else ()) + (FRONTEND_SOURCE_PATHS if pins["profile"] == preparation.FRONTEND else ()) + (("node.lock.json", "run-node.py", "test_run_node.py") if mode == "node-baseline" else ())
 
 
 def selected_inputs(metadata, reached, root, mode="identity"):
     repo = root.parents[1]
     pins = preparation.load_pins(root, preparation.stage_for_mode(mode))
-    paths = {repo / "Cargo.toml", *(root / name for name in source_paths(pins, mode)), root / "runtime/source/Cargo.toml", root / "runtime/source/Cargo.lock"}
+    paths = {repo / "Cargo.toml", *(root / name for name in source_paths(pins, mode)), root / "runtime/source/Cargo.toml", root / "runtime/source/Cargo.lock", *frontend_transport_inputs(root, mode)}
     paths.add(repo / pins["foks_additional_versions"]["baseline_lock"])
     for package in metadata["packages"]:
         if package["id"] not in reached or package["source"] is not None:

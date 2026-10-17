@@ -205,9 +205,10 @@ def repin_foundation(root, data, patch_bytes=None):
 
 
 @contextmanager
-def lifetimes_fixture(root):
+def lifetimes_fixture(root, additional_contents=None):
     """A full synthetic immutable B1 prefix followed by twenty-one B2 edits."""
     extra = {name: ("upstream " + name + "\n").encode() for name in p.LIFETIMES_PATHS if name not in p.FOUNDATION_PATHS and name not in p.PATCH_PATHS}
+    extra.update(additional_contents or {})
     with foundation_fixture(root, extra) as previous:
         (root / "Cargo.lock").write_bytes(previous["expected_lock"])
         accepted = p.prepare(previous["archive"], root, p.FOUNDATION)
@@ -249,6 +250,58 @@ def repin_lifetimes(root, data, patch_bytes=None):
     if patch_bytes is not None:
         (root / p.LIFETIMES_PATCH).write_bytes(patch_bytes)
         data["series"]["patches"][2].update(foundation_file(root, p.LIFETIMES_PATCH))
+    (root / p.FOUNDATION_SERIES).write_text(json.dumps(data["series"]))
+    data["profile"]["node_series"] = foundation_file(root, p.FOUNDATION_SERIES)
+    (root / p.FOUNDATION_PROFILE).write_text(json.dumps(data["profile"]))
+
+
+@contextmanager
+def frontend_fixture(root):
+    """Four explicit patches, with preserved historical profiles and assets."""
+    old_paths = set(p.PATCH_PATHS) | set(p.FOUNDATION_PATHS) | set(p.LIFETIMES_PATHS)
+    extra = {name: ("upstream " + name + "\n").encode() for name in p.FRONTEND_PATHS if name not in old_paths and name not in p.FRONTEND_ADDITIONS}
+    with lifetimes_fixture(root, extra) as previous:
+        accepted = p.prepare(previous["archive"], root, p.LIFETIMES)
+        assets = p.prepare_assets(previous["native"], previous["binding"], root, p.LIFETIMES)
+        preserved = root / Path(p.FRONTEND_MANIFEST).parent
+        preserved.mkdir(parents=True)
+        (root / "runtime/source").rename(preserved / "source")
+        (root / "runtime/source-manifest.json").rename(preserved / "source-manifest.json")
+        for original, target in ((p.FOUNDATION_PROFILE, p.FRONTEND_PROFILE), (p.FOUNDATION_SERIES, p.FRONTEND_SERIES), ("runtime/assets-node-lifetimes.json", p.FRONTEND_ASSETS)):
+            destination = root / target
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes((root / original).read_bytes())
+        accepted_images = {name: foundation_file(root, path) for name, (path, _) in p.FRONTEND_BASE_IMAGES.items()}
+        files, chunks = [], []
+        final = {row["path"]: dict(row) for row in accepted["files"]}
+        for name in p.FRONTEND_PATHS:
+            path = preserved / "source" / name
+            before = path.read_bytes() if path.exists() else None
+            after = ("frontend " + name + "\n").encode()
+            old_lines = [] if before is None else before.splitlines(keepends=True)
+            files.append({"path": name, "mode": "100644", "before": None if before is None else p.image_identity(before), "after": p.image_identity(after)})
+            chunks.append(("--- " + ("/dev/null" if before is None else "a/" + name) + "\n+++ b/" + name + "\n@@ -" + str(1 if old_lines else 0) + "," + str(len(old_lines)) + " +1,1 @@\n").encode() + b"".join(b"-" + line for line in old_lines) + b"+" + after)
+            final[name] = {"path": name, "mode": "100644", **p.image_identity(after)}
+        (root / p.FRONTEND_PATCH).write_bytes(b"".join(chunks))
+        rows = sorted(final.values(), key=lambda row: row["path"])
+        series = copy.deepcopy(previous["series"])
+        series.update(profile=p.FRONTEND, accepted_b2_commit=p.FRONTEND_BASE)
+        series["patches"].append({**foundation_file(root, p.FRONTEND_PATCH), "files": files})
+        (root / p.FOUNDATION_SERIES).write_text(json.dumps(series))
+        profile = copy.deepcopy(previous["profile"])
+        profile.update(profile=p.FRONTEND, accepted_b2_commit=p.FRONTEND_BASE, node_series=foundation_file(root, p.FOUNDATION_SERIES))
+        profile["base"].update(accepted_images)
+        profile["qualification"].update(claim="b3-frontend-components-only", source_roster=list(p.FRONTEND_PATHS), tree={"files": len(rows), "payload_bytes": sum(row["bytes"] for row in rows), "inventory_sha256": p.digest(json.dumps(rows, sort_keys=True, separators=(",", ":")).encode())}, tests={"prefix": p.FRONTEND_TEST_PREFIX, "names": p.FRONTEND_TESTS.copy(), "threads": 1}, modes=copy.deepcopy(p.FRONTEND_MODES), not_qualified=p.FRONTEND_EXCLUSIONS.copy(), frontend=p.frontend_contract(), native_execution=p.frontend_native_contract(), frontend_layout_evidence=p.frontend_layout_contract())
+        (root / p.FOUNDATION_PROFILE).write_text(json.dumps(profile))
+        base_hashes = {name: (entry["path"], entry["sha256"]) for name, entry in accepted_images.items()}
+        with patch.object(p, "FRONTEND_BASE_IMAGES", base_hashes), patch.object(p, "FRONTEND_ASSET_SHA256", p.file_hash(root / p.FRONTEND_ASSETS)):
+            yield {**previous, "profile": profile, "series": series, "rows": rows, "accepted_b2": accepted, "accepted_b2_profile": previous["profile"], "accepted_b2_assets": assets, "accepted_b2_images": accepted_images}
+
+
+def repin_frontend(root, data, patch_bytes=None):
+    if patch_bytes is not None:
+        (root / p.FRONTEND_PATCH).write_bytes(patch_bytes)
+        data["series"]["patches"][3].update(foundation_file(root, p.FRONTEND_PATCH))
     (root / p.FOUNDATION_SERIES).write_text(json.dumps(data["series"]))
     data["profile"]["node_series"] = foundation_file(root, p.FOUNDATION_SERIES)
     (root / p.FOUNDATION_PROFILE).write_text(json.dumps(data["profile"]))
@@ -1554,6 +1607,402 @@ class LifetimesTests(unittest.TestCase):
             link.symlink_to(path)
             with self.assertRaises(ValueError):
                 p.lifetimes_layout_output(link, p.file_hash(path))
+
+
+class FrontendTests(unittest.TestCase):
+    def test_four_patch_reconstruction_keeps_all_historical_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with frontend_fixture(root) as data:
+                old = (p.PATCH_PATH, p.FOUNDATION_PATCH, p.LIFETIMES_PATCH, p.FRONTEND_PROFILE, p.FRONTEND_SERIES, p.FRONTEND_MANIFEST, p.FRONTEND_ASSETS)
+                preserved = {name: (root / name).read_bytes() for name in old}
+                source = p.prepare(data["archive"], root, p.FRONTEND)
+                self.assertEqual(source["files"], data["rows"])
+                self.assertEqual(len(source["files"]), len(data["accepted_b2"]["files"]) + 2)
+                self.assertEqual((source["profile"], source["kind"]), (p.FRONTEND, "patched-source"))
+                self.assertEqual(len(p.FRONTEND_UNION), 29)
+                self.assertEqual(p.prepare(data["archive"], root, p.FRONTEND), source)
+                data["archive"].unlink()
+                self.assertEqual(p.verify_source(root, p.FRONTEND), source)
+                self.assertEqual({name: (root / name).read_bytes() for name in old}, preserved)
+                for stage in (None, p.FOUNDATION, p.LIFETIMES):
+                    with self.subTest(stage=stage), self.assertRaises(ValueError):
+                        p.verify_source(root, stage)
+
+    def test_accepted_lifetimes_tree_cannot_be_implicitly_replaced(self):
+        import shutil
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with frontend_fixture(root) as data:
+                original = root / Path(p.FRONTEND_MANIFEST).parent
+                shutil.copytree(original / "source", root / "runtime/source")
+                shutil.copyfile(original / "source-manifest.json", root / "runtime/source-manifest.json")
+                manifest = (root / "runtime/source-manifest.json").read_bytes()
+                with self.assertRaises(ValueError):
+                    p.prepare(data["archive"], root, p.FRONTEND)
+                self.assertEqual((root / "runtime/source-manifest.json").read_bytes(), manifest)
+
+    def test_closed_profile_rejects_protocol_stage_and_budget_relabelling(self):
+        mutations = (
+            lambda x: x.update(format=True), lambda x: x.update(profile=p.LIFETIMES),
+            lambda x: x.update(accepted_b2_commit="0" * 40), lambda x: x.update(extra=1),
+            lambda x: x["base"].pop("lifetimes_series"),
+            lambda x: x["base"]["lifetimes_profile"].update(path=p.FOUNDATION_PROFILE),
+            lambda x: x["cargo_lock"]["expected"].update(sha256="0" * 64),
+            lambda x: x["qualification"]["tree"].update(files=True),
+            lambda x: x["qualification"]["tree"].update(files=x["qualification"]["tree"]["files"] + 1),
+            lambda x: x["qualification"]["source_roster"].append("crates/celld/other.rs"),
+            lambda x: x["qualification"]["tests"]["names"].pop(),
+            lambda x: x["qualification"]["frontend"]["commands"].update(release_refused=0),
+            lambda x: x["qualification"]["frontend"]["header"].update(requires_write_half_eof=False),
+            lambda x: x["qualification"]["frontend"]["response"].update(driver_or_proof_failure_publishes=True),
+            lambda x: x["qualification"]["native_execution"].update(compile_network="loopback"),
+            lambda x: x["qualification"]["native_execution"]["run_network"].update(address="0.0.0.0"),
+            lambda x: x["qualification"]["frontend_layout_evidence"].update(watch_allocation_bound=256),
+            lambda x: x["qualification"]["frontend_layout_evidence"]["process_precharge"].update(frontend=1),
+            lambda x: x["qualification"].update(not_qualified=[]),
+            lambda x: x["qualification"]["program"]["fixture_js"].update(sha256="0" * 64),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with frontend_fixture(root) as data:
+                original = copy.deepcopy(data["profile"])
+                for index, mutate in enumerate(mutations):
+                    data["profile"] = copy.deepcopy(original)
+                    mutate(data["profile"])
+                    repin_frontend(root, data)
+                    with self.subTest(index=index), self.assertRaises(ValueError):
+                        p.load_pins(root, p.FRONTEND)
+
+    def test_fourth_patch_is_closed_and_cannot_modify_its_prefix(self):
+        mutations = (
+            lambda x: x["series"]["patches"][0].update(sha256="0" * 64),
+            lambda x: x["series"]["patches"][2]["files"][0]["after"].update(bytes=1),
+            lambda x: x["series"]["patches"].pop(),
+            lambda x: x["series"]["patches"][3].update(bytes=512 * 1024 + 1),
+            lambda x: x["series"]["patches"][3]["files"].reverse(),
+            lambda x: x["series"]["patches"][3]["files"][0].update(mode="100755"),
+            lambda x: next(row for row in x["series"]["patches"][3]["files"] if row["path"] in p.FRONTEND_ADDITIONS).update(before=p.image_identity(b"not absent\n")),
+            lambda x: next(row for row in x["series"]["patches"][3]["files"] if row["path"] not in p.FRONTEND_ADDITIONS).update(before=None),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with frontend_fixture(root) as data:
+                original = copy.deepcopy(data["series"])
+                for index, mutate in enumerate(mutations):
+                    data["series"] = copy.deepcopy(original)
+                    mutate(data)
+                    repin_frontend(root, data)
+                    with self.subTest(index=index), self.assertRaises(ValueError):
+                        p.prepare(data["archive"], root, p.FRONTEND)
+                    self.assertFalse((root / "runtime/source").exists())
+                data["series"] = copy.deepcopy(original)
+                data["series"]["patches"][3]["files"][-1]["after"]["sha256"] = "0" * 64
+                repin_frontend(root, data)
+                with self.assertRaises(ValueError):
+                    p.prepare(data["archive"], root, p.FRONTEND)
+                self.assertFalse((root / "runtime/source").exists())
+                self.assertFalse(list((root / "runtime").glob("source-staging-*")))
+
+    def test_new_asset_receipt_preserves_both_prior_stage_receipts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with frontend_fixture(root) as data:
+                old_paths = ("runtime/artifacts/assets.json", "runtime/assets-node-foundation.json", "runtime/assets-node-lifetimes.json", p.LIFETIMES_ASSETS, p.FRONTEND_ASSETS)
+                before = {name: (root / name).read_bytes() for name in old_paths}
+                result = p.prepare_assets(data["native"], data["binding"], root, p.FRONTEND)
+                self.assertEqual(result["profile"], p.FRONTEND)
+                self.assertEqual(result["lifetimes_receipt_sha256"], p.file_hash(root / p.FRONTEND_ASSETS))
+                self.assertEqual({name: (root / name).read_bytes() for name in old_paths}, before)
+                self.assertEqual(p.verify_assets(root, p.FRONTEND), result)
+                path = root / "runtime/assets-node-qualification.json"
+                p.write_json(path, {**result, "format": True})
+                with self.assertRaises(ValueError):
+                    p.verify_assets(root, p.FRONTEND)
+                p.write_json(path, result)
+                (root / "runtime/assets-node-lifetimes.json").write_bytes(b"{}\n")
+                with self.assertRaises(ValueError):
+                    p.verify_assets(root, p.FRONTEND)
+
+    def test_modes_and_exact_seventy_four_test_inventory_are_stage_bound(self):
+        self.assertEqual(len(p.FRONTEND_TESTS), 74)
+        self.assertEqual(len(set(p.FRONTEND_TESTS)), 74)
+        self.assertEqual(len(set(p.LIFETIMES_TESTS) - set(p.FRONTEND_TESTS)), 2)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with frontend_fixture(root):
+                pins = p.load_pins(root, p.FRONTEND)
+                with patch.object(p, "network_command", side_effect=lambda argv: list(map(str, argv))):
+                    for mode, contract in p.FRONTEND_MODES.items():
+                        self.assertEqual(p.stage_for_mode(mode), p.FRONTEND)
+                        commands = p.build_commands(root, Path("/toolchain"), pins, mode)
+                        self.assertIn("--locked", commands["build"])
+                        self.assertIn("--offline", commands["build"])
+                        self.assertEqual("--features" in commands["build"], bool(contract["root_features"]))
+                        self.assertEqual("lifecycle" in commands, mode.endswith("lifecycle"))
+                    with self.assertRaises(ValueError):
+                        p.foundation_test_commands(root, Path("/toolchain"), pins)
+                    for mode in (*p.FOUNDATION_MODES, *p.LIFETIMES_MODES, "identity", "node-baseline"):
+                        with self.subTest(mode=mode), self.assertRaises(ValueError):
+                            p.selected_mode(pins, mode)
+            path = root / "stdout"
+            for listing in (True, False):
+                raw = self.render_test_output(p.FRONTEND_TESTS, listing)
+                path.write_text(raw)
+                self.assertEqual(p.foundation_test_output(path, listing, p.FRONTEND), p.FRONTEND_TESTS)
+                for changed in (raw + raw, raw.replace(p.FRONTEND_TESTS[-1], p.FRONTEND_TESTS[0]), raw.replace("74", "73"), raw.replace("0 ignored", "1 ignored")):
+                    if changed == raw:
+                        continue
+                    path.write_text(changed)
+                    with self.assertRaises(ValueError):
+                        p.foundation_test_output(path, listing, p.FRONTEND)
+                for group, names in p.FRONTEND_TRANSPORT_TESTS.items():
+                    path.write_text(self.render_test_output(names, listing))
+                    self.assertEqual(p.component_test_output(path, listing, names), names)
+                    path.write_text(self.render_test_output([], listing))
+                    with self.subTest(group=group), self.assertRaises(ValueError):
+                        p.component_test_output(path, listing, names)
+
+    @staticmethod
+    def render_test_output(names, listing):
+        if listing:
+            return "".join(name + ": test\n" for name in names) + "\n" + str(len(names)) + " tests, 0 benchmarks\n"
+        return "running " + str(len(names)) + " tests\n" + "".join("test " + name + " ... ok\n" for name in names) + "\ntest result: ok. " + str(len(names)) + " passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.01s\n"
+
+    def test_native_commands_separate_compiler_listing_runtime_and_transport_network(self):
+        ports = {"tcp": 23001, "bucket": 23002}
+        pins = {"profile": p.FRONTEND}
+        with patch.object(p, "network_command", side_effect=lambda argv: ["DENY-ALL", *map(str, argv)]):
+            compile_argv = p.frontend_test_compile_command(Path("/fixture"), Path("/toolchain"), pins)
+            self.assertEqual(compile_argv[0], "DENY-ALL")
+            self.assertIn("--no-run", compile_argv)
+            self.assertIn("--message-format=json", compile_argv)
+            self.assertEqual(compile_argv.count("--package"), 2)
+            self.assertNotIn(p.FRONTEND_TEST_PREFIX, compile_argv)
+            self.assertEqual(p.frontend_test_command(Path("/binary"), True), ["DENY-ALL", "/binary", p.FRONTEND_TEST_PREFIX, "--list"])
+            run = p.frontend_test_command(Path("/binary"), False, ports)
+            self.assertEqual(run[:2], ["/usr/bin/sandbox-exec", "-p"])
+            self.assertEqual(run[3:], ["/binary", p.FRONTEND_TEST_PREFIX, "--test-threads=1"])
+            self.assertIn("(deny network*)", run[2])
+            for role in ports:
+                self.assertEqual(run[2].count('tcp "localhost:' + str(ports[role]) + '"'), 3)
+            self.assertNotIn('tcp "*', run[2])
+            self.assertNotIn("127.0.0.1:*", run[2])
+            for group in p.FRONTEND_TRANSPORT_TESTS:
+                for action, argv in p.frontend_transport_commands(Path("/fixture/tools/guarded"), Path("/toolchain"), group).items():
+                    self.assertEqual(argv[0], "DENY-ALL")
+                    self.assertEqual(argv[argv.index("--manifest-path") + 1], "/fixture/Cargo.toml")
+                    self.assertEqual(argv[argv.index("--target-dir") + 1], "/fixture/tools/guarded/runtime/target/transport-regression")
+                    self.assertEqual([argv[index + 1] for index, value in enumerate(argv) if value == "--package"], ["foks-hosted-transport"])
+                    self.assertEqual(argv[argv.index("--features") + 1], "qualification")
+                    self.assertIn("--lib", argv)
+                    self.assertIn("--list" if action == "list" else "--test-threads=1", argv)
+        env = p.frontend_test_environment({"HOME": "/fixture"}, ports)
+        self.assertEqual(env, {"HOME": "/fixture", "FOKS_B3_TCP_PORT": "23001", "FOKS_B3_BUCKET_PORT": "23002"})
+        for invalid in (None, {}, {"tcp": 23001, "bucket": 23001}, {"tcp": True, "bucket": 23002}, {"tcp": 80, "bucket": 23002}, {**ports, "third": 23003}):
+            with self.subTest(ports=invalid), self.assertRaises(ValueError):
+                p.frontend_test_command(Path("/binary"), False, invalid)
+        with self.assertRaises(ValueError):
+            p.frontend_test_environment({"FOKS_B3_OTHER": "1"}, ports)
+        with self.assertRaises(ValueError):
+            p.frontend_test_command(Path("/binary"), True, ports)
+
+    def test_library_test_artifact_requires_one_exact_regular_executable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            binary, graph, message = self.artifact_fixture(root)
+            path = root / "compile.stdout"
+            def write(messages):
+                path.write_bytes(b"".join(json.dumps(item).encode() + b"\n" for item in messages))
+            finished = {"reason": "build-finished", "success": True}
+            write([message, finished])
+            self.assertEqual(p.verify_frontend_test_artifact(path, graph, root)["sha256"], p.file_hash(binary))
+            mutations = (
+                lambda x: x.update(package_id="other"), lambda x: x.update(features=[]),
+                lambda x: x["profile"].update(test=1), lambda x: x["target"].update(kind=["bin"]),
+                lambda x: x["target"].update(src_path="/wrong/lib.rs"),
+                lambda x: x.update(executable=str(binary.parent / "other-0123456789abcdef")),
+                lambda x: x.update(executable=str(binary.parent / ".." / "deps" / binary.name)),
+            )
+            for index, mutate in enumerate(mutations):
+                changed = copy.deepcopy(message)
+                mutate(changed)
+                write([changed, finished])
+                with self.subTest(index=index), self.assertRaises(ValueError):
+                    p.verify_frontend_test_artifact(path, graph, root)
+            for messages in ([finished], [message, message, finished], [message, {**finished, "success": False}], [message, {"reason": "unclassified"}, finished]):
+                write(messages)
+                with self.assertRaises(ValueError):
+                    p.verify_frontend_test_artifact(path, graph, root)
+            write([message, finished])
+            original = binary.read_bytes()
+            binary.unlink()
+            other = root / "other"
+            other.write_bytes(original)
+            binary.symlink_to(other)
+            with self.assertRaises(ValueError):
+                p.verify_frontend_test_artifact(path, graph, root)
+
+    @staticmethod
+    def artifact_fixture(root):
+        binary = root / "runtime/target" / p.TARGET / "debug/deps/celld-0123456789abcdef"
+        binary.parent.mkdir(parents=True)
+        binary.write_bytes(b"reviewed nonexecuted test artifact\n")
+        binary.chmod(0o755)
+        target = {"package_id": "actual-celld", "name": "celld", "kind": ["lib"], "crate_types": ["lib"], "src_path": str(root / "runtime/source/crates/celld/lib.rs"), "features": p.FRONTEND_MODES[p.FRONTEND]["celld_features"]}
+        graph = {"profile": p.FRONTEND, "mode": p.FRONTEND, "node_test_target": target}
+        message = {"reason": "compiler-artifact", "package_id": target["package_id"], "features": target["features"], "target": {key: target[key] for key in ("name", "kind", "crate_types", "src_path")}, "profile": {"test": True}, "executable": str(binary)}
+        return binary, graph, message
+
+    @staticmethod
+    def layout_record():
+        constructors = {name: {"capture_bytes": 32, "capture_align": 8, "future_bytes": 64, "future_align": 8, "result_bytes": 0, "result_align": 1, "typed_bytes": 96} for name in p.FRONTEND_LAYOUT_POLICY}
+        return {"format": 1, "claim": "b3-frontend-layouts-only", "constructors": constructors, "fixed": {name: {"bytes": 32, "align": 8} for name in p.FRONTEND_FIXED_LAYOUTS}, "watch_components": {"notify": {"bytes": 48, "align": 8}, "rwlock_bool": {"bytes": 16, "align": 8}, "atomic_usize": {"bytes": 8, "align": 8}}, "watch_derived_bytes": 544, "watch_allocation_bound": 4096, "frame_bytes": [32, 4194304], "process_precharge": dict(p.FRONTEND_PROCESS_PRECHARGE), "original_invocation_limit": 8388608}
+
+    def test_all_three_layout_records_bind_the_same_unchanged_stderr(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "stderr"
+            b1 = {**FoundationTests.layout_record(), "cleanup_reserve": 532480}
+            records = [(b"FOKS_B1_LAYOUT ", b1), (b"FOKS_B2_LAYOUT ", LifetimesTests.layout_record()), (b"FOKS_B3_LAYOUT ", self.layout_record())]
+            raw = b"retained Cargo warning\n" + b"".join(prefix + json.dumps(record).encode() + b"\n" for prefix, record in records)
+            path.write_bytes(raw)
+            checksum = p.digest(raw)
+            self.assertEqual(p.foundation_layout_output(path, checksum, p.FRONTEND)["record"], b1)
+            self.assertEqual(p.lifetimes_layout_output(path, checksum)["record"], records[1][1])
+            observed = p.frontend_layout_output(path, checksum)
+            self.assertEqual(observed["record"], records[2][1])
+            self.assertLess(observed["raw_record_bytes"], 16384)
+            path.write_bytes(raw.replace(b"retained", b"altered!"))
+            with self.assertRaises(ValueError):
+                p.frontend_layout_output(path, checksum)
+
+    def test_frontend_layout_parser_rejects_forged_policy_or_overlap(self):
+        mutations = (
+            lambda x: x.update(format=True), lambda x: x.update(claim="runtime-qualified"),
+            lambda x: x.update(extra=0), lambda x: x["fixed"].pop("public_request_guard"),
+            lambda x: x["constructors"].update(unreviewed={}),
+            lambda x: x["constructors"]["frontend/connection"].update(typed_bytes=64),
+            lambda x: x["constructors"]["frontend/gate_dispatch"].update(capture_bytes=8192, typed_bytes=8256),
+            lambda x: x["constructors"]["output/send"].update(capture_bytes=49152, typed_bytes=49216),
+            lambda x: x["constructors"]["output/send"].update(future_align=True),
+            lambda x: x["fixed"]["watch_sender"].update(bytes=0),
+            lambda x: x["fixed"]["watch_receiver"].update(align=32),
+            lambda x: x["watch_components"].pop("notify"),
+            lambda x: x["watch_components"]["atomic_usize"].update(bytes=16),
+            lambda x: x.update(watch_derived_bytes=256),
+            lambda x: x.update(watch_allocation_bound=8192),
+            lambda x: x["watch_components"]["notify"].update(bytes=4096),
+            lambda x: x["process_precharge"].update(frontend=True),
+            lambda x: x.update(frame_bytes=[32, 4194305]),
+            lambda x: x.update(original_invocation_limit=16777216),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "stderr"
+            for index, mutate in enumerate(mutations):
+                record = self.layout_record()
+                mutate(record)
+                raw = b"FOKS_B3_LAYOUT " + json.dumps(record).encode() + b"\n"
+                path.write_bytes(raw)
+                with self.subTest(index=index), self.assertRaises(ValueError):
+                    p.frontend_layout_output(path, p.digest(raw))
+            raw = b"FOKS_B3_LAYOUT " + json.dumps(self.layout_record()).encode() + b"\n"
+            for changed in (raw + raw, b"prefix " + raw, raw[:-1], raw.replace(b"\n", b"\r\n"), raw.replace(b'"format": 1', b'"format": 1, "format": 1'), raw.replace(b'"watch_derived_bytes": 544', b'"watch_derived_bytes": 544.0')):
+                path.write_bytes(changed)
+                with self.assertRaises(ValueError):
+                    p.frontend_layout_output(path, p.digest(changed))
+
+
+    def test_owned_runner_binds_compile_artifact_ports_all_layouts_and_transport_tests(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            binary, graph, message = self.artifact_fixture(root)
+            evidence = root / "evidence"
+            evidence.mkdir()
+            b1 = {**FoundationTests.layout_record(), "cleanup_reserve": 532480}
+            stderr = b"".join(prefix + json.dumps(record).encode() + b"\n" for prefix, record in ((b"FOKS_B1_LAYOUT ", b1), (b"FOKS_B2_LAYOUT ", LifetimesTests.layout_record()), (b"FOKS_B3_LAYOUT ", self.layout_record())))
+            calls = []
+            def owned(argv, cwd, environment, selected_directory, name, slot, timeout, monitor):
+                calls.append((name, list(map(str, argv)), environment.copy(), slot, timeout))
+                self.assertEqual(cwd, root)
+                self.assertEqual(selected_directory, evidence)
+                if name == "tests-compile":
+                    out = json.dumps(message) + "\n" + json.dumps({"reason": "build-finished", "success": True}) + "\n"
+                else:
+                    names = p.FRONTEND_TESTS if name.startswith("tests-") else p.FRONTEND_TRANSPORT_TESTS[name.split("-")[1]]
+                    out = self.render_test_output(names, name.endswith("list"))
+                (evidence / (name + ".stdout")).write_text(out)
+                (evidence / (name + ".stderr")).write_bytes(stderr if name == "tests-run" else b"")
+                return {"stdout_sha256": p.file_hash(evidence / (name + ".stdout")), "stderr_sha256": p.file_hash(evidence / (name + ".stderr")), "cleanup_complete": True}
+            ports, slot = {"tcp": 23001, "bucket": 23002}, object()
+            pins = {"profile": p.FRONTEND, "build": {"timeout_seconds": 1800}}
+            with patch.object(p, "run_owned", side_effect=owned), patch.object(p, "choose_frontend_ports", return_value=ports), patch.object(p, "network_command", side_effect=lambda argv: ["DENY-ALL", *map(str, argv)]):
+                focused = {}
+                p.run_frontend_components(focused, root, Path("/toolchain"), pins, graph, {"HOME": "/fixture"}, evidence, slot)
+            self.assertEqual([row[0] for row in calls], ["tests-compile", "tests-list", "tests-run", "transport-deadline-list", "transport-deadline-run", "transport-memory-list", "transport-memory-run"])
+            for name, argv, environment, actual_slot, timeout in calls:
+                self.assertIs(actual_slot, slot)
+                self.assertEqual(timeout, 1800)
+                if name == "tests-run":
+                    self.assertEqual(argv[0], "/usr/bin/sandbox-exec")
+                    self.assertEqual(environment["FOKS_B3_TCP_PORT"], "23001")
+                    self.assertEqual(environment["FOKS_B3_BUCKET_PORT"], "23002")
+                else:
+                    self.assertEqual(argv[0], "DENY-ALL")
+                    self.assertEqual(environment, {"HOME": "/fixture"})
+            self.assertEqual(focused["binary"]["sha256"], p.file_hash(binary))
+            self.assertEqual(focused["frontend_layouts"]["record"], self.layout_record())
+            self.assertEqual(focused["layouts"]["record"], b1)
+            self.assertEqual(focused["lifetimes_layouts"]["record"], LifetimesTests.layout_record())
+            for result in focused["transport_tests"].values():
+                self.assertEqual(result["scope"], "root-workspace-a0-regression")
+                self.assertEqual(result["manifest"], str(root.parents[1] / "Cargo.toml"))
+            self.assertEqual(p.read_json(evidence / "frontend-test-inputs.json")["ports"], ports)
+            calls.clear()
+            def replaced(*args, **kwargs):
+                result = owned(*args, **kwargs)
+                if args[4] == "tests-list":
+                    binary.write_bytes(b"changed after listing\n")
+                return result
+            with patch.object(p, "run_owned", side_effect=replaced), patch.object(p, "network_command", side_effect=lambda argv: ["DENY-ALL", *map(str, argv)]), self.assertRaises(ValueError):
+                p.run_frontend_components({}, root, Path("/toolchain"), pins, graph, {}, evidence, slot)
+            self.assertEqual([row[0] for row in calls], ["tests-compile", "tests-list"])
+
+
+    def test_frontend_cli_probes_bind_feature_help_and_exact_parse_refusals(self):
+        cli = (ROOT / "runtime/source/crates/celld/main/cli.rs").read_text()
+        literal = cli.split("pub(crate) fn print_help() -> anyhow::Result<()> {", 1)[1].split('r#"', 1)[1].split('"#,', 1)[0]
+        old_help = (literal.replace("{shutdown_total_ms}", "40000") + "\n").encode()
+        suffix = b"\n\nGUARDED NODE QUALIFICATION (local components only):\n  celld foks-guarded-node SCENARIO [OPTIONS]\n  Scenarios: cold-sync-retire, failed-turn-gated, tcp-write-held,\n             tcp-disconnect, shutdown-complete, shutdown-cut\n  Requires explicit local S3 and loopback listeners, bucket durability,\n  dummy credentials, and a fresh CELLD_TEST_DATA_DIR.\n"
+        enabled = old_help[:-1] + suffix + b"\n"
+        self.assertEqual((len(old_help), p.digest(old_help)), p.FOUNDATION_HELP_IMAGE)
+        self.assertEqual((len(enabled), p.digest(enabled)), p.FRONTEND_HELP_IMAGE)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            def observe(name, stdout, stderr, mode):
+                (root / (name + ".stdout")).write_bytes(stdout)
+                (root / (name + ".stderr")).write_bytes(stderr)
+                return p.foundation_probe_output(root, name, mode)
+            self.assertEqual(observe("help", enabled, b"", p.FRONTEND)["stdout_sha256"], p.digest(enabled))
+            observe("help", old_help, b"", p.FRONTEND + "-default")
+            for mode, wrong in ((p.FRONTEND, old_help), (p.FRONTEND + "-default", enabled)):
+                with self.assertRaises(ValueError):
+                    observe("help", wrong, b"", mode)
+            for name, (arguments, refusal) in p.FRONTEND_REFUSALS.items():
+                mode = p.FRONTEND + "-default" if name == "frontend-absent" else p.FRONTEND
+                self.assertEqual(p.foundation_probe_specs(mode)[name], (arguments, 1))
+                for prefix in (b"", p.FOUNDATION_JEMALLOC_WARNING):
+                    observed = observe(name, b"", prefix + refusal, mode)
+                    self.assertEqual(observed["stderr_sha256"], p.digest(prefix + refusal))
+                    self.assertEqual(len(observed["recognized_warnings"]), int(bool(prefix)))
+                for stdout, stderr in ((b"unexpected\n", refusal), (b"", refusal[:-1]), (b"", refusal + b"extra\n"), (b"", p.FOUNDATION_JEMALLOC_WARNING * 2 + refusal), (b"", refusal.replace(b"\n", b"\r\n"))):
+                    with self.assertRaises(ValueError):
+                        observe(name, stdout, stderr, mode)
+                for old in (*p.FOUNDATION_MODES, *p.LIFETIMES_MODES, None):
+                    with self.subTest(mode=old), self.assertRaises(ValueError):
+                        observe(name, b"", refusal, old)
+            for mode in (*p.FOUNDATION_MODES, *p.LIFETIMES_MODES):
+                if not mode.endswith("lifecycle"):
+                    self.assertEqual(set(p.foundation_probe_specs(mode)), {"version", "help", "invalid-option"})
 
 
 class AssetTests(unittest.TestCase):

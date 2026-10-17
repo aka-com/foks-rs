@@ -1,0 +1,4978 @@
+--- a/crates/celld/actor.rs
++++ b/crates/celld/actor.rs
+@@ -418,7 +418,6 @@
+ 
+ #[cfg(feature = "foks-guarded-node-qualification")]
+ impl GuardedRequest {
+-    #[cfg(test)]
+     pub(crate) fn from_envelope(envelope: guarded_node::GuardedEnvelope) -> Self {
+         Self { envelope }
+     }
+@@ -431,6 +430,8 @@
+ pub enum Message {
+     #[cfg(feature = "foks-guarded-node-qualification")]
+     Guarded(GuardedRequest),
++    #[cfg(feature = "foks-guarded-node-qualification")]
++    GuardedReady(guarded_node::GuardedReadyProbe),
+     /// A periodic resource sample. The measuring is the shell's job; every
+     /// decision that follows belongs to the core.
+     SampleLoad(crate::host_services::HostMetricsSample),
+@@ -794,6 +795,32 @@
+     in_flight: Arc<AtomicUsize>,
+ }
+ 
++impl PublicRequestGuard {
++    fn acquire(
++        draining: &std::sync::atomic::AtomicBool,
++        in_flight: &Arc<AtomicUsize>,
++    ) -> Option<Self> {
++        if draining.load(Ordering::SeqCst) {
++            return None;
++        }
++        in_flight.fetch_add(1, Ordering::SeqCst);
++        if draining.load(Ordering::SeqCst) {
++            in_flight.fetch_sub(1, Ordering::SeqCst);
++            return None;
++        }
++        Some(Self {
++            in_flight: in_flight.clone(),
++        })
++    }
++    #[cfg(all(test, feature = "foks-guarded-node-qualification"))]
++    pub(crate) fn acquire_for_test(
++        draining: &std::sync::atomic::AtomicBool,
++        in_flight: &Arc<AtomicUsize>,
++    ) -> Option<Self> {
++        Self::acquire(draining, in_flight)
++    }
++}
++
+ impl Drop for PublicRequestGuard {
+     fn drop(&mut self) {
+         self.in_flight.fetch_sub(1, Ordering::SeqCst);
+@@ -1810,17 +1837,7 @@
+     /// closes the race where shutdown stores the flag between the first read
+     /// and the counter increment: that request backs out before user code runs.
+     pub fn admit_public(&self) -> Option<PublicRequestGuard> {
+-        if self.draining.load(Ordering::SeqCst) {
+-            return None;
+-        }
+-        self.public_in_flight.fetch_add(1, Ordering::SeqCst);
+-        if self.draining.load(Ordering::SeqCst) {
+-            self.public_in_flight.fetch_sub(1, Ordering::SeqCst);
+-            return None;
+-        }
+-        Some(PublicRequestGuard {
+-            in_flight: self.public_in_flight.clone(),
+-        })
++        PublicRequestGuard::acquire(&self.draining, &self.public_in_flight)
+     }
+ 
+     pub fn public_in_flight(&self) -> usize {
+@@ -2778,6 +2795,24 @@
+ 
+     fn handle_message(&mut self, message: Message, out: &mut StepOutput) {
+         match message {
++            #[cfg(feature = "foks-guarded-node-qualification")]
++            Message::GuardedReady(probe) => {
++                let manager = self
++                    .node_log
++                    .lock()
++                    .ok()
++                    .and_then(|manager| manager.clone());
++                let runtime = match self.host.as_ref() {
++                    Some(CellHost::Engine(runtime)) => Some(runtime),
++                    _ => None,
++                };
++                probe.resolve(
++                    &self.state,
++                    self.guarded.as_ref(),
++                    runtime,
++                    manager.as_ref(),
++                );
++            }
+             #[cfg(feature = "foks-guarded-node-qualification")]
+             Message::Guarded(request) => {
+                 // Consume the original binding into this exact registry before
+--- a/crates/celld/actor/local_request.rs
++++ b/crates/celld/actor/local_request.rs
+@@ -121,7 +121,7 @@
+ // The guarded path owns its original, preadmitted activity. It must never
+ // construct an ordinary ActivityGuard (whose Drop allocates a mailbox node).
+ // Its only starter in B2 is the test-only driver; B3 supplies socket admission.
+-#[cfg(all(test, feature = "foks-guarded-node-qualification"))]
++#[cfg(feature = "foks-guarded-node-qualification")]
+ pub(crate) struct GuardedLocalRequest {
+     activity: crate::guarded_execution::node::GuardedActivity,
+ }
+@@ -134,7 +134,6 @@
+ 
+ #[cfg(feature = "foks-guarded-node-qualification")]
+ impl AppHandle {
+-    #[cfg(test)]
+     pub(crate) fn guarded_local_request(
+         &self,
+         activity: crate::guarded_execution::node::GuardedActivity,
+@@ -167,7 +166,7 @@
+     GuardedLocalRequest { activity }
+ }
+ 
+-#[cfg(all(test, feature = "foks-guarded-node-qualification"))]
++#[cfg(feature = "foks-guarded-node-qualification")]
+ impl GuardedLocalRequest {
+     pub(crate) async fn run<T: GatedAnswer>(
+         self,
+--- a/crates/celld/cell_dispatch.rs
++++ b/crates/celld/cell_dispatch.rs
+@@ -420,31 +420,72 @@
+ }
+ 
+ #[cfg(feature = "foks-guarded-node-qualification")]
+-pub(crate) async fn dispatch_guarded_gate(app: AppHandle, mut req: crate::js::GateReq) {
+-    let Some(origin) = req.guarded.take() else {
+-        let _ = req.reply.send(Err(RequestError::NodeFenced));
+-        return;
+-    };
+-    if req.scope != origin.cell() || req.ticket != origin.ticket() {
+-        origin.fail();
+-        let _ = req.reply.send(Err(RequestError::NodeFenced));
+-        return;
+-    }
+-    let routed = match app.guarded_gate_request(origin).await {
+-        Ok(routed) => routed,
+-        Err(error) => {
+-            let _ = req.reply.send(Err(error));
+-            return;
+-        }
+-    };
++pub(crate) struct GuardedGateWork {
++    pub(crate) app: AppHandle,
++    pub(crate) req: crate::js::GateReq,
++}
++#[cfg(feature = "foks-guarded-node-qualification")]
++pub(crate) struct GuardedGateResult {
++    fence: Option<crate::guarded_execution::node::DispatcherFence>,
++    reply: oneshot::Sender<Result<(), RequestError>>,
++    result: Result<(), RequestError>,
++}
++#[cfg(feature = "foks-guarded-node-qualification")]
++impl GuardedGateResult {
++    // Called only after the actual Work future/Box/AppHandle has been dropped.
++    pub(crate) fn dispose(self) {
++        let Self {
++            fence,
++            reply,
++            mut result,
++        } = self;
++        if fence.is_none_or(|fence| fence.complete().is_err()) {
++            result = Err(RequestError::NodeFenced);
++        }
++        let _ = reply.send(result);
++    }
++}
++#[cfg(feature = "foks-guarded-node-qualification")]
++impl GuardedGateWork {
++    pub(crate) async fn run(self) -> GuardedGateResult {
++        let Self { app, mut req } = self;
++        let Some(origin) = req.guarded.take() else {
++            return GuardedGateResult {
++                fence: None,
++                reply: req.reply,
++                result: Err(RequestError::NodeFenced),
++            };
++        };
++        let fence = origin.dispatch_fence().ok();
++        let result =
++            if fence.is_none() || req.scope != origin.cell() || req.ticket != origin.ticket() {
++                origin.fail();
++                Err(RequestError::NodeFenced)
++            } else {
++                guarded_gate_result(&app, origin, req.ticket).await
++            };
++        drop(req.scope);
++        drop(app);
++        GuardedGateResult {
++            fence,
++            reply: req.reply,
++            result,
++        }
++    }
++}
++#[cfg(feature = "foks-guarded-node-qualification")]
++async fn guarded_gate_result(
++    app: &AppHandle,
++    origin: crate::guarded_execution::node::OwnedGateOrigin,
++    ticket: crate::actor::GateTicket,
++) -> Result<(), RequestError> {
++    let routed = app.guarded_gate_request(origin).await?;
+     let (routed, activity) = routed.into_parts();
+     let result = if routed.route == Route::Local {
+-        app.guarded_gate_output(&activity, req.ticket).await
++        app.guarded_gate_output(&activity, ticket).await
+     } else {
+         Err(RequestError::NodeFenced)
+     };
+-    // The actual source snapshot is observed through the same bound dedicated
+-    // runtime. No fabricated alarm-free value can satisfy finish bookkeeping.
+     let alarm = activity.alarm_snapshot();
+     let finished = match alarm {
+         Ok(alarm) => activity.finish(alarm, result.is_ok()).await,
+@@ -453,15 +494,21 @@
+             Err(error)
+         }
+     };
+-    let result = if finished.is_ok() {
++    if finished.is_ok() {
+         result
+     } else {
+         Err(RequestError::NodeFenced)
+-    };
+-    // Dispose the copied scope before making the response observable. The
+-    // returned scalar and consumed sender are the only remaining gate payload.
+-    drop(req.scope);
+-    let _ = req.reply.send(result);
++    }
++}
++#[cfg(feature = "foks-guarded-node-qualification")]
++pub(crate) async fn dispatch_guarded_gate(app: AppHandle, req: crate::js::GateReq) {
++    // Ordinary compatibility caller: the inner concrete future is destroyed
++    // before its separate reply/fence disposition. Guarded Run uses fixed slots.
++    let result = {
++        let mut work = std::pin::pin!(GuardedGateWork { app, req }.run());
++        work.as_mut().await
++    };
++    result.dispose();
+ }
+ 
+ #[cfg(all(test, feature = "foks-guarded-node-qualification"))]
+@@ -482,3 +529,25 @@
+         },
+     );
+ }
++
++#[cfg(feature = "foks-guarded-node-qualification")]
++pub(crate) fn dispose_guarded_dispatch<F: ?Sized>(
++    future: std::pin::Pin<Box<F>>,
++    result: GuardedGateResult,
++) {
++    drop(future);
++    result.dispose();
++}
++#[cfg(all(test, feature = "foks-guarded-node-qualification"))]
++impl GuardedGateResult {
++    pub(crate) fn refused_for_test(
++        fence: crate::guarded_execution::node::DispatcherFence,
++        reply: oneshot::Sender<Result<(), RequestError>>,
++    ) -> Self {
++        Self {
++            fence: Some(fence),
++            reply,
++            result: Err(RequestError::NodeFenced),
++        }
++    }
++}
+--- a/crates/celld/guarded_execution.rs
++++ b/crates/celld/guarded_execution.rs
+@@ -1006,7 +1006,6 @@
+         }))
+     }
+ 
+-    #[cfg(test)]
+     fn node_control(
+         control: &node::NodeControl,
+         ordinal: u8,
+--- a/crates/celld/guarded_node.rs
++++ b/crates/celld/guarded_node.rs
+@@ -1,4 +1,4 @@
+-//! Closed foundation. Installation is not readiness or permission to execute.
++//! Closed node qualification. Installation alone is not readiness or execution permission.
+ use crate::fleet::LoadedDeployment;
+ use crate::generation::DeploymentGraph;
+ use crate::js::guarded_node as program;
+@@ -10,6 +10,8 @@
+ 
+ #[path = "guarded_node/control.rs"]
+ mod control;
++#[path = "guarded_node/output.rs"]
++pub(crate) mod output;
+ #[cfg(test)]
+ #[path = "guarded_node/tests.rs"]
+ mod tests;
+@@ -53,13 +55,16 @@
+ pub struct GuardedNode {
+     policy: DescriptorPolicy,
+     effects: Arc<OwnedEffectRegistry>,
++    accepting: AtomicBool,
++    diagnostics_reserved: AtomicBool,
++    bound: AtomicBool,
+     // Bootstrap-owned pools and the process registry are dropped before owner.
+     factory: control::OwnerFactory,
+     owner: control::OriginalOwner,
+ }
+ 
+ impl GuardedNode {
+-    /// Once-only foundation installation. No Action, bucket or Ready exists.
++    /// Once-only policy installation; Run readiness requires the sealed bind below.
+     pub fn install() -> Result<Arc<Self>, Refusal> {
+         if INSTALL_STARTED.swap(true, Ordering::AcqRel) {
+             return Err(Refusal::Busy);
+@@ -83,20 +88,23 @@
+         let node = Arc::new(Self {
+             policy: DescriptorPolicy::new(),
+             effects,
++            accepting: AtomicBool::new(true),
++            diagnostics_reserved: AtomicBool::new(false),
++            bound: AtomicBool::new(false),
+             factory,
+             owner,
+         });
+         // A failed installation remains a tombstone. An uninstalled policy is
+         // ordinary only when installation has never been attempted.
+         if INSTALLED.set(node.clone()).is_err() {
+-            node.stop_admission();
++            node.owner.fail();
+             return Err(Refusal::Busy);
+         }
+         Ok(node)
+     }
+ 
+     pub fn stop_admission(&self) {
+-        self.owner.fail();
++        self.accepting.store(false, Ordering::Release);
+     }
+ 
+     /// Scalar observations of native foundation storage, not physical leases.
+@@ -402,7 +410,6 @@
+ const ROOT_OWNED_LIMIT: usize = 8192;
+ const NATIVE_LIMIT: usize = 512;
+ const CHILD_CREATIONS: u8 = 16;
+-#[cfg(test)]
+ const CELL_SCOPES: [&str; 3] = [
+     concat!(
+         "FoksGuardedNodeFixture:",
+@@ -589,7 +596,6 @@
+     cancel: bool,
+ }
+ impl RootCell {
+-    #[cfg(test)]
+     fn new() -> Self {
+         Self {
+             sequence: 0,
+@@ -641,6 +647,9 @@
+     tainted: bool,
+     retiring: bool,
+     cancel_requested: bool,
++    frame_reserved: bool,
++    dispatcher_sequence: Option<u64>,
++    write_pending: bool,
+     eviction_request: u64,
+     eviction_result: Option<Result<celld_logic::EvictSuccess, celld_logic::EvictError>>,
+     lease: Option<super::Lease>,
+@@ -649,16 +658,31 @@
+     state: Mutex<InvocationState>,
+     sequence: u64,
+     cell: &'static str,
++    cancellation: tokio::sync::watch::Sender<bool>,
++    public_guard: Option<crate::actor::PublicRequestGuard>,
+     control: NodeControl,
+     // The base owner is last; no payload is permitted to outlive it on success.
+     owner: Mutex<Option<control::OriginalOwner>>,
+ }
++impl InvocationRecord {
++    fn reserve_frame(&self, kind: output::FrameKind) -> Result<(), Refusal> {
++        let mut state = lock_owned(&self.state)?;
++        if state.frame_reserved {
++            return Err(Refusal::Busy);
++        }
++        state.frame_reserved = true;
++        drop(state);
++        // One original aggregate/pool reservation, never the root-owned cap.
++        self.control.reserve_output(kind.bytes())
++    }
++}
++
+ struct BankState {
+     records: [Option<Arc<InvocationRecord>>; 2],
+     held: [Option<HeldRetirement>; 2],
+-    // B2 keeps the production bank layout; actual admission arrives in B3.
+-    #[cfg_attr(not(test), allow(dead_code))]
+     next: u64,
++    retired: [u64; 2],
++    retirement_wakers: [Option<Waker>; 2],
+     actor_waker: Option<Waker>,
+ }
+ pub(crate) struct OwnedEffectRegistry {
+@@ -688,6 +712,8 @@
+                 records: [None, None],
+                 held: [None, None],
+                 next: 0,
++                retired: [0; 2],
++                retirement_wakers: [None, None],
+                 actor_waker: None,
+             }),
+             capacity,
+@@ -3596,7 +3622,8 @@
+             }
+             _ => return Err(Refusal::Invalid),
+         }
+-        let cancellation = self.operation == InlineKind::Cancel;
++        let cancellation =
++            (self.operation == InlineKind::Cancel).then(|| record.cancellation.clone());
+         drop(state);
+         drop(record);
+         if let Some(wake) = wake {
+@@ -3605,7 +3632,9 @@
+         if let Some(abandon) = abandon {
+             abandon.request();
+         }
+-        if cancellation {
++        if let Some(cancellation) = cancellation {
++            cancellation.send_replace(true);
++            drop(cancellation);
+             registry.start_cancel_if_needed(&self.context)?;
+         }
+         self.consumed = true;
+@@ -3941,44 +3970,76 @@
+         }
+     }
+ }
+-#[cfg(test)]
+ impl OwnedEffectRegistry {
+-    fn register_component(
++    fn register_owned(
+         self: &Arc<Self>,
+         owner: control::OriginalOwner,
+-        slot: usize,
++        tenant: usize,
++        fixed_slot: Option<usize>,
++        public_guard: Option<crate::actor::PublicRequestGuard>,
+     ) -> Result<GuardedEnvelope, Refusal> {
++        let mut admission = UnstartedRegistration {
++            owner: Some(owner),
++            public_guard,
++        };
++        let owner = admission.owner.as_ref().ok_or(Refusal::Invalid)?;
+         owner.check()?;
+-        if slot >= 2 {
++        if tenant >= 3 {
+             return Err(Refusal::Invalid);
+         }
+         owner.charge(control::arc_bytes::<InvocationRecord>()?)?;
+         // Fixed initial/auxiliary/retirement scope images and native direct
+         // resources are separately charged before their actual construction.
+         owner.charge(
+-            CELL_SCOPES[slot]
++            CELL_SCOPES[tenant]
+                 .len()
+                 .checked_mul(4)
+                 .ok_or(Refusal::Bounds)?,
+         )?;
++        watch_derived_bytes()?;
++        owner.charge(WATCH_ALLOCATION_BOUND)?;
++        let mut bank = self.bank.try_lock().map_err(|_| Refusal::Contended)?;
++        if bank
++            .records
++            .iter()
++            .flatten()
++            .any(|record| record.cell == CELL_SCOPES[tenant])
++            || bank
++                .held
++                .iter()
++                .flatten()
++                .any(|held| held.cell == Some(CELL_SCOPES[tenant]))
++        {
++            return Err(Refusal::Busy);
++        }
++        let slot = fixed_slot
++            .or_else(|| {
++                (0..2).find(|slot| bank.records[*slot].is_none() && bank.held[*slot].is_none())
++            })
++            .filter(|slot| *slot < 2)
++            .ok_or(Refusal::Busy)?;
++        if bank.records[slot].is_some() || bank.held[slot].is_some() {
++            return Err(Refusal::Busy);
++        }
+         let control = owner.node_control();
+         let a2_control = super::Capacity::node_control(&control, slot as u8)?;
+-        let lease = self
+-            .capacity
+-            .try_admit(program::TENANT_IDS[slot], a2_control)
+-            .map_err(|_| Refusal::Capacity)?;
+         let request = crate::asyncrt::next_core_request();
+         let auxiliary = crate::asyncrt::next_core_request();
+         let eviction_request = crate::asyncrt::next_core_request();
+         if request == 0 || auxiliary <= request || eviction_request <= auxiliary {
+             return Err(Refusal::Exhausted);
+         }
+-        let mut bank = self.bank.try_lock().map_err(|_| Refusal::Contended)?;
+-        if bank.records[slot].is_some() || bank.held[slot].is_some() {
+-            return Err(Refusal::Busy);
+-        }
+         bank.next = bank.next.checked_add(1).ok_or(Refusal::Exhausted)?;
+         let sequence = bank.next;
++        control.check()?;
++        // All fallible scalar preparation precedes physical A2 admission.
++        // From here the concrete record retains its lease and Public guard.
++        let lease = self
++            .capacity
++            .try_admit(program::TENANT_IDS[tenant], a2_control)
++            .map_err(|_| Refusal::Capacity)?;
++        let (cancellation, initial_receiver) = tokio::sync::watch::channel(false);
++        drop(initial_receiver);
+         let record = Arc::new(InvocationRecord {
+             state: Mutex::new(InvocationState {
+                 roots: std::array::from_fn(|_| RootCell::new()),
+@@ -4000,14 +4061,19 @@
+                 tainted: false,
+                 retiring: false,
+                 cancel_requested: false,
++                frame_reserved: false,
++                dispatcher_sequence: None,
++                write_pending: false,
+                 eviction_request,
+                 eviction_result: None,
+                 lease: Some(lease),
+             }),
+             sequence,
+-            cell: CELL_SCOPES[slot],
++            cell: CELL_SCOPES[tenant],
++            cancellation,
++            public_guard: admission.public_guard.take(),
+             control,
+-            owner: Mutex::new(Some(owner)),
++            owner: Mutex::new(admission.owner.take()),
+         });
+         bank.records[slot] = Some(record.clone());
+         drop(bank);
+@@ -4019,6 +4085,17 @@
+         })
+     }
+ }
++#[cfg(test)]
++impl OwnedEffectRegistry {
++    fn register_component(
++        self: &Arc<Self>,
++        owner: control::OriginalOwner,
++        slot: usize,
++    ) -> Result<GuardedEnvelope, Refusal> {
++        self.register_owned(owner, slot, Some(slot), None)
++    }
++}
++
+ impl OwnedEffectRegistry {
+     fn retirement_eligible(state: &InvocationState) -> bool {
+         !(state.tainted
+@@ -4038,6 +4115,7 @@
+                 .activities
+                 .iter()
+                 .any(|activity| activity.output.as_ref().is_some_and(|output| !output.done))
++            || state.dispatcher_sequence.is_some()
+             || state.runtime.is_none())
+     }
+     #[cfg(test)]
+@@ -4537,7 +4615,6 @@
+     }
+ }
+ 
+-#[cfg(test)]
+ pub(crate) struct DriverPermit {
+     context: JobContext,
+     submitted: bool,
+@@ -4551,7 +4628,6 @@
+     context: JobContext,
+     consumed: bool,
+ }
+-#[cfg(test)]
+ impl DriverPermit {
+     pub(crate) fn context(&self) -> &JobContext {
+         &self.context
+@@ -4585,7 +4661,6 @@
+         })
+     }
+ }
+-#[cfg(test)]
+ impl Drop for DriverPermit {
+     fn drop(&mut self) {
+         if !self.submitted {
+@@ -4655,6 +4730,79 @@
+ }
+ 
+ impl OwnedNodeDriverCompletion {
++    pub(crate) fn check_output(&self) -> Result<(), Refusal> {
++        self.context
++            .require_role(JobRole::Forward(ForwardLane::Driver))?;
++        let registry = self.context.registry()?;
++        let record = registry.record(self.context.token)?;
++        let mut state = lock_owned(&record.state)?;
++        let root = OwnedEffectRegistry::root(&mut state, self.context.token)?;
++        if self.consumed || root.state != RootState::Delivered || !root.consumer {
++            return Err(Refusal::Invalid);
++        }
++        drop(state);
++        drop(record);
++        self.context.check_forward()
++    }
++
++    pub(crate) fn output_deadline(&self) -> Instant {
++        self.context.deadline
++    }
++
++    pub(crate) fn cancellation(&self) -> Result<tokio::sync::watch::Receiver<bool>, Refusal> {
++        let registry = self.context.registry()?;
++        let record = registry.record(self.context.token)?;
++        Ok(record.cancellation.subscribe())
++    }
++
++    pub(crate) fn reserve_frame(&mut self, kind: output::FrameKind) -> Result<(), Refusal> {
++        self.check_output()?;
++        let registry = self.context.registry()?;
++        let record = registry.record(self.context.token)?;
++        record.reserve_frame(kind)
++    }
++
++    pub(crate) fn observe_write_pending(&self) -> Result<(), Refusal> {
++        let registry = self.context.registry()?;
++        let record = registry.record(self.context.token)?;
++        let mut state = lock_owned(&record.state)?;
++        OwnedEffectRegistry::root(&mut state, self.context.token)?;
++        state.write_pending = true;
++        Ok(())
++    }
++
++    pub(crate) async fn prepare_output(
++        mut self,
++        kind: output::FrameKind,
++    ) -> Result<output::GatedFrame, Refusal> {
++        self.context.check_identity()?;
++        let output = self
++            .value
++            .take()
++            .ok_or(Refusal::Invalid)?
++            .prepare_output(&self.context)
++            .await?;
++        output::GatedFrame::new(self, output, kind)
++    }
++
++    pub(crate) async fn finish_output(
++        mut self,
++        output: crate::runtime::DriverOutput,
++    ) -> Result<RetirementObservation, Refusal> {
++        self.context.check_identity()?;
++        output.dispose(&self.context).await?;
++        let registry = self.context.registry()?;
++        registry.finish_root(&self.context)?;
++        let observation = RetirementObservation {
++            registry,
++            slot: self.context.token.slot as usize,
++            sequence: self.context.token.invocation,
++        };
++        self.consumed = true;
++        drop(self);
++        Ok(observation)
++    }
++
+     pub(crate) async fn dispose_node(mut self) -> Result<(), Refusal> {
+         self.context.check_identity()?;
+         self.value
+@@ -4674,7 +4822,6 @@
+         }
+     }
+ }
+-#[cfg(test)]
+ impl GuardedActivity {
+     pub(crate) fn claim_driver(&self) -> Result<DriverPermit, Refusal> {
+         self.context.check_forward()?;
+@@ -5021,6 +5168,9 @@
+     ) -> Result<(OwnedGateOrigin, Option<RetiredAux>), Refusal> {
+         let epoch = state.epoch.ok_or(Refusal::Invalid)?;
+         let generation = state.generation.ok_or(Refusal::Invalid)?;
++        if state.dispatcher_sequence.is_some() {
++            return Err(Refusal::Busy);
++        }
+         if sample.channel != celld_logic::Channel::Sync
+             || sample.epoch != Some(epoch)
+             || sample.position.is_none()
+@@ -5312,16 +5462,44 @@
+     PendingOwner,
+     Failed,
+ }
++struct UnstartedRegistration {
++    owner: Option<control::OriginalOwner>,
++    public_guard: Option<crate::actor::PublicRequestGuard>,
++}
++impl Drop for UnstartedRegistration {
++    fn drop(&mut self) {
++        if let Some(owner) = self.owner.take() {
++            if let Err(held) = owner.retire_unstarted() {
++                if let Some(guard) = self.public_guard.take() {
++                    std::mem::forget(guard);
++                }
++                std::mem::forget(held);
++            }
++        }
++    }
++}
+ struct HeldRetirement {
+     phase: HeldPhase,
++    cell: Option<&'static str>,
++    sequence: u64,
++    public_guard: Option<crate::actor::PublicRequestGuard>,
+     owner: Option<control::OriginalOwner>,
+     held_owner: Option<control::HeldOwner>,
+     lease: Option<super::Lease>,
+ }
+ impl HeldRetirement {
++    fn marker_for(cell: Option<&'static str>, sequence: u64) -> Self {
++        let mut marker = Self::marker();
++        marker.cell = cell;
++        marker.sequence = sequence;
++        marker
++    }
+     fn marker() -> Self {
+         Self {
+             phase: HeldPhase::Disposing,
++            cell: None,
++            sequence: 0,
++            public_guard: None,
+             owner: None,
+             held_owner: None,
+             lease: None,
+@@ -5341,6 +5519,10 @@
+             state,
+             control,
+             owner,
++            cell,
++            sequence,
++            public_guard,
++            cancellation,
+             ..
+         } = record;
+         let (mut state, state_poisoned) = match state.into_inner() {
+@@ -5353,6 +5535,9 @@
+         };
+         let mut held = Self {
+             phase: HeldPhase::Disposing,
++            cell: Some(cell),
++            sequence,
++            public_guard,
+             owner,
+             held_owner: None,
+             lease: state.lease.take(),
+@@ -5362,6 +5547,7 @@
+         // disposed. Retired attachments and all their non-issuing contexts die
+         // before the final original control. No bank/state guard is held.
+         drop(state);
++        drop(cancellation);
+         drop(control);
+         let result = (|| {
+             if state_poisoned || owner_poisoned {
+@@ -5411,6 +5597,11 @@
+ }
+ impl Drop for HeldRetirement {
+     fn drop(&mut self) {
++        if self.owner.is_some() || self.held_owner.is_some() || self.lease.is_some() {
++            if let Some(guard) = self.public_guard.take() {
++                std::mem::forget(guard);
++            }
++        }
+         if let Some(lease) = self.lease.take() {
+             lease.capacity.quarantine(lease.token);
+             std::mem::forget(lease);
+@@ -5426,6 +5617,7 @@
+ }
+ fn terminal_conjuncts(state: &InvocationState) -> bool {
+     !state.tainted
++        && state.dispatcher_sequence.is_none()
+         && state.retiring
+         && state.lease.is_some()
+         && state.runtime.is_none()
+@@ -5499,8 +5691,9 @@
+                     if held.phase != HeldPhase::PendingOwner {
+                         continue;
+                     }
++                    let marker = HeldRetirement::marker_for(held.cell, held.sequence);
+                     Some(Err(bank.held[slot]
+-                        .replace(HeldRetirement::marker())
++                        .replace(marker)
+                         .expect("present pending owner")))
+                 } else {
+                     let Some(record) = bank.records[slot].as_ref() else {
+@@ -5536,7 +5729,10 @@
+                     let record = bank.records[slot].take().expect("present terminal record");
+                     match Arc::try_unwrap(record) {
+                         Ok(record) => {
+-                            bank.held[slot] = Some(HeldRetirement::marker());
++                            bank.held[slot] = Some(HeldRetirement::marker_for(
++                                Some(record.cell),
++                                record.sequence,
++                            ));
+                             Some(Ok(record))
+                         }
+                         Err(record) => {
+@@ -5562,8 +5758,9 @@
+                 }
+             };
+             retry |= !complete && held.phase == HeldPhase::PendingOwner;
++            let retired_sequence = held.sequence;
+             let replacement = if complete { None } else { Some(held) };
+-            let previous = {
++            let (previous, wake) = {
+                 let mut bank = match lock_owned(&self.bank) {
+                     Ok(bank) => bank,
+                     Err(_) => {
+@@ -5583,24 +5780,820 @@
+                     self.process.fail();
+                     return;
+                 }
+-                std::mem::replace(&mut bank.held[slot], replacement)
++                if complete {
++                    bank.retired[slot] = retired_sequence;
++                }
++                (
++                    std::mem::replace(&mut bank.held[slot], replacement),
++                    bank.retirement_wakers[slot].take(),
++                )
+             };
+             drop(previous);
++            if let Some(wake) = wake {
++                wake.wake();
++            }
+         }
+         if state_poisoned {
+             self.process.fail();
+             return;
+         }
+-        // Closed B2 retries only these two fixed ownership observations. No
+-        // task/work/credit is retried. A persistent alias retains its slot and
+-        // can keep scheduling this bounded poll; CPU availability and bounded
+-        // wall-clock retirement are deliberately not qualified by B2.
+-        if retry {
+-            if let Some(cx) = poll {
+-                cx.waker().wake_by_ref();
++        // A persistent alias remains occupied. B3's fixed host tick wakes the
++        // existing actor selector; this observation never self-schedules a spin.
++        // No task/work/credit is retried and no fresh timer is allocated here.
++        let _ = retry;
++    }
++}
++
++const WATCH_ALLOCATION_BOUND: usize = 4096;
++fn watch_derived_bytes() -> Result<usize, Refusal> {
++    fn padded<T>() -> Result<usize, Refusal> {
++        let layout = std::alloc::Layout::new::<T>();
++        if layout.align() > 16 {
++            return Err(Refusal::Bounds);
++        }
++        layout
++            .size()
++            .checked_add(15)
++            .map(|bytes| bytes & !15)
++            .ok_or(Refusal::Bounds)
++    }
++    // Tokio1.53.1 Shared<bool>: nine Notify, the value lock, state/refcounts,
++    // conservative optional BigNotify index and the two Arc header counters.
++    let bytes = 9 * padded::<tokio::sync::Notify>()?
++        + padded::<std::sync::RwLock<bool>>()?
++        + 6 * padded::<std::sync::atomic::AtomicUsize>()?;
++    if bytes > WATCH_ALLOCATION_BOUND {
++        Err(Refusal::Bounds)
++    } else {
++        Ok(bytes)
++    }
++}
++
++pub(crate) struct RetirementObservation {
++    registry: Arc<OwnedEffectRegistry>,
++    slot: usize,
++    sequence: u64,
++}
++impl Future for RetirementObservation {
++    type Output = Result<(), Refusal>;
++    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
++        let incoming = cx.waker().clone();
++        let mut deferred = DeferredWaker(None);
++        let mut bank = match poll_owned(&self.registry.bank, cx) {
++            Poll::Ready(Ok(bank)) => bank,
++            Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
++            Poll::Pending => return Poll::Pending,
++        };
++        if bank.retired[self.slot] >= self.sequence {
++            return Poll::Ready(Ok(()));
++        }
++        let exact = bank.records[self.slot]
++            .as_ref()
++            .is_some_and(|record| record.sequence == self.sequence)
++            || bank.held[self.slot]
++                .as_ref()
++                .is_some_and(|held| held.sequence == self.sequence);
++        if !exact {
++            return Poll::Ready(Err(Refusal::Invalid));
++        }
++        if bank.held[self.slot]
++            .as_ref()
++            .is_some_and(|held| held.phase == HeldPhase::Failed)
++        {
++            return Poll::Ready(Err(Refusal::Failed));
++        }
++        deferred.0 = bank.retirement_wakers[self.slot].replace(incoming);
++        drop(bank);
++        Poll::Pending
++    }
++}
++
++pub(crate) struct DispatcherFence {
++    context: JobContext,
++    sequence: u64,
++    disposed: bool,
++}
++impl OwnedGateOrigin {
++    pub(crate) fn mark_dispatch(&self) -> Result<(), Refusal> {
++        self.context.check_forward()?;
++        let registry = self.context.registry()?;
++        let record = registry.record(self.context.token)?;
++        let mut state = lock_owned(&record.state)?;
++        if state.dispatcher_sequence.is_some() || state.activities[1].sequence != self.sequence {
++            return Err(Refusal::Busy);
++        }
++        state.dispatcher_sequence = Some(self.sequence);
++        drop(state);
++        self.context.check_forward()
++    }
++    pub(crate) fn dispatch_fence(&self) -> Result<DispatcherFence, Refusal> {
++        self.context.check_identity()?;
++        let registry = self.context.registry()?;
++        let record = registry.record(self.context.token)?;
++        if lock_owned(&record.state)?.dispatcher_sequence != Some(self.sequence) {
++            return Err(Refusal::Invalid);
++        }
++        Ok(DispatcherFence {
++            context: self.context.clone(),
++            sequence: self.sequence,
++            disposed: false,
++        })
++    }
++}
++impl DispatcherFence {
++    pub(crate) fn complete(mut self) -> Result<(), Refusal> {
++        let registry = self.context.registry()?;
++        let record = registry.record(self.context.token)?;
++        let mut state = lock_owned(&record.state)?;
++        if state.dispatcher_sequence != Some(self.sequence) {
++            return Err(Refusal::Invalid);
++        }
++        state.dispatcher_sequence = None;
++        self.disposed = true;
++        drop(state);
++        drop(record);
++        drop(self);
++        registry.wake_actor();
++        Ok(())
++    }
++}
++impl Drop for DispatcherFence {
++    fn drop(&mut self) {
++        if !self.disposed {
++            self.context.fail();
++        }
++    }
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum GuardedNodeScenario {
++    ColdSyncRetire,
++    FailedTurnGated,
++    TcpWriteHeld,
++    TcpDisconnect,
++    ShutdownComplete,
++    ShutdownCut,
++}
++impl GuardedNodeScenario {
++    pub fn parse(value: &str) -> Result<Self, Refusal> {
++        Ok(match value {
++            "cold-sync-retire" => Self::ColdSyncRetire,
++            "failed-turn-gated" => Self::FailedTurnGated,
++            "tcp-write-held" => Self::TcpWriteHeld,
++            "tcp-disconnect" => Self::TcpDisconnect,
++            "shutdown-complete" => Self::ShutdownComplete,
++            "shutdown-cut" => Self::ShutdownCut,
++            _ => return Err(Refusal::Invalid),
++        })
++    }
++    pub const fn as_str(self) -> &'static str {
++        match self {
++            Self::ColdSyncRetire => "cold-sync-retire",
++            Self::FailedTurnGated => "failed-turn-gated",
++            Self::TcpWriteHeld => "tcp-write-held",
++            Self::TcpDisconnect => "tcp-disconnect",
++            Self::ShutdownComplete => "shutdown-complete",
++            Self::ShutdownCut => "shutdown-cut",
++        }
++    }
++    fn frame(self) -> output::FrameKind {
++        if matches!(
++            self,
++            Self::TcpWriteHeld | Self::TcpDisconnect | Self::ShutdownCut
++        ) {
++            output::FrameKind::Backpressure
++        } else {
++            output::FrameKind::Ordinary
++        }
++    }
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++enum FrontendCommand {
++    Begin { tenant: usize },
++    Observe { tenant: usize, pending: bool },
++}
++fn parse_header(bytes: &[u8], scenario: GuardedNodeScenario) -> Result<FrontendCommand, Refusal> {
++    if bytes.len() != 16
++        || &bytes[..8] != b"FOKSGN01"
++        || bytes[8] != 1
++        || bytes[10] >= 3
++        || bytes[12..] != [0; 4]
++    {
++        return Err(Refusal::Invalid);
++    }
++    let tenant = usize::from(bytes[10]);
++    match (bytes[9], bytes[11]) {
++        (1, 0) => Ok(FrontendCommand::Begin { tenant }),
++        (2, 0) => Ok(FrontendCommand::Observe {
++            tenant,
++            pending: false,
++        }),
++        (2, 1) if scenario.frame() == output::FrameKind::Backpressure => {
++            Ok(FrontendCommand::Observe {
++                tenant,
++                pending: true,
++            })
++        }
++        _ => Err(Refusal::Invalid),
++    }
++}
++
++pub struct GuardedBucket {
++    bucket: crate::bucket::Bucket,
++}
++async fn check_bucket_contract(bucket: &crate::bucket::Bucket) -> Result<(), Refusal> {
++    if bucket.backend != crate::bucket::StorageBackend::S3 {
++        return Err(Refusal::Invalid);
++    }
++    match bucket.probe_startup_storage_steps().await {
++        Ok(crate::bucket::StorageProbeVerdict::Conformant) => Ok(()),
++        Ok(crate::bucket::StorageProbeVerdict::Violation(_)) => Err(Refusal::Invalid),
++        Err(_) => Err(Refusal::Failed),
++    }
++}
++
++// Private message carries actual installation identities; no caller can submit
++// a Boolean Ready or a fabricated recovery result.
++pub struct GuardedReadyProbe {
++    registry: Arc<OwnedEffectRegistry>,
++    runtime: crate::runtime::RuntimeManager,
++    manager: Arc<crate::node_log::NodeLogManager>,
++    reply: tokio::sync::oneshot::Sender<Result<(), Refusal>>,
++}
++impl GuardedReadyProbe {
++    pub(crate) fn resolve(
++        self,
++        core: &celld_logic::State,
++        registry: Option<&Arc<OwnedEffectRegistry>>,
++        runtime: Option<&crate::runtime::RuntimeManager>,
++        manager: Option<&Arc<crate::node_log::NodeLogManager>>,
++    ) {
++        let result = (|| {
++            self.registry.process.check()?;
++            if !registry.is_some_and(|registry| Arc::ptr_eq(registry, &self.registry))
++                || !manager.is_some_and(|manager| Arc::ptr_eq(manager, &self.manager))
++            {
++                return Err(Refusal::Invalid);
++            }
++            let runtime = runtime.ok_or(Refusal::NotReady)?;
++            if !Arc::ptr_eq(&runtime.generations, &self.runtime.generations)
++                || !Arc::ptr_eq(&runtime.data_dir, &self.runtime.data_dir)
++                || !runtime
++                    .replication
++                    .as_ref()
++                    .zip(self.runtime.replication.as_ref())
++                    .is_some_and(|(left, right)| Arc::ptr_eq(&left.ltx(), &right.ltx()))
++            {
++                return Err(Refusal::Invalid);
++            }
++            if !core.ready_to_serve() || !core.ownership_confirmed() {
++                return Err(Refusal::NotReady);
++            }
++            self.registry.process.check()
++        })();
++        let _ = self.reply.send(result);
++    }
++}
++impl GuardedNode {
++    pub fn reserve_diagnostics(&self, bytes: usize) -> Result<(), Refusal> {
++        if bytes != 65_536 || self.diagnostics_reserved.swap(true, Ordering::AcqRel) {
++            return Err(Refusal::Invalid);
++        }
++        self.owner.charge(bytes)
++    }
++    pub async fn require_bucket(
++        &self,
++        bucket: &crate::bucket::Bucket,
++    ) -> Result<GuardedBucket, Refusal> {
++        self.owner.check()?;
++        self.owner.charge(
++            std::mem::size_of::<GuardedBucket>() + bucket.name.len() + bucket.prefix.len(),
++        )?;
++        crate::asyncrt::timeout(
++            std::time::Duration::from_secs(30),
++            check_bucket_contract(bucket),
++        )
++        .await
++        .map_err(|_| Refusal::Expired)??;
++        self.owner.check()?;
++        Ok(GuardedBucket {
++            bucket: bucket.clone(),
++        })
++    }
++    pub async fn bind_running(
++        self: &Arc<Self>,
++        scenario: GuardedNodeScenario,
++        app: crate::actor::AppHandle,
++        bucket: GuardedBucket,
++        owner: &crate::node_log::DurabilityOwner,
++        manager: &Arc<crate::node_log::NodeLogManager>,
++        gate_tx: &tokio::sync::mpsc::UnboundedSender<crate::host_channels::GateReq>,
++    ) -> Result<GuardedFrontend, Refusal> {
++        self.owner.check()?;
++        if self.bound.swap(true, Ordering::AcqRel) {
++            return Err(Refusal::Busy);
++        }
++        let runtime = app.runtime.as_ref().ok_or(Refusal::NotReady)?;
++        let ltx = runtime.replication.as_ref().ok_or(Refusal::Invalid)?.ltx();
++        if !owner.guarded_matches(manager, &ltx, &bucket.bucket)
++            || !crate::host_channels::GATE_TX
++                .get()
++                .is_some_and(|installed| installed.same_channel(gate_tx))
++        {
++            self.owner.fail();
++            return Err(Refusal::Invalid);
++        }
++        measured_frontend_constructors()?;
++        // AppHandle cloning owns only its bounded advertise String; all other
++        // shared host services are existing Run-owned runtime overhead.
++        if app.advertise.len() > 256 {
++            return Err(Refusal::Bounds);
++        }
++        self.owner.charge(4 * 65_536 + 2 * 8192 + 131_072)?;
++        self.owner.charge(std::mem::size_of::<GuardedFrontend>())?;
++        // Finite bootstrap observations share one absolute deadline. Each
++        // concrete reply channel is charged before construction and disposed
++        // before the next observation; no invocation deadline is created here.
++        let deadline = Instant::now()
++            .checked_add(std::time::Duration::from_secs(30))
++            .ok_or(Refusal::Bounds)?;
++        let mut ready = false;
++        for _ in 0..300 {
++            self.owner.check()?;
++            self.owner.charge(
++                channel_bound::<Result<(), Refusal>>()?
++                    .checked_add(std::mem::size_of::<GuardedReadyProbe>())
++                    .ok_or(Refusal::Bounds)?,
++            )?;
++            let (reply, receive) = tokio::sync::oneshot::channel();
++            let probe = GuardedReadyProbe {
++                registry: self.effects.clone(),
++                runtime: runtime.clone(),
++                manager: manager.clone(),
++                reply,
++            };
++            app.tx
++                .send(crate::actor::Message::GuardedReady(probe))
++                .map_err(|_| Refusal::Failed)?;
++            let result = original_timeout(deadline, receive)
++                .await
++                .map_err(|_| Refusal::Expired)?
++                .map_err(|_| Refusal::Failed)?;
++            match result {
++                Ok(()) => {
++                    ready = true;
++                    break;
++                }
++                Err(Refusal::NotReady) => {}
++                Err(error) => return Err(error),
++            }
++            if Instant::now() >= deadline {
++                break;
++            }
++            crate::asyncrt::sleep(std::time::Duration::from_millis(100)).await;
++        }
++        if !ready {
++            self.owner.fail();
++            return Err(Refusal::NotReady);
++        }
++        self.owner.check()?;
++        drop(bucket);
++        Ok(GuardedFrontend {
++            node: self.clone(),
++            app,
++            scenario,
++            connections: std::array::from_fn(|_| None),
++            dispatchers: std::array::from_fn(|_| None),
++            completed: 0,
++            refused: 0,
++        })
++    }
++}
++
++#[derive(serde::Serialize)]
++pub struct GuardedNodeReport {
++    pub claim: &'static str,
++    pub scenario: &'static str,
++    pub accepting: bool,
++    pub failed: bool,
++    pub connections: usize,
++    pub dispatchers: usize,
++    pub invocations: usize,
++    pub held: usize,
++    pub public_in_flight: usize,
++    pub completed: u64,
++    pub refused: u64,
++}
++#[derive(serde::Serialize)]
++pub struct GuardedFrontendEvent {
++    pub kind: &'static str,
++    pub completed: u64,
++    pub refused: u64,
++    pub failed: bool,
++}
++type ConnectionFuture = Pin<Box<dyn Future<Output = Result<(), Refusal>> + Send>>;
++type DispatchFuture = Pin<Box<dyn Future<Output = crate::cell_dispatch::GuardedGateResult> + Send>>;
++pub struct GuardedFrontend {
++    connections: [Option<ConnectionFuture>; 4],
++    dispatchers: [Option<DispatchFuture>; 2],
++    app: crate::actor::AppHandle,
++    node: Arc<GuardedNode>,
++    scenario: GuardedNodeScenario,
++    completed: u64,
++    refused: u64,
++}
++impl GuardedFrontend {
++    pub fn accept(&mut self, socket: tokio::net::TcpStream) -> Result<(), Refusal> {
++        let stamp = control::AcceptedStamp::capture()?;
++        self.node.owner.check()?;
++        if !self.node.accepting.load(Ordering::Acquire) {
++            return Err(Refusal::Cancelled);
++        }
++        let slot = self
++            .connections
++            .iter_mut()
++            .find(|cell| cell.is_none())
++            .ok_or(Refusal::Busy)?;
++        let header = self.node.owner.acquire_header(stamp)?;
++        let work = ConnectionWork {
++            socket: Some(socket),
++            header: Some(header),
++            route: None,
++            driver: None,
++            app: self.app.clone(),
++            node: self.node.clone(),
++            scenario: self.scenario,
++        };
++        *slot = Some(Box::pin(work.run()));
++        Ok(())
++    }
++    pub fn dispatch_gate(
++        &mut self,
++        req: crate::host_channels::GateReq,
++    ) -> Result<Option<crate::host_channels::GateReq>, Refusal> {
++        if req.guarded.is_none() {
++            return Ok(Some(req));
++        }
++        let Some(slot) = self.dispatchers.iter_mut().find(|slot| slot.is_none()) else {
++            self.node.owner.fail();
++            return Err(Refusal::Busy);
++        };
++        *slot = Some(Box::pin(
++            crate::cell_dispatch::GuardedGateWork {
++                app: self.app.clone(),
++                req,
++            }
++            .run(),
++        ));
++        Ok(None)
++    }
++    pub async fn progress(&mut self) -> GuardedFrontendEvent {
++        std::future::poll_fn(|cx| {
++            for slot in &mut self.dispatchers {
++                if let Some(work) = slot.as_mut() {
++                    if let Poll::Ready(result) = work.as_mut().poll(cx) {
++                        let future = slot.take().expect("polled dispatcher exists");
++                        crate::cell_dispatch::dispose_guarded_dispatch(future, result);
++                        return Poll::Ready(GuardedFrontendEvent {
++                            kind: "dispatcher-disposed",
++                            completed: self.completed,
++                            refused: self.refused,
++                            failed: self.node.owner.check().is_err(),
++                        });
++                    }
++                }
++            }
++            for slot in &mut self.connections {
++                if let Some(work) = slot.as_mut() {
++                    if let Poll::Ready(result) = work.as_mut().poll(cx) {
++                        drop(slot.take());
++                        let counter = if result.is_ok() {
++                            &mut self.completed
++                        } else {
++                            &mut self.refused
++                        };
++                        if let Some(next) = counter.checked_add(1) {
++                            *counter = next;
++                        } else {
++                            self.node.owner.fail();
++                        }
++                        return Poll::Ready(GuardedFrontendEvent {
++                            kind: "connection-disposed",
++                            completed: self.completed,
++                            refused: self.refused,
++                            failed: self.node.owner.check().is_err(),
++                        });
++                    }
++                }
++            }
++            Poll::Pending
++        })
++        .await
++    }
++    pub fn tick(&self) {
++        self.node.effects.wake_actor();
++    }
++    pub fn stop_admission(&self) {
++        self.node.stop_admission();
++    }
++    pub fn failed(&self) -> bool {
++        self.node.owner.check().is_err()
++    }
++    pub fn report(&self) -> GuardedNodeReport {
++        let (invocations, held) = self
++            .node
++            .effects
++            .bank
++            .try_lock()
++            .map(|bank| {
++                (
++                    bank.records.iter().flatten().count(),
++                    bank.held.iter().flatten().count(),
++                )
++            })
++            .unwrap_or((usize::MAX, usize::MAX));
++        GuardedNodeReport {
++            claim: "b3-frontend-components-only",
++            scenario: self.scenario.as_str(),
++            accepting: self.node.accepting.load(Ordering::Acquire),
++            failed: self.failed(),
++            connections: self.connections.iter().flatten().count(),
++            dispatchers: self.dispatchers.iter().flatten().count(),
++            invocations,
++            held,
++            public_in_flight: self.app.public_in_flight(),
++            completed: self.completed,
++            refused: self.refused,
++        }
++    }
++    pub fn drained(&self) -> bool {
++        let report = self.report();
++        guarded_drain_conjunction(
++            true,
++            true,
++            !report.failed,
++            [
++                report.connections,
++                report.dispatchers,
++                report.invocations,
++                report.held,
++                report.public_in_flight,
++            ],
++        )
++    }
++}
++impl Drop for GuardedFrontend {
++    fn drop(&mut self) {
++        // Unknown host shutdown retains all actual futures/resources. A process
++        // cut is not a joined/retired success and must not release Public guards.
++        for work in self.connections.iter_mut().filter_map(Option::take) {
++            self.node.owner.fail();
++            std::mem::forget(work);
++        }
++        for work in self.dispatchers.iter_mut().filter_map(Option::take) {
++            self.node.owner.fail();
++            std::mem::forget(work);
++        }
++    }
++}
++
++// Socket comes before the route/driver waiters. Dropping an unpolled or
++// abandoned connection closes it before C7 can reclaim a lost F3 consumer.
++struct ConnectionWork {
++    socket: Option<tokio::net::TcpStream>,
++    header: Option<control::HeaderLease>,
++    route: Option<GuardedRouteWait>,
++    driver: Option<NodeDriverWait>,
++    app: crate::actor::AppHandle,
++    node: Arc<GuardedNode>,
++    scenario: GuardedNodeScenario,
++}
++impl ConnectionWork {
++    async fn run(self) -> Result<(), Refusal> {
++        let deadline = self
++            .header
++            .as_ref()
++            .ok_or(Refusal::Invalid)?
++            .stamp
++            .deadline();
++        // One original deadline encloses header, route, native delivery, C1,
++        // transport and retirement observation. Dropping this owned aggregate
++        // closes its socket before releasing route/driver consumers. Actual
++        // unfinished native work remains in the original bank after timeout.
++        original_timeout(deadline, self.run_inner())
++            .await
++            .map_err(|_| Refusal::Expired)?
++    }
++    async fn run_inner(mut self) -> Result<(), Refusal> {
++        let header = self.header.as_mut().ok_or(Refusal::Invalid)?;
++        let socket = self.socket.as_mut().ok_or(Refusal::Invalid)?;
++        let command = read_frontend_header(
++            socket,
++            &mut header.bytes,
++            header.stamp.deadline(),
++            self.scenario,
++        )
++        .await;
++        let stamp = header.stamp;
++        drop(self.header.take());
++        let command = match command {
++            Ok(command) => command,
++            Err(error) => {
++                let _ = self.scalar_reply(stamp, [0; 32]).await;
++                return Err(error);
++            }
++        };
++        if let FrontendCommand::Observe { tenant, pending } = command {
++            let bytes = self.node.effects.scalar_observation(tenant, pending)?;
++            return self.scalar_reply(stamp, bytes).await;
++        }
++        if !self.node.accepting.load(Ordering::Acquire) {
++            return Err(Refusal::Cancelled);
++        }
++        let FrontendCommand::Begin { tenant } = command else {
++            return Err(Refusal::Invalid);
++        };
++        let guard = self.app.admit_public().ok_or(Refusal::Cancelled)?;
++        let owner = self
++            .node
++            .factory
++            .try_owner(control::OwnerRole::Invocation, Some(stamp))?;
++        let envelope = self
++            .node
++            .effects
++            .register_owned(owner, tenant, None, Some(guard))?;
++        self.route = Some(self.node.effects.primary_route(&envelope.context)?);
++        self.app
++            .tx
++            .send(crate::actor::Message::Guarded(
++                crate::actor::GuardedRequest::from_envelope(envelope),
++            ))
++            .map_err(|_| Refusal::Failed)?;
++        let routed = self
++            .route
++            .as_mut()
++            .ok_or(Refusal::Invalid)?
++            .await
++            .map_err(|_| Refusal::Failed)?;
++        drop(self.route.take());
++        let runtime = self.app.runtime.as_ref().ok_or(Refusal::NotReady)?;
++        self.driver = Some(runtime.start_guarded_driver(
++            self.app.clone(),
++            routed,
++            self.scenario == GuardedNodeScenario::FailedTurnGated,
++        )?);
++        let completion = self.driver.as_mut().ok_or(Refusal::Invalid)?.await?;
++        drop(self.driver.take());
++        let frame = completion.prepare_output(self.scenario.frame()).await?;
++        let disposition = frame
++            .send(self.socket.take().ok_or(Refusal::Invalid)?)
++            .await?;
++        // The send consumed every original owner alias; this scalar/process
++        // ticket cannot keep the invocation Request or its allocation alive.
++        disposition.retirement.await?;
++        disposition.outcome
++    }
++    async fn scalar_reply(
++        &mut self,
++        stamp: control::AcceptedStamp,
++        bytes: [u8; 32],
++    ) -> Result<(), Refusal> {
++        use tokio::io::AsyncWriteExt as _;
++        let owner = self
++            .node
++            .factory
++            .try_owner(control::OwnerRole::Control, Some(stamp))?;
++        owner.reserve_control(bytes.len())?;
++        let deadline = owner.deadline()?;
++        let socket = self.socket.as_mut().ok_or(Refusal::Invalid)?;
++        let outcome = original_timeout(deadline, async {
++            socket.write_all(&bytes).await?;
++            socket.flush().await
++        })
++        .await;
++        drop(self.socket.take());
++        let result = outcome
++            .map_err(|_| Refusal::Expired)
++            .and_then(|result| result.map_err(|_| Refusal::Failed));
++        if owner.retire_unstarted().is_err() {
++            self.node.owner.fail();
++            return Err(Refusal::Failed);
++        }
++        result
++    }
++}
++async fn read_frontend_header<R: tokio::io::AsyncRead + Unpin>(
++    reader: &mut R,
++    bytes: &mut [u8; 17],
++    deadline: Instant,
++    scenario: GuardedNodeScenario,
++) -> Result<FrontendCommand, Refusal> {
++    use tokio::io::AsyncReadExt as _;
++    let read = async {
++        let mut received = 0;
++        loop {
++            let count = reader
++                .read(&mut bytes[received..])
++                .await
++                .map_err(|_| Refusal::Failed)?;
++            if count == 0 {
++                return parse_header(&bytes[..received], scenario);
++            }
++            received += count;
++            if received == bytes.len() {
++                return Err(Refusal::Invalid);
++            }
++        }
++    };
++    original_timeout(deadline, read)
++        .await
++        .map_err(|_| Refusal::Expired)?
++}
++#[allow(clippy::disallowed_methods)] // preserve the original accepted std monotonic Instant, never renew it
++async fn original_timeout<F: Future>(
++    deadline: Instant,
++    future: F,
++) -> Result<F::Output, tokio::time::error::Elapsed> {
++    tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), future).await
++}
++impl OwnedEffectRegistry {
++    fn primary_route(self: &Arc<Self>, context: &JobContext) -> Result<GuardedRouteWait, Refusal> {
++        context.check_forward()?;
++        let record = self.record(context.token)?;
++        let mut state = lock_owned(&record.state)?;
++        if state.activities[0].route_consumer || state.activities[0].route_delivered {
++            return Err(Refusal::Busy);
++        }
++        state.activities[0].route_consumer = true;
++        Ok(GuardedRouteWait {
++            context: context.clone(),
++            index: 0,
++            request: context.request,
++            active: true,
++        })
++    }
++    fn scalar_observation(&self, tenant: usize, pending: bool) -> Result<[u8; 32], Refusal> {
++        let records = self
++            .bank
++            .try_lock()
++            .map_err(|_| Refusal::Contended)?
++            .records
++            .clone();
++        let mut bytes = [0; 32];
++        bytes[..8].copy_from_slice(b"FOKSGS01");
++        bytes[8] = 1;
++        bytes[9] = tenant as u8;
++        bytes[10] = u8::from(pending);
++        for record in records
++            .iter()
++            .flatten()
++            .filter(|record| record.cell == CELL_SCOPES[tenant])
++        {
++            let state = record.state.try_lock().map_err(|_| Refusal::Contended)?;
++            bytes[11] = if pending {
++                u8::from(state.write_pending)
+             } else {
+-                self.wake_actor();
+-            }
+-        }
+-    }
+-}
++                1
++            };
++            bytes[12..20].copy_from_slice(&record.sequence.to_le_bytes());
++        }
++        Ok(bytes)
++    }
++}
++fn measured_frontend_constructors() -> Result<(), Refusal> {
++    let connection = [
++        std::alloc::Layout::new::<ConnectionWork>(),
++        actual_future_layout(ConnectionWork::run),
++        std::alloc::Layout::new::<Result<(), Refusal>>(),
++    ];
++    let dispatcher = [
++        std::alloc::Layout::new::<crate::cell_dispatch::GuardedGateWork>(),
++        actual_future_layout(crate::cell_dispatch::GuardedGateWork::run),
++        std::alloc::Layout::new::<crate::cell_dispatch::GuardedGateResult>(),
++    ];
++    for (layouts, ceiling) in [(connection, 65_536), (dispatcher, 8192)] {
++        if layouts.iter().any(|layout| layout.align() > 16) {
++            return Err(Refusal::Bounds);
++        }
++        let typed = layouts
++            .iter()
++            .try_fold(0usize, |bytes, layout| bytes.checked_add(layout.size()))
++            .ok_or(Refusal::Bounds)?;
++        // One concrete AppHandle clone has at most256 owned String bytes.
++        // Keep that capacity inside the same prepaid cell, separate from the
++        // emitted measured inline type sum. No pointer-only capacity claim.
++        if typed.checked_add(256).is_none_or(|bytes| bytes > ceiling) {
++            return Err(Refusal::Bounds);
++        }
++    }
++    Ok(())
++}
++
++fn guarded_drain_conjunction(
++    core_drained: bool,
++    shell_drained: bool,
++    healthy: bool,
++    occupied: [usize; 5],
++) -> bool {
++    core_drained && shell_drained && healthy && occupied == [0; 5]
++}
+--- a/crates/celld/guarded_node/control.rs
++++ b/crates/celld/guarded_node/control.rs
+@@ -60,12 +60,10 @@
+ }
+ 
+ impl AcceptedStamp {
+-    #[cfg(test)]
+     pub(super) fn capture() -> Result<Self, Refusal> {
+         Self::at(Instant::now())
+     }
+ 
+-    #[cfg(test)]
+     pub(super) fn at(accepted_at: Instant) -> Result<Self, Refusal> {
+         Ok(Self {
+             accepted_at,
+@@ -73,6 +71,10 @@
+                 .checked_add(Duration::from_secs(15))
+                 .ok_or(Refusal::Bounds)?,
+         })
++    }
++
++    pub(super) fn deadline(self) -> Instant {
++        self.deadline
+     }
+ 
+     fn control_deadline(self) -> Result<Instant, Refusal> {
+@@ -203,6 +205,7 @@
+     // accepts or constructs a socket; B3 supplies the real admission caller.
+     _socket: Option<tokio::net::TcpStream>,
+     stamp: Option<AcceptedStamp>,
++    generation: u64,
+     bytes: [u8; 17],
+ }
+ 
+@@ -464,6 +467,49 @@
+ }
+ 
+ impl OriginalOwner {
++    pub(super) fn reserve_control(&self, bytes: usize) -> Result<(), Refusal> {
++        if self.control.role != OwnerRole::Control {
++            self.fail();
++            return Err(Refusal::Invalid);
++        }
++        self.node_control().reserve_pool(bytes, false)
++    }
++
++    pub(super) fn deadline(&self) -> Result<Instant, Refusal> {
++        self.control.deadline.ok_or(Refusal::Invalid)
++    }
++
++    pub(super) fn acquire_header(&self, stamp: AcceptedStamp) -> Result<HeaderLease, Refusal> {
++        self.check()?;
++        if self.control.role != OwnerRole::Process {
++            return Err(Refusal::Invalid);
++        }
++        let mut state = self
++            .registry
++            .state
++            .try_lock()
++            .map_err(|_| Refusal::Contended)?;
++        let (index, cell) = state
++            .headers
++            .iter_mut()
++            .enumerate()
++            .find(|(_, cell)| cell.stamp.is_none())
++            .ok_or(Refusal::Busy)?;
++        cell.generation = cell.generation.checked_add(1).ok_or(Refusal::Exhausted)?;
++        cell.stamp = Some(stamp);
++        let generation = cell.generation;
++        let bytes = std::mem::take(&mut cell.bytes);
++        drop(state);
++        Ok(HeaderLease {
++            bytes,
++            stamp,
++            registry: self.registry.clone(),
++            control: self.node_control(),
++            index,
++            generation,
++        })
++    }
++
+     pub(super) fn charge(&self, bytes: usize) -> Result<(), Refusal> {
+         self.check()?;
+         self.control.charge(bytes)?;
+@@ -844,6 +890,34 @@
+     generation: u64,
+ }
+ 
++// The fixed header reservation is reusable only when this sole lease has
++// returned its concrete buffer. It owns no invocation or replacement clock.
++pub(super) struct HeaderLease {
++    pub(super) bytes: [u8; 17],
++    pub(super) stamp: AcceptedStamp,
++    registry: Arc<Registry>,
++    control: NodeControl,
++    index: usize,
++    generation: u64,
++}
++impl Drop for HeaderLease {
++    fn drop(&mut self) {
++        let result = (|| {
++            let mut state = lock_owned(&self.registry.state)?;
++            let cell = state.headers.get_mut(self.index).ok_or(Refusal::Invalid)?;
++            if cell.generation != self.generation || cell.stamp.is_none() {
++                return Err(Refusal::Invalid);
++            }
++            cell.bytes = std::mem::take(&mut self.bytes);
++            cell.stamp = None;
++            Ok(())
++        })();
++        if result.is_err() {
++            self.control.fail();
++        }
++    }
++}
++
+ // Already-admitted fixed bookkeeping only. External owner/header/pin admission
+ // keeps its separate try-lock contract. No guard may cross native work/await.
+ pub(super) fn lock_owned<T>(mutex: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>, Refusal> {
+@@ -884,6 +958,40 @@
+ }
+ 
+ impl NodeControl {
++    // Output/control pools are distinct from retained working storage. The
++    // aggregate original-owner debt is charged exactly once and never refunded.
++    fn reserve_pool(&self, bytes: usize, output: bool) -> Result<(), Refusal> {
++        self.check()?;
++        self.control
++            .debt
++            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |debt| {
++                debt.checked_add(bytes)
++                    .filter(|total| *total <= self.control.role.cap())
++            })
++            .map_err(|_| {
++                self.fail();
++                Refusal::Bounds
++            })?;
++        let admitted = if output {
++            self.control.request.reserve_output(bytes)
++        } else {
++            self.control.request.reserve_control(bytes)
++        };
++        if !admitted {
++            self.fail();
++            return Err(Refusal::Capacity);
++        }
++        self.check()
++    }
++
++    pub(crate) fn reserve_output(&self, bytes: usize) -> Result<(), Refusal> {
++        if self.control.role != OwnerRole::Invocation {
++            self.fail();
++            return Err(Refusal::Invalid);
++        }
++        self.reserve_pool(bytes, true)
++    }
++
+     pub(crate) fn check_identity(&self) -> Result<(), Refusal> {
+         let registry = self.registry.upgrade().ok_or(Refusal::Failed)?;
+         let state = lock_owned(&registry.state)?;
+--- /dev/null
++++ b/crates/celld/guarded_node/output.rs
+@@ -0,0 +1,928 @@
++//! Consuming, bounded output for the admitted guarded diagnostic frontend.
++//!
++//! A local flush says nothing about peer receipt. The full socket and frame
++//! are destroyed before the driver may mark output disposed or finish activity.
++
++use super::{OwnedNodeDriverCompletion, Refusal, RetirementObservation};
++use crate::runtime::DriverOutput;
++use foks_hosted_transport::{deadline::Deadline, framing::write_response_until};
++use std::future::Future;
++use std::io;
++use std::pin::Pin;
++use std::task::{Context, Poll};
++use std::time::{Duration, Instant};
++use tokio::io::AsyncWrite;
++use tokio::net::TcpStream;
++use tokio::sync::watch;
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(crate) enum FrameKind {
++    Ordinary,
++    Backpressure,
++}
++impl FrameKind {
++    pub(crate) const fn bytes(self) -> usize {
++        match self {
++            Self::Ordinary => 32,
++            Self::Backpressure => 4 * 1024 * 1024,
++        }
++    }
++}
++
++// Resources precede the original bank owner even if this value is never polled.
++// DriverOutput's Drop retains/quarantines an abandoned native answer; the bank
++// owner then retains its exact Delivered consumer rather than publishing Free.
++pub(crate) struct GatedFrame {
++    bytes: Vec<u8>,
++    output: DriverOutput,
++    owner: OwnedNodeDriverCompletion,
++    preparation: Result<(), Refusal>,
++}
++pub(crate) struct SendDisposition {
++    pub(crate) outcome: Result<(), Refusal>,
++    pub(crate) retirement: RetirementObservation,
++}
++impl GatedFrame {
++    pub(crate) fn new(
++        mut owner: OwnedNodeDriverCompletion,
++        output: DriverOutput,
++        kind: FrameKind,
++    ) -> Result<Self, Refusal> {
++        // This inline owner/future lives in the prepaid frontend cell. Refuse
++        // an oversized actual constructor before its frame is allocated or a
++        // SocketWork future can be returned; the large bytes have their own
++        // one-shot response reservation, never the root's owned-byte allowance.
++        measured_socket_constructor()?;
++        let mut bytes = Vec::new();
++        let preparation = (|| {
++            owner.check_output()?;
++            owner.reserve_frame(kind)?;
++            bytes
++                .try_reserve_exact(kind.bytes())
++                .map_err(|_| Refusal::Capacity)?;
++            if bytes.capacity() != kind.bytes() {
++                return Err(Refusal::Bounds);
++            }
++            bytes.resize(kind.bytes(), 0);
++            output.write_frame(&mut bytes)?;
++            owner.check_output()
++        })();
++        // Expected cancellation, expiry and allocation refusal still own the
++        // proved answer. send() closes the socket before disposing that answer;
++        // no second terminal-proof claim or unowned error branch is introduced.
++        Ok(Self {
++            bytes,
++            output,
++            owner,
++            preparation,
++        })
++    }
++
++    pub(crate) fn send(
++        self,
++        socket: TcpStream,
++    ) -> impl Future<Output = Result<SendDisposition, Refusal>> {
++        // Construct the ordered aggregate before returning any future. Losing
++        // an unpolled send future closes the socket before dropping its owner.
++        SocketWork {
++            socket: Some(socket),
++            frame: Some(self),
++        }
++        .run()
++    }
++}
++
++struct SocketWork {
++    socket: Option<TcpStream>,
++    frame: Option<GatedFrame>,
++}
++
++fn socket_future_layout() -> std::alloc::Layout {
++    fn layout<F: Future>(_: fn(SocketWork) -> F) -> std::alloc::Layout {
++        std::alloc::Layout::new::<F>()
++    }
++    layout(SocketWork::run)
++}
++pub(crate) fn measured_socket_constructor() -> Result<usize, Refusal> {
++    std::mem::size_of::<SocketWork>()
++        .checked_add(socket_future_layout().size())
++        .and_then(|bytes| {
++            bytes.checked_add(std::mem::size_of::<Result<SendDisposition, Refusal>>())
++        })
++        .filter(|bytes| *bytes <= 48 * 1024)
++        .ok_or(Refusal::Bounds)
++}
++impl SocketWork {
++    async fn run(mut self) -> Result<SendDisposition, Refusal> {
++        let frame = self.frame.as_mut().ok_or(Refusal::Invalid)?;
++        let mut cancel = None;
++        let outcome = match frame.preparation.and_then(|()| frame.owner.cancellation()) {
++            Ok(receiver) => {
++                cancel = Some(receiver);
++                transmit(
++                    self.socket.as_mut().ok_or(Refusal::Invalid)?,
++                    &frame.bytes,
++                    &mut frame.owner,
++                    cancel.as_mut().ok_or(Refusal::Invalid)?,
++                )
++                .await
++            }
++            Err(error) => Err(error),
++        };
++        // transmit's borrowed write/flush future has returned and been dropped.
++        // Closing the full owned stream is the physical abandonment witness on
++        // every error branch, and ends local socket ownership on success too.
++        drop(self.socket.take());
++        drop(cancel);
++        let GatedFrame {
++            bytes,
++            output,
++            owner,
++            preparation: _,
++        } = self.frame.take().ok_or(Refusal::Invalid)?;
++        drop(bytes);
++        let retirement = owner.finish_output(output).await?;
++        Ok(SendDisposition {
++            outcome,
++            retirement,
++        })
++    }
++}
++
++// Private transport-only seam. Tests use original admitted owners and the real
++// canonical cancel watch; they do not fabricate a DriverOutput or runtime Ready.
++trait Authority {
++    fn check(&self) -> Result<(), Refusal>;
++    fn deadline(&self) -> Instant;
++    fn write_pending(&self) -> Result<(), Refusal>;
++}
++impl Authority for OwnedNodeDriverCompletion {
++    fn check(&self) -> Result<(), Refusal> {
++        self.check_output()
++    }
++    fn deadline(&self) -> Instant {
++        self.output_deadline()
++    }
++    fn write_pending(&self) -> Result<(), Refusal> {
++        self.observe_write_pending()
++    }
++}
++
++struct ObservedWriter<'a, W, A> {
++    writer: &'a mut W,
++    authority: &'a mut A,
++    pending: bool,
++    refusal: Option<Refusal>,
++}
++impl<W: AsyncWrite + Unpin, A: Authority> ObservedWriter<'_, W, A> {
++    fn check(&mut self) -> io::Result<()> {
++        if let Err(error) = self.authority.check() {
++            self.refusal = Some(error);
++            return Err(io::ErrorKind::Other.into());
++        }
++        Ok(())
++    }
++}
++impl<W: AsyncWrite + Unpin, A: Authority> AsyncWrite for ObservedWriter<'_, W, A> {
++    fn poll_write(
++        self: Pin<&mut Self>,
++        cx: &mut Context<'_>,
++        bytes: &[u8],
++    ) -> Poll<io::Result<usize>> {
++        let this = self.get_mut();
++        if let Err(error) = this.check() {
++            return Poll::Ready(Err(error));
++        }
++        let result = Pin::new(&mut *this.writer).poll_write(cx, bytes);
++        if result.is_pending() && !this.pending {
++            this.pending = true;
++            if let Err(error) = this.authority.write_pending() {
++                this.refusal = Some(error);
++                return Poll::Ready(Err(io::ErrorKind::Other.into()));
++            }
++        }
++        result
++    }
++    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
++        let this = self.get_mut();
++        if let Err(error) = this.check() {
++            return Poll::Ready(Err(error));
++        }
++        Pin::new(&mut *this.writer).poll_flush(cx)
++    }
++    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
++        Pin::new(&mut *self.get_mut().writer).poll_shutdown(cx)
++    }
++}
++
++fn current_cancel(cancel: &watch::Receiver<bool>) -> Result<(), Refusal> {
++    // A closed watch is uncertain even if its last value was false. No new
++    // sender is manufactured and an already-set cancel precedes the first byte.
++    if *cancel.borrow() || cancel.has_changed().is_err() {
++        Err(Refusal::Cancelled)
++    } else {
++        Ok(())
++    }
++}
++async fn cancelled(cancel: &mut watch::Receiver<bool>) {
++    loop {
++        let already_cancelled = *cancel.borrow_and_update();
++        if already_cancelled || cancel.changed().await.is_err() {
++            return;
++        }
++    }
++}
++
++async fn transmit<W: AsyncWrite + Unpin, A: Authority>(
++    writer: &mut W,
++    bytes: &[u8],
++    authority: &mut A,
++    cancel: &mut watch::Receiver<bool>,
++) -> Result<(), Refusal> {
++    current_cancel(cancel)?;
++    authority.check()?;
++    let deadline = Deadline::at(authority.deadline());
++    // Retain the one consumer through an exclusive borrow. Its native answer
++    // is Send-only; sharing it across this await would incorrectly require Sync.
++    let (result, refusal) = {
++        let mut observed = ObservedWriter {
++            writer,
++            authority: &mut *authority,
++            pending: false,
++            refusal: None,
++        };
++        let result = crate::asyncrt::select_biased! {
++            "canonical cancellation that ties a ready write or flush stops publication";
++            _ = cancelled(cancel) => Err(Refusal::Cancelled),
++            result = write_response_until(&mut observed, bytes, deadline, Duration::from_secs(15)) => {
++                result.map_err(|error| match error {
++                    foks_hosted_transport::Error::Io(error) if error.kind() == io::ErrorKind::TimedOut => Refusal::Expired,
++                    _ => Refusal::Failed,
++                })
++            },
++        };
++        (result, observed.refusal)
++    };
++    if let Some(error) = refusal {
++        return Err(error);
++    }
++    if let Err(error) = result {
++        // In particular, an A0 absolute timeout must also be observed by the
++        // same original control, preserving its sticky expiry/failure state.
++        // This does not turn a transport error into a successful publication.
++        let _ = authority.check();
++        return Err(error);
++    }
++    current_cancel(cancel)?;
++    authority.check()
++}
++
++#[cfg(test)]
++pub(crate) mod component {
++    use super::super::tests::OutputFixture;
++    use super::*;
++    use std::alloc::Layout;
++    use std::cell::{Cell, RefCell};
++    use std::net::{Ipv4Addr, SocketAddrV4};
++    use std::os::fd::AsRawFd;
++    use std::sync::Weak;
++    use std::task::Waker;
++    use tokio::io::AsyncReadExt;
++    use tokio::net::TcpSocket;
++    use tokio::sync::Notify;
++
++    struct TestAuthority<'a> {
++        fixture: &'a OutputFixture,
++        pending: &'a Notice,
++    }
++    impl Authority for TestAuthority<'_> {
++        fn check(&self) -> Result<(), Refusal> {
++            self.fixture.check_output()
++        }
++        fn deadline(&self) -> Instant {
++            self.fixture.output_deadline()
++        }
++        fn write_pending(&self) -> Result<(), Refusal> {
++            self.fixture.observe_write_pending()?;
++            self.pending.signal();
++            Ok(())
++        }
++    }
++
++    fn frame(fixture: &OutputFixture, kind: FrameKind) -> Result<Vec<u8>, Refusal> {
++        fixture.reserve_frame(kind)?;
++        let mut bytes = Vec::new();
++        bytes
++            .try_reserve_exact(kind.bytes())
++            .map_err(|_| Refusal::Capacity)?;
++        if bytes.capacity() != kind.bytes() {
++            return Err(Refusal::Bounds);
++        }
++        bytes.extend((0..kind.bytes()).map(pattern));
++        Ok(bytes)
++    }
++
++    #[derive(Default)]
++    struct Notice {
++        seen: Cell<bool>,
++        notify: Notify,
++    }
++    impl Notice {
++        fn signal(&self) {
++            self.seen.set(true);
++            self.notify.notify_one();
++        }
++        async fn wait(&self) -> Result<(), Refusal> {
++            if !self.seen.get() {
++                crate::asyncrt::timeout(Duration::from_secs(5), self.notify.notified())
++                    .await
++                    .map_err(|_| Refusal::Expired)?;
++            }
++            if self.seen.get() {
++                Ok(())
++            } else {
++                Err(Refusal::Invalid)
++            }
++        }
++    }
++
++    #[derive(Default)]
++    struct Barrier {
++        entered: Notice,
++        released: Cell<bool>,
++        waiter: RefCell<Option<Waker>>,
++    }
++    impl Barrier {
++        fn poll(&self, cx: &mut Context<'_>) -> Poll<()> {
++            self.entered.signal();
++            if self.released.get() {
++                return Poll::Ready(());
++            }
++            let old = self.waiter.borrow_mut().replace(cx.waker().clone());
++            drop(old);
++            Poll::Pending
++        }
++        fn release(&self) {
++            self.released.set(true);
++            let wake = self.waiter.borrow_mut().take();
++            if let Some(wake) = wake {
++                wake.wake();
++            }
++        }
++    }
++
++    #[derive(Default)]
++    struct Disposal {
++        physical: Cell<bool>,
++        owner_alive: Cell<bool>,
++        accepted: Cell<usize>,
++        flushes: Cell<usize>,
++    }
++
++    struct TrackedWriter<'a, W> {
++        writer: Option<W>,
++        disposal: &'a Disposal,
++        original: Weak<foks_hosted_transport::memory::Request>,
++    }
++    impl<W> Drop for TrackedWriter<'_, W> {
++        fn drop(&mut self) {
++            drop(self.writer.take());
++            self.disposal.physical.set(true);
++            self.disposal
++                .owner_alive
++                .set(self.original.upgrade().is_some());
++        }
++    }
++    impl<W: AsyncWrite + Unpin> AsyncWrite for TrackedWriter<'_, W> {
++        fn poll_write(
++            self: Pin<&mut Self>,
++            cx: &mut Context<'_>,
++            bytes: &[u8],
++        ) -> Poll<io::Result<usize>> {
++            let this = self.get_mut();
++            let Some(writer) = this.writer.as_mut() else {
++                return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
++            };
++            let result = Pin::new(writer).poll_write(cx, bytes);
++            if let Poll::Ready(Ok(length)) = result {
++                this.disposal
++                    .accepted
++                    .set(this.disposal.accepted.get() + length);
++            }
++            result
++        }
++        fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
++            let this = self.get_mut();
++            this.disposal.flushes.set(this.disposal.flushes.get() + 1);
++            let Some(writer) = this.writer.as_mut() else {
++                return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
++            };
++            Pin::new(writer).poll_flush(cx)
++        }
++        fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
++            let Some(writer) = self.get_mut().writer.as_mut() else {
++                return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
++            };
++            Pin::new(writer).poll_shutdown(cx)
++        }
++    }
++
++    #[derive(Clone, Copy)]
++    enum Gate {
++        Write,
++        Flush,
++    }
++    struct GateWriter<'a> {
++        gate: Gate,
++        barrier: &'a Barrier,
++    }
++    impl AsyncWrite for GateWriter<'_> {
++        fn poll_write(
++            self: Pin<&mut Self>,
++            cx: &mut Context<'_>,
++            bytes: &[u8],
++        ) -> Poll<io::Result<usize>> {
++            if matches!(self.gate, Gate::Write) && self.barrier.poll(cx).is_pending() {
++                return Poll::Pending;
++            }
++            Poll::Ready(Ok(bytes.len()))
++        }
++        fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
++            if matches!(self.gate, Gate::Flush) && self.barrier.poll(cx).is_pending() {
++                return Poll::Pending;
++            }
++            Poll::Ready(Ok(()))
++        }
++        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
++            Poll::Ready(Ok(()))
++        }
++    }
++
++    fn recorded_tcp_port() -> Result<u16, Refusal> {
++        let input = std::env::var("FOKS_B3_TCP_PORT").map_err(|_| Refusal::Invalid)?;
++        let port = input.parse::<u16>().map_err(|_| Refusal::Invalid)?;
++        if port == 0 || port.to_string() != input {
++            return Err(Refusal::Invalid);
++        }
++        Ok(port)
++    }
++
++    fn tcp_diagnostic(fields: std::fmt::Arguments<'_>) -> Result<(), Refusal> {
++        use std::io::Write as _;
++        // Only the fixed phase labels, primitive scalars and closed Refusal
++        // results below reach this writer: at most eight short rows per case.
++        // Direct stderr keeps failed-fixture evidence outside libtest capture.
++        let mut stderr = std::io::stderr().lock();
++        writeln!(stderr, "FOKS_B3_TCP_DIAG {fields}").map_err(|_| Refusal::Failed)?;
++        stderr.flush().map_err(|_| Refusal::Failed)
++    }
++
++    fn socket_buffer(stream: &TcpStream, option: libc::c_int) -> Result<usize, Refusal> {
++        let mut value: libc::c_int = 0;
++        let mut length = std::mem::size_of_val(&value) as libc::socklen_t;
++        // The owned live TCP descriptor and exact SOL_SOCKET integer buffer
++        // ABI are confined to this local component fixture.
++        let result = unsafe {
++            libc::getsockopt(
++                stream.as_raw_fd(),
++                libc::SOL_SOCKET,
++                option,
++                (&mut value as *mut libc::c_int).cast(),
++                &mut length,
++            )
++        };
++        let errno = if result == 0 {
++            0
++        } else {
++            io::Error::last_os_error().raw_os_error().unwrap_or(0)
++        };
++        tcp_diagnostic(format_args!(
++            "phase=socket-buffer option={option} result={result} errno={errno} length={length} expected_length={} value={value} maximum=131072",
++            std::mem::size_of_val(&value)
++        ))?;
++        if result != 0
++            || length as usize != std::mem::size_of_val(&value)
++            || value <= 0
++            || value > 128 * 1024
++        {
++            return Err(Refusal::Invalid);
++        }
++        Ok(value as usize)
++    }
++
++    fn connected_socket_buffer(stream: &TcpStream, option: libc::c_int) -> Result<usize, Refusal> {
++        let value: libc::c_int = 4096;
++        // Configure the actual connected endpoint before any application bytes
++        // are sent. The stream remains owned and borrowed throughout this call;
++        // SOL_SOCKET/SO_SNDBUF/SO_RCVBUF use this exact live c_int/length ABI.
++        // No raw-descriptor ownership transfer or connected TcpSocket conversion.
++        let result = unsafe {
++            libc::setsockopt(
++                stream.as_raw_fd(),
++                libc::SOL_SOCKET,
++                option,
++                (&value as *const libc::c_int).cast(),
++                std::mem::size_of_val(&value) as libc::socklen_t,
++            )
++        };
++        let errno = if result == 0 {
++            0
++        } else {
++            io::Error::last_os_error().raw_os_error().unwrap_or(0)
++        };
++        tcp_diagnostic(format_args!(
++            "phase=configure-connected-buffer option={option} result={result} errno={errno} requested={value}"
++        ))?;
++        if result != 0 {
++            return Err(Refusal::Failed);
++        }
++        // Kernel rounding is observed, never assumed; preserve the original
++        // positive-value, ABI-length and 128-KiB ceiling checks unchanged.
++        socket_buffer(stream, option)
++    }
++
++    async fn tcp_pair() -> Result<(TcpStream, TcpStream, usize, usize), Refusal> {
++        let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, recorded_tcp_port()?);
++        let listener = TcpSocket::new_v4().map_err(|_| Refusal::Failed)?;
++        listener.set_reuseaddr(true).map_err(|_| Refusal::Failed)?;
++        listener
++            .set_send_buffer_size(4096)
++            .map_err(|_| Refusal::Failed)?;
++        listener.bind(address.into()).map_err(|_| Refusal::Failed)?;
++        let listener = listener.listen(1).map_err(|_| Refusal::Failed)?;
++        let peer = TcpSocket::new_v4().map_err(|_| Refusal::Failed)?;
++        peer.set_recv_buffer_size(4096)
++            .map_err(|_| Refusal::Failed)?;
++        crate::asyncrt::timeout(Duration::from_secs(5), async {
++            let (peer, (server, peer_address)) =
++                futures_util::future::try_join(peer.connect(address.into()), listener.accept())
++                    .await
++                    .map_err(|_| Refusal::Failed)?;
++            drop(listener);
++            if !peer_address.ip().is_loopback() {
++                return Err(Refusal::Invalid);
++            }
++            let send = connected_socket_buffer(&server, libc::SO_SNDBUF)?;
++            let receive = connected_socket_buffer(&peer, libc::SO_RCVBUF)?;
++            // Exclude initial reactor readiness from the backpressure witness.
++            // This remains inside the same setup bound as connect/accept.
++            server.writable().await.map_err(|_| Refusal::Failed)?;
++            Ok((server, peer, send, receive))
++        })
++        .await
++        .map_err(|_| Refusal::Expired)?
++    }
++
++    fn reset_on_close(peer: &TcpStream) -> Result<(), Refusal> {
++        let linger = libc::linger {
++            l_onoff: 1,
++            l_linger: 0,
++        };
++        let result = unsafe {
++            libc::setsockopt(
++                peer.as_raw_fd(),
++                libc::SOL_SOCKET,
++                libc::SO_LINGER,
++                (&linger as *const libc::linger).cast(),
++                std::mem::size_of_val(&linger) as libc::socklen_t,
++            )
++        };
++        if result == 0 {
++            Ok(())
++        } else {
++            Err(Refusal::Failed)
++        }
++    }
++
++    fn pattern(index: usize) -> u8 {
++        (index % 251) as u8
++    }
++    async fn read_pattern(peer: &mut TcpStream, expected: usize) -> Result<usize, Refusal> {
++        let mut chunk = [0_u8; 4096];
++        let mut total = 0_usize;
++        loop {
++            let count = peer.read(&mut chunk).await.map_err(|_| Refusal::Failed)?;
++            if count == 0 {
++                break;
++            }
++            if total
++                .checked_add(count)
++                .filter(|total| *total <= expected)
++                .is_none()
++                || chunk[..count]
++                    .iter()
++                    .enumerate()
++                    .any(|(index, byte)| *byte != pattern(total + index))
++            {
++                return Err(Refusal::Invalid);
++            }
++            total += count;
++        }
++        if total == expected {
++            Ok(total)
++        } else {
++            Err(Refusal::Invalid)
++        }
++    }
++
++    #[derive(Clone, Copy, Debug)]
++    enum GateCase {
++        Write,
++        Flush,
++        CancelBefore,
++        CancelWrite,
++        CancelFlush,
++        Deadline,
++    }
++
++    // The selected deadline remains the original acceptance stamp plus15s;
++    // only its already-elapsed age is controlled by this local fixture.
++    #[allow(clippy::disallowed_methods)]
++    async fn gate_case(case: GateCase) -> Result<(), Refusal> {
++        let fixture = if matches!(case, GateCase::Deadline) {
++            OutputFixture::with_accepted_at(Instant::now() - Duration::from_secs(14))?
++        } else {
++            OutputFixture::new()?
++        };
++        let bytes = frame(&fixture, FrameKind::Ordinary)?;
++        let original = fixture.weak_owner();
++        let deadline = fixture.output_deadline();
++        let mut cancel = fixture.cancellation()?;
++        let barrier = Barrier::default();
++        let pending = Notice::default();
++        let disposal = Disposal::default();
++        let mut authority = TestAuthority {
++            fixture: &fixture,
++            pending: &pending,
++        };
++        let gate = if matches!(case, GateCase::Flush | GateCase::CancelFlush) {
++            Gate::Flush
++        } else {
++            Gate::Write
++        };
++        let mut writer = TrackedWriter {
++            writer: Some(GateWriter {
++                gate,
++                barrier: &barrier,
++            }),
++            disposal: &disposal,
++            original: original.clone(),
++        };
++        let pre_cancel = if matches!(case, GateCase::CancelBefore) {
++            fixture.canonical_cancel()
++        } else {
++            Ok(())
++        };
++        let attempt = async {
++            pre_cancel?;
++            let control = async {
++                if matches!(case, GateCase::CancelBefore) {
++                    return Ok(true);
++                }
++                let entered = barrier.entered.wait().await;
++                if entered.is_err() {
++                    barrier.release();
++                    return Err(Refusal::Expired);
++                }
++                let held = original.upgrade().is_some()
++                    && fixture.occupied()?
++                    && fixture.output_deadline() == deadline
++                    && !disposal.physical.get();
++                match case {
++                    GateCase::Write | GateCase::Flush => barrier.release(),
++                    GateCase::CancelWrite | GateCase::CancelFlush => fixture.canonical_cancel()?,
++                    GateCase::Deadline | GateCase::CancelBefore => {}
++                }
++                Ok::<_, Refusal>(held)
++            };
++            Ok::<_, Refusal>(
++                futures_util::future::join(
++                    transmit(&mut writer, &bytes, &mut authority, &mut cancel),
++                    control,
++                )
++                .await,
++            )
++        };
++        let result = crate::asyncrt::timeout(Duration::from_secs(5), attempt).await;
++        // No assertion or early result propagation precedes release and the
++        // physical writer/frame/watch disposal. Both futures were owned inline.
++        barrier.release();
++        drop(writer);
++        let unchanged_deadline = fixture.output_deadline() == deadline;
++        let observed_pending = fixture.write_pending();
++        drop(cancel);
++        drop(bytes);
++        let disposition = fixture.finish_after_disposal();
++        let ((sent, held), disposition) = (result.map_err(|_| Refusal::Expired)??, disposition?);
++        if !held? || !unchanged_deadline || !disposal.physical.get() || !disposal.owner_alive.get()
++        {
++            return Err(Refusal::Invalid);
++        }
++        let expected = match case {
++            GateCase::Write | GateCase::Flush => Ok(()),
++            GateCase::Deadline => Err(Refusal::Expired),
++            _ => Err(Refusal::Cancelled),
++        };
++        if sent != expected {
++            return Err(Refusal::Invalid);
++        }
++        let succeeded = expected.is_ok();
++        if succeeded {
++            if !disposition.retired
++                || disposition.retained
++                || original.upgrade().is_some()
++                || disposal.accepted.get() != FrameKind::Ordinary.bytes()
++                || disposal.flushes.get() == 0
++            {
++                return Err(Refusal::Invalid);
++            }
++        } else if disposition.retired || !disposition.retained || original.upgrade().is_none() {
++            return Err(Refusal::Invalid);
++        }
++        match case {
++            GateCase::CancelBefore => {
++                if disposal.accepted.get() != 0 || disposal.flushes.get() != 0 || observed_pending?
++                {
++                    return Err(Refusal::Invalid);
++                }
++            }
++            GateCase::Write | GateCase::CancelWrite | GateCase::Deadline => {
++                if !observed_pending? || !disposition.write_pending {
++                    return Err(Refusal::Invalid);
++                }
++                if !succeeded && disposal.accepted.get() != 0 {
++                    return Err(Refusal::Invalid);
++                }
++            }
++            GateCase::Flush | GateCase::CancelFlush => {
++                if observed_pending?
++                    || !barrier.entered.seen.get()
++                    || disposal.accepted.get() != FrameKind::Ordinary.bytes()
++                {
++                    return Err(Refusal::Invalid);
++                }
++            }
++        }
++        Ok(())
++    }
++
++    async fn tcp_case(disconnect: bool) -> Result<(), Refusal> {
++        tcp_diagnostic(format_args!("phase=start disconnect={disconnect}"))?;
++        let fixture = OutputFixture::new()?;
++        let bytes = frame(&fixture, FrameKind::Backpressure)?;
++        let original = fixture.weak_owner();
++        let mut cancel = fixture.cancellation()?;
++        tcp_diagnostic(format_args!(
++            "phase=owner-ready disconnect={disconnect} frame_length={} frame_capacity={} owner_alive={}",
++            bytes.len(), bytes.capacity(), original.upgrade().is_some()
++        ))?;
++        let connected = tcp_pair().await;
++        tcp_diagnostic(format_args!(
++            "phase=pair-result disconnect={disconnect} result={:?}",
++            connected
++                .as_ref()
++                .map(|(_, _, send, receive)| (*send, *receive))
++        ))?;
++        let (server, peer, send_buffer, receive_buffer) = connected?;
++        let mut peer = Some(peer);
++        let pending = Notice::default();
++        let disposal = Disposal::default();
++        let mut authority = TestAuthority {
++            fixture: &fixture,
++            pending: &pending,
++        };
++        let mut writer = Some(TrackedWriter {
++            writer: Some(server),
++            disposal: &disposal,
++            original: original.clone(),
++        });
++        let transfer = async {
++            let result = transmit(
++                writer.as_mut().ok_or(Refusal::Invalid)?,
++                &bytes,
++                &mut authority,
++                &mut cancel,
++            )
++            .await;
++            // The peer EOF and subsequent owner retirement must follow actual
++            // full-stream Drop, not merely a write-side shutdown or ready flush.
++            drop(writer.take());
++            Ok::<_, Refusal>(result)
++        };
++        let reader = async {
++            pending.wait().await?;
++            let pending_accepted = disposal.accepted.get();
++            let held = original.upgrade().is_some()
++                && fixture.occupied()?
++                && fixture.write_pending()?
++                && !disposal.physical.get()
++                && pending_accepted > 0
++                && pending_accepted < FrameKind::Backpressure.bytes();
++            let mut peer = peer.take().ok_or(Refusal::Invalid)?;
++            if disconnect {
++                reset_on_close(&peer)?;
++                drop(peer);
++                Ok((held, 0, pending_accepted))
++            } else {
++                let count = read_pattern(&mut peer, FrameKind::Backpressure.bytes()).await?;
++                drop(peer);
++                Ok::<_, Refusal>((held, count, pending_accepted))
++            }
++        };
++        let result = crate::asyncrt::timeout(
++            Duration::from_secs(8),
++            futures_util::future::join(transfer, reader),
++        )
++        .await;
++        drop(writer.take());
++        drop(peer.take());
++        drop(cancel);
++        drop(bytes);
++        let disposition = fixture.finish_after_disposal();
++        tcp_diagnostic(format_args!(
++            "phase=disposed disconnect={disconnect} transfer={:?} disposition={:?} pending={} physical={} owner_at_disposal={} owner_alive={} accepted={} flushes={} send_buffer={send_buffer} receive_buffer={receive_buffer}",
++            result.as_ref().map_err(|_| Refusal::Expired),
++            disposition.as_ref().map(|value| (value.retired, value.retained, value.write_pending)),
++            pending.seen.get(), disposal.physical.get(), disposal.owner_alive.get(),
++            original.upgrade().is_some(), disposal.accepted.get(), disposal.flushes.get()
++        ))?;
++        let ((sent, peer_result), disposition) =
++            (result.map_err(|_| Refusal::Expired)?, disposition?);
++        let sent = sent?;
++        let (held, count, pending_accepted) = peer_result?;
++        if !held
++            || !pending.seen.get()
++            || !disposal.physical.get()
++            || !disposal.owner_alive.get()
++            || !disposition.write_pending
++            || !disposition.retired
++            || disposition.retained
++            || original.upgrade().is_some()
++            || send_buffer >= FrameKind::Backpressure.bytes()
++            || receive_buffer >= FrameKind::Backpressure.bytes()
++        {
++            return Err(Refusal::Invalid);
++        }
++        if disconnect {
++            if sent != Err(Refusal::Failed)
++                || count != 0
++                || disposal.accepted.get() >= FrameKind::Backpressure.bytes()
++            {
++                return Err(Refusal::Invalid);
++            }
++        } else if sent.is_err()
++            || count != FrameKind::Backpressure.bytes()
++            || disposal.accepted.get() != count
++            || disposal.flushes.get() == 0
++        {
++            return Err(Refusal::Invalid);
++        }
++        // Preserve the actual finite kernel buffer values and Pending witness
++        // in the bounded native test log. This is a component observation, not
++        // peer receipt or a successful full-process retirement measurement.
++        use std::io::Write;
++        let mut stderr = std::io::stderr().lock();
++        writeln!(stderr,
++            "FOKS_B3_TCP disconnect={disconnect} send_buffer={send_buffer} receive_buffer={receive_buffer} pending=true pending_accepted={pending_accepted} accepted={} read={count} physical_disposal=true",
++            disposal.accepted.get()).map_err(|_| Refusal::Failed)?;
++        stderr.flush().map_err(|_| Refusal::Failed)?;
++        Ok(())
++    }
++
++    pub(crate) async fn owner_survives_pending_write() -> Result<(), Refusal> {
++        gate_case(GateCase::Write).await
++    }
++    pub(crate) async fn tcp_pending_then_complete() -> Result<(), Refusal> {
++        tcp_case(false).await
++    }
++    pub(crate) async fn tcp_disconnect_disposes_before_retirement() -> Result<(), Refusal> {
++        tcp_case(true).await
++    }
++    pub(crate) async fn flush_pending_then_complete() -> Result<(), Refusal> {
++        gate_case(GateCase::Flush).await
++    }
++    pub(crate) async fn cancel_already_set_refuses_write() -> Result<(), Refusal> {
++        gate_case(GateCase::CancelBefore).await
++    }
++    pub(crate) async fn canonical_cancel_during_write() -> Result<(), Refusal> {
++        gate_case(GateCase::CancelWrite).await
++    }
++    pub(crate) async fn canonical_cancel_during_flush() -> Result<(), Refusal> {
++        gate_case(GateCase::CancelFlush).await
++    }
++    pub(crate) async fn output_original_deadline() -> Result<(), Refusal> {
++        gate_case(GateCase::Deadline).await
++    }
++
++    pub(crate) fn visit_layouts(
++        mut visitor: impl FnMut(super::super::component::ConstructorLayout),
++    ) {
++        visitor(super::super::component::ConstructorLayout {
++            id: "output/send",
++            capture: Layout::new::<SocketWork>(),
++            future: Some(socket_future_layout()),
++            result: Layout::new::<Result<SendDisposition, Refusal>>(),
++            channel_payload: None,
++        });
++    }
++}
+--- a/crates/celld/guarded_node/tests.rs
++++ b/crates/celld/guarded_node/tests.rs
+@@ -1,6 +1,7 @@
+ //! Foundation and lifetime components, executed serially. Tests13/29 build,
+ //! adopt and destroy a real Worker on a local paged database; the other closed
+-//! fixtures do not claim native startup, Ready, a frontend or remote restore.
++//! fixtures do not claim native startup, Ready or remote restore. B3 adds
++//! real loopback transport and bounded frontend component leaves; full Run is B4.
+ use super::control::{
+     self, component, AcceptedStamp, CleanupKind, OriginalOwner, OwnerFactory, OwnerRole,
+ };
+@@ -1428,7 +1429,7 @@
+ }
+ 
+ #[test]
+-fn b1_foundation_has_no_ready_or_action() {
++fn b1_foundation_requires_frontend_for_ready_and_action() {
+     // A local component avoids changing or resetting the actual process-wide
+     // installation used by test14. This is not a serving/readiness constructor.
+     let (factory, owner) = fixture_factory();
+@@ -1441,6 +1442,9 @@
+         effects,
+         factory,
+         owner,
++        accepting: AtomicBool::new(true),
++        diagnostics_reserved: AtomicBool::new(false),
++        bound: AtomicBool::new(false),
+     };
+     let observation = local.foundation().unwrap();
+     assert_eq!(observation.claim, "b1-foundation-only");
+@@ -1450,25 +1454,19 @@
+     assert_eq!(observation.program, program::identities());
+     assert_eq!(observation.tenant_ids, program::TENANT_IDS);
+     local.stop_admission();
+-    assert!(local
+-        .factory
+-        .try_owner(
+-            OwnerRole::Invocation,
+-            Some(AcceptedStamp::capture().unwrap())
+-        )
+-        .is_err());
++    assert!(!local.accepting.load(Ordering::Acquire));
++    assert!(local.owner.check().is_ok());
++    assert!(!local.bound.load(Ordering::Acquire));
+     let GuardedNode {
+-        policy: _,
+         effects,
+         factory,
+         owner,
++        ..
+     } = local;
+     drop(effects);
+     retire_factory(factory, owner);
+-    // CLI Action itself is deliberately unchanged; actual binary probes are a
+-    // separate root-run qualification after source and graph review.
+-    let cli = include_str!("../main/cli.rs");
+-    assert!(!cli.contains("foks-guarded-node-qualification"));
++    // Neither foundation installation nor a component registry supplies the
++    // private bucket/actor/runtime/channel witnesses required by bind_running.
+ }
+ 
+ // B2 component tests use fresh real owners and the one retained canonical host
+@@ -2264,7 +2262,7 @@
+ }
+ 
+ #[test]
+-fn b2_lifetimes_has_no_ready_action_or_frontend() {
++fn b2_lifetimes_requires_frontend_for_ready_and_action() {
+     let fixture = b2_fixture();
+     assert_eq!(
+         fixture
+@@ -2278,8 +2276,15 @@
+             .count(),
+         2
+     );
+-    let cli = include_str!("../main/cli.rs");
+-    assert!(!cli.contains("foks-guarded-node-qualification") && !cli.contains("node-lifetimes"));
++    assert!(fixture
++        .registry()
++        .bank
++        .lock()
++        .unwrap()
++        .records
++        .iter()
++        .flatten()
++        .all(|record| record.state.lock().unwrap().runtime.is_none()));
+     assert_eq!(program::FIXTURE_JS.matches("new Uint8Array(12)").count(), 1);
+     assert!(program::FIXTURE_JS.contains("storage.sync()"));
+     assert_eq!(program::identities(), DescriptorPolicy::new().program);
+@@ -3563,3 +3568,1000 @@
+     // The body crossed the real publication boundary and its actual panic was
+     // joined. No successful NodeNativeCompletion, Worker or Ready was created.
+ }
++
++// Transport leaves use real admitted owners and real core cancellation. The
++// resident host results are component inputs only: no Worker/DriverOutput or
++// Run readiness is manufactured. Final healthy cleanup bypasses only canonical
++// terminal admission, using the already reviewed empty-resource physical cut.
++pub(crate) struct OutputFixture {
++    core: Mutex<State>,
++    context: Option<JobContext>,
++    registry: Arc<OwnedEffectRegistry>,
++    weak: Weak<foks_hosted_transport::memory::Request>,
++    factory: OwnerFactory,
++    process: OriginalOwner,
++}
++pub(crate) struct OutputFixtureDisposition {
++    pub(crate) retired: bool,
++    pub(crate) retained: bool,
++    pub(crate) write_pending: bool,
++}
++impl OutputFixture {
++    pub(crate) fn new() -> Result<Self, Refusal> {
++        Self::with_accepted_at(Instant::now())
++    }
++    pub(crate) fn with_accepted_at(accepted: Instant) -> Result<Self, Refusal> {
++        let (factory, process) = fixture_factory();
++        let registry = OwnedEffectRegistry::new(process.node_control())?;
++        let owner = factory.try_owner(OwnerRole::Invocation, Some(AcceptedStamp::at(accepted)?))?;
++        let weak = Arc::downgrade(&component::request(&owner));
++        let envelope = registry.register_component(owner, 0)?;
++        let admission = envelope.begin(&registry)?;
++        let context = admission.context.clone();
++        let mut core = State::new("node", model_config(false));
++        on_event(
++            &mut core,
++            Event::GenerationChanged {
++                generation: 1,
++                now_mono_ms: 0,
++                max_age_ms: 1000,
++                eager_classes: vec![],
++            },
++        );
++        let effects = on_event(&mut core, admission.into_event(0));
++        activate_from_effects(&mut core, context.cell(), context.request, 1, effects);
++        Ok(Self {
++            core: Mutex::new(core),
++            context: Some(context),
++            registry,
++            weak,
++            factory,
++            process,
++        })
++    }
++    fn origin(&self) -> Result<&JobContext, Refusal> {
++        self.context.as_ref().ok_or(Refusal::Invalid)
++    }
++    pub(crate) fn check_output(&self) -> Result<(), Refusal> {
++        self.origin()?.check_forward()
++    }
++    pub(crate) fn output_deadline(&self) -> Instant {
++        self.context.as_ref().expect("live output fixture").deadline
++    }
++    pub(crate) fn weak_owner(&self) -> Weak<foks_hosted_transport::memory::Request> {
++        self.weak.clone()
++    }
++    pub(crate) fn occupied(&self) -> Result<bool, Refusal> {
++        let bank = lock_owned(&self.registry.bank)?;
++        Ok(bank.records[0].is_some() || bank.held[0].is_some())
++    }
++    pub(crate) fn cancellation(&self) -> Result<tokio::sync::watch::Receiver<bool>, Refusal> {
++        Ok(self
++            .registry
++            .record(self.origin()?.token)?
++            .cancellation
++            .subscribe())
++    }
++    pub(crate) fn reserve_frame(&self, kind: output::FrameKind) -> Result<(), Refusal> {
++        self.check_output()?;
++        let record = self.registry.record(self.origin()?.token)?;
++        record.reserve_frame(kind)
++    }
++    pub(crate) fn observe_write_pending(&self) -> Result<(), Refusal> {
++        let record = self.registry.record(self.origin()?.token)?;
++        lock_owned(&record.state)?.write_pending = true;
++        Ok(())
++    }
++    pub(crate) fn write_pending(&self) -> Result<bool, Refusal> {
++        let record = self.registry.record(self.origin()?.token)?;
++        let pending = lock_owned(&record.state)?.write_pending;
++        Ok(pending)
++    }
++    pub(crate) fn canonical_cancel(&self) -> Result<(), Refusal> {
++        let effects = {
++            let mut core = lock_owned(&self.core)?;
++            on_event(&mut core, Event::ReleaseAll)
++        };
++        let mut delivered = false;
++        for effect in effects {
++            if matches!(effect, Effect::CancelCellActivity { .. }) {
++                match self.registry.claim_actor(&effect) {
++                    ActorClaim::Inline(permit) => {
++                        permit.deliver(effect)?;
++                        delivered = true;
++                    }
++                    _ => return Err(Refusal::Invalid),
++                }
++            }
++        }
++        if delivered && *self.cancellation()?.borrow() {
++            Ok(())
++        } else {
++            Err(Refusal::Invalid)
++        }
++    }
++    pub(crate) fn finish_after_disposal(mut self) -> Result<OutputFixtureDisposition, Refusal> {
++        let write_pending = self.write_pending()?;
++        let context = self.context.take().ok_or(Refusal::Invalid)?;
++        if context.check_forward().is_err() {
++            context.fail();
++            drop(context);
++            // Failure/cancellation is deliberately retained. This fixture does
++            // not manufacture a runtime stop or successful terminal proof.
++            return Ok(OutputFixtureDisposition {
++                retired: false,
++                retained: self.weak.upgrade().is_some(),
++                write_pending,
++            });
++        }
++        let request = context.request;
++        let mut core = self.core.into_inner().map_err(|_| Refusal::Failed)?;
++        on_event(&mut core, Event::ActivityFinished { request });
++        if !core.request_inactive(request) {
++            return Err(Refusal::Busy);
++        }
++        drop(core);
++        let generation = crate::generation::Generation::empty_guarded_for_test(71);
++        let mut pin = generation.try_guarded_pin()?;
++        pin.mark_started();
++        let record = self.registry.record(context.token)?;
++        lock_owned(&record.state)?.generation_pin = Some(pin);
++        drop(record);
++        let witness = context.runtime_witness()?;
++        witness.begin_retire()?;
++        witness.memory_released()?; // Actual empty native set in this leaf.
++        witness.output_disposed()?; // Caller has physically dropped all transport payloads.
++        drop(witness);
++        let record = {
++            let mut bank = lock_owned(&self.registry.bank)?;
++            let record = bank.records[0].take().ok_or(Refusal::Invalid)?;
++            bank.held[0] = Some(HeldRetirement::marker_for(
++                Some(record.cell),
++                record.sequence,
++            ));
++            record
++        };
++        let record = Arc::try_unwrap(record).map_err(|_| Refusal::Busy)?;
++        let held = HeldRetirement::dispose_record(record);
++        if held.phase != HeldPhase::PendingOwner {
++            return Err(Refusal::Failed);
++        }
++        let old = { lock_owned(&self.registry.bank)?.held[0].replace(held) };
++        drop(old);
++        self.registry.retire_completed_records();
++        if self.weak.upgrade().is_none() {
++            return Err(Refusal::Invalid);
++        }
++        drop(context);
++        self.registry.retire_completed_records();
++        let retired =
++            self.weak.upgrade().is_none() && lock_owned(&self.registry.bank)?.held[0].is_none();
++        let Self {
++            registry,
++            factory,
++            process,
++            weak,
++            ..
++        } = self;
++        drop(registry);
++        drop(weak);
++        retire_factory(factory, process);
++        Ok(OutputFixtureDisposition {
++            retired,
++            retained: !retired,
++            write_pending,
++        })
++    }
++}
++
++fn b3_local_node() -> Arc<GuardedNode> {
++    let (factory, owner) = fixture_factory();
++    owner
++        .charge(control::arc_bytes::<GuardedNode>().unwrap())
++        .unwrap();
++    let effects = OwnedEffectRegistry::new(owner.node_control()).unwrap();
++    Arc::new(GuardedNode {
++        policy: DescriptorPolicy::new(),
++        effects,
++        factory,
++        owner,
++        accepting: AtomicBool::new(true),
++        diagnostics_reserved: AtomicBool::new(false),
++        bound: AtomicBool::new(false),
++    })
++}
++fn b3_begin_context(envelope: GuardedEnvelope, registry: &Arc<OwnedEffectRegistry>) -> JobContext {
++    let GuardedAdmission { context, scope, .. } = envelope.begin(registry).unwrap();
++    drop(scope);
++    context
++}
++fn b3_header(command: u8, tenant: u8, phase: u8) -> [u8; 16] {
++    let mut bytes = [0; 16];
++    bytes[..8].copy_from_slice(b"FOKSGN01");
++    bytes[8] = 1;
++    bytes[9] = command;
++    bytes[10] = tenant;
++    bytes[11] = phase;
++    bytes
++}
++#[test]
++fn b3_header_closed_matrix() {
++    for scenario in [
++        GuardedNodeScenario::ColdSyncRetire,
++        GuardedNodeScenario::FailedTurnGated,
++        GuardedNodeScenario::TcpWriteHeld,
++        GuardedNodeScenario::TcpDisconnect,
++        GuardedNodeScenario::ShutdownComplete,
++        GuardedNodeScenario::ShutdownCut,
++    ] {
++        assert_eq!(GuardedNodeScenario::parse(scenario.as_str()), Ok(scenario));
++        for tenant in 0..3 {
++            assert_eq!(
++                parse_header(&b3_header(1, tenant, 0), scenario),
++                Ok(FrontendCommand::Begin {
++                    tenant: tenant.into()
++                })
++            );
++            assert_eq!(
++                parse_header(&b3_header(2, tenant, 0), scenario),
++                Ok(FrontendCommand::Observe {
++                    tenant: tenant.into(),
++                    pending: false
++                })
++            );
++            assert_eq!(
++                parse_header(&b3_header(2, tenant, 1), scenario).is_ok(),
++                scenario.frame() == output::FrameKind::Backpressure
++            );
++        }
++        for index in [0, 7, 8, 12, 13, 14, 15] {
++            let mut bytes = b3_header(1, 0, 0);
++            bytes[index] ^= 0x80;
++            assert_eq!(parse_header(&bytes, scenario), Err(Refusal::Invalid));
++        }
++        for command in [0, 3, 4, 255] {
++            assert!(parse_header(&b3_header(command, 0, 0), scenario).is_err());
++        }
++        for tenant in [3, 255] {
++            assert!(parse_header(&b3_header(1, tenant, 0), scenario).is_err());
++        }
++        assert!(parse_header(&b3_header(1, 0, 1), scenario).is_err());
++        assert!(parse_header(&b3_header(1, 0, 0)[..15], scenario).is_err());
++        let mut long = b3_header(1, 0, 0).to_vec();
++        long.push(0);
++        assert!(parse_header(&long, scenario).is_err());
++    }
++    assert!(GuardedNodeScenario::parse("release-any").is_err());
++}
++#[test]
++fn b3_header_eof_and_original_deadline() {
++    crate::actor::guarded_test_runtime().block_on(async {
++        use tokio::io::AsyncWriteExt as _;
++        let (mut peer, mut server) = tokio::io::duplex(32);
++        peer.write_all(&b3_header(1, 2, 0)).await.unwrap();
++        let stamp = AcceptedStamp::capture().unwrap();
++        let mut bytes = [0; 17];
++        let mut read = Box::pin(read_frontend_header(
++            &mut server,
++            &mut bytes,
++            stamp.deadline(),
++            GuardedNodeScenario::ColdSyncRetire,
++        ));
++        assert!(
++            futures_util::poll!(&mut read).is_pending(),
++            "exact16 bytes require actual peer EOF"
++        );
++        peer.shutdown().await.unwrap();
++        assert_eq!(read.await, Ok(FrontendCommand::Begin { tenant: 2 }));
++        drop(server);
++        drop(peer);
++        let (mut peer, mut server) = tokio::io::duplex(32);
++        let mut long = b3_header(1, 0, 0).to_vec();
++        long.push(0);
++        peer.write_all(&long).await.unwrap();
++        assert_eq!(
++            read_frontend_header(
++                &mut server,
++                &mut [0; 17],
++                stamp.deadline(),
++                GuardedNodeScenario::ColdSyncRetire
++            )
++            .await,
++            Err(Refusal::Invalid)
++        );
++        drop(server);
++        drop(peer);
++        let expired = AcceptedStamp::at(Instant::now() - Duration::from_secs(16)).unwrap();
++        let (_peer, mut server) = tokio::io::duplex(32);
++        assert_eq!(
++            read_frontend_header(
++                &mut server,
++                &mut [0; 17],
++                expired.deadline(),
++                GuardedNodeScenario::ColdSyncRetire
++            )
++            .await,
++            Err(Refusal::Expired)
++        );
++        let dropped = Arc::new(AtomicBool::new(false));
++        struct Payload(Arc<AtomicBool>);
++        impl Drop for Payload {
++            fn drop(&mut self) {
++                self.0.store(true, Ordering::Release);
++            }
++        }
++        let payload = Payload(dropped.clone());
++        let result = original_timeout(expired.deadline(), async move {
++            let _payload = payload;
++            std::future::pending::<()>().await
++        })
++        .await;
++        assert!(result.is_err() && dropped.load(Ordering::Acquire));
++    });
++}
++// This explicitly named empty-resource fixture bypasses only terminal
++// admission, never native/Ready authority. It uses the same physical helper.
++fn b3_empty_pending(registry: &Arc<OwnedEffectRegistry>, context: &JobContext) {
++    let record = registry.record(context.token).unwrap();
++    {
++        let state = record.state.lock().unwrap();
++        assert!(
++            state.roots.iter().all(RootCell::disposed)
++                && state.runtime.is_none()
++                && state.activation.is_none()
++                && state.attachment.is_none()
++        );
++    }
++    let generation = crate::generation::Generation::empty_guarded_for_test(72);
++    let mut pin = generation.try_guarded_pin().unwrap();
++    pin.mark_started();
++    record.state.lock().unwrap().generation_pin = Some(pin);
++    drop(record);
++    let witness = context.runtime_witness().unwrap();
++    witness.begin_retire().unwrap();
++    witness.memory_released().unwrap();
++    witness.output_disposed().unwrap();
++    drop(witness);
++    let record = {
++        let mut bank = registry.bank.lock().unwrap();
++        let record = bank.records[context.token.slot as usize].take().unwrap();
++        bank.held[context.token.slot as usize] = Some(HeldRetirement::marker_for(
++            Some(record.cell),
++            record.sequence,
++        ));
++        record
++    };
++    let record = match Arc::try_unwrap(record) {
++        Ok(record) => record,
++        Err(_) => panic!("unexpected actual record alias"),
++    };
++    let held = HeldRetirement::dispose_record(record);
++    assert!(held.phase == HeldPhase::PendingOwner);
++    assert!(generation.is_drained());
++    let marker = { registry.bank.lock().unwrap().held[context.token.slot as usize].replace(held) };
++    drop(marker);
++}
++#[test]
++fn b3_tenants_share_two_slots() {
++    let node = b3_local_node();
++    let make = |tenant| {
++        node.effects.register_owned(
++            child(&node.factory, OwnerRole::Invocation),
++            tenant,
++            None,
++            None,
++        )
++    };
++    let first = b3_begin_context(make(0).unwrap(), &node.effects);
++    let second = b3_begin_context(make(1).unwrap(), &node.effects);
++    assert_eq!(first.token.slot, 0);
++    assert_eq!(second.token.slot, 1);
++    assert!(node
++        .factory
++        .try_owner(
++            OwnerRole::Invocation,
++            Some(AcceptedStamp::capture().unwrap())
++        )
++        .is_err());
++    b3_empty_pending(&node.effects, &first);
++    node.effects.retire_completed_records();
++    assert!(node.effects.bank.lock().unwrap().held[0].is_some());
++    drop(first);
++    node.effects.retire_completed_records();
++    let third = b3_begin_context(make(2).unwrap(), &node.effects);
++    assert_eq!(third.token.slot, 0);
++    assert_eq!(third.cell(), CELL_SCOPES[2]);
++    assert!(third.token.invocation > second.token.invocation);
++    b3_empty_pending(&node.effects, &second);
++    drop(second);
++    node.effects.retire_completed_records();
++    b3_empty_pending(&node.effects, &third);
++    drop(third);
++    node.effects.retire_completed_records();
++    assert!(node
++        .effects
++        .bank
++        .lock()
++        .unwrap()
++        .records
++        .iter()
++        .all(Option::is_none));
++}
++#[test]
++fn b3_stop_admission_preserves_existing_owner() {
++    let node = b3_local_node();
++    let owner = child(&node.factory, OwnerRole::Invocation);
++    let control = owner.node_control();
++    node.stop_admission();
++    assert!(!node.accepting.load(Ordering::Acquire));
++    assert!(node.owner.check().is_ok() && control.check().is_ok());
++    drop(control);
++    retire(owner);
++}
++#[test]
++fn b3_output_reservation_is_one_shot() {
++    let fixture = OutputFixture::new().unwrap();
++    let weak = fixture.weak_owner();
++    fixture.reserve_frame(output::FrameKind::Ordinary).unwrap();
++    assert_eq!(
++        fixture.reserve_frame(output::FrameKind::Backpressure),
++        Err(Refusal::Busy)
++    );
++    assert!(weak.upgrade().is_some());
++    let disposition = fixture.finish_after_disposal().unwrap();
++    assert!(disposition.retired && !disposition.retained);
++    assert!(weak.upgrade().is_none());
++}
++#[test]
++fn b3_output_owner_survives_pending_write() {
++    crate::actor::guarded_test_runtime()
++        .block_on(output::component::owner_survives_pending_write())
++        .unwrap();
++}
++#[test]
++fn b3_tcp_pending_then_complete() {
++    crate::actor::guarded_test_runtime()
++        .block_on(output::component::tcp_pending_then_complete())
++        .unwrap();
++}
++#[test]
++fn b3_tcp_disconnect_disposes_before_retirement() {
++    crate::actor::guarded_test_runtime()
++        .block_on(output::component::tcp_disconnect_disposes_before_retirement())
++        .unwrap();
++}
++#[test]
++fn b3_flush_pending_then_complete() {
++    crate::actor::guarded_test_runtime()
++        .block_on(output::component::flush_pending_then_complete())
++        .unwrap();
++}
++#[test]
++fn b3_cancel_already_set_refuses_write() {
++    crate::actor::guarded_test_runtime()
++        .block_on(output::component::cancel_already_set_refuses_write())
++        .unwrap();
++}
++#[test]
++fn b3_canonical_cancel_during_write() {
++    crate::actor::guarded_test_runtime()
++        .block_on(output::component::canonical_cancel_during_write())
++        .unwrap();
++}
++#[test]
++fn b3_canonical_cancel_during_flush() {
++    crate::actor::guarded_test_runtime()
++        .block_on(output::component::canonical_cancel_during_flush())
++        .unwrap();
++}
++#[test]
++fn b3_output_original_deadline() {
++    crate::actor::guarded_test_runtime()
++        .block_on(output::component::output_original_deadline())
++        .unwrap();
++}
++#[test]
++fn b3_public_guard_survives_pending_owner() {
++    let node = b3_local_node();
++    let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
++    let draining = AtomicBool::new(false);
++    let guard = crate::actor::PublicRequestGuard::acquire_for_test(&draining, &counter).unwrap();
++    let owner = child(&node.factory, OwnerRole::Invocation);
++    let weak = Arc::downgrade(&component::request(&owner));
++    let context = b3_begin_context(
++        node.effects
++            .register_owned(owner, 0, None, Some(guard))
++            .unwrap(),
++        &node.effects,
++    );
++    assert_eq!(counter.load(Ordering::SeqCst), 1);
++    b3_empty_pending(&node.effects, &context);
++    node.effects.retire_completed_records();
++    assert_eq!(counter.load(Ordering::SeqCst), 1);
++    assert!(weak.upgrade().is_some());
++    drop(context);
++    node.effects.retire_completed_records();
++    assert_eq!(counter.load(Ordering::SeqCst), 0);
++    assert!(weak.upgrade().is_none());
++    draining.store(true, Ordering::SeqCst);
++    assert!(crate::actor::PublicRequestGuard::acquire_for_test(&draining, &counter).is_none());
++}
++#[test]
++fn b3_gate_dispatch_disposal_fence() {
++    crate::actor::guarded_test_runtime().block_on(async {
++        let mut fixture = b2_fixture();
++        let (_core, permit, driver) = b2_core(&mut fixture);
++        let mut origin = b2_sync_origin(&driver, b2_ticket(driver.epoch().unwrap(), 1)).unwrap();
++        origin.mark_dispatch().unwrap();
++        let fence = origin.dispatch_fence().unwrap();
++        let record = b2_record(&fixture, 0);
++        assert!(record.state.lock().unwrap().dispatcher_sequence.is_some());
++        assert!(matches!(
++            b2_sync_origin(&driver, b2_ticket(driver.epoch().unwrap(), 2)),
++            Err(Refusal::Busy)
++        ));
++        let dropped = Arc::new(AtomicBool::new(false));
++        struct Payload(Arc<AtomicBool>);
++        impl Drop for Payload {
++            fn drop(&mut self) {
++                self.0.store(true, Ordering::Release);
++            }
++        }
++        let payload = Payload(dropped.clone());
++        let future = Box::pin(async move {
++            let _payload = payload;
++            std::future::pending::<()>().await
++        });
++        let (reply, receive) = tokio::sync::oneshot::channel();
++        let result = crate::cell_dispatch::GuardedGateResult::refused_for_test(fence, reply);
++        origin.submitted = true;
++        drop(origin);
++        crate::cell_dispatch::dispose_guarded_dispatch(future, result);
++        assert!(dropped.load(Ordering::Acquire));
++        assert_eq!(receive.await, Ok(Err(RequestError::NodeFenced)));
++        assert!(record.state.lock().unwrap().dispatcher_sequence.is_none());
++        drop(record);
++        drop(driver);
++        drop(permit);
++        // No AppHandle or successful Ready is fabricated; actual fixed-pump
++        // AppHandle capture/destruction is separately source/type measured.
++    });
++}
++#[test]
++fn b3_both_shutdown_modes_require_guarded_drain() {
++    let node = b3_local_node();
++    let envelope = node
++        .effects
++        .register_owned(child(&node.factory, OwnerRole::Invocation), 0, None, None)
++        .unwrap();
++    let context = envelope.begin(&node.effects).unwrap().context;
++    node.stop_admission();
++    for core_drained in [false, true] {
++        for shell_drained in [false, true] {
++            assert!(!guarded_drain_conjunction(
++                core_drained,
++                shell_drained,
++                true,
++                [
++                    0,
++                    0,
++                    node.effects
++                        .bank
++                        .lock()
++                        .unwrap()
++                        .records
++                        .iter()
++                        .flatten()
++                        .count(),
++                    0,
++                    0
++                ]
++            ));
++            assert!(!guarded_drain_conjunction(
++                core_drained,
++                shell_drained,
++                false,
++                [0; 5]
++            ));
++        }
++    }
++    b3_empty_pending(&node.effects, &context);
++    assert!(node.effects.bank.lock().unwrap().held[0].is_some());
++    drop(context);
++    node.effects.retire_completed_records();
++    assert!(guarded_drain_conjunction(true, true, true, [0; 5]));
++    // Main's Handoff and Preserve paths both consume this guarded predicate in
++    // addition to their real core/shell conjunction; no lifecycle result fake.
++}
++#[test]
++fn b3_persistent_alias_does_not_self_wake() {
++    let node = b3_local_node();
++    let context = node
++        .effects
++        .register_owned(child(&node.factory, OwnerRole::Invocation), 0, None, None)
++        .unwrap()
++        .begin(&node.effects)
++        .unwrap()
++        .context;
++    b3_empty_pending(&node.effects, &context);
++    let wake = Arc::new(B2HWake(AtomicBool::new(false)));
++    let waker = futures_util::task::waker(wake.clone());
++    let mut cx = Context::from_waker(&waker);
++    node.effects.retire_completed_records_with(Some(&mut cx));
++    assert!(!wake.0.load(Ordering::Acquire));
++    assert!(node.effects.bank.lock().unwrap().held[0].is_some());
++    drop(context);
++    node.effects.retire_completed_records_with(Some(&mut cx));
++    assert!(node.effects.bank.lock().unwrap().held[0].is_none());
++}
++// B3 leaf proof: the actual Bucket/S3 client checks finite HTTP responses.
++// These fixtures never construct guarded Ready or claim full node startup.
++#[derive(Clone, Copy, Debug)]
++enum B3BucketCase {
++    Positive,
++    Transport,
++    Violation,
++}
++
++struct B3ProbeRequest {
++    method: String,
++    path: String,
++    condition: Option<String>,
++    absent: Option<String>,
++    range: Option<String>,
++    body: [u8; 32],
++    body_len: usize,
++}
++
++async fn b3_read_probe_request(
++    stream: &mut tokio::net::TcpStream,
++) -> Result<B3ProbeRequest, String> {
++    use tokio::io::AsyncReadExt;
++    let mut header = [0u8; 8192];
++    let mut used = 0;
++    loop {
++        if used == header.len() {
++            return Err("probe request headers exceed fixed fixture bound".into());
++        }
++        stream
++            .read_exact(&mut header[used..used + 1])
++            .await
++            .map_err(|error| format!("read probe header: {error}"))?;
++        used += 1;
++        if used >= 4 && &header[used - 4..used] == b"\r\n\r\n" {
++            break;
++        }
++    }
++    let header =
++        std::str::from_utf8(&header[..used]).map_err(|_| "probe HTTP header is not UTF-8")?;
++    let mut lines = header.split("\r\n");
++    let mut request_line = lines.next().ok_or("missing request line")?.split(' ');
++    let method = request_line.next().ok_or("missing method")?.to_owned();
++    let path = request_line.next().ok_or("missing path")?.to_owned();
++    if request_line.next() != Some("HTTP/1.1") || request_line.next().is_some() {
++        return Err("unexpected probe HTTP version/request line".into());
++    }
++    let mut condition = None;
++    let mut absent = None;
++    let mut range = None;
++    let mut length = None;
++    for line in lines.filter(|line| !line.is_empty()) {
++        let (name, value) = line.split_once(':').ok_or("malformed probe header")?;
++        let value = value.trim();
++        let target = if name.eq_ignore_ascii_case("if-match") {
++            Some(&mut condition)
++        } else if name.eq_ignore_ascii_case("if-none-match") {
++            Some(&mut absent)
++        } else if name.eq_ignore_ascii_case("range") {
++            Some(&mut range)
++        } else {
++            None
++        };
++        if let Some(target) = target {
++            if target.replace(value.to_owned()).is_some() {
++                return Err("duplicate probe condition/range".into());
++            }
++        }
++        if name.eq_ignore_ascii_case("content-length")
++            && length
++                .replace(value.parse::<usize>().map_err(|_| "bad content length")?)
++                .is_some()
++        {
++            return Err("duplicate content length".into());
++        }
++        if name.eq_ignore_ascii_case("transfer-encoding") {
++            return Err("fixture only accepts fixed-size request bodies".into());
++        }
++    }
++    let body_len = length.unwrap_or(0);
++    let mut body = [0; 32];
++    if body_len > body.len() {
++        return Err("probe body exceeds fixed fixture bound".into());
++    }
++    stream
++        .read_exact(&mut body[..body_len])
++        .await
++        .map_err(|error| format!("read probe body: {error}"))?;
++    Ok(B3ProbeRequest {
++        method,
++        path,
++        condition,
++        absent,
++        range,
++        body,
++        body_len,
++    })
++}
++
++async fn b3_probe_response(
++    stream: &mut tokio::net::TcpStream,
++    status: &str,
++    fields: &str,
++    body: &[u8],
++) -> Result<(), String> {
++    use tokio::io::AsyncWriteExt;
++    // All response fields/bodies below are closed fixture literals.
++    let header = format!(
++        "HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {}\r\n{fields}\r\n",
++        body.len()
++    );
++    stream
++        .write_all(header.as_bytes())
++        .await
++        .map_err(|error| error.to_string())?;
++    stream
++        .write_all(body)
++        .await
++        .map_err(|error| error.to_string())?;
++    stream.flush().await.map_err(|error| error.to_string())?;
++    stream.shutdown().await.map_err(|error| error.to_string())
++}
++
++async fn b3_serve_probe(
++    listener: tokio::net::TcpListener,
++    case: B3BucketCase,
++) -> Result<usize, String> {
++    const PRECONDITION: &[u8] = b"<Error><Code>PreconditionFailed</Code><Message>fixture condition rejected</Message></Error>";
++    let count = match case {
++        B3BucketCase::Positive => 8,
++        B3BucketCase::Transport => 2,
++        B3BucketCase::Violation => 3,
++    };
++    let mut cas_path = None;
++    let mut range_path = None;
++    for index in 0..count {
++        let (mut stream, peer) = listener.accept().await.map_err(|error| error.to_string())?;
++        if !peer.ip().is_loopback() {
++            return Err("nonloopback probe peer".into());
++        }
++        let request = b3_read_probe_request(&mut stream).await?;
++        let step = match case {
++            B3BucketCase::Positive => index,
++            B3BucketCase::Transport if index == 1 => 4,
++            B3BucketCase::Violation if index == 2 => 4,
++            _ => index,
++        };
++        if step == 0 {
++            if !request.path.starts_with("/foks-b3-probe/probe/cas-") {
++                return Err("unexpected CAS fixture key".into());
++            }
++            cas_path = Some(request.path.clone());
++        } else if step == 5 {
++            if !request.path.starts_with("/foks-b3-probe/probe/range-") {
++                return Err("unexpected range fixture key".into());
++            }
++            range_path = Some(request.path.clone());
++        }
++        let expected_path = if step <= 4 {
++            cas_path.as_ref()
++        } else {
++            range_path.as_ref()
++        };
++        if expected_path != Some(&request.path) {
++            return Err("probe switched its key within one contract".into());
++        }
++        let (method, body, absent, condition, range) = match step {
++            0 => ("PUT", &b"probe-create"[..], Some("*"), None, None),
++            1 => ("PUT", &b"probe-recreate"[..], Some("*"), None, None),
++            2 => ("PUT", &b"probe-update"[..], None, Some("\"one\""), None),
++            3 => ("PUT", &b"probe-stale"[..], None, Some("\"one\""), None),
++            4 | 7 => ("DELETE", &b""[..], None, None, None),
++            5 => ("PUT", &b"celld-range-probe"[..], None, None, None),
++            6 => ("GET", &b""[..], None, None, Some("bytes=6-10")),
++            _ => return Err("unexpected fixture step".into()),
++        };
++        if request.method != method
++            || &request.body[..request.body_len] != body
++            || request.absent.as_deref() != absent
++            || request.condition.as_deref() != condition
++            || request.range.as_deref() != range
++        {
++            return Err(format!(
++                "probe request failed exact contract at step {step}"
++            ));
++        }
++        if matches!(case, B3BucketCase::Transport) && step == 0 {
++            // The actual CAS client sees an EOF after sending its request.
++            // Its real no-retry policy must proceed to cleanup DELETE next.
++            drop(stream);
++            continue;
++        }
++        match step {
++            0 => b3_probe_response(&mut stream, "200 OK", "ETag: \"one\"\r\n", b"").await?,
++            1 if matches!(case, B3BucketCase::Violation) => {
++                b3_probe_response(&mut stream, "200 OK", "ETag: \"wrong\"\r\n", b"").await?;
++            }
++            1 | 3 => b3_probe_response(&mut stream, "412 Precondition Failed", "Content-Type: application/xml\r\n", PRECONDITION).await?,
++            2 => b3_probe_response(&mut stream, "200 OK", "ETag: \"two\"\r\n", b"").await?,
++            4 | 7 => b3_probe_response(&mut stream, "204 No Content", "", b"").await?,
++            5 => b3_probe_response(&mut stream, "200 OK", "ETag: \"range\"\r\n", b"").await?,
++            6 => b3_probe_response(&mut stream, "206 Partial Content", "ETag: \"range\"\r\nLast-Modified: Wed, 21 Oct 2015 07:28:00 GMT\r\nContent-Range: bytes 6-10/17\r\n", b"range").await?,
++            _ => return Err("unexpected fixture response step".into()),
++        }
++        drop(stream);
++    }
++    drop(listener);
++    Ok(count)
++}
++
++fn b3_bucket_probe(case: B3BucketCase) {
++    crate::actor::guarded_test_runtime().block_on(async {
++        let port = std::env::var("FOKS_B3_BUCKET_PORT")
++            .expect("B3 Bucket leaf tests require the recorded loopback fixture port")
++            .parse::<u16>()
++            .expect("recorded B3 Bucket port must be numeric");
++        assert_ne!(port, 0, "no unrecorded ephemeral port fallback");
++        let address = std::net::SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, port);
++        let listener = tokio::net::TcpListener::bind(address)
++            .await
++            .expect("owned B3 Bucket port");
++        let endpoint = format!("http://127.0.0.1:{port}");
++        let bucket = crate::bucket::Bucket::open(
++            "foks-b3-probe",
++            Some(&endpoint),
++            "us-east-1",
++            Some(crate::bucket::StaticCredentials {
++                access_key_id: "foks-b3-fixture".into(),
++                secret_access_key: "foks-b3-fixture".into(),
++                session_token: None,
++            }),
++            Some("foks-b3-probe"),
++        )
++        .expect("actual Bucket/S3 client");
++        // Both complete futures are owned inline. No fixture task or listener
++        // escapes if the eight-second test bound is reached; there is no sleep.
++        let result = tokio::time::timeout(Duration::from_secs(8), async {
++            tokio::join!(
++                super::check_bucket_contract(&bucket),
++                b3_serve_probe(listener, case)
++            )
++        })
++        .await;
++        drop(bucket);
++        let (verdict, served) = result.expect("finite actual Bucket probe and fixture completion");
++        let served = served.expect("exact scripted S3 request contract");
++        match case {
++            B3BucketCase::Positive => {
++                assert_eq!(served, 8);
++                assert_eq!(verdict, Ok(()));
++            }
++            B3BucketCase::Transport => {
++                assert_eq!(served, 2);
++                assert_eq!(verdict, Err(Refusal::Failed));
++            }
++            B3BucketCase::Violation => {
++                assert_eq!(served, 3);
++                assert_eq!(verdict, Err(Refusal::Invalid));
++            }
++        }
++        eprintln!("FOKS_B3_BUCKET_CASE case={case:?} requests={served} fixture_disposed=true");
++    });
++}
++
++#[test]
++fn b3_bucket_probe_positive() {
++    b3_bucket_probe(B3BucketCase::Positive);
++}
++
++#[test]
++fn b3_bucket_probe_transport_refusal() {
++    b3_bucket_probe(B3BucketCase::Transport);
++}
++
++#[test]
++fn b3_bucket_probe_contract_refusal() {
++    b3_bucket_probe(B3BucketCase::Violation);
++}
++
++#[test]
++fn b3_frontend_layout_ledger() {
++    use std::alloc::Layout;
++    use std::io::Write as _;
++    let mut rows = vec![
++        lifetimes::ConstructorLayout {
++            id: "frontend/connection",
++            capture: Layout::new::<ConnectionWork>(),
++            future: Some(actual_future_layout(ConnectionWork::run)),
++            result: Layout::new::<Result<(), Refusal>>(),
++            channel_payload: None,
++        },
++        lifetimes::ConstructorLayout {
++            id: "frontend/gate_dispatch",
++            capture: Layout::new::<crate::cell_dispatch::GuardedGateWork>(),
++            future: Some(actual_future_layout(
++                crate::cell_dispatch::GuardedGateWork::run,
++            )),
++            result: Layout::new::<crate::cell_dispatch::GuardedGateResult>(),
++            channel_payload: None,
++        },
++    ];
++    output::component::visit_layouts(|row| rows.push(row));
++    assert_eq!(rows.len(), 3);
++    let mut constructors = serde_json::Map::new();
++    for row in rows {
++        let future = row.future.expect("actual named future type");
++        for layout in [row.capture, future, row.result] {
++            assert!(layout.align().is_power_of_two() && layout.align() <= 16);
++        }
++        let typed = row
++            .capture
++            .size()
++            .checked_add(future.size())
++            .and_then(|bytes| bytes.checked_add(row.result.size()))
++            .unwrap();
++        let ceiling = match row.id {
++            "frontend/connection" => 65536,
++            "frontend/gate_dispatch" => 8192,
++            "output/send" => 49152,
++            _ => panic!("unknown constructor"),
++        };
++        assert!(typed <= ceiling, "{} typed {typed} > {ceiling}", row.id);
++        assert!(constructors.insert(row.id.into(),serde_json::json!({"capture_bytes":row.capture.size(),"capture_align":row.capture.align(),"future_bytes":future.size(),"future_align":future.align(),"result_bytes":row.result.size(),"result_align":row.result.align(),"typed_bytes":typed})).is_none());
++    }
++    let mut fixed = serde_json::Map::new();
++    for (name, layout) in [
++        (
++            "watch_sender",
++            Layout::new::<tokio::sync::watch::Sender<bool>>(),
++        ),
++        (
++            "watch_receiver",
++            Layout::new::<tokio::sync::watch::Receiver<bool>>(),
++        ),
++        (
++            "retirement_observation",
++            Layout::new::<RetirementObservation>(),
++        ),
++        (
++            "public_request_guard",
++            Layout::new::<crate::actor::PublicRequestGuard>(),
++        ),
++    ] {
++        assert!(layout.size() > 0 && layout.size() <= 4096 && layout.align() <= 16);
++        fixed.insert(
++            name.into(),
++            serde_json::json!({"bytes":layout.size(),"align":layout.align()}),
++        );
++    }
++    let mut watch = serde_json::Map::new();
++    for (name, layout) in [
++        ("notify", Layout::new::<tokio::sync::Notify>()),
++        ("rwlock_bool", Layout::new::<std::sync::RwLock<bool>>()),
++        (
++            "atomic_usize",
++            Layout::new::<std::sync::atomic::AtomicUsize>(),
++        ),
++    ] {
++        watch.insert(
++            name.into(),
++            serde_json::json!({"bytes":layout.size(),"align":layout.align()}),
++        );
++    }
++    measured_frontend_constructors().unwrap();
++    let record = serde_json::json!({"format":1,"claim":"b3-frontend-layouts-only","constructors":constructors,"fixed":fixed,"watch_components":watch,"watch_derived_bytes":watch_derived_bytes().unwrap(),"watch_allocation_bound":4096,"frame_bytes":[32,4194304],"process_precharge":{"frontend":262144,"dispatcher":16384,"report":131072,"serialization":65536},"original_invocation_limit":8388608});
++    let bytes = format!("FOKS_B3_LAYOUT {record}\n").into_bytes();
++    assert!(bytes.len() <= 16384);
++    let mut stderr = std::io::stderr().lock();
++    stderr.write_all(&bytes).unwrap();
++    stderr.flush().unwrap();
++}
+--- a/crates/celld/host_channels.rs
++++ b/crates/celld/host_channels.rs
+@@ -369,6 +369,9 @@
+     tokio::sync::oneshot::Receiver<Result<(), celld_logic::RequestError>>,
+     celld_logic::RequestError,
+ > {
++    origin
++        .mark_dispatch()
++        .map_err(|_| celld_logic::RequestError::NodeFenced)?;
+     let (send, receive) = tokio::sync::oneshot::channel();
+     let request = GateReq {
+         scope: origin.cell().to_owned(),
+--- a/crates/celld/lib.rs
++++ b/crates/celld/lib.rs
+@@ -314,7 +314,7 @@
+     }
+ }
+ 
+-// Closed diagnostics only: no guarded serving capability crosses this boundary.
++// Closed diagnostic qualification; the node frontend requires private Run bindings.
+ #[cfg(feature = "foks-guarded-qualification")]
+ mod guarded_execution;
+ #[cfg(feature = "foks-guarded-qualification")]
+@@ -326,6 +326,7 @@
+ #[cfg(feature = "foks-guarded-node-qualification")]
+ pub use guarded_execution::node::{
+     FoundationLayouts as GuardedFoundationLayouts,
+-    FoundationObservation as GuardedFoundationObservation, GuardedNode,
++    FoundationObservation as GuardedFoundationObservation, GuardedBucket, GuardedFrontend,
++    GuardedFrontendEvent, GuardedNode, GuardedNodeReport, GuardedNodeScenario,
+     Refusal as GuardedNodeRefusal,
+ };
+--- a/crates/celld/main.rs
++++ b/crates/celld/main.rs
+@@ -3364,6 +3364,8 @@
+ }
+ #[path = "main/cli.rs"]
+ mod cli;
++#[path = "main/guarded.rs"]
++mod guarded;
+ use cli::{action_from_process, print_help, Action};
+ 
+ #[cfg(all(test, celld_internal_tests))]
+@@ -3518,6 +3520,7 @@
+     // retention until a thread allocates again, so the operator has to be
+     // able to read whether that cleanup thread started.
+     celld::memory::tune_allocator();
++    let mut guarded = guarded::Run::default();
+     let mut settings = match action {
+         Action::Deploy(arguments) => return fleet::run_deploy(arguments).await,
+         Action::Dev(arguments) => return celld::dev::run(arguments).await,
+@@ -3625,6 +3628,11 @@
+                 preamble,
+             )
+             .await;
++        }
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        Action::GuardedNode { settings, scenario } => {
++            guarded = guarded::Run::install(scenario)?;
++            settings
+         }
+         Action::Run(settings) => settings,
+     };
+@@ -3795,7 +3803,9 @@
+             // The list above proves the bucket answers; it does not prove the
+             // store enforces the conditional writes or ranged reads that a
+             // cell needs. Test both contracts here before the node serves.
+-            fleet::probe_storage_before_serving(&client, settings.control_plane).await?;
++            if !guarded.probe_bucket(&client).await? {
++                fleet::probe_storage_before_serving(&client, settings.control_plane).await?;
++            }
+             let lease_client = node_bucket(&settings, managed_storage.as_ref(), true)?;
+             if settings.control_plane {
+                 celld::control_plane::wait_for_initial_deployment(&client).await?;
+@@ -4241,6 +4251,7 @@
+         matches!(durability.as_str(), "bucket" | "fleet"),
+         "CELLD_DURABILITY must be `bucket` or `fleet`"
+     );
++    let mut guarded_manager = None;
+     let mut durability_owner = DurabilityOwnerSelection::new(follower.clone());
+     if let Ownership::Bucket(bucket_ownership) = &actor.ownership {
+         if let (Some(replication), Some(spec)) = (
+@@ -4273,6 +4284,9 @@
+                 celld::node_log::eviction_policy_from_env()?,
+             ));
+             *actor.node_log.lock().unwrap() = Some(manager.clone());
++            if guarded.enabled() {
++                guarded_manager = Some(manager.clone());
++            }
+             // Recovery-before-install is fatal for every posture: the
+             // predecessor's folded state lives in the lease record this
+             // session is about to replace, and the install writes a fresh
+@@ -4329,7 +4343,7 @@
+     let (do_call_tx, mut do_call_rx) = mpsc::unbounded_channel();
+     celld::js::set_do_call_tx(do_call_tx);
+     let (gate_tx, mut gate_rx) = mpsc::unbounded_channel();
+-    celld::js::set_gate_tx(gate_tx);
++    celld::js::set_gate_tx(gate_tx.clone());
+     let (facet_tx, mut facet_rx) = mpsc::unbounded_channel();
+     celld::js::set_facet_tx(facet_tx);
+     {
+@@ -4674,8 +4688,20 @@
+ 
+     // Arm the schedule, then watch the pointer. Adoption arms it again, so
+     // a cron change travels with the deployment that carries it.
++    guarded
++        .ready(
++            app.clone(),
++            durability_owner.as_ref(),
++            guarded_manager.as_ref(),
++            &gate_tx,
++        )
++        .await?;
+     spawn_cron_arm(app.clone());
+-    if let Some(bucket) = deploy_bucket {
++    if guarded.enabled() {
++        // No generation adoption is qualified by B3. Dropping the receiver
++        // makes the existing internal reload route return its normal refusal.
++        drop(reload_rx);
++    } else if let Some(bucket) = deploy_bucket {
+         start_pointer_watcher(
+             app.clone(),
+             bucket,
+@@ -4703,15 +4729,19 @@
+         });
+     }
+ 
+-    celld::cli_output::Output::new(celld::cli_output::Format::Text).line(format_args!(
+-        "celld listening on {} (ownership={ownership_name})",
+-        listener.local_addr()?
+-    ))?;
+-    celld::cli_output::Output::new(celld::cli_output::Format::Text).line(format_args!(
+-        "celld internal listening on {} (advertise={})",
+-        internal_listener.local_addr()?,
+-        app.advertise
+-    ))?;
++    if guarded.enabled() {
++        guarded.report("ready", false)?;
++    } else {
++        celld::cli_output::Output::new(celld::cli_output::Format::Text).line(format_args!(
++            "celld listening on {} (ownership={ownership_name})",
++            listener.local_addr()?
++        ))?;
++        celld::cli_output::Output::new(celld::cli_output::Format::Text).line(format_args!(
++            "celld internal listening on {} (advertise={})",
++            internal_listener.local_addr()?,
++            app.advertise
++        ))?;
++    }
+     let (shutdown_tx, mut shutdown_rx) = mpsc::unbounded_channel();
+     #[cfg(all(test, celld_internal_tests))]
+     if shutdown_accept_failure_test_active {
+@@ -4750,14 +4780,16 @@
+         celld::asyncrt::select! {
+             connection = listener.accept() => {
+                 let (stream, _) = connection?;
+-                connections.push(serve_http_connection(
+-                    stream,
+-                    HttpSurface::Public,
+-                    app.clone(),
+-                    shutdown_tx.clone(),
+-                    connection_drain.clone(),
+-                    connection_grace,
+-                ));
++                if let Some(stream) = guarded.accept(stream)? {
++                    connections.push(serve_http_connection(
++                        stream,
++                        HttpSurface::Public,
++                        app.clone(),
++                        shutdown_tx.clone(),
++                        connection_drain.clone(),
++                        connection_grace,
++                    ));
++                }
+             }
+             connection = internal_listener.accept() => {
+                 let (stream, _) = connection?;
+@@ -4782,9 +4814,12 @@
+                 let Some(req) = req else {
+                     anyhow::bail!("output-gate channel closed");
+                 };
+-                gate_calls.push(Box::pin(dispatch_gate(app.clone(), req)));
++                if let Some(req) = guarded.dispatch(req) {
++                    gate_calls.push(Box::pin(dispatch_gate(app.clone(), req)));
++                }
+             }
+             Some(()) = gate_calls.next(), if !gate_calls.is_empty() => {}
++            _ = guarded.progress() => {}
+             call = service_call_rx.recv() => {
+                 let Some(call) = call else {
+                     anyhow::bail!("service call channel closed");
+@@ -4888,6 +4923,13 @@
+                 exit_flushed(3);
+             }
+             _ = replication_health.tick() => {
++                guarded.tick();
++                if guarded.failed() {
++                    if let Err(error) = guarded.report("failed", false) {
++                        tracing::error!(%error, "guarded failure report could not be written");
++                    }
++                    exit_flushed(3);
++                }
+                 if let Some(runtime) = &app.runtime {
+                     match runtime.replication_status() {
+                         Ok(None) => {}
+@@ -4910,6 +4952,7 @@
+     // absolute bound leaves the orchestrator time to observe an orderly exit
+     // instead of replacing a progressing donor with SIGKILL.
+     let shutdown_started = tokio::time::Instant::now();
++    guarded.stop();
+     let process_deadline = shutdown_started + std::time::Duration::from_millis(shutdown_total_ms);
+     // A donor normally spends its complete budget making safe handoff
+     // progress. Reserve at most one second, and never more than ten percent of
+@@ -5051,7 +5094,7 @@
+         let mut pre_drain_tick = tokio::time::interval(std::time::Duration::from_millis(5));
+         let mut admitted = None;
+         let admitted_drained = loop {
+-            if admitted.is_none() && app.public_in_flight() == 0 {
++            if admitted.is_none() && app.public_in_flight() == 0 && guarded.drained() {
+                 admitted = Some(true);
+             }
+             if let Some(admitted_drained) = admitted {
+@@ -5067,19 +5110,24 @@
+                     admitted = Some(false);
+                 }
+                 _ = tokio::time::sleep_until(handoff_deadline) => break false,
+-                _ = pre_drain_tick.tick() => {}
++                _ = pre_drain_tick.tick() => { guarded.tick(); }
+                 connection = shutdown_connection_rx.recv() => {
+                     let Some(connection) = connection else {
+                         anyhow::bail!("shutdown listener tasks stopped during pre-drain");
+                     };
+-                    drain_connections.push(serve_http_connection(
+-                        connection.stream,
+-                        connection.surface,
+-                        app.clone(),
+-                        shutdown_tx.clone(),
+-                        drain_connection.clone(),
+-                        connection_grace,
+-                    ));
++                    if guarded.enabled() && matches!(connection.surface, HttpSurface::Public) {
++                        // A stopped guarded listener never becomes Hyper ingress.
++                        drop(connection.stream);
++                    } else {
++                        drain_connections.push(serve_http_connection(
++                            connection.stream,
++                            connection.surface,
++                            app.clone(),
++                            shutdown_tx.clone(),
++                            drain_connection.clone(),
++                            connection_grace,
++                        ));
++                    }
+                     #[cfg(all(test, celld_internal_tests))]
+                     if connection.recovered_after_error {
+                         shutdown_accept_failure_recovered_for_test = true;
+@@ -5099,9 +5147,12 @@
+                     let Some(req) = req else {
+                         anyhow::bail!("output-gate channel closed during shutdown pre-drain");
+                     };
++                    if let Some(req) = guarded.dispatch(req) {
+                     gate_calls.push(Box::pin(dispatch_gate(app.clone(), req)));
+                 }
++                }
+                 Some(_) = gate_calls.next(), if !gate_calls.is_empty() => {}
++                _ = guarded.progress() => {}
+                 call = service_call_rx.recv() => {
+                     let Some(call) = call else {
+                         anyhow::bail!("service call channel closed during shutdown pre-drain");
+@@ -5240,10 +5291,11 @@
+                 }
+                 ShutdownMode::Preserve => status.activating == 0 && status.evicting == 0,
+             });
+-            let completely_drained = match shutdown_mode {
+-                ShutdownMode::Handoff => core_drained,
+-                ShutdownMode::Preserve => shell_drained && core_drained,
+-            };
++            let completely_drained = guarded.drained()
++                && match shutdown_mode {
++                    ShutdownMode::Handoff => core_drained,
++                    ShutdownMode::Preserve => shell_drained && core_drained,
++                };
+             if completely_drained {
+                 break true;
+             }
+@@ -5267,19 +5319,24 @@
+                     process_deadline_fired = tokio::time::Instant::now() >= handoff_deadline;
+                     break false;
+                 },
+-                _ = handoff.tick() => {}
++                _ = handoff.tick() => { guarded.tick(); }
+                 connection = shutdown_connection_rx.recv() => {
+                     let Some(connection) = connection else {
+                         anyhow::bail!("shutdown listener tasks stopped during drain");
+                     };
+-                    drain_connections.push(serve_http_connection(
+-                        connection.stream,
+-                        connection.surface,
+-                        app.clone(),
+-                        shutdown_tx.clone(),
+-                        drain_connection.clone(),
+-                        connection_grace,
+-                    ));
++                    if guarded.enabled() && matches!(connection.surface, HttpSurface::Public) {
++                        // A stopped guarded listener never becomes Hyper ingress.
++                        drop(connection.stream);
++                    } else {
++                        drain_connections.push(serve_http_connection(
++                            connection.stream,
++                            connection.surface,
++                            app.clone(),
++                            shutdown_tx.clone(),
++                            drain_connection.clone(),
++                            connection_grace,
++                        ));
++                    }
+                     let _ = connection.received.send(());
+                 }
+                 Some(_) = drain_connections.next(), if !drain_connections.is_empty() => {}
+@@ -5295,9 +5352,12 @@
+                     let Some(req) = req else {
+                         anyhow::bail!("output-gate channel closed during shutdown");
+                     };
++                    if let Some(req) = guarded.dispatch(req) {
+                     gate_calls.push(Box::pin(dispatch_gate(app.clone(), req)));
+                 }
++                }
+                 Some(_) = gate_calls.next(), if !gate_calls.is_empty() => {}
++                _ = guarded.progress() => {}
+                 call = service_call_rx.recv() => {
+                     let Some(call) = call else {
+                         anyhow::bail!("service call channel closed during shutdown");
+@@ -5586,7 +5646,16 @@
+         shutdown_accept_failure_test_active,
+         "final log flush reached",
+     );
+-    exit_flushed(0);
++    // This reports retained/cut work honestly before the existing hard exit;
++    // it does not fabricate disposal or reopen an occupied execution slot.
++    let code = match guarded.report("shutdown", drained) {
++        Ok(()) => 0,
++        Err(error) => {
++            tracing::error!(%error, "guarded shutdown report could not be written");
++            3
++        }
++    };
++    exit_flushed(code);
+ }
+ 
+ use celld::machine::{
+--- a/crates/celld/main/cli.rs
++++ b/crates/celld/main/cli.rs
+@@ -26,6 +26,11 @@
+ 
+ pub(crate) enum Action {
+     Run(Settings),
++    #[cfg(feature = "foks-guarded-node-qualification")]
++    GuardedNode {
++        settings: Settings,
++        scenario: celld::GuardedNodeScenario,
++    },
+     Diagnose {
+         settings: Settings,
+         peers: Vec<String>,
+@@ -69,6 +74,12 @@
+ 
+ pub(crate) fn action_from_process() -> anyhow::Result<Action> {
+     let mut arguments = std::env::args().skip(1).collect::<Vec<_>>();
++    #[cfg(feature = "foks-guarded-node-qualification")]
++    let guarded_selected = arguments
++        .first()
++        .is_some_and(|value| value == "foks-guarded-node");
++    #[cfg(not(feature = "foks-guarded-node-qualification"))]
++    let guarded_selected = false;
+     if let Some(action) = arguments.first().map(String::as_str) {
+         let arguments = arguments[1..].to_vec();
+         match action {
+@@ -86,20 +97,46 @@
+             _ => {}
+         }
+     }
++    #[cfg(feature = "foks-guarded-node-qualification")]
++    let guarded_scenario = if arguments
++        .first()
++        .is_some_and(|value| value == "foks-guarded-node")
++    {
++        arguments.remove(0);
++        anyhow::ensure!(
++            !arguments.is_empty(),
++            "foks-guarded-node requires a closed scenario"
++        );
++        let value = arguments.remove(0);
++        Some(
++            celld::GuardedNodeScenario::parse(&value)
++                .map_err(|_| anyhow::anyhow!("unsupported foks-guarded-node scenario"))?,
++        )
++    } else {
++        None
++    };
+     let diagnose = arguments.first().is_some_and(|value| value == "diagnose");
++    anyhow::ensure!(
++        !guarded_selected || !diagnose,
++        "guarded node refuses diagnose options"
++    );
+     if diagnose {
+         arguments.remove(0);
+     }
+-    if matches!(
+-        arguments.first().map(String::as_str),
+-        Some("--help" | "-h" | "help")
+-    ) {
++    if !guarded_selected
++        && matches!(
++            arguments.first().map(String::as_str),
++            Some("--help" | "-h" | "help")
++        )
++    {
+         return Ok(Action::Help);
+     }
+-    if matches!(
+-        arguments.first().map(String::as_str),
+-        Some("--version" | "-V" | "version")
+-    ) {
++    if !guarded_selected
++        && matches!(
++            arguments.first().map(String::as_str),
++            Some("--version" | "-V" | "version")
++        )
++    {
+         return Ok(Action::Version);
+     }
+     let env = |name: &str| {
+@@ -114,6 +151,7 @@
+     let configured_internal_listen = env("CELLD_INTERNAL_ADDR");
+     let configured_advertise = env("CELLD_ADVERTISE");
+     if !diagnose
++        && !guarded_selected
+         && arguments.is_empty()
+         && !control_plane
+         && celld_bucket.is_none()
+@@ -249,6 +287,11 @@
+             "the internal development store requires the celld dev node configuration"
+         );
+     }
++    #[cfg(feature = "foks-guarded-node-qualification")]
++    if let Some(scenario) = guarded_scenario {
++        super::guarded::validate(&settings)?;
++        return Ok(Action::GuardedNode { settings, scenario });
++    }
+     Ok(if diagnose {
+         Action::Diagnose {
+             settings,
+@@ -383,5 +426,7 @@
+ Documentation: https://celld.dev/docs"#,
+         shutdown_total_ms = celld::env_vars::DEFAULT_SHUTDOWN_TOTAL_MS,
+     );
++    #[cfg(feature = "foks-guarded-node-qualification")]
++    let help = format!("{help}\n\nGUARDED NODE QUALIFICATION (local components only):\n  celld foks-guarded-node SCENARIO [OPTIONS]\n  Scenarios: cold-sync-retire, failed-turn-gated, tcp-write-held,\n             tcp-disconnect, shutdown-complete, shutdown-cut\n  Requires explicit local S3 and loopback listeners, bucket durability,\n  dummy credentials, and a fresh CELLD_TEST_DATA_DIR.\n");
+     celld::cli_output::Output::new(celld::cli_output::Format::Text).help(&help)
+ }
+--- /dev/null
++++ b/crates/celld/main/guarded.rs
+@@ -0,0 +1,358 @@
++// Copyright 2026 Deno Land Inc. Apache-2.0 license.
++
++//! Optional qualification adapter for the canonical Run body. The disabled
++//! adapter neither installs a policy nor changes ordinary ingress or drain.
++
++use celld::actor::AppHandle;
++use celld::host_channels::GateReq;
++use tokio::net::TcpStream;
++
++#[derive(Default)]
++pub(super) struct Run {
++    #[cfg(feature = "foks-guarded-node-qualification")]
++    enabled: Option<Enabled>,
++}
++
++#[cfg(feature = "foks-guarded-node-qualification")]
++struct Enabled {
++    node: std::sync::Arc<celld::GuardedNode>,
++    scenario: celld::GuardedNodeScenario,
++    bucket: Option<celld::GuardedBucket>,
++    frontend: Option<celld::GuardedFrontend>,
++    // Reused for the finite startup/final records, never an unbounded log.
++    encoded: Vec<u8>,
++}
++
++#[cfg(feature = "foks-guarded-node-qualification")]
++fn refused(error: celld::GuardedNodeRefusal) -> anyhow::Error {
++    anyhow::anyhow!("guarded node refused: {error:?}")
++}
++
++#[cfg(feature = "foks-guarded-node-qualification")]
++pub(super) fn validate(settings: &super::cli::Settings) -> anyhow::Result<()> {
++    anyhow::ensure!(
++        !settings.control_plane
++            && settings.load_deployment
++            && settings.dev_store.is_none()
++            && !settings.unsafe_public_advertise
++            && !settings.trust_forwarded_headers,
++        "guarded node requires standalone bucket deployment"
++    );
++    let spec = settings
++        .bucket
++        .as_deref()
++        .ok_or_else(|| anyhow::anyhow!("guarded node requires --bucket"))?;
++    let (backend, name, prefix) = celld::bucket::split_spec(spec);
++    anyhow::ensure!(
++        backend == celld::bucket::StorageBackend::S3 && !name.is_empty() && !prefix.is_empty(),
++        "guarded node requires a scoped S3 bucket prefix"
++    );
++    let endpoint = settings
++        .endpoint
++        .as_deref()
++        .ok_or_else(|| anyhow::anyhow!("guarded node requires an explicit local S3 endpoint"))?;
++    let endpoint = url::Url::parse(endpoint)?;
++    anyhow::ensure!(
++        endpoint.scheme() == "http"
++            && endpoint.host_str() == Some("127.0.0.1")
++            && endpoint.port().is_some()
++            && endpoint.username().is_empty()
++            && endpoint.password().is_none()
++            && endpoint.path() == "/"
++            && endpoint.query().is_none()
++            && endpoint.fragment().is_none(),
++        "guarded node S3 endpoint must be explicit IPv4 loopback HTTP"
++    );
++    for listen in [&settings.listen, &settings.internal_listen] {
++        let celld::startup::Listen::Explicit(address) = listen else {
++            anyhow::bail!("guarded node requires explicit loopback listeners");
++        };
++        let address: std::net::SocketAddr = address.parse()?;
++        anyhow::ensure!(
++            address.ip() == std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
++                && address.port() != 0,
++            "guarded node requires explicit IPv4 loopback listener ports"
++        );
++    }
++    if let Some(address) = &settings.advertise {
++        let address: std::net::SocketAddr = address.parse()?;
++        anyhow::ensure!(
++            address.ip() == std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
++                && address.port() != 0,
++            "guarded node advertise must be IPv4 loopback"
++        );
++    }
++    for (name, expected) in [
++        ("AWS_ACCESS_KEY_ID", "foks-local-dummy"),
++        ("AWS_SECRET_ACCESS_KEY", "foks-local-dummy-secret"),
++        ("AWS_CONFIG_FILE", "/dev/null"),
++        ("AWS_SHARED_CREDENTIALS_FILE", "/dev/null"),
++        ("AWS_EC2_METADATA_DISABLED", "true"),
++        ("CELLD_DURABILITY", "bucket"),
++    ] {
++        anyhow::ensure!(
++            std::env::var(name).as_deref() == Ok(expected),
++            "guarded node requires the closed local credential and durability profile ({name})"
++        );
++    }
++    for name in [
++        "AWS_SESSION_TOKEN",
++        "AWS_PROFILE",
++        "AWS_ROLE_ARN",
++        "AWS_WEB_IDENTITY_TOKEN_FILE",
++        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
++        "AWS_CONTAINER_CREDENTIALS_FULL_URI",
++        "CELLD_TEST_SCRIPT_PATH",
++        "CELLD_WATCH",
++        "CELLD_INTERNAL_DEV_STORE",
++        "CELLD_TEST_FAIL_PUBLISH_ONCE",
++    ] {
++        anyhow::ensure!(
++            std::env::var_os(name).is_none(),
++            "guarded node refuses {name}"
++        );
++    }
++    let directory = std::env::var_os("CELLD_TEST_DATA_DIR")
++        .map(std::path::PathBuf::from)
++        .ok_or_else(|| anyhow::anyhow!("guarded node requires a fresh CELLD_TEST_DATA_DIR"))?;
++    anyhow::ensure!(
++        directory.is_absolute(),
++        "guarded node data directory must be absolute"
++    );
++    match std::fs::symlink_metadata(&directory) {
++        Ok(metadata) => anyhow::ensure!(
++            metadata.is_dir()
++                && !metadata.file_type().is_symlink()
++                && std::fs::read_dir(&directory)?.next().is_none(),
++            "guarded node data directory must be fresh and empty"
++        ),
++        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
++            let parent = directory
++                .parent()
++                .ok_or_else(|| anyhow::anyhow!("guarded data directory has no parent"))?;
++            anyhow::ensure!(parent.is_dir(), "guarded data directory parent must exist");
++        }
++        Err(error) => return Err(error.into()),
++    }
++    Ok(())
++}
++
++impl Run {
++    #[cfg(feature = "foks-guarded-node-qualification")]
++    pub(super) fn install(scenario: celld::GuardedNodeScenario) -> anyhow::Result<Self> {
++        let node = celld::GuardedNode::install().map_err(refused)?;
++        node.reserve_diagnostics(65_536).map_err(refused)?;
++        let mut encoded = Vec::new();
++        encoded.try_reserve_exact(65_536)?;
++        anyhow::ensure!(
++            encoded.capacity() == 65_536,
++            "guarded diagnostic allocation exceeded its charge"
++        );
++        Ok(Self {
++            enabled: Some(Enabled {
++                node,
++                scenario,
++                bucket: None,
++                frontend: None,
++                encoded,
++            }),
++        })
++    }
++
++    pub(super) fn enabled(&self) -> bool {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        {
++            return self.enabled.is_some();
++        }
++        #[cfg(not(feature = "foks-guarded-node-qualification"))]
++        false
++    }
++
++    pub(super) async fn probe_bucket(
++        &mut self,
++        _bucket: &celld::bucket::Bucket,
++    ) -> anyhow::Result<bool> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        if let Some(enabled) = &mut self.enabled {
++            enabled.bucket = Some(
++                enabled
++                    .node
++                    .require_bucket(_bucket)
++                    .await
++                    .map_err(refused)?,
++            );
++            return Ok(true);
++        }
++        Ok(false)
++    }
++
++    pub(super) async fn ready(
++        &mut self,
++        _app: AppHandle,
++        _owner: Option<&celld::node_log::DurabilityOwner>,
++        _manager: Option<&std::sync::Arc<celld::node_log::NodeLogManager>>,
++        _gate: &tokio::sync::mpsc::UnboundedSender<GateReq>,
++    ) -> anyhow::Result<()> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        if let Some(enabled) = &mut self.enabled {
++            let bucket = enabled
++                .bucket
++                .take()
++                .ok_or_else(|| anyhow::anyhow!("guarded bucket probe missing"))?;
++            let owner =
++                _owner.ok_or_else(|| anyhow::anyhow!("guarded durability owner missing"))?;
++            let manager =
++                _manager.ok_or_else(|| anyhow::anyhow!("guarded node log manager missing"))?;
++            enabled.frontend = Some(
++                enabled
++                    .node
++                    .bind_running(enabled.scenario, _app, bucket, owner, manager, _gate)
++                    .await
++                    .map_err(refused)?,
++            );
++        }
++        Ok(())
++    }
++
++    pub(super) fn accept(&mut self, stream: TcpStream) -> anyhow::Result<Option<TcpStream>> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        if let Some(enabled) = &mut self.enabled {
++            let frontend = enabled
++                .frontend
++                .as_mut()
++                .ok_or_else(|| anyhow::anyhow!("guarded frontend is not ready"))?;
++            // This synchronous call captures the original acceptance deadline
++            // before the header future is constructed or any await occurs.
++            if let Err(error) = frontend.accept(stream) {
++                tracing::debug!(?error, "guarded connection refused");
++            }
++            return Ok(None);
++        }
++        Ok(Some(stream))
++    }
++
++    pub(super) fn dispatch(&mut self, req: GateReq) -> Option<GateReq> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        if let Some(enabled) = &mut self.enabled {
++            let result = enabled
++                .frontend
++                .as_mut()
++                .ok_or(celld::GuardedNodeRefusal::NotReady)
++                .and_then(|frontend| frontend.dispatch_gate(req));
++            return match result {
++                Ok(ordinary) => ordinary,
++                Err(error) => {
++                    tracing::error!(?error, "guarded dispatcher failed; fencing process");
++                    if let Err(error) = self.report("failed", false) {
++                        tracing::error!(%error, "guarded failure report could not be written");
++                    }
++                    // Preserve canonical celld's non-unwinding exit even when
++                    // diagnostic output is broken and runtime work remains.
++                    super::exit_flushed(3);
++                }
++            };
++        }
++        Some(req)
++    }
++
++    pub(super) async fn progress(&mut self) {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        if let Some(frontend) = self
++            .enabled
++            .as_mut()
++            .and_then(|value| value.frontend.as_mut())
++        {
++            let _ = frontend.progress().await;
++            return;
++        }
++        std::future::pending::<()>().await;
++    }
++
++    pub(super) fn tick(&self) {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        if let Some(frontend) = self
++            .enabled
++            .as_ref()
++            .and_then(|value| value.frontend.as_ref())
++        {
++            frontend.tick();
++        }
++    }
++
++    pub(super) fn stop(&self) {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        if let Some(enabled) = &self.enabled {
++            enabled.node.stop_admission();
++            if let Some(frontend) = &enabled.frontend {
++                frontend.stop_admission();
++            }
++        }
++    }
++
++    pub(super) fn drained(&self) -> bool {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        if let Some(enabled) = &self.enabled {
++            return enabled
++                .frontend
++                .as_ref()
++                .is_some_and(|value| value.drained());
++        }
++        true
++    }
++
++    pub(super) fn failed(&self) -> bool {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        if let Some(enabled) = &self.enabled {
++            return enabled.frontend.as_ref().is_none_or(|value| value.failed());
++        }
++        false
++    }
++
++    pub(super) fn report(
++        &mut self,
++        _event: &'static str,
++        _ordinary_drained: bool,
++    ) -> anyhow::Result<()> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        if let Some(enabled) = &mut self.enabled {
++            use std::io::Write;
++            #[derive(serde::Serialize)]
++            struct Record {
++                event: &'static str,
++                ordinary_drained: bool,
++                guarded: celld::GuardedNodeReport,
++            }
++            struct Bounded<'a>(&'a mut Vec<u8>);
++            impl Write for Bounded<'_> {
++                fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
++                    if bytes.len() > 65_535 - self.0.len() {
++                        return Err(std::io::Error::other("guarded record overflow"));
++                    }
++                    self.0.extend_from_slice(bytes);
++                    Ok(bytes.len())
++                }
++                fn flush(&mut self) -> std::io::Result<()> {
++                    Ok(())
++                }
++            }
++            let frontend = enabled
++                .frontend
++                .as_ref()
++                .ok_or_else(|| anyhow::anyhow!("guarded report before readiness"))?;
++            enabled.encoded.clear();
++            serde_json::to_writer(
++                Bounded(&mut enabled.encoded),
++                &Record {
++                    event: _event,
++                    ordinary_drained: _ordinary_drained,
++                    guarded: frontend.report(),
++                },
++            )?;
++            enabled.encoded.push(b'\n');
++            let mut stdout = std::io::stdout().lock();
++            stdout.write_all(&enabled.encoded)?;
++            stdout.flush()?;
++        }
++        Ok(())
++    }
++}
+--- a/crates/celld/node_log.rs
++++ b/crates/celld/node_log.rs
+@@ -4049,6 +4049,32 @@
+ }
+ 
+ impl DurabilityOwner {
++    /// Read-only identity observation for the closed Run frontend. This does
++    /// not install a durability stack, recover a log, or grant serving rights.
++    #[cfg(feature = "foks-guarded-node-qualification")]
++    pub(crate) fn guarded_matches(
++        &self,
++        manager: &Arc<NodeLogManager>,
++        ltx: &Arc<crate::ltx_repl::LtxRepl>,
++        bucket: &crate::bucket::Bucket,
++    ) -> bool {
++        self.stack.as_ref().is_some_and(|stack| {
++            !stack.fleet
++                && stack.registration.is_none()
++                && stack.ltx_tasks.is_some()
++                && stack.replica_close_task.is_none()
++                && Arc::ptr_eq(&stack.manager, manager)
++                && Arc::ptr_eq(&stack.ltx, ltx)
++                && Arc::ptr_eq(&manager.ltx, ltx)
++                && Arc::ptr_eq(&manager.bucket.store, &bucket.store)
++                && Arc::ptr_eq(&manager.bucket.cas_store, &bucket.cas_store)
++                && manager.bucket.name == bucket.name
++                && manager.bucket.prefix == bucket.prefix
++                && !stack.node_log_tasks.stop.is_stopped()
++                && !stack.node_log_tasks.roots.is_empty()
++        })
++    }
++
+     /// Creates the unique owner for a runtime durability stack.
+     ///
+     /// Set `fleet` to install the coupled node-log registration.
+--- a/crates/celld/runtime.rs
++++ b/crates/celld/runtime.rs
+@@ -3782,8 +3782,8 @@
+     Ok(())
+ }
+ 
+-// B2 has no network admission or Ready constructor. Its private runtime arm
+-// consumes only the actor/bank's existing invocation and canonical activation.
++// The private runtime arm consumes only the actor/bank's existing invocation
++// and canonical activation. B3's admitted frontend owns the output consumer.
+ #[cfg(feature = "foks-guarded-node-qualification")]
+ pub(crate) use guarded_node_runtime::guarded_cancel;
+ #[cfg(all(test, feature = "foks-guarded-node-qualification"))]
+@@ -3791,7 +3791,9 @@
+     assert_guarded_adoption_for_test, assert_guarded_paths_for_test, visit_guarded_layouts_for_test,
+ };
+ #[cfg(feature = "foks-guarded-node-qualification")]
+-pub(crate) use guarded_node_runtime::{NodeDriverCompletion, NodeNativeCompletion, NodeRuntime};
++pub(crate) use guarded_node_runtime::{
++    DriverOutput, NodeDriverCompletion, NodeNativeCompletion, NodeRuntime,
++};
+ 
+ #[cfg(feature = "foks-guarded-node-qualification")]
+ mod guarded_node_runtime {
+@@ -3999,7 +4001,6 @@
+         resources: Option<RuntimeResources>,
+         alarm: AlarmSnapshot,
+         published: bool,
+-        #[cfg(test)]
+         driver_started: bool,
+         epoch: u64,
+         generation: GenerationId,
+@@ -4057,7 +4058,6 @@
+                 .slot
+                 .heap_id())
+         }
+-        #[cfg(test)]
+         fn driver_parts(
+             &mut self,
+             context: &JobContext,
+@@ -4168,16 +4168,25 @@
+         replication: Replication,
+         attachment: EpochAttachment,
+         witness: RuntimeWitness,
++        terminal_proved: bool,
+         disposed: bool,
+         origin: JobContext,
+     }
+     impl NodeDriverCompletion {
+-        pub(crate) async fn dispose(mut self, context: &JobContext) -> Result<(), Refusal> {
++        fn same_consumer(&self, context: &JobContext) -> Result<(), Refusal> {
+             context.check_identity()?;
+             if context.role() != JobRole::Forward(ForwardLane::Driver)
+                 || self.origin.root_token() != context.root_token()
+                 || !self.origin.same_invocation(context)
+             {
++                return Err(refused(context, Refusal::Invalid));
++            }
++            Ok(())
++        }
++
++        async fn prove_terminal(&mut self, context: &JobContext) -> Result<(), Refusal> {
++            self.same_consumer(context)?;
++            if self.terminal_proved {
+                 return Err(refused(context, Refusal::Invalid));
+             }
+             // Only the sealed bank consumer can call this method, after the
+@@ -4197,13 +4206,57 @@
+                     .submit_node(move |cleanup| work.run(cleanup))?
+                     .await?;
+             }
++            self.terminal_proved = true;
++            Ok(())
++        }
++
++        // This remains the distinct discard branch used by C7 and B2's
++        // component consumer. Preparing a frame consumes self, so this branch
++        // can never claim C1 a second time for that same answer.
++        pub(crate) async fn dispose(mut self, context: &JobContext) -> Result<(), Refusal> {
++            self.prove_terminal(context).await?;
++            self.finish_disposition(context).await
++        }
++
++        pub(crate) async fn prepare_output(
++            mut self,
++            context: &JobContext,
++        ) -> Result<DriverOutput, Refusal> {
++            self.prove_terminal(context).await?;
++            // The handler's error may itself carry a durable output ticket.
++            // GuardedLocalRequest has already checked it before returning the
++            // answer. A gate rejection never becomes a diagnostic reply.
++            let publication = (|| {
++                context.check_forward()?;
++                self.drive_result?;
++                match &self.answer.as_ref().ok_or(Refusal::Invalid)?.result {
++                    Ok(response) if valid_native_response(response) => Ok(()),
++                    Err(crate::actor::LocalRequestFailure::Handler(_)) => Ok(()),
++                    _ => Err(refused(context, Refusal::Invalid)),
++                }
++            })();
++            // Once C1 is proved, even a known refusal must reach the consuming
++            // socket-disposal path. Returning only Err here would discard the
++            // only answer consumer before its frontend closes that socket.
++            Ok(DriverOutput {
++                completion: self,
++                publication,
++            })
++        }
++
++        async fn finish_disposition(mut self, context: &JobContext) -> Result<(), Refusal> {
++            self.same_consumer(context)?;
++            if !self.terminal_proved {
++                return Err(refused(context, Refusal::Invalid));
++            }
+             let answer = self
+                 .answer
+                 .take()
+                 .ok_or_else(|| refused(context, Refusal::Invalid))?;
+             let covered = answer.result.is_ok() && self.drive_result.is_ok();
+-            // B2's sealed component consumer discards the native answer. B3
+-            // supplies the consuming socket path; no bytes are published here.
++            // The consuming frontend has already destroyed its transmit
++            // future, socket and full frame before entering this method.
++            // The discard branch publishes no bytes at all.
+             drop(answer.result);
+             self.witness.output_disposed()?;
+             let alarm = self
+@@ -4215,6 +4268,61 @@
+             Ok(())
+         }
+     }
++
++    fn valid_native_response(response: &HttpResponse) -> bool {
++        response.status == 200
++            && response.body.len() == 12
++            && response.body.capacity() <= 512
++            && response.headers.capacity() == 0
++            && response.stream.is_none()
++            && response.websocket.is_none()
++    }
++
++    // No raw response, activity, proof or owner escapes this consuming value.
++    // Its inner Drop still quarantines an abandoned/uncertain disposition.
++    pub(crate) struct DriverOutput {
++        completion: NodeDriverCompletion,
++        publication: Result<(), Refusal>,
++    }
++    impl DriverOutput {
++        pub(crate) fn write_frame(&self, frame: &mut [u8]) -> Result<(), Refusal> {
++            use crate::guarded_execution::node::output::FrameKind;
++            self.publication?;
++            if (frame.len() != FrameKind::Ordinary.bytes()
++                && frame.len() != FrameKind::Backpressure.bytes())
++                || !self.completion.terminal_proved
++            {
++                return Err(Refusal::Invalid);
++            }
++            let answer = self.completion.answer.as_ref().ok_or(Refusal::Invalid)?;
++            let mut native = [0_u8; 12];
++            let status = match &answer.result {
++                Ok(response) if valid_native_response(response) => {
++                    native.copy_from_slice(&response.body);
++                    0
++                }
++                Err(crate::actor::LocalRequestFailure::Handler(_)) => 1,
++                _ => return Err(Refusal::Invalid),
++            };
++            // One charged frame allocation. The immutable twelve-byte native
++            // fixture stays unchanged; padding never duplicates the full frame.
++            frame.fill(0);
++            frame[..8].copy_from_slice(b"FOKSGO01");
++            frame[8] = 1;
++            frame[9] = status;
++            let length = u32::try_from(frame.len()).map_err(|_| Refusal::Bounds)?;
++            frame[12..16].copy_from_slice(&length.to_le_bytes());
++            frame[16..28].copy_from_slice(&native);
++            for chunk in frame[32..].chunks_mut(native.len()) {
++                chunk.copy_from_slice(&native[..chunk.len()]);
++            }
++            Ok(())
++        }
++
++        pub(crate) async fn dispose(self, context: &JobContext) -> Result<(), Refusal> {
++            self.completion.finish_disposition(context).await
++        }
++    }
+     impl Drop for NodeDriverCompletion {
+         fn drop(&mut self) {
+             if !self.disposed {
+@@ -4226,10 +4334,8 @@
+         }
+     }
+ 
+-    // The production frontend is intentionally absent in B2. Like the opaque
+-    // GuardedRequest constructor, only component code can start this actual
+-    // factory until B3 supplies an admitted socket owner.
+-    #[cfg(test)]
++    // Only the sealed bank can admit this real driver factory. Its complete
++    // future and reply remain retained until the bank actually joins F3.
+     struct NodeDriverWork {
+         slot: Arc<crate::pool::Slot>,
+         affiliation: crate::pool::Affiliation,
+@@ -4242,7 +4348,6 @@
+         attachment: EpochAttachment,
+         witness: RuntimeWitness,
+     }
+-    #[cfg(test)]
+     impl NodeDriverWork {
+         async fn run(self, context: JobContext) -> NodeDriverCompletion {
+             let Self {
+@@ -4298,14 +4403,11 @@
+             // The native reply and driver are independent. Retain the reply
+             // while polling all background/final-abandon work through return.
+             let (mut drive_result, answer) = futures_util::future::join(driver, handler).await;
+-            if answer.result.as_ref().is_ok_and(|response| {
+-                response.status != 200
+-                    || response.body.len() != 12
+-                    || response.body.capacity() > 512
+-                    || response.headers.capacity() != 0
+-                    || response.stream.is_some()
+-                    || response.websocket.is_some()
+-            }) {
++            if answer
++                .result
++                .as_ref()
++                .is_ok_and(|response| !valid_native_response(response))
++            {
+                 drive_result = Err(refused(&context, Refusal::Invalid));
+             }
+             let final_state = slot
+@@ -4354,13 +4456,13 @@
+                 replication,
+                 attachment,
+                 witness,
++                terminal_proved: false,
+                 disposed: false,
+                 origin: context,
+             }
+         }
+     }
+ 
+-    #[cfg(test)]
+     fn report_for_driver(context: &JobContext) -> Result<AlarmReporter, Refusal> {
+         let origin = context.clone();
+         let report = move |cell: String, alarm: AlarmSnapshot| {
+@@ -4380,12 +4482,8 @@
+         Ok(charged(context, report)?)
+     }
+ 
+-    #[cfg(test)]
+     impl RuntimeManager {
+-        // B2 checks this exact factory's source and layouts; executing the full
+-        // driver and its main actor pumps belongs to the B3/B4 qualification.
+-        #[allow(dead_code)]
+-        pub(crate) fn start_guarded_driver_for_test(
++        pub(crate) fn start_guarded_driver(
+             &self,
+             app: crate::actor::AppHandle,
+             routed: crate::guarded_execution::node::GuardedRouted,
+@@ -4451,6 +4549,17 @@
+                 witness,
+             };
+             permit.submit_node(move |context| work.run(context))
++        }
++
++        #[cfg(test)]
++        #[allow(dead_code)]
++        pub(crate) fn start_guarded_driver_for_test(
++            &self,
++            app: crate::actor::AppHandle,
++            routed: crate::guarded_execution::node::GuardedRouted,
++            throw: bool,
++        ) -> Result<crate::guarded_execution::node::NodeDriverWait, Refusal> {
++            self.start_guarded_driver(app, routed, throw)
+         }
+     }
+ 
+@@ -4731,7 +4840,6 @@
+             }),
+             alarm: AlarmSnapshot::without_wake(None),
+             published: false,
+-            #[cfg(test)]
+             driver_started: false,
+             epoch,
+             generation,

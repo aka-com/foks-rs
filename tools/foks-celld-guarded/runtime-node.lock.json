@@ -2,6 +2,7 @@
   "accepted_a2_commit": "dca38eecb08263a3594f70025df7a309ed3682a5",
   "accepted_a3a_commit": "fee8db31ae8df590e32bc02f8c8de815d9f7ecea",
   "accepted_b1_commit": "23039e209d1b3b129a274dd65fe07f0abfdba8e0",
+  "accepted_b2_commit": "d22ff3deedf0f0a87f635aec2317a87410e39110",
   "base": {
     "foundation_profile": {
       "bytes": 13181,
@@ -17,6 +18,21 @@
       "bytes": 71282,
       "path": "runtime/evidence/accepted-b1/prepared-inputs/source-manifest.json",
       "sha256": "e59f9ce8ef088f8da741ddaf8e8ee488bfba27d508948bab55d0495b73728de2"
+    },
+    "lifetimes_profile": {
+      "bytes": 30152,
+      "path": "runtime/evidence/accepted-b2/runtime-node.lock.json",
+      "sha256": "b005ea3af86f1a09243184f359321d51ba1f81caf4aff34d22e377de32d359d3"
+    },
+    "lifetimes_series": {
+      "bytes": 22719,
+      "path": "runtime/evidence/accepted-b2/patches/node-series.json",
+      "sha256": "f7e5d4dc073cabbc7dcdec17e798163881f04da2a60952c8dae53f960577622e"
+    },
+    "lifetimes_source_manifest": {
+      "bytes": 71284,
+      "path": "runtime/evidence/accepted-b2/prepared-inputs/source-manifest.json",
+      "sha256": "b06b21c3014d4745e8ef1898a0165affd8f67026bb07962ff75188cafb5e3890"
     },
     "node_profile": {
       "bytes": 35289,
@@ -63,9 +79,9 @@
   },
   "format": 1,
   "node_series": {
-    "bytes": 22719,
+    "bytes": 30660,
     "path": "patches/node-series.json",
-    "sha256": "f7e5d4dc073cabbc7dcdec17e798163881f04da2a60952c8dae53f960577622e"
+    "sha256": "4d5cc7dd369a0ee3371f575d58ed8b73f75403bb723d58977c1f960d367088ce"
   },
   "pins": {
     "build": {
@@ -238,9 +254,9 @@
       "version": "152.1.0"
     }
   },
-  "profile": "node-lifetimes",
+  "profile": "node-qualification",
   "qualification": {
-    "claim": "b2-lifetimes-components-only",
+    "claim": "b3-frontend-components-only",
     "deployments": {
       "fixture": {
         "prefix": "deploy/foks-guarded-node-fixture/1fdd2523a443ea95",
@@ -250,6 +266,154 @@
         "prefix": "deploy/foks-guarded-node-primary/b19584ba0ac8c37f",
         "version": "b19584ba0ac8c37f"
       }
+    },
+    "frontend": {
+      "commands": {
+        "begin": {
+          "opcode": 1,
+          "phases": [
+            0
+          ]
+        },
+        "observe": {
+          "opcode": 2,
+          "pending_phase": 1,
+          "phases": [
+            0,
+            1
+          ]
+        },
+        "release_refused": 3
+      },
+      "control_allocation": "original-control-owner-and-a0-control-pool",
+      "header": {
+        "bytes": 16,
+        "magic": "FOKSGN01",
+        "requires_write_half_eof": true,
+        "reserved_zero_bytes": 4,
+        "retained_bytes": 17,
+        "tenant_ordinals": [
+          0,
+          1,
+          2
+        ],
+        "version": 1
+      },
+      "large_output_scenarios": [
+        "tcp-write-held",
+        "tcp-disconnect",
+        "shutdown-cut"
+      ],
+      "limits": {
+        "connections": 4,
+        "control_seconds": 1,
+        "dispatchers": 2,
+        "encoded_report_bytes": 65536,
+        "invocation_bytes": 8388608,
+        "maximum_frame_bytes": 4194304,
+        "ordinary_frame_bytes": 32,
+        "process_bytes": 1048576,
+        "report_bytes": 131072,
+        "request_seconds": 15,
+        "slots": 2
+      },
+      "output_allocation": "one-shot-original-debt-and-a0-response-pool",
+      "response": {
+        "base_bytes": 32,
+        "driver_or_proof_failure_publishes": false,
+        "failure_payload_zero": true,
+        "large_tail": "repeated-actual-payload",
+        "length_encoding": "u32-le",
+        "magic": "FOKSGO01",
+        "payload_bytes": 12,
+        "status": {
+          "gated_handler_failure": 1,
+          "success": 0
+        },
+        "version": 1
+      },
+      "retirement_ticket": "scalar-process-registry-sequence-no-record-weak",
+      "scenarios": [
+        "cold-sync-retire",
+        "failed-turn-gated",
+        "tcp-write-held",
+        "tcp-disconnect",
+        "shutdown-complete",
+        "shutdown-cut"
+      ]
+    },
+    "frontend_layout_evidence": {
+      "claim": "b3-frontend-layouts-only",
+      "constructor_fields": [
+        "capture_bytes",
+        "capture_align",
+        "future_bytes",
+        "future_align",
+        "result_bytes",
+        "result_align",
+        "typed_bytes"
+      ],
+      "constructor_policy": {
+        "frontend/connection": {
+          "bucket": "process",
+          "ceiling_bytes": 65536,
+          "count": 4
+        },
+        "frontend/gate_dispatch": {
+          "bucket": "process",
+          "ceiling_bytes": 8192,
+          "count": 2
+        },
+        "output/send": {
+          "bucket": "invocation",
+          "ceiling_bytes": 49152,
+          "count": 1
+        }
+      },
+      "fixed_ceiling_bytes": 4096,
+      "fixed_fields": [
+        "bytes",
+        "align"
+      ],
+      "fixed_names": [
+        "watch_sender",
+        "watch_receiver",
+        "retirement_observation",
+        "public_request_guard"
+      ],
+      "frame_bytes": [
+        32,
+        4194304
+      ],
+      "maximum_record_bytes": 16384,
+      "maximum_stderr_bytes": 1048576,
+      "original_invocation_limit": 8388608,
+      "prefix": "FOKS_B3_LAYOUT ",
+      "process_precharge": {
+        "dispatcher": 16384,
+        "frontend": 262144,
+        "report": 131072,
+        "serialization": 65536
+      },
+      "record_fields": [
+        "format",
+        "claim",
+        "constructors",
+        "fixed",
+        "watch_components",
+        "watch_derived_bytes",
+        "watch_allocation_bound",
+        "frame_bytes",
+        "process_precharge",
+        "original_invocation_limit"
+      ],
+      "watch_allocation_bound": 4096,
+      "watch_components": [
+        "notify",
+        "rwlock_bool",
+        "atomic_usize"
+      ],
+      "watch_formula": "9*round16(notify)+round16(rwlock_bool)+6*round16(atomic_usize)"
     },
     "layout_evidence": {
       "arc_convention": "repr-c-two-atomic-usize",
@@ -808,7 +972,7 @@
       }
     },
     "modes": {
-      "node-lifetimes": {
+      "node-qualification": {
         "celld_features": [
           "foks-guarded-node-qualification",
           "foks-guarded-qualification"
@@ -822,13 +986,13 @@
           "node-qualification"
         ]
       },
-      "node-lifetimes-default": {
+      "node-qualification-default": {
         "celld_features": [],
         "celld_foks_edges": [],
         "direct_root_tokio": false,
         "root_features": []
       },
-      "node-lifetimes-lifecycle": {
+      "node-qualification-lifecycle": {
         "celld_features": [
           "foks-guarded-qualification"
         ],
@@ -839,12 +1003,70 @@
         ]
       }
     },
+    "native_execution": {
+      "artifact_profile_test": true,
+      "compile_args": [
+        "--no-run",
+        "--message-format=json"
+      ],
+      "compile_network": "deny-all",
+      "features": [
+        "foks-guarded-node-qualification",
+        "foks-guarded-qualification"
+      ],
+      "jobs": 2,
+      "list_args": [
+        "guarded_execution::node::tests::",
+        "--list"
+      ],
+      "list_network": "deny-all",
+      "package": "celld@0.6.2",
+      "run_args": [
+        "guarded_execution::node::tests::",
+        "--test-threads=1"
+      ],
+      "run_network": {
+        "address": "127.0.0.1",
+        "environment": {
+          "bucket": "FOKS_B3_BUCKET_PORT",
+          "tcp": "FOKS_B3_TCP_PORT"
+        },
+        "ipv6_qualified": false,
+        "roles": [
+          "tcp",
+          "bucket"
+        ],
+        "sandbox_executable": "/usr/bin/sandbox-exec",
+        "template": "(version 1)\n(allow default)\n(deny network*)\n(allow network-bind (local tcp \"localhost:{tcp}\") (local tcp \"localhost:{bucket}\"))\n(allow network-inbound (local tcp \"localhost:{tcp}\") (local tcp \"localhost:{bucket}\"))\n(allow network-outbound (remote tcp \"localhost:{tcp}\") (remote tcp \"localhost:{bucket}\"))\n"
+      },
+      "target": "aarch64-apple-darwin",
+      "target_kind": "lib",
+      "transport_tests": {
+        "feature": "qualification",
+        "names": {
+          "deadline": [
+            "deadline::tests::expired_scope_rejects_new_work_and_nested_cleanup_restores_it",
+            "deadline::tests::scope_restores_context_after_unwind_and_never_extends_budget",
+            "deadline::tests::absolute_deadline_preserves_original_instant_and_expiry"
+          ],
+          "memory": [
+            "memory::tests::qualification_output_retains_capacity_and_leaves_control_available",
+            "memory::tests::qualification_reservations_reject_failed_owner_without_new_charges",
+            "memory::tests::qualification_output_preserves_small_fallback_but_control_does_not"
+          ]
+        },
+        "network": "deny-all",
+        "package": "foks-hosted-transport",
+        "target_kind": "lib"
+      }
+    },
     "not_qualified": [
-      "guarded-readiness",
-      "guarded-action",
-      "same-process-serving",
+      "full-process-success",
+      "full-driver-terminal-conjunction",
       "host-az-recovery",
-      "whole-node-retirement"
+      "production-metadata",
+      "whole-node-retirement",
+      "remote-put-termination"
     ],
     "program": {
       "fixture_js": {
@@ -870,25 +1092,19 @@
     },
     "source_roster": [
       "crates/celld/actor.rs",
-      "crates/celld/actor/effects.rs",
       "crates/celld/actor/local_request.rs",
-      "crates/celld/actor/production.rs",
-      "crates/celld/asyncrt.rs",
       "crates/celld/cell_dispatch.rs",
-      "crates/celld/cell_runtime.rs",
-      "crates/celld/generation.rs",
       "crates/celld/guarded_execution.rs",
       "crates/celld/guarded_node.rs",
       "crates/celld/guarded_node/control.rs",
+      "crates/celld/guarded_node/output.rs",
       "crates/celld/guarded_node/tests.rs",
       "crates/celld/host_channels.rs",
-      "crates/celld/js.rs",
-      "crates/celld/js/guarded.rs",
-      "crates/celld/js/guarded_node.rs",
-      "crates/celld/js/storage_ops.rs",
       "crates/celld/lib.rs",
-      "crates/celld/ltx_repl.rs",
-      "crates/celld/ltx_replication.rs",
+      "crates/celld/main.rs",
+      "crates/celld/main/cli.rs",
+      "crates/celld/main/guarded.rs",
+      "crates/celld/node_log.rs",
       "crates/celld/runtime.rs"
     ],
     "tests": {
@@ -913,7 +1129,7 @@
         "guarded_execution::node::tests::b1_resident_gate_duplicate_is_inert",
         "guarded_execution::node::tests::b1_soft_swap_gate_and_ordinary_gate_regression",
         "guarded_execution::node::tests::b1_inactive_observation_is_not_processed_finish",
-        "guarded_execution::node::tests::b1_foundation_has_no_ready_or_action",
+        "guarded_execution::node::tests::b1_foundation_requires_frontend_for_ready_and_action",
         "guarded_execution::node::tests::b2_effect_inventory_is_closed",
         "guarded_execution::node::tests::b2_original_origin_cannot_be_rebound",
         "guarded_execution::node::tests::b2_forward_saturation_preserves_cleanup",
@@ -945,15 +1161,36 @@
         "guarded_execution::node::tests::b2_native_close_failure_after_worker_drop_holds_slot",
         "guarded_execution::node::tests::b2_retirement_requires_every_conjunct",
         "guarded_execution::node::tests::b2_original_deadline_denies_new_work_but_allows_reserved_cleanup",
-        "guarded_execution::node::tests::b2_lifetimes_has_no_ready_action_or_frontend"
+        "guarded_execution::node::tests::b2_lifetimes_requires_frontend_for_ready_and_action",
+        "guarded_execution::node::tests::b3_header_closed_matrix",
+        "guarded_execution::node::tests::b3_header_eof_and_original_deadline",
+        "guarded_execution::node::tests::b3_tenants_share_two_slots",
+        "guarded_execution::node::tests::b3_stop_admission_preserves_existing_owner",
+        "guarded_execution::node::tests::b3_output_reservation_is_one_shot",
+        "guarded_execution::node::tests::b3_output_owner_survives_pending_write",
+        "guarded_execution::node::tests::b3_tcp_pending_then_complete",
+        "guarded_execution::node::tests::b3_tcp_disconnect_disposes_before_retirement",
+        "guarded_execution::node::tests::b3_flush_pending_then_complete",
+        "guarded_execution::node::tests::b3_cancel_already_set_refuses_write",
+        "guarded_execution::node::tests::b3_canonical_cancel_during_write",
+        "guarded_execution::node::tests::b3_canonical_cancel_during_flush",
+        "guarded_execution::node::tests::b3_output_original_deadline",
+        "guarded_execution::node::tests::b3_bucket_probe_positive",
+        "guarded_execution::node::tests::b3_bucket_probe_transport_refusal",
+        "guarded_execution::node::tests::b3_bucket_probe_contract_refusal",
+        "guarded_execution::node::tests::b3_public_guard_survives_pending_owner",
+        "guarded_execution::node::tests::b3_gate_dispatch_disposal_fence",
+        "guarded_execution::node::tests::b3_both_shutdown_modes_require_guarded_drain",
+        "guarded_execution::node::tests::b3_persistent_alias_does_not_self_wake",
+        "guarded_execution::node::tests::b3_frontend_layout_ledger"
       ],
       "prefix": "guarded_execution::node::tests::",
       "threads": 1
     },
     "tree": {
-      "files": 286,
-      "inventory_sha256": "b6f56b07244b18685a4977e0da68e53a37bfc0053bd4b9412933c46e050998db",
-      "payload_bytes": 7101033
+      "files": 288,
+      "inventory_sha256": "9498438bb1b3b9bb7a31d4ffcbc986c8e85ac1dcc1c828525b8bd8f849039069",
+      "payload_bytes": 7239729
     }
   },
   "target": "aarch64-apple-darwin"

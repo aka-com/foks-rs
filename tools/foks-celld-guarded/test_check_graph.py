@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 import check_graph as c
-from test_prepare_runtime import a2_fixture, foundation_fixture, lifetimes_fixture, historical_pins, p
+from test_prepare_runtime import a2_fixture, foundation_fixture, lifetimes_fixture, frontend_fixture, historical_pins, p
 
 
 def fixture(mode="identity", profile=c.preparation.A1):
@@ -55,10 +55,10 @@ def add_package(metadata, name, version="1.0.0", identity=None, features=None, s
 @contextmanager
 def foundation_graph_fixture(root, mode):
     root.parent.mkdir(parents=True, exist_ok=True)
-    stage = p.LIFETIMES if mode in p.LIFETIMES_MODES else p.FOUNDATION
-    fixture_source = lifetimes_fixture if stage == p.LIFETIMES else foundation_fixture
+    stage = p.stage_for_mode(mode)
+    fixture_source = {p.FOUNDATION: foundation_fixture, p.LIFETIMES: lifetimes_fixture, p.FRONTEND: frontend_fixture}[stage]
     with fixture_source(root) as data, ExitStack() as stack:
-        for name in ("FOUNDATION_BASE_IMAGES", "FOUNDATION_LOCK_BEFORE", "LIFETIMES_BASE_IMAGES", "LIFETIMES_LOCK_SHA256", "LIFETIMES_ASSET_SHA256"):
+        for name in ("FOUNDATION_BASE_IMAGES", "FOUNDATION_LOCK_BEFORE", "LIFETIMES_BASE_IMAGES", "LIFETIMES_LOCK_SHA256", "LIFETIMES_ASSET_SHA256", "FRONTEND_BASE_IMAGES", "FRONTEND_ASSET_SHA256"):
             stack.enter_context(patch.object(c.preparation, name, getattr(p, name)))
         p.prepare(data["archive"], root, stage)
         (root / "Cargo.lock").write_bytes(data["expected_lock"])
@@ -75,6 +75,8 @@ def foundation_graph_fixture(root, mode):
                 package["manifest_path"] = str(root / "Cargo.toml" if package["name"] == c.FIXTURE else root / "runtime/source/crates/celld/Cargo.toml" if package["name"] == "celld" else root.parents[1] / "crates" / package["name"] / "Cargo.toml")
         celld = next(package for package in metadata["packages"] if package["name"] == "celld")
         celld["targets"] = [{"name": "celld", "kind": ["bin"], "crate_types": ["bin"], "src_path": str(root / "runtime/source/crates/celld/main.rs")}]
+        if stage == p.FRONTEND:
+            celld["targets"].append({"name": "celld", "kind": ["lib"], "crate_types": ["lib"], "src_path": str(root / "runtime/source/crates/celld/lib.rs")})
         celld["dependencies"] = [{"name": name, "source": None, "req": "*", "kind": None, "rename": None, "optional": True, "uses_default_features": False, "features": ["qualification" if name == "foks-hosted-transport" else "owned-list"], "target": None, "registry": None, "path": str(root.parents[1] / "crates" / name)} for name in p.FOUNDATION_EDGES]
         for name in contract["celld_foks_edges"]:
             edge(metadata, "celld", name)
@@ -830,6 +832,147 @@ class LifetimesGraphTests(unittest.TestCase):
                     edge(altered, "tokio", "foks-metadata-core")
                     with self.assertRaisesRegex(ValueError, "replaced or extended"):
                         c.preparation.upstream_edges(altered, set(packages), root, "node-lifetimes")
+
+
+class FrontendGraphTests(unittest.TestCase):
+    def test_three_modes_keep_exact_optional_edges_and_bind_both_targets(self):
+        for mode, contract in p.FRONTEND_MODES.items():
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "tools/fixture"
+                with foundation_graph_fixture(root, mode) as (metadata, pins, data):
+                    report = c.graph_report(metadata, pins, mode, root)
+                    self.assertEqual(report["profile"], p.FRONTEND)
+                    self.assertEqual(report["foundation"]["accepted_b2_commit"], p.FRONTEND_BASE)
+                    self.assertEqual(report["foundation"]["accepted_b2_images"], data["accepted_b2_images"])
+                    self.assertEqual(report["foundation"]["declared_foks_edges"], p.FOUNDATION_EDGES)
+                    self.assertEqual(report["foundation"]["celld_foks_edges"], contract["celld_foks_edges"])
+                    self.assertFalse({"rusqlite", "libsqlite3-sys"} & set(report["foks_subclosure"]))
+                    if mode.endswith("lifecycle"):
+                        self.assertNotIn("node_target", report)
+                        self.assertNotIn("node_test_target", report)
+                    else:
+                        self.assertEqual(report["node_target"]["kind"], ["bin"])
+                        self.assertEqual(report["node_test_target"]["kind"], ["lib"])
+                        self.assertEqual(report["node_test_target"]["features"], contract["celld_features"])
+                    for old in (*p.FOUNDATION_MODES, *p.LIFETIMES_MODES, "identity", "lifecycle", "node-baseline"):
+                        with self.subTest(old=old), self.assertRaises(ValueError):
+                            c.graph_report(metadata, pins, old, root)
+
+    def test_library_artifact_target_and_native_subclosure_cannot_be_relabelled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tools/fixture"
+            with foundation_graph_fixture(root, p.FRONTEND) as (metadata, pins, _):
+                def celld(value):
+                    return next(row for row in value["packages"] if row["name"] == "celld")
+                mutations = (
+                    lambda x: celld(x)["targets"].pop(),
+                    lambda x: celld(x)["targets"].append(copy.deepcopy(celld(x)["targets"][1])),
+                    lambda x: celld(x)["targets"][1].update(name="other"),
+                    lambda x: celld(x)["targets"][1].update(src_path="/other/lib.rs"),
+                    lambda x: celld(x)["targets"][1].update(crate_types=["cdylib"]),
+                    lambda x: celld(x)["targets"][1].update({"required-features": ["other"]}),
+                    lambda x: celld(x)["dependencies"][0].update(optional=False),
+                    lambda x: celld(x)["dependencies"][0].update(features=["test-support"]),
+                    lambda x: edge(x, "foks-metadata-core", "libsqlite3-sys"),
+                    lambda x: next(row for row in x["resolve"]["nodes"] if row["id"] == "celld")["features"].append("unreviewed"),
+                )
+                for index, mutate in enumerate(mutations):
+                    changed = copy.deepcopy(metadata)
+                    mutate(changed)
+                    with self.subTest(index=index), self.assertRaises(ValueError):
+                        c.graph_report(changed, pins, p.FRONTEND, root)
+        for mode in (p.FRONTEND + "-default", p.FRONTEND + "-lifecycle"):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "tools/fixture"
+                with foundation_graph_fixture(root, mode) as (metadata, pins, _):
+                    edge(metadata, "celld", "foks-metadata-core")
+                    with self.assertRaises(ValueError):
+                        c.graph_report(metadata, pins, mode, root)
+
+    def test_frontend_graph_commands_keep_locked_offline_selected_workspace(self):
+        for mode, contract in p.FRONTEND_MODES.items():
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "tools/fixture"
+                with foundation_graph_fixture(root, mode), patch.object(c.preparation, "network_command", side_effect=lambda argv: ["DENY-ALL", *map(str, argv)]):
+                    commands = c.commands(root, Path("/toolchain"), mode)
+                    for name, argv in commands.items():
+                        self.assertEqual(argv[0], "DENY-ALL")
+                        self.assertIn("--locked", argv)
+                        self.assertIn("--offline", argv)
+                        self.assertEqual(argv[argv.index("--manifest-path") + 1], str(root / "Cargo.toml"))
+                        flag = "--filter-platform" if name == "metadata" else "--target"
+                        self.assertEqual(argv[argv.index(flag) + 1], p.TARGET)
+                        self.assertEqual("--features" in argv, bool(contract["root_features"]))
+                        if contract["root_features"]:
+                            self.assertEqual(argv[argv.index("--features") + 1], "foks-celld-guarded/" + contract["root_features"][0])
+                    self.assertEqual(commands["tree"].count("--package"), 2)
+
+    def test_inputs_include_prefix_assets_and_current_foks_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            root = repo / "tools/fixture"
+            with foundation_graph_fixture(root, p.FRONTEND) as (metadata, pins, _):
+                for name in c.source_paths(pins, p.FRONTEND):
+                    path = root / name
+                    if not path.exists():
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_bytes(("reviewed " + name + "\n").encode())
+                workspace = '[workspace]\nmembers = ' + json.dumps(["crates/" + name for name in p.FOUNDATION_EDGES] + ["apps/desktop"]) + '\n'
+                (repo / "Cargo.toml").write_text(workspace)
+                (repo / "Cargo.lock").write_bytes(b"root workspace lock\n")
+                (repo / "apps/desktop").mkdir(parents=True)
+                (repo / "apps/desktop/Cargo.toml").write_bytes(b"unselected member manifest\n")
+                baseline = repo / pins["foks_additional_versions"]["baseline_lock"]
+                baseline.parent.mkdir(parents=True, exist_ok=True)
+                baseline.write_bytes(b"reviewed lock\n")
+                for name in p.FOUNDATION_EDGES:
+                    path = repo / "crates" / name / "src/lib.rs"
+                    path.parent.mkdir(parents=True)
+                    path.write_bytes(b"reviewed actual FOKS source\n")
+                    (path.parent.parent / "Cargo.toml").write_bytes(b"reviewed manifest\n")
+                report = c.graph_report(metadata, pins, p.FRONTEND, root)
+                reached = {row["id"] for row in report["packages"]}
+                with patch.object(c.preparation, "config_inputs", return_value={}):
+                    before = c.candidate_inputs(root, p.FRONTEND)
+                    selected = c.selected_inputs(metadata, reached, root, p.FRONTEND)
+                self.assertTrue(all(before.get(path) == checksum for path, checksum in selected.items()))
+                for name in (*c.A2_SOURCE_PATHS, *c.FOUNDATION_SOURCE_PATHS, *c.LIFETIMES_SOURCE_PATHS, *c.FRONTEND_SOURCE_PATHS):
+                    self.assertIn(str(root / name), selected)
+                self.assertIn(str(repo / "crates/foks-hosted-transport/src/lib.rs"), selected)
+                self.assertIn(str(repo / "Cargo.lock"), selected)
+                self.assertIn(str(repo / "apps/desktop/Cargo.toml"), selected)
+                for members in ([], ["../outside"], ["crates/*"], ["crates/missing"], ["crates/a"] * 2, [1]):
+                    (repo / "Cargo.toml").write_text('[workspace]\nmembers = ' + json.dumps(members) + '\n')
+                    with self.subTest(members=members), self.assertRaises(ValueError):
+                        c.frontend_transport_inputs(root, p.FRONTEND)
+                (repo / "Cargo.toml").write_text(workspace)
+                (repo / "apps/desktop/Cargo.toml").unlink()
+                (repo / "apps/desktop/Cargo.toml").symlink_to(repo / "Cargo.lock")
+                with self.assertRaises(ValueError):
+                    c.frontend_transport_inputs(root, p.FRONTEND)
+                self.assertNotIn("run-node.py", c.source_paths(pins, p.FRONTEND))
+
+    def test_changed_predecessor_or_missing_mode_refuses_before_any_command(self):
+        for changed in ("Cargo.lock", p.FRONTEND_PROFILE, p.FRONTEND_SERIES, p.FRONTEND_MANIFEST):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "tools/fixture"
+                with foundation_graph_fixture(root, p.FRONTEND):
+                    path = root / changed
+                    path.write_bytes(path.read_bytes() + b"\n")
+                    with patch.object(c.preparation, "run_owned") as execute, self.assertRaises(ValueError):
+                        c.collect(root / "refused", root, p.FRONTEND)
+                    execute.assert_not_called()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tools/fixture"
+            with foundation_graph_fixture(root, p.FRONTEND):
+                evidence = root / "evidence"
+                evidence.mkdir()
+                record = {"format": 1, "target": p.TARGET, "profile": p.FRONTEND, "manifest": str(root / "Cargo.toml"), "cwd": str(root)}
+                for changed in ({}, {"mode": p.LIFETIMES}, {"mode": p.FRONTEND, "profile": p.LIFETIMES}):
+                    (evidence / "evidence.json").write_text(json.dumps({**record, **changed}))
+                    with patch.object(c.preparation, "controlled_environment") as environment, self.assertRaises(ValueError):
+                        c.verify(evidence, root, p.FRONTEND)
+                    environment.assert_not_called()
 
 
 class LockTests(unittest.TestCase):

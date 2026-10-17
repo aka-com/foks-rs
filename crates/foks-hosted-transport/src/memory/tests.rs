@@ -30,6 +30,65 @@ const ALL_POOLS: [PoolId; 5] = [
 ];
 
 #[test]
+fn qualification_output_retains_capacity_and_leaves_control_available() {
+    let pools = balanced_pools(10);
+    let request = pools.request(None);
+    request.classify_input(4097);
+    assert!(request.reserve_output(10));
+    assert_eq!(pools.output.available_permits(), 0);
+    assert_eq!(pools.small.available_permits(), 10);
+    let held = request.clone();
+    drop(request);
+    assert_eq!(pools.output.available_permits(), 0);
+    let control = pools.request(None);
+    assert!(control.reserve_control(4));
+    assert_eq!(pools.control.available_permits(), 6);
+    assert_eq!(pools.output.available_permits(), 0);
+    drop(held);
+    assert_eq!(pools.output.available_permits(), 10);
+    assert_eq!(pools.control.available_permits(), 6);
+    drop(control);
+    assert_eq!(pools.control.available_permits(), 10);
+}
+
+#[test]
+fn qualification_reservations_reject_failed_owner_without_new_charges() {
+    let pools = balanced_pools(10);
+    let request = pools.request(None);
+    request.classify_input(4097);
+    assert!(!request.reserve_output(11));
+    assert!(request.failed());
+    assert!(!request.reserve_output(1));
+    assert!(!request.reserve_control(1));
+    assert_eq!(pools.output.available_permits(), 10);
+    assert_eq!(pools.control.available_permits(), 10);
+    assert_eq!(pools.small.available_permits(), 10);
+}
+
+#[test]
+fn qualification_output_preserves_small_fallback_but_control_does_not() {
+    let pools = balanced_pools(10);
+    let bulk = pools.request(None);
+    bulk.classify_input(4097);
+    assert!(bulk.reserve_output(10));
+    let small = pools.request(None);
+    assert!(small.reserve_output(3));
+    assert_eq!(pools.small.available_permits(), 7);
+    assert!(small.reserve_control(10));
+    assert!(!small.reserve_control(1));
+    assert!(small.failed());
+    assert_eq!(pools.small.available_permits(), 7);
+    assert!(!small.reserve_output(1));
+    assert_eq!(pools.small.available_permits(), 7);
+    drop(small);
+    assert_eq!(pools.small.available_permits(), 10);
+    assert_eq!(pools.control.available_permits(), 10);
+    assert_eq!(pools.output.available_permits(), 0);
+    drop(bulk);
+    assert_eq!(pools.output.available_permits(), 10);
+}
+
+#[test]
 fn repeated_charges_merge_into_five_fixed_slots_and_keep_input_separate() {
     let pools = balanced_pools(100);
     let input_pool = Arc::new(Semaphore::new(3));

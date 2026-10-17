@@ -224,6 +224,25 @@ impl Request {
         self.failed.load(Ordering::Relaxed)
     }
 
+    /// Reserve a qualification frame using the existing response budget.
+    /// Small-input fallback keeps its ordinary semantics; guarded invocation
+    /// owners classify themselves as non-small before using this method.
+    #[cfg(any(test, feature = "qualification"))]
+    pub fn reserve_output(&self, bytes: usize) -> bool {
+        !self.failed()
+            && foks_rpc::ResponseAllocationBudget::reserve(self, bytes, false)
+            && !self.failed()
+    }
+
+    /// Reserve a qualification control reply independently of response-pool
+    /// saturation. The existing control allocator never falls back to Small.
+    #[cfg(any(test, feature = "qualification"))]
+    pub fn reserve_control(&self, bytes: usize) -> bool {
+        !self.failed()
+            && foks_rpc::ResponseAllocationBudget::reserve(self, bytes, true)
+            && !self.failed()
+    }
+
     fn reserve_from(&self, pool: PoolId, bytes: usize) -> Result<(), ReserveFailure> {
         let count = u32::try_from(bytes).map_err(|_| ReserveFailure::Capacity)?;
         let semaphore = pool.semaphore(&self.pools);
