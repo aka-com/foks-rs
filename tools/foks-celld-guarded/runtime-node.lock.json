@@ -4,6 +4,7 @@
   "accepted_b1_commit": "23039e209d1b3b129a274dd65fe07f0abfdba8e0",
   "accepted_b2_commit": "d22ff3deedf0f0a87f635aec2317a87410e39110",
   "accepted_b3_commit": "9151df82364fa60177cb62f6645746ce1aff9b48",
+  "accepted_b4_p1_commit": "66090566c0ffcccc12e2d1c2bc9917f2f84019c4",
   "base": {
     "foundation_profile": {
       "bytes": 13181,
@@ -55,6 +56,21 @@
       "path": "node.lock.json",
       "sha256": "af0c4f23c08fd2c1d17126c0b7c2d68720ecd275840945de444eae7d46bcc866"
     },
+    "observations_profile": {
+      "bytes": 49530,
+      "path": "runtime/evidence/accepted-b4-p1/runtime-node.lock.json",
+      "sha256": "665a781a004136ecf5aea53efd7d3b648d0554359f356839837c2491a1a05b64"
+    },
+    "observations_series": {
+      "bytes": 35243,
+      "path": "runtime/evidence/accepted-b4-p1/patches/node-series.json",
+      "sha256": "7722cf0db5432d56c4bbba7ea06e553bbbae9c7e8be6c074090eab4aee64f72a"
+    },
+    "observations_source_manifest": {
+      "bytes": 71794,
+      "path": "runtime/evidence/accepted-b4-p1/prepared-inputs/source-manifest.json",
+      "sha256": "ade667e7ac21b0d3648138a59f436cfb36f1ba4cb4c55de161f68e088ccd41b6"
+    },
     "patch_series": {
       "bytes": 4041,
       "path": "patches/series.json",
@@ -95,9 +111,9 @@
   },
   "format": 1,
   "node_series": {
-    "bytes": 35243,
+    "bytes": 42853,
     "path": "patches/node-series.json",
-    "sha256": "7722cf0db5432d56c4bbba7ea06e553bbbae9c7e8be6c074090eab4aee64f72a"
+    "sha256": "034b19a0b9314602f5c5f092fdf556fc7ae65e4d9b76f5efbc2e3dd652c08750"
   },
   "pins": {
     "build": {
@@ -270,9 +286,9 @@
       "version": "152.1.0"
     }
   },
-  "profile": "node-observations",
+  "profile": "node-process",
   "qualification": {
-    "claim": "b4-p1-observation-components-only",
+    "claim": "b4-p2-process-components-only",
     "deployments": {
       "fixture": {
         "prefix": "deploy/foks-guarded-node-fixture/1fdd2523a443ea95",
@@ -285,6 +301,11 @@
     },
     "frontend": {
       "commands": {
+        "advance": {
+          "bytes": 32,
+          "opcode": 3,
+          "version": 2
+        },
         "begin": {
           "opcode": 1,
           "phases": [
@@ -299,15 +320,21 @@
             1
           ]
         },
-        "release_refused": 3
+        "release_refused": {
+          "opcode": 3,
+          "versions": [
+            1
+          ]
+        }
       },
       "control_allocation": "original-control-owner-and-a0-control-pool",
+      "control_deadline": "min(original-acceptance-plus15s,actual-reply-start-plus1s)",
       "header": {
         "bytes": 16,
         "magic": "FOKSGN01",
         "requires_write_half_eof": true,
         "reserved_zero_bytes": 4,
-        "retained_bytes": 17,
+        "retained_bytes": 33,
         "tenant_ordinals": [
           0,
           1,
@@ -315,10 +342,16 @@
         ],
         "version": 1
       },
+      "large_output_aliases": [
+        "shutdown-cut"
+      ],
       "large_output_scenarios": [
         "tcp-write-held",
         "tcp-disconnect",
-        "shutdown-cut"
+        "cancel-write",
+        "deadline-write",
+        "shutdown-handoff-cut",
+        "shutdown-preserve-cut"
       ],
       "limits": {
         "connections": 4,
@@ -349,13 +382,112 @@
         "version": 1
       },
       "retirement_ticket": "scalar-process-registry-sequence-no-record-weak",
+      "scenario_aliases": {
+        "shutdown-complete": "shutdown-handoff-complete",
+        "shutdown-cut": "shutdown-handoff-cut"
+      },
       "scenarios": [
         "cold-sync-retire",
+        "restore-next-process",
+        "two-slots",
+        "same-tenant-building",
+        "same-tenant-running",
+        "retiring-after-memory-busy",
+        "same-tenant-quarantined",
         "failed-turn-gated",
         "tcp-write-held",
         "tcp-disconnect",
-        "shutdown-complete",
-        "shutdown-cut"
+        "descriptor-boot-no-prewarm",
+        "descriptor-reload-no-prewarm",
+        "ordinary-primary-service-refusal-regression",
+        "bucket-transport-refusal",
+        "bucket-probe-timeout",
+        "bucket-contract-violation",
+        "sync-held-pre-enqueue",
+        "sync-held-post-enqueue",
+        "sync-held-resident",
+        "sync-held-before-proof",
+        "sync-held-after-proof",
+        "sync-held-before-finish",
+        "sync-abandon-pre-enqueue-expiry",
+        "sync-abandon-pre-enqueue-reply-loss",
+        "sync-abandon-pre-enqueue-parent-cancel",
+        "sync-abandon-pre-enqueue-swap",
+        "sync-abandon-pre-enqueue-actor-loss",
+        "sync-abandon-post-enqueue-expiry",
+        "sync-abandon-post-enqueue-reply-loss",
+        "sync-abandon-post-enqueue-parent-cancel",
+        "sync-abandon-post-enqueue-swap",
+        "sync-abandon-post-enqueue-actor-loss",
+        "sync-abandon-resident-expiry",
+        "sync-abandon-resident-reply-loss",
+        "sync-abandon-resident-parent-cancel",
+        "sync-abandon-resident-swap",
+        "sync-abandon-resident-actor-loss",
+        "sync-abandon-before-proof-expiry",
+        "sync-abandon-before-proof-reply-loss",
+        "sync-abandon-before-proof-parent-cancel",
+        "sync-abandon-before-proof-swap",
+        "sync-abandon-before-proof-actor-loss",
+        "sync-abandon-after-proof-expiry",
+        "sync-abandon-after-proof-reply-loss",
+        "sync-abandon-after-proof-parent-cancel",
+        "sync-abandon-after-proof-swap",
+        "sync-abandon-after-proof-actor-loss",
+        "sync-abandon-before-finish-expiry",
+        "sync-abandon-before-finish-reply-loss",
+        "sync-abandon-before-finish-parent-cancel",
+        "sync-abandon-before-finish-swap",
+        "sync-abandon-before-finish-actor-loss",
+        "reload-held-before-construction",
+        "reload-held-during-sync",
+        "reload-held-before-output",
+        "reload-held-during-retirement",
+        "proof-held-primary-durable",
+        "proof-held-primary-ownership",
+        "cancel-write",
+        "deadline-header",
+        "deadline-route",
+        "deadline-restore",
+        "deadline-build",
+        "deadline-driver",
+        "deadline-c1",
+        "deadline-write",
+        "deadline-retirement",
+        "effect-abandon-restore-caller-loss",
+        "effect-abandon-restore-reply-loss",
+        "effect-abandon-restore-actor-loss",
+        "effect-abandon-start-caller-loss",
+        "effect-abandon-start-reply-loss",
+        "effect-abandon-start-actor-loss",
+        "effect-abandon-proof-caller-loss",
+        "effect-abandon-proof-reply-loss",
+        "effect-abandon-proof-actor-loss",
+        "effect-abandon-verification-caller-loss",
+        "effect-abandon-verification-reply-loss",
+        "effect-abandon-verification-actor-loss",
+        "effect-abandon-stop-caller-loss",
+        "effect-abandon-stop-reply-loss",
+        "effect-abandon-stop-actor-loss",
+        "stop-after-memory-error",
+        "panic-construction",
+        "panic-task",
+        "panic-turn",
+        "panic-payload-drop",
+        "panic-teardown",
+        "shutdown-handoff-complete",
+        "shutdown-handoff-cut",
+        "shutdown-preserve-complete",
+        "shutdown-preserve-cut",
+        "binding-wrong-owner",
+        "binding-wrong-epoch",
+        "binding-wrong-core-request",
+        "binding-wrong-invocation-sequence",
+        "binding-wrong-descriptor",
+        "binding-wrong-runtime-generation",
+        "binding-zero-runtime-generation",
+        "binding-missing-runtime-generation",
+        "binding-drained-runtime-generation"
       ]
     },
     "frontend_layout_evidence": {
@@ -988,7 +1120,7 @@
       }
     },
     "modes": {
-      "node-observations": {
+      "node-process": {
         "celld_features": [
           "foks-guarded-node-qualification",
           "foks-guarded-qualification"
@@ -1002,13 +1134,13 @@
           "node-qualification"
         ]
       },
-      "node-observations-default": {
+      "node-process-default": {
         "celld_features": [],
         "celld_foks_edges": [],
         "direct_root_tokio": false,
         "root_features": []
       },
-      "node-observations-lifecycle": {
+      "node-process-lifecycle": {
         "celld_features": [
           "foks-guarded-qualification"
         ],
@@ -1392,6 +1524,1453 @@
         "unseen": 0
       }
     },
+    "process": {
+      "advance_reply": {
+        "bytes": 32,
+        "exact_echo": [
+          "tenant",
+          "checkpoint",
+          "invocation",
+          "control_ordinal",
+          "case"
+        ],
+        "magic": "FOKSGA02",
+        "reserved_zero": [
+          30,
+          32
+        ],
+        "status": {
+          "accepted_scheduling": 0,
+          "refused": 1
+        },
+        "version": 2
+      },
+      "advance_request": {
+        "bytes": 32,
+        "checkpoint_range": [
+          1,
+          24
+        ],
+        "control_ordinal_positive": true,
+        "integer_encoding": "little-endian",
+        "invocation_positive": true,
+        "magic": "FOKSGN01",
+        "offsets": {
+          "case": [
+            28,
+            30
+          ],
+          "checkpoint": 11,
+          "control_ordinal": [
+            20,
+            28
+          ],
+          "invocation": [
+            12,
+            20
+          ],
+          "magic": [
+            0,
+            8
+          ],
+          "opcode": 9,
+          "reserved_zero": [
+            30,
+            32
+          ],
+          "tenant": 10,
+          "version": 8
+        },
+        "opcode": 3,
+        "read_buffer_bytes": 33,
+        "requires_write_half_eof": true,
+        "tenant_ordinals": [
+          0,
+          1,
+          2
+        ],
+        "version": 2
+      },
+      "authority": [
+        "initial-targets-seal-once-per-process",
+        "same-real-invocation-a2-token-root-op-child-identity",
+        "entered-before-one-use-advance",
+        "actual-control-owner-before-advance-mutation",
+        "no-observation-issuing-authority",
+        "ack-is-scheduling-only",
+        "no-control-after-stop-failure-or-seal",
+        "process-records-never-authorize-advance",
+        "release-callbacks-wakes-and-drops-outside-ownership-locks",
+        "original-forward-authority-rechecked-after-release",
+        "shutdown-release-armed-before-stop",
+        "canonical-reload-processes-new-generation-before-held-continuation",
+        "actual-actor-os-thread-exit-and-finished-only-join",
+        "sticky-cleanup-hold-survives-original-expiry",
+        "same-original-auxiliary-request-and-sequence-at-selected-checkpoint"
+      ],
+      "case_count": 101,
+      "cases": [
+        {
+          "activity": 0,
+          "checkpoint": 2,
+          "id": 1,
+          "lane": 255,
+          "name": "cold-sync-retire",
+          "native_kind": 255,
+          "reaction": "Continue",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 2,
+          "id": 2,
+          "lane": 255,
+          "name": "restore-next-process",
+          "native_kind": 255,
+          "reaction": "Continue",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 5,
+          "id": 3,
+          "lane": 3,
+          "name": "two-slots",
+          "native_kind": 255,
+          "reaction": "HoldThenContinue",
+          "targets": 2
+        },
+        {
+          "activity": 0,
+          "checkpoint": 4,
+          "id": 4,
+          "lane": 6,
+          "name": "same-tenant-building",
+          "native_kind": 6,
+          "reaction": "HoldThenContinue",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 5,
+          "id": 5,
+          "lane": 3,
+          "name": "same-tenant-running",
+          "native_kind": 255,
+          "reaction": "HoldThenContinue",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 16,
+          "id": 6,
+          "lane": 14,
+          "name": "retiring-after-memory-busy",
+          "native_kind": 8,
+          "reaction": "HoldThenContinue",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 16,
+          "id": 7,
+          "lane": 14,
+          "name": "same-tenant-quarantined",
+          "native_kind": 8,
+          "reaction": "OwnedLocalDispositionFailure",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 13,
+          "id": 8,
+          "lane": 9,
+          "name": "failed-turn-gated",
+          "native_kind": 255,
+          "reaction": "Continue",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 15,
+          "id": 9,
+          "lane": 3,
+          "name": "tcp-write-held",
+          "native_kind": 255,
+          "reaction": "PeerDrain",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 15,
+          "id": 10,
+          "lane": 3,
+          "name": "tcp-disconnect",
+          "native_kind": 255,
+          "reaction": "PeerClose",
+          "targets": 1
+        },
+        {
+          "activity": 255,
+          "checkpoint": 20,
+          "id": 11,
+          "lane": 255,
+          "name": "descriptor-boot-no-prewarm",
+          "native_kind": 255,
+          "reaction": "ObserveGuardedBootOnly",
+          "targets": 1
+        },
+        {
+          "activity": 255,
+          "checkpoint": 20,
+          "id": 12,
+          "lane": 255,
+          "name": "descriptor-reload-no-prewarm",
+          "native_kind": 255,
+          "reaction": "AutoReloadOnceAfterReadyObservation",
+          "targets": 1
+        },
+        {
+          "activity": 255,
+          "checkpoint": 0,
+          "id": 13,
+          "lane": 255,
+          "name": "ordinary-primary-service-refusal-regression",
+          "native_kind": 255,
+          "reaction": "OrdinaryDefaultHttp",
+          "targets": 1
+        },
+        {
+          "activity": 255,
+          "checkpoint": 23,
+          "id": 14,
+          "lane": 255,
+          "name": "bucket-transport-refusal",
+          "native_kind": 255,
+          "reaction": "CloseActualProbeConnection",
+          "targets": 1
+        },
+        {
+          "activity": 255,
+          "checkpoint": 23,
+          "id": 15,
+          "lane": 255,
+          "name": "bucket-probe-timeout",
+          "native_kind": 255,
+          "reaction": "HoldActualRetriedRangeGet",
+          "targets": 1
+        },
+        {
+          "activity": 255,
+          "checkpoint": 23,
+          "id": 16,
+          "lane": 255,
+          "name": "bucket-contract-violation",
+          "native_kind": 255,
+          "reaction": "FixedHttpContractViolation",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 5,
+          "id": 17,
+          "lane": 3,
+          "name": "sync-held-pre-enqueue",
+          "native_kind": 255,
+          "reaction": "HoldThenContinue",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 6,
+          "id": 18,
+          "lane": 255,
+          "name": "sync-held-post-enqueue",
+          "native_kind": 255,
+          "reaction": "HoldThenContinue",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 7,
+          "id": 19,
+          "lane": 255,
+          "name": "sync-held-resident",
+          "native_kind": 255,
+          "reaction": "HoldThenContinue",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 8,
+          "id": 20,
+          "lane": 5,
+          "name": "sync-held-before-proof",
+          "native_kind": 255,
+          "reaction": "HoldThenContinue",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 9,
+          "id": 21,
+          "lane": 5,
+          "name": "sync-held-after-proof",
+          "native_kind": 255,
+          "reaction": "HoldThenContinue",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 11,
+          "id": 22,
+          "lane": 255,
+          "name": "sync-held-before-finish",
+          "native_kind": 255,
+          "reaction": "HoldThenContinue",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 5,
+          "id": 23,
+          "lane": 3,
+          "name": "sync-abandon-pre-enqueue-expiry",
+          "native_kind": 255,
+          "reaction": "OriginalExpiry",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 5,
+          "id": 24,
+          "lane": 3,
+          "name": "sync-abandon-pre-enqueue-reply-loss",
+          "native_kind": 255,
+          "reaction": "AbandonOwnedProducerBeforeSend",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 5,
+          "id": 25,
+          "lane": 3,
+          "name": "sync-abandon-pre-enqueue-parent-cancel",
+          "native_kind": 255,
+          "reaction": "CanonicalParentCancel",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 5,
+          "id": 26,
+          "lane": 3,
+          "name": "sync-abandon-pre-enqueue-swap",
+          "native_kind": 255,
+          "reaction": "ForceReloadSwap",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 5,
+          "id": 27,
+          "lane": 3,
+          "name": "sync-abandon-pre-enqueue-actor-loss",
+          "native_kind": 255,
+          "reaction": "ActualActorExit",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 6,
+          "id": 28,
+          "lane": 255,
+          "name": "sync-abandon-post-enqueue-expiry",
+          "native_kind": 255,
+          "reaction": "OriginalExpiry",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 6,
+          "id": 29,
+          "lane": 255,
+          "name": "sync-abandon-post-enqueue-reply-loss",
+          "native_kind": 255,
+          "reaction": "DropActualReplyConsumer",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 6,
+          "id": 30,
+          "lane": 255,
+          "name": "sync-abandon-post-enqueue-parent-cancel",
+          "native_kind": 255,
+          "reaction": "CanonicalParentCancel",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 6,
+          "id": 31,
+          "lane": 255,
+          "name": "sync-abandon-post-enqueue-swap",
+          "native_kind": 255,
+          "reaction": "ForceReloadSwap",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 6,
+          "id": 32,
+          "lane": 255,
+          "name": "sync-abandon-post-enqueue-actor-loss",
+          "native_kind": 255,
+          "reaction": "ActualActorExit",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 7,
+          "id": 33,
+          "lane": 255,
+          "name": "sync-abandon-resident-expiry",
+          "native_kind": 255,
+          "reaction": "OriginalExpiry",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 7,
+          "id": 34,
+          "lane": 255,
+          "name": "sync-abandon-resident-reply-loss",
+          "native_kind": 255,
+          "reaction": "DropActualReplyConsumer",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 7,
+          "id": 35,
+          "lane": 255,
+          "name": "sync-abandon-resident-parent-cancel",
+          "native_kind": 255,
+          "reaction": "CanonicalParentCancel",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 7,
+          "id": 36,
+          "lane": 255,
+          "name": "sync-abandon-resident-swap",
+          "native_kind": 255,
+          "reaction": "ForceReloadSwap",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 7,
+          "id": 37,
+          "lane": 255,
+          "name": "sync-abandon-resident-actor-loss",
+          "native_kind": 255,
+          "reaction": "ActualActorExit",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 8,
+          "id": 38,
+          "lane": 5,
+          "name": "sync-abandon-before-proof-expiry",
+          "native_kind": 255,
+          "reaction": "OriginalExpiry",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 8,
+          "id": 39,
+          "lane": 5,
+          "name": "sync-abandon-before-proof-reply-loss",
+          "native_kind": 255,
+          "reaction": "DropActualReplyConsumer",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 8,
+          "id": 40,
+          "lane": 5,
+          "name": "sync-abandon-before-proof-parent-cancel",
+          "native_kind": 255,
+          "reaction": "CanonicalParentCancel",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 8,
+          "id": 41,
+          "lane": 5,
+          "name": "sync-abandon-before-proof-swap",
+          "native_kind": 255,
+          "reaction": "ForceReloadSwap",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 8,
+          "id": 42,
+          "lane": 5,
+          "name": "sync-abandon-before-proof-actor-loss",
+          "native_kind": 255,
+          "reaction": "ActualActorExit",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 9,
+          "id": 43,
+          "lane": 5,
+          "name": "sync-abandon-after-proof-expiry",
+          "native_kind": 255,
+          "reaction": "OriginalExpiry",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 9,
+          "id": 44,
+          "lane": 5,
+          "name": "sync-abandon-after-proof-reply-loss",
+          "native_kind": 255,
+          "reaction": "DropActualReplyConsumer",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 9,
+          "id": 45,
+          "lane": 5,
+          "name": "sync-abandon-after-proof-parent-cancel",
+          "native_kind": 255,
+          "reaction": "CanonicalParentCancel",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 9,
+          "id": 46,
+          "lane": 5,
+          "name": "sync-abandon-after-proof-swap",
+          "native_kind": 255,
+          "reaction": "ForceReloadSwap",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 9,
+          "id": 47,
+          "lane": 5,
+          "name": "sync-abandon-after-proof-actor-loss",
+          "native_kind": 255,
+          "reaction": "ActualActorExit",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 11,
+          "id": 48,
+          "lane": 255,
+          "name": "sync-abandon-before-finish-expiry",
+          "native_kind": 255,
+          "reaction": "OriginalExpiry",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 11,
+          "id": 49,
+          "lane": 255,
+          "name": "sync-abandon-before-finish-reply-loss",
+          "native_kind": 255,
+          "reaction": "DropActualReplyConsumer",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 11,
+          "id": 50,
+          "lane": 255,
+          "name": "sync-abandon-before-finish-parent-cancel",
+          "native_kind": 255,
+          "reaction": "CanonicalParentCancel",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 11,
+          "id": 51,
+          "lane": 255,
+          "name": "sync-abandon-before-finish-swap",
+          "native_kind": 255,
+          "reaction": "ForceReloadSwap",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 11,
+          "id": 52,
+          "lane": 255,
+          "name": "sync-abandon-before-finish-actor-loss",
+          "native_kind": 255,
+          "reaction": "ActualActorExit",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 4,
+          "id": 53,
+          "lane": 6,
+          "name": "reload-held-before-construction",
+          "native_kind": 6,
+          "reaction": "ForceReload",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 5,
+          "id": 54,
+          "lane": 3,
+          "name": "reload-held-during-sync",
+          "native_kind": 255,
+          "reaction": "ForceReload",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 14,
+          "id": 55,
+          "lane": 3,
+          "name": "reload-held-before-output",
+          "native_kind": 255,
+          "reaction": "ForceReload",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 16,
+          "id": 56,
+          "lane": 14,
+          "name": "reload-held-during-retirement",
+          "native_kind": 8,
+          "reaction": "ForceReload",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 8,
+          "id": 57,
+          "lane": 4,
+          "name": "proof-held-primary-durable",
+          "native_kind": 255,
+          "reaction": "HoldThenContinue",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 10,
+          "id": 58,
+          "lane": 4,
+          "name": "proof-held-primary-ownership",
+          "native_kind": 255,
+          "reaction": "HoldThenContinue",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 15,
+          "id": 59,
+          "lane": 3,
+          "name": "cancel-write",
+          "native_kind": 255,
+          "reaction": "CanonicalReleaseAll",
+          "targets": 1
+        },
+        {
+          "activity": 255,
+          "checkpoint": 1,
+          "id": 60,
+          "lane": 255,
+          "name": "deadline-header",
+          "native_kind": 255,
+          "reaction": "OriginalExpiry",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 2,
+          "id": 61,
+          "lane": 255,
+          "name": "deadline-route",
+          "native_kind": 255,
+          "reaction": "OriginalExpiry",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 3,
+          "id": 62,
+          "lane": 6,
+          "name": "deadline-restore",
+          "native_kind": 255,
+          "reaction": "OriginalExpiry",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 4,
+          "id": 63,
+          "lane": 6,
+          "name": "deadline-build",
+          "native_kind": 6,
+          "reaction": "OriginalExpiry",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 12,
+          "id": 64,
+          "lane": 3,
+          "name": "deadline-driver",
+          "native_kind": 255,
+          "reaction": "OriginalExpiry",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 13,
+          "id": 65,
+          "lane": 9,
+          "name": "deadline-c1",
+          "native_kind": 255,
+          "reaction": "OriginalExpiry",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 15,
+          "id": 66,
+          "lane": 3,
+          "name": "deadline-write",
+          "native_kind": 255,
+          "reaction": "OriginalExpiry",
+          "targets": 1
+        },
+        {
+          "activity": 255,
+          "checkpoint": 18,
+          "id": 67,
+          "lane": 255,
+          "name": "deadline-retirement",
+          "native_kind": 255,
+          "reaction": "OriginalExpiry",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 3,
+          "id": 68,
+          "lane": 6,
+          "name": "effect-abandon-restore-caller-loss",
+          "native_kind": 255,
+          "reaction": "DropActualConnectionConsumer",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 24,
+          "id": 69,
+          "lane": 6,
+          "name": "effect-abandon-restore-reply-loss",
+          "native_kind": 255,
+          "reaction": "DropActualEffectConsumer",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 3,
+          "id": 70,
+          "lane": 6,
+          "name": "effect-abandon-restore-actor-loss",
+          "native_kind": 255,
+          "reaction": "ActualActorExit",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 4,
+          "id": 71,
+          "lane": 6,
+          "name": "effect-abandon-start-caller-loss",
+          "native_kind": 6,
+          "reaction": "DropActualConnectionConsumer",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 24,
+          "id": 72,
+          "lane": 6,
+          "name": "effect-abandon-start-reply-loss",
+          "native_kind": 255,
+          "reaction": "DropActualEffectConsumer",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 4,
+          "id": 73,
+          "lane": 6,
+          "name": "effect-abandon-start-actor-loss",
+          "native_kind": 6,
+          "reaction": "ActualActorExit",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 9,
+          "id": 74,
+          "lane": 4,
+          "name": "effect-abandon-proof-caller-loss",
+          "native_kind": 255,
+          "reaction": "DropActualConnectionConsumer",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 24,
+          "id": 75,
+          "lane": 4,
+          "name": "effect-abandon-proof-reply-loss",
+          "native_kind": 255,
+          "reaction": "DropActualEffectConsumer",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 9,
+          "id": 76,
+          "lane": 4,
+          "name": "effect-abandon-proof-actor-loss",
+          "native_kind": 255,
+          "reaction": "ActualActorExit",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 10,
+          "id": 77,
+          "lane": 4,
+          "name": "effect-abandon-verification-caller-loss",
+          "native_kind": 255,
+          "reaction": "DropActualConnectionConsumer",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 24,
+          "id": 78,
+          "lane": 4,
+          "name": "effect-abandon-verification-reply-loss",
+          "native_kind": 255,
+          "reaction": "DropActualEffectConsumer",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 10,
+          "id": 79,
+          "lane": 4,
+          "name": "effect-abandon-verification-actor-loss",
+          "native_kind": 255,
+          "reaction": "ActualActorExit",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 17,
+          "id": 80,
+          "lane": 14,
+          "name": "effect-abandon-stop-caller-loss",
+          "native_kind": 255,
+          "reaction": "DropActualConnectionConsumer",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 24,
+          "id": 81,
+          "lane": 10,
+          "name": "effect-abandon-stop-reply-loss",
+          "native_kind": 255,
+          "reaction": "DropActualEffectConsumer",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 17,
+          "id": 82,
+          "lane": 14,
+          "name": "effect-abandon-stop-actor-loss",
+          "native_kind": 255,
+          "reaction": "ActualActorExit",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 16,
+          "id": 83,
+          "lane": 14,
+          "name": "stop-after-memory-error",
+          "native_kind": 8,
+          "reaction": "OwnedLocalDispositionFailure",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 22,
+          "id": 84,
+          "lane": 6,
+          "name": "panic-construction",
+          "native_kind": 6,
+          "reaction": "PanicAtOwnedBoundary",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 22,
+          "id": 85,
+          "lane": 6,
+          "name": "panic-task",
+          "native_kind": 255,
+          "reaction": "PanicAtOwnedBoundary",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 22,
+          "id": 86,
+          "lane": 3,
+          "name": "panic-turn",
+          "native_kind": 255,
+          "reaction": "PanicAtOwnedBoundary",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 22,
+          "id": 87,
+          "lane": 3,
+          "name": "panic-payload-drop",
+          "native_kind": 255,
+          "reaction": "PanicAtOwnedBoundary",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 22,
+          "id": 88,
+          "lane": 10,
+          "name": "panic-teardown",
+          "native_kind": 7,
+          "reaction": "PanicAtOwnedBoundary",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 16,
+          "id": 89,
+          "lane": 14,
+          "name": "shutdown-handoff-complete",
+          "native_kind": 8,
+          "reaction": "CanonicalShutdownThenRelease",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 16,
+          "id": 90,
+          "lane": 14,
+          "name": "shutdown-handoff-cut",
+          "native_kind": 8,
+          "reaction": "CanonicalShutdownKeepNativeHold",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 16,
+          "id": 91,
+          "lane": 14,
+          "name": "shutdown-preserve-complete",
+          "native_kind": 8,
+          "reaction": "CanonicalShutdownThenRelease",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 16,
+          "id": 92,
+          "lane": 14,
+          "name": "shutdown-preserve-cut",
+          "native_kind": 8,
+          "reaction": "CanonicalShutdownKeepNativeHold",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 21,
+          "id": 93,
+          "lane": 255,
+          "name": "binding-wrong-owner",
+          "native_kind": 255,
+          "reaction": "InvalidBindingAtRealValidator",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 21,
+          "id": 94,
+          "lane": 6,
+          "name": "binding-wrong-epoch",
+          "native_kind": 255,
+          "reaction": "InvalidBindingAtRealValidator",
+          "targets": 1
+        },
+        {
+          "activity": 1,
+          "checkpoint": 21,
+          "id": 95,
+          "lane": 255,
+          "name": "binding-wrong-core-request",
+          "native_kind": 255,
+          "reaction": "InvalidBindingAtRealValidator",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 21,
+          "id": 96,
+          "lane": 3,
+          "name": "binding-wrong-invocation-sequence",
+          "native_kind": 255,
+          "reaction": "InvalidBindingAtRealValidator",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 21,
+          "id": 97,
+          "lane": 6,
+          "name": "binding-wrong-descriptor",
+          "native_kind": 6,
+          "reaction": "InvalidBindingAtRealValidator",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 21,
+          "id": 98,
+          "lane": 6,
+          "name": "binding-wrong-runtime-generation",
+          "native_kind": 255,
+          "reaction": "InvalidBindingAtRealValidator",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 21,
+          "id": 99,
+          "lane": 6,
+          "name": "binding-zero-runtime-generation",
+          "native_kind": 255,
+          "reaction": "InvalidBindingAtRealValidator",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 21,
+          "id": 100,
+          "lane": 6,
+          "name": "binding-missing-runtime-generation",
+          "native_kind": 255,
+          "reaction": "InvalidBindingAtRealValidator",
+          "targets": 1
+        },
+        {
+          "activity": 0,
+          "checkpoint": 21,
+          "id": 101,
+          "lane": 6,
+          "name": "binding-drained-runtime-generation",
+          "native_kind": 255,
+          "reaction": "InvalidBindingAtRealValidator",
+          "targets": 1
+        }
+      ],
+      "checkpoint_ids": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24
+      ],
+      "end": {
+        "counts": "recorded=emitted=received=highest-contiguous-sequence;sum(state_counts)+process_record_count=recorded",
+        "cutoff_scope": "diagnostic-frontier-no-task-termination",
+        "fields": [
+          "kind",
+          "recorded_count",
+          "emitted_count",
+          "highest_record_sequence",
+          "barrier_count",
+          "consumed_control_count",
+          "failed",
+          "overflow",
+          "state_counts",
+          "process_record_count",
+          "sealed",
+          "cutoff_scope"
+        ],
+        "kind": "b4_checkpoint_end",
+        "reject_post_end_records": true,
+        "sealed": true,
+        "state_count_entries": 7
+      },
+      "internal_process_state_ids": [
+        7,
+        9,
+        14,
+        15,
+        16
+      ],
+      "invocation_nullable_fields": {
+        "auxiliary_request": "activity!=1",
+        "auxiliary_sequence": "activity!=1",
+        "control_ordinal": "ordinal==0",
+        "native_child_sequence": "child_sequence==0",
+        "operation": "operation==0",
+        "root_sequence": "lane==255"
+      },
+      "invocation_record_fields": [
+        "kind",
+        "record_sequence",
+        "case",
+        "checkpoint",
+        "state",
+        "tenant",
+        "bank_slot",
+        "a2_slot",
+        "a2_token",
+        "invocation",
+        "lane",
+        "root_sequence",
+        "native_kind",
+        "native_child_sequence",
+        "activity",
+        "operation",
+        "control_ordinal",
+        "auxiliary_request",
+        "auxiliary_sequence"
+      ],
+      "limits": {
+        "barrier_cells": 2,
+        "control_reply_seconds": 1,
+        "controls_per_case": 64,
+        "header_cell_bytes": 33,
+        "header_cells": 4,
+        "journal_bytes": 8192,
+        "journal_rows": 64,
+        "original_request_seconds": 15,
+        "p1_snapshot_bytes": 264192,
+        "p1_snapshots": 2,
+        "record_bytes": 512,
+        "reload_operations": 1,
+        "reload_slots": 1,
+        "retained_bytes": 131072,
+        "serializer_bytes": 65536,
+        "stream_bytes": 34816,
+        "structured_stdout_bytes": 563200
+      },
+      "process_checkpoint_ids": {
+        "header": [
+          15,
+          16
+        ],
+        "header_checkpoint": 1,
+        "other_checkpoint": 20,
+        "probe": [
+          2,
+          3,
+          12
+        ],
+        "probe_checkpoint": 23
+      },
+      "process_optional_fields": {
+        "from_generation": {
+          "present_for_state_ids": [
+            6,
+            8
+          ],
+          "source": "first"
+        },
+        "process_operation": {
+          "present_for_state_ids": [
+            4,
+            5,
+            6,
+            7,
+            8,
+            13
+          ],
+          "value": 1
+        },
+        "to_generation": {
+          "first_for_state_ids": [
+            1,
+            7
+          ],
+          "otherwise": "second",
+          "present_for_state_ids": [
+            1,
+            5,
+            6,
+            7,
+            8
+          ]
+        }
+      },
+      "process_record_fields": [
+        "kind",
+        "record_sequence",
+        "case",
+        "checkpoint",
+        "process_operation",
+        "state",
+        "from_generation",
+        "to_generation",
+        "first",
+        "second"
+      ],
+      "process_states": {
+        "1": "ReadyInitialSnapshotComplete",
+        "10": "ActorExit",
+        "11": "CanonicalCut",
+        "12": "ProbeSucceeded",
+        "13": "ReloadFailed",
+        "14": "MainWorkCharged",
+        "15": "HeaderEntered",
+        "16": "HeaderExpired",
+        "2": "ProbeEntered",
+        "3": "ProbeRefused",
+        "4": "ReloadRequested",
+        "5": "ReloadBuildRetained",
+        "6": "ReloadAdopted",
+        "7": "GenerationChangedProcessed",
+        "8": "DrainedOldGeneration",
+        "9": "ShutdownStarted"
+      },
+      "proof_scope": "b4-p2-components-only;main-ownership-and-all101process-cases-require-P3",
+      "reload_states": [
+        "Unissued",
+        "PointerRead",
+        "GraphLoading",
+        "BuildSubmitted",
+        "BuildJoinedResultHeld",
+        "AdoptedOrRefused",
+        "GenerationChangedProcessedOrFailed",
+        "ReplyDisposed",
+        "CompletedOrStopped"
+      ],
+      "states": {
+        "1": "entered",
+        "2": "advanced",
+        "3": "consumer_dropped",
+        "4": "continued",
+        "5": "expired",
+        "6": "failed",
+        "7": "cut"
+      }
+    },
+    "process_layout_evidence": {
+      "crosslinks": {
+        "header_cell33": "same-run-B1.layouts.header_cell",
+        "p1_retained_bytes": "same-run-P1-retained_bytes",
+        "qualification_bytes": "row1.size"
+      },
+      "extra_scratch_bytes": 0,
+      "frontend_constructor_maximum": 65536,
+      "main_work_bytes": 0,
+      "main_work_scope": "library-component-zero;actual-main-measurement-is-process-journal-kind14",
+      "maximum_record_bytes": 4096,
+      "prefix": "FOKS_B4_PROCESS_LAYOUT=",
+      "record_fields": [
+        "schema",
+        "rows",
+        "retained_bytes",
+        "retained_terms"
+      ],
+      "registry_arc_maximum": 65536,
+      "retained_bytes_maximum": 131072,
+      "retained_term_fields": [
+        "p1_retained_bytes",
+        "qualification_bytes",
+        "main_work_bytes",
+        "extra_scratch_bytes",
+        "sync_mutex_bytes",
+        "sync_condvar_bytes"
+      ],
+      "row_fields": [
+        "id",
+        "size",
+        "align"
+      ],
+      "rows": [
+        {
+          "ceiling_bytes": 16384,
+          "id": 1,
+          "maximum_alignment": 16,
+          "name": "qualification_state"
+        },
+        {
+          "ceiling_bytes": 8192,
+          "id": 2,
+          "maximum_alignment": 16,
+          "name": "journal_full"
+        },
+        {
+          "ceiling_bytes": 1024,
+          "id": 3,
+          "maximum_alignment": 16,
+          "name": "barrier_cell"
+        },
+        {
+          "ceiling_bytes": 8192,
+          "id": 4,
+          "maximum_alignment": 16,
+          "name": "reload_request_state"
+        },
+        {
+          "ceiling_bytes": 256,
+          "id": 5,
+          "maximum_alignment": 16,
+          "name": "header_cell33"
+        },
+        {
+          "ceiling_bytes": 4096,
+          "id": 6,
+          "maximum_alignment": 16,
+          "name": "header_lease33"
+        },
+        {
+          "ceiling_bytes": 49152,
+          "id": 7,
+          "maximum_alignment": 16,
+          "name": "FramePayload"
+        },
+        {
+          "ceiling_bytes": 49152,
+          "id": 8,
+          "maximum_alignment": 16,
+          "name": "GatedFrame"
+        },
+        {
+          "ceiling_bytes": 49152,
+          "id": 9,
+          "maximum_alignment": 16,
+          "name": "SocketWork"
+        },
+        {
+          "ceiling_bytes": 49152,
+          "id": 10,
+          "maximum_alignment": 16,
+          "name": "socket_future"
+        },
+        {
+          "ceiling_bytes": 4096,
+          "id": 11,
+          "maximum_alignment": 16,
+          "name": "socket_result"
+        },
+        {
+          "ceiling_bytes": 49152,
+          "id": 12,
+          "maximum_alignment": 16,
+          "name": "catch_closure"
+        },
+        {
+          "ceiling_bytes": 4096,
+          "id": 13,
+          "maximum_alignment": 16,
+          "name": "negative_config_arc"
+        }
+      ],
+      "schema": 1,
+      "scratch_compiled_gate_maximum": 1024,
+      "socket_constructor_maximum": 49152,
+      "sync_backing": {
+        "allocation": "two-requested-PAL-Box-payloads;allocator-and-kernel-overhead-excluded",
+        "both_positive": true,
+        "combined_maximum": 256,
+        "fields": [
+          "sync_mutex_bytes",
+          "sync_condvar_bytes"
+        ],
+        "initialize": "fresh-unshared-mutex-try_lock-drop-then-condvar-notify_all-before-sharing",
+        "other_toolchain_or_target": "requires-new-backend-source-review",
+        "precharge": "both-before-Qualification-construction",
+        "toolchain": {
+          "commit": "59807616e1fa2540724bfbac14d7976d7e4a3860",
+          "rustc_version": "rustc 1.95.0 (59807616e 2026-04-14)",
+          "sources": [
+            "https://raw.githubusercontent.com/rust-lang/rust/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/sync/mutex/mod.rs",
+            "https://raw.githubusercontent.com/rust-lang/rust/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/sync/condvar/mod.rs",
+            "https://raw.githubusercontent.com/rust-lang/rust/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/sync/mutex/pthread.rs",
+            "https://raw.githubusercontent.com/rust-lang/rust/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/sync/condvar/pthread.rs",
+            "https://raw.githubusercontent.com/rust-lang/rust/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/sync/once_box.rs",
+            "https://raw.githubusercontent.com/rust-lang/rust/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/pal/unix/sync/mutex.rs",
+            "https://raw.githubusercontent.com/rust-lang/rust/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/pal/unix/sync/condvar.rs"
+          ],
+          "target": "aarch64-apple-darwin"
+        },
+        "types": [
+          "existing-libc-pthread_mutex_t",
+          "existing-libc-pthread_cond_t"
+        ]
+      }
+    },
     "program": {
       "fixture_js": {
         "bytes": 1905,
@@ -1416,11 +2995,17 @@
     },
     "source_roster": [
       "crates/celld/actor.rs",
-      "crates/celld/guarded_execution.rs",
+      "crates/celld/actor/effects.rs",
+      "crates/celld/actor/production.rs",
+      "crates/celld/cell_dispatch.rs",
       "crates/celld/guarded_node.rs",
       "crates/celld/guarded_node/control.rs",
       "crates/celld/guarded_node/output.rs",
+      "crates/celld/guarded_node/qualification.rs",
       "crates/celld/guarded_node/tests.rs",
+      "crates/celld/js/storage_ops.rs",
+      "crates/celld/main.rs",
+      "crates/celld/main/cli.rs",
       "crates/celld/main/guarded.rs",
       "crates/celld/runtime.rs"
     ],
@@ -1511,15 +3096,52 @@
         "guarded_execution::node::tests::b4_observation_failed_retirement_retains_public_guard",
         "guarded_execution::node::tests::b4_observation_scalar_copy_does_not_pin_owner",
         "guarded_execution::node::tests::b4_observation_contention_refuses_without_false_free",
-        "guarded_execution::node::tests::b4_observation_stream_bounds_and_layouts"
+        "guarded_execution::node::tests::b4_observation_stream_bounds_and_layouts",
+        "guarded_execution::node::tests::b4_process_case_table_closed",
+        "guarded_execution::node::tests::b4_process_protocol_versions_and_reserved",
+        "guarded_execution::node::tests::b4_process_advance_exact_identity",
+        "guarded_execution::node::tests::b4_process_advance_replay_and_wrong_target",
+        "guarded_execution::node::tests::b4_process_advance_contention_no_action",
+        "guarded_execution::node::tests::b4_process_initial_target_does_not_rearm",
+        "guarded_execution::node::tests::b4_process_two_targets_distinct_release",
+        "guarded_execution::node::tests::b4_process_journal_contiguous_and_null_identity",
+        "guarded_execution::node::tests::b4_process_journal_overflow_fail_closed",
+        "guarded_execution::node::tests::b4_process_process_records_cannot_advance",
+        "guarded_execution::node::tests::b4_process_header_lease33_stale_return",
+        "guarded_execution::node::tests::b4_process_control_reply_start_bound",
+        "guarded_execution::node::tests::b4_process_control_reply_original_expiry",
+        "guarded_execution::node::tests::b4_process_hold_release_rechecks_authority",
+        "guarded_execution::node::tests::b4_process_callbacks_and_drop_outside_locks",
+        "guarded_execution::node::tests::b4_process_actor_result_drop_selector",
+        "guarded_execution::node::tests::b4_process_aux_finish_selector_does_not_hold_primary",
+        "guarded_execution::node::tests::b4_process_local_failure_path_predicate_and_selector",
+        "guarded_execution::node::tests::b4_process_reload_processed_and_drained_state_contract",
+        "guarded_execution::node::tests::b4_process_reload_request_one_shot_contract",
+        "guarded_execution::node::tests::b4_process_guarded_no_prewarm_scope",
+        "guarded_execution::node::tests::b4_process_actor_exit_record_not_join_proof",
+        "guarded_execution::node::tests::b4_process_panic_construction_selector",
+        "guarded_execution::node::tests::b4_process_panic_restore_selector",
+        "guarded_execution::node::tests::b4_process_panic_turn_selector",
+        "guarded_execution::node::tests::b4_process_panic_payload_drop_selector",
+        "guarded_execution::node::tests::b4_process_panic_teardown_selector",
+        "guarded_execution::node::tests::b4_process_binding_owner_original_charged",
+        "guarded_execution::node::tests::b4_process_binding_epoch_actual_validator",
+        "guarded_execution::node::tests::b4_process_binding_core_parent_predicate_and_selector",
+        "guarded_execution::node::tests::b4_process_binding_invocation_comparison_copy",
+        "guarded_execution::node::tests::b4_process_binding_descriptor_real_permit",
+        "guarded_execution::node::tests::b4_process_binding_runtime_generation_predicate_and_selector",
+        "guarded_execution::node::tests::b4_process_binding_zero_generation_before_pin",
+        "guarded_execution::node::tests::b4_process_binding_missing_required_generation",
+        "guarded_execution::node::tests::b4_process_binding_drained_generation_state_and_selector",
+        "guarded_execution::node::tests::b4_process_process_layouts_and_stream_caps"
       ],
       "prefix": "guarded_execution::node::tests::",
       "threads": 1
     },
     "tree": {
-      "files": 288,
-      "inventory_sha256": "671152e04891c4584d457c836bc3102f222c50df7745edec4272602d089473ac",
-      "payload_bytes": 7323345
+      "files": 289,
+      "inventory_sha256": "83febb634aaccde24ee14ff74a13db01c17beafac139da1cb217ea2dae2cdc0b",
+      "payload_bytes": 7549708
     }
   },
   "target": "aarch64-apple-darwin"

@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 import check_graph as c
-from test_prepare_runtime import a2_fixture, foundation_fixture, lifetimes_fixture, frontend_fixture, observations_fixture, historical_pins, p
+from test_prepare_runtime import a2_fixture, foundation_fixture, lifetimes_fixture, frontend_fixture, observations_fixture, process_fixture, historical_pins, p
 
 
 def fixture(mode="identity", profile=c.preparation.A1):
@@ -56,9 +56,9 @@ def add_package(metadata, name, version="1.0.0", identity=None, features=None, s
 def foundation_graph_fixture(root, mode):
     root.parent.mkdir(parents=True, exist_ok=True)
     stage = p.stage_for_mode(mode)
-    fixture_source = {p.FOUNDATION: foundation_fixture, p.LIFETIMES: lifetimes_fixture, p.FRONTEND: frontend_fixture, p.OBSERVATIONS: observations_fixture}[stage]
+    fixture_source = {p.FOUNDATION: foundation_fixture, p.LIFETIMES: lifetimes_fixture, p.FRONTEND: frontend_fixture, p.OBSERVATIONS: observations_fixture, p.PROCESS: process_fixture}[stage]
     with fixture_source(root) as data, ExitStack() as stack:
-        for name in ("FOUNDATION_BASE_IMAGES", "FOUNDATION_LOCK_BEFORE", "LIFETIMES_BASE_IMAGES", "LIFETIMES_LOCK_SHA256", "LIFETIMES_ASSET_SHA256", "FRONTEND_BASE_IMAGES", "FRONTEND_ASSET_SHA256", "OBSERVATIONS_BASE_IMAGES", "OBSERVATIONS_ASSET_SHA256"):
+        for name in ("FOUNDATION_BASE_IMAGES", "FOUNDATION_LOCK_BEFORE", "LIFETIMES_BASE_IMAGES", "LIFETIMES_LOCK_SHA256", "LIFETIMES_ASSET_SHA256", "FRONTEND_BASE_IMAGES", "FRONTEND_ASSET_SHA256", "OBSERVATIONS_BASE_IMAGES", "OBSERVATIONS_ASSET_SHA256", "PROCESS_BASE_IMAGES", "PROCESS_ASSET_SHA256"):
             stack.enter_context(patch.object(c.preparation, name, getattr(p, name)))
         p.prepare(data["archive"], root, stage)
         (root / "Cargo.lock").write_bytes(data["expected_lock"])
@@ -75,7 +75,7 @@ def foundation_graph_fixture(root, mode):
                 package["manifest_path"] = str(root / "Cargo.toml" if package["name"] == c.FIXTURE else root / "runtime/source/crates/celld/Cargo.toml" if package["name"] == "celld" else root.parents[1] / "crates" / package["name"] / "Cargo.toml")
         celld = next(package for package in metadata["packages"] if package["name"] == "celld")
         celld["targets"] = [{"name": "celld", "kind": ["bin"], "crate_types": ["bin"], "src_path": str(root / "runtime/source/crates/celld/main.rs")}]
-        if stage in (p.FRONTEND, p.OBSERVATIONS):
+        if stage in (p.FRONTEND, p.OBSERVATIONS, p.PROCESS):
             celld["targets"].append({"name": "celld", "kind": ["lib"], "crate_types": ["lib"], "src_path": str(root / "runtime/source/crates/celld/lib.rs")})
         celld["dependencies"] = [{"name": name, "source": None, "req": "*", "kind": None, "rename": None, "optional": True, "uses_default_features": False, "features": ["qualification" if name == "foks-hosted-transport" else "owned-list"], "target": None, "registry": None, "path": str(root.parents[1] / "crates" / name)} for name in p.FOUNDATION_EDGES]
         for name in contract["celld_foks_edges"]:
@@ -1111,6 +1111,172 @@ class ObservationsGraphTests(unittest.TestCase):
                     with patch.object(c.preparation, "controlled_environment") as environment, self.assertRaises(ValueError):
                         c.verify(evidence, root, p.OBSERVATIONS)
                     environment.assert_not_called()
+
+
+class ProcessGraphTests(unittest.TestCase):
+    def test_process_modes_have_exact_feature_edges_and_targets(self):
+        for mode, contract in p.PROCESS_MODES.items():
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "tools/fixture"
+                with foundation_graph_fixture(root, mode) as (metadata, pins, _):
+                    report = c.graph_report(metadata, pins, mode, root)
+                    self.assertEqual(report["profile"], p.PROCESS)
+                    self.assertEqual(report["foundation"]["declared_foks_edges"], p.FOUNDATION_EDGES)
+                    self.assertEqual(report["foundation"]["celld_foks_edges"], contract["celld_foks_edges"])
+                    self.assertFalse({"rusqlite", "libsqlite3-sys"} & set(report["foks_subclosure"]))
+                    if mode.endswith("lifecycle"):
+                        self.assertNotIn("node_target", report)
+                        self.assertNotIn("node_test_target", report)
+                    else:
+                        self.assertEqual(report["node_target"]["kind"], ["bin"])
+                        self.assertEqual(report["node_test_target"]["kind"], ["lib"])
+                        self.assertEqual(report["node_test_target"]["features"], contract["celld_features"])
+                    for old in (*p.FOUNDATION_MODES, *p.LIFETIMES_MODES, *p.FRONTEND_MODES, *p.OBSERVATIONS_MODES, "identity", "node-baseline", "node-process-unknown"):
+                        with self.subTest(old=old), self.assertRaises(ValueError):
+                            c.graph_report(metadata, pins, old, root)
+                    def celld(value):
+                        return next(row for row in value["packages"] if row["name"] == "celld")
+                    mutations = [
+                        lambda x: celld(x)["dependencies"][0].update(optional=False),
+                        lambda x: celld(x)["dependencies"][0].update(features=["test-support"]),
+                        lambda x: next(row for row in x["resolve"]["nodes"] if row["id"] == "celld")["features"].append("unreviewed"),
+                    ]
+                    if not mode.endswith("lifecycle"):
+                        mutations.extend((
+                            lambda x: celld(x)["targets"].pop(),
+                            lambda x: celld(x)["targets"].append(copy.deepcopy(celld(x)["targets"][0])),
+                            lambda x: celld(x)["targets"][1].update(src_path="/other/lib.rs"),
+                        ))
+                    if mode == p.PROCESS:
+                        mutations.append(lambda x: edge(x, "foks-metadata-core", "libsqlite3-sys"))
+                    for index, mutate in enumerate(mutations):
+                        changed = copy.deepcopy(metadata)
+                        mutate(changed)
+                        with self.subTest(index=index), self.assertRaises(ValueError):
+                            c.graph_report(changed, pins, mode, root)
+
+    def test_process_graph_report_binds_all_accepted_ancestors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tools/fixture"
+            with foundation_graph_fixture(root, p.PROCESS) as (metadata, pins, data):
+                report = c.graph_report(metadata, pins, p.PROCESS, root)["foundation"]
+                self.assertEqual(report["accepted_a3a_commit"], p.FOUNDATION_BASE)
+                self.assertEqual(report["accepted_b1_commit"], p.LIFETIMES_BASE)
+                self.assertEqual(report["accepted_b2_commit"], p.FRONTEND_BASE)
+                self.assertEqual(report["accepted_b3_commit"], p.OBSERVATIONS_BASE)
+                self.assertEqual(report["accepted_b4_p1_commit"], p.PROCESS_BASE)
+                for key, fixture_key in (("accepted_b1_images", "accepted_images"), ("accepted_b2_images", "accepted_b2_images"), ("accepted_b3_images", "accepted_b3_images"), ("accepted_b4_p1_images", "accepted_p1_images")):
+                    self.assertEqual(report[key], data[fixture_key])
+                self.assertEqual(report["profile_sha256"], p.file_hash(root / p.FOUNDATION_PROFILE))
+                self.assertEqual(report["series_sha256"], pins["foundation"]["node_series"]["sha256"])
+
+    @staticmethod
+    def input_fixture(repo, root, pins):
+        for name in c.source_paths(pins, p.PROCESS):
+            path = root / name
+            if not path.exists():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(("reviewed " + name + "\n").encode())
+        (repo / "Cargo.toml").write_text('[workspace]\nmembers = ' + json.dumps(["crates/" + name for name in p.FOUNDATION_EDGES] + ["apps/desktop"]) + '\n')
+        (repo / "Cargo.lock").write_bytes(b"root workspace lock\n")
+        (repo / "apps/desktop").mkdir(parents=True)
+        (repo / "apps/desktop/Cargo.toml").write_bytes(b"unselected resolver member\n")
+        baseline = repo / pins["foks_additional_versions"]["baseline_lock"]
+        baseline.parent.mkdir(parents=True, exist_ok=True)
+        baseline.write_bytes(b"reviewed lock\n")
+        for name in p.FOUNDATION_EDGES:
+            path = repo / "crates" / name / "src/lib.rs"
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"reviewed actual FOKS source\n")
+            (path.parent.parent / "Cargo.toml").write_bytes(b"reviewed manifest\n")
+
+    def test_process_bindings_include_sixth_patch_and_every_prepared_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            root = repo / "tools/fixture"
+            with foundation_graph_fixture(root, p.PROCESS) as (metadata, pins, data):
+                self.input_fixture(repo, root, pins)
+                report = c.graph_report(metadata, pins, p.PROCESS, root)
+                reached = {row["id"] for row in report["packages"]}
+                with patch.object(c.preparation, "config_inputs", return_value={}):
+                    before = c.candidate_inputs(root, p.PROCESS)
+                    selected = c.selected_inputs(metadata, reached, root, p.PROCESS)
+                self.assertTrue(all(before.get(path) == checksum for path, checksum in selected.items()))
+                for name in (*c.A2_SOURCE_PATHS, *c.FOUNDATION_SOURCE_PATHS, *c.LIFETIMES_SOURCE_PATHS, *c.FRONTEND_SOURCE_PATHS, *c.OBSERVATIONS_SOURCE_PATHS, *c.PROCESS_SOURCE_PATHS):
+                    self.assertIn(str(root / name), selected)
+                for row in data["rows"]:
+                    self.assertIn(str(root / "runtime/source" / row["path"]), before)
+                    self.assertEqual(before[str(root / "runtime/source" / row["path"])], row["sha256"])
+                self.assertIn(str(root / "runtime/source/crates/celld/guarded_node/qualification.rs"), before)
+                self.assertNotIn("run-node.py", c.source_paths(pins, p.PROCESS))
+                self.assertNotIn("run-guarded-node.py", c.source_paths(pins, p.PROCESS))
+                for name in (p.PROCESS_PATCH, p.PROCESS_PROFILE, p.PROCESS_MANIFEST):
+                    path = root / name
+                    original = path.read_bytes()
+                    path.write_bytes(original + b"\n")
+                    with patch.object(c.preparation, "config_inputs", return_value={}):
+                        if name == p.PROCESS_PATCH:
+                            with self.assertRaises(ValueError):
+                                c.candidate_inputs(root, p.PROCESS)
+                        else:
+                            with self.assertRaises(ValueError):
+                                c.selected_inputs(metadata, reached, root, p.PROCESS)
+                    path.write_bytes(original)
+
+    def test_process_default_and_lifecycle_reject_accidental_enabled_edges(self):
+        for mode in (p.PROCESS + "-default", p.PROCESS + "-lifecycle"):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "tools/fixture"
+                with foundation_graph_fixture(root, mode) as (metadata, pins, _):
+                    edge(metadata, "celld", "foks-metadata-core")
+                    with self.assertRaises(ValueError):
+                        c.graph_report(metadata, pins, mode, root)
+                    self.assertEqual(c.frontend_transport_inputs(root, mode), set())
+                    with patch.object(c.preparation, "network_command", side_effect=lambda argv: ["DENY-ALL", *map(str, argv)]):
+                        for name, argv in c.commands(root, Path("/toolchain"), mode).items():
+                            self.assertEqual(argv[0], "DENY-ALL")
+                            self.assertIn("--locked", argv)
+                            self.assertIn("--offline", argv)
+                            self.assertEqual("--features" in argv, mode.endswith("lifecycle"))
+
+    def test_process_graph_rejects_cross_stage_and_changed_predecessor_inputs(self):
+        for changed in ("Cargo.lock", p.PROCESS_PROFILE, p.PROCESS_SERIES, p.PROCESS_MANIFEST, p.OBSERVATIONS_PROFILE):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "tools/fixture"
+                with foundation_graph_fixture(root, p.PROCESS):
+                    path = root / changed
+                    path.write_bytes(path.read_bytes() + b"\n")
+                    with patch.object(c.preparation, "run_owned") as execute, self.assertRaises(ValueError):
+                        c.collect(root / "refused", root, p.PROCESS)
+                    execute.assert_not_called()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tools/fixture"
+            with foundation_graph_fixture(root, p.PROCESS):
+                evidence = root / "evidence"
+                evidence.mkdir()
+                record = {"format": 1, "target": p.TARGET, "profile": p.PROCESS, "manifest": str(root / "Cargo.toml"), "cwd": str(root)}
+                for changed in ({}, {"mode": p.OBSERVATIONS}, {"mode": p.PROCESS, "profile": p.OBSERVATIONS}, {"mode": "node-process-unknown"}):
+                    (evidence / "evidence.json").write_text(json.dumps({**record, **changed}))
+                    with patch.object(c.preparation, "controlled_environment") as environment, self.assertRaises(ValueError):
+                        c.verify(evidence, root, p.PROCESS)
+                    environment.assert_not_called()
+
+    def test_process_transport_regression_keeps_exact_root_workspace_bindings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            root = repo / "tools/fixture"
+            with foundation_graph_fixture(root, p.PROCESS) as (metadata, pins, _):
+                self.input_fixture(repo, root, pins)
+                expected = {repo / "Cargo.lock", repo / "apps/desktop/Cargo.toml", *(repo / "crates" / name / "Cargo.toml" for name in p.FOUNDATION_EDGES)}
+                self.assertEqual(c.frontend_transport_inputs(root, p.PROCESS), expected)
+                for argv in c.preparation.frontend_transport_commands(root, Path("/toolchain"), "deadline").values():
+                    self.assertEqual(argv[argv.index("--manifest-path") + 1], str(repo / "Cargo.toml"))
+                    self.assertEqual(argv[argv.index("--target-dir") + 1], str(root / "runtime/target/transport-regression"))
+                    self.assertEqual(argv.count("--package"), 1)
+                    self.assertEqual(argv[argv.index("--package") + 1], "foks-hosted-transport")
+                (repo / "apps/desktop/Cargo.toml").unlink()
+                with self.assertRaises(ValueError):
+                    c.frontend_transport_inputs(root, p.PROCESS)
 
 
 class LockTests(unittest.TestCase):

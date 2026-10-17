@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare pinned A1/A2 inputs, A3a nodes and explicit B1/B2/B3 and P1 stages.
+"""Prepare pinned A1/A2 inputs, A3a nodes and explicit B1/B2/B3 and P1/P2 stages.
 
 verify checks only the original upstream archive. prepare also applies the closed
 A2 patch in private staging. assets accepts the two reviewed local V8 assets.
@@ -9,6 +9,7 @@ and share one fail-closed process-group build slot.
 import argparse
 import ast
 import contextlib
+import copy
 import gzip
 import hashlib
 import json
@@ -217,10 +218,41 @@ OBSERVATIONS_MODES = {
     "node-observations": FOUNDATION_MODES["node-foundation"],
     "node-observations-lifecycle": FOUNDATION_MODES["node-foundation-lifecycle"],
 }
-NODE_STAGES = (FOUNDATION, LIFETIMES, FRONTEND, OBSERVATIONS)
-NODE_MODES = {**FOUNDATION_MODES, **LIFETIMES_MODES, **FRONTEND_MODES, **OBSERVATIONS_MODES}
-NODE_BINARY_MODES = ("node-foundation-default", "node-foundation", "node-lifetimes-default", "node-lifetimes", "node-qualification-default", "node-qualification", "node-observations-default", "node-observations")
-NODE_LIFECYCLE_MODES = ("node-foundation-lifecycle", "node-lifetimes-lifecycle", "node-qualification-lifecycle", "node-observations-lifecycle")
+PROCESS = "node-process"
+PROCESS_BASE = "66090566c0ffcccc12e2d1c2bc9917f2f84019c4"
+PROCESS_PATCH = "patches/0006-node-process.patch"
+PROCESS_PROFILE = "runtime/evidence/accepted-b4-p1/runtime-node.lock.json"
+PROCESS_SERIES = "runtime/evidence/accepted-b4-p1/patches/node-series.json"
+PROCESS_MANIFEST = "runtime/evidence/accepted-b4-p1/prepared-inputs/source-manifest.json"
+PROCESS_ASSETS = "runtime/evidence/accepted-b4-p1/assets-node-observations.json"
+PROCESS_BASE_IMAGES = {
+    "observations_profile": (PROCESS_PROFILE, "665a781a004136ecf5aea53efd7d3b648d0554359f356839837c2491a1a05b64"),
+    "observations_series": (PROCESS_SERIES, "7722cf0db5432d56c4bbba7ea06e553bbbae9c7e8be6c074090eab4aee64f72a"),
+    "observations_source_manifest": (PROCESS_MANIFEST, "ade667e7ac21b0d3648138a59f436cfb36f1ba4cb4c55de161f68e088ccd41b6"),
+}
+PROCESS_ASSET_SHA256 = "2c1a0e4fc330a7a5c6b7541836dea170305173809e77e6d25790f43b9ad0c733"
+MAXIMUM_PROCESS_PATCHES = 1536 * 1024
+PROCESS_ADDITIONS = frozenset(("crates/celld/guarded_node/qualification.rs",))
+# Exact fourteen-path source roster; expansion requires a reviewed amendment.
+PROCESS_PATHS = tuple(sorted((
+    "crates/celld/actor.rs", "crates/celld/actor/effects.rs",
+    "crates/celld/actor/production.rs", "crates/celld/cell_dispatch.rs",
+    "crates/celld/guarded_node.rs", "crates/celld/guarded_node/control.rs",
+    "crates/celld/guarded_node/output.rs", "crates/celld/guarded_node/qualification.rs",
+    "crates/celld/guarded_node/tests.rs", "crates/celld/js/storage_ops.rs",
+    "crates/celld/main.rs", "crates/celld/main/cli.rs",
+    "crates/celld/main/guarded.rs", "crates/celld/runtime.rs",
+)))
+PROCESS_UNION = tuple(sorted(set(FRONTEND_UNION) | set(PROCESS_ADDITIONS)))
+PROCESS_MODES = {
+    "node-process-default": FOUNDATION_MODES["node-foundation-default"],
+    "node-process": FOUNDATION_MODES["node-foundation"],
+    "node-process-lifecycle": FOUNDATION_MODES["node-foundation-lifecycle"],
+}
+NODE_STAGES = (FOUNDATION, LIFETIMES, FRONTEND, OBSERVATIONS, PROCESS)
+NODE_MODES = {**FOUNDATION_MODES, **LIFETIMES_MODES, **FRONTEND_MODES, **OBSERVATIONS_MODES, **PROCESS_MODES}
+NODE_BINARY_MODES = ("node-foundation-default", "node-foundation", "node-lifetimes-default", "node-lifetimes", "node-qualification-default", "node-qualification", "node-observations-default", "node-observations", "node-process-default", "node-process")
+NODE_LIFECYCLE_MODES = ("node-foundation-lifecycle", "node-lifetimes-lifecycle", "node-qualification-lifecycle", "node-observations-lifecycle", "node-process-lifecycle")
 FRONTEND_TEST_PREFIX = LIFETIMES_TEST_PREFIX
 FRONTEND_TEST_RENAMES = {
     "b1_foundation_has_no_ready_or_action": "b1_foundation_requires_frontend_for_ready_and_action",
@@ -256,6 +288,1215 @@ FRONTEND_SCENARIOS = ("cold-sync-retire", "failed-turn-gated", "tcp-write-held",
 FRONTEND_LARGE_SCENARIOS = ("tcp-write-held", "tcp-disconnect", "shutdown-cut")
 FRONTEND_EXCLUSIONS = ["full-process-success", "full-driver-terminal-conjunction", "host-az-recovery", "production-metadata", "whole-node-retirement", "remote-put-termination"]
 OBSERVATIONS_EXCLUSIONS = FRONTEND_EXCLUSIONS.copy()
+PROCESS_EXCLUSIONS = OBSERVATIONS_EXCLUSIONS.copy()
+# Filled only from the reviewed P2 Rust source contract before source freeze.
+PROCESS_TESTS = OBSERVATIONS_TESTS + [FRONTEND_TEST_PREFIX + name for name in ('b4_process_case_table_closed',
+ 'b4_process_protocol_versions_and_reserved',
+ 'b4_process_advance_exact_identity',
+ 'b4_process_advance_replay_and_wrong_target',
+ 'b4_process_advance_contention_no_action',
+ 'b4_process_initial_target_does_not_rearm',
+ 'b4_process_two_targets_distinct_release',
+ 'b4_process_journal_contiguous_and_null_identity',
+ 'b4_process_journal_overflow_fail_closed',
+ 'b4_process_process_records_cannot_advance',
+ 'b4_process_header_lease33_stale_return',
+ 'b4_process_control_reply_start_bound',
+ 'b4_process_control_reply_original_expiry',
+ 'b4_process_hold_release_rechecks_authority',
+ 'b4_process_callbacks_and_drop_outside_locks',
+ 'b4_process_actor_result_drop_selector',
+ 'b4_process_aux_finish_selector_does_not_hold_primary',
+ 'b4_process_local_failure_path_predicate_and_selector',
+ 'b4_process_reload_processed_and_drained_state_contract',
+ 'b4_process_reload_request_one_shot_contract',
+ 'b4_process_guarded_no_prewarm_scope',
+ 'b4_process_actor_exit_record_not_join_proof',
+ 'b4_process_panic_construction_selector',
+ 'b4_process_panic_restore_selector',
+ 'b4_process_panic_turn_selector',
+ 'b4_process_panic_payload_drop_selector',
+ 'b4_process_panic_teardown_selector',
+ 'b4_process_binding_owner_original_charged',
+ 'b4_process_binding_epoch_actual_validator',
+ 'b4_process_binding_core_parent_predicate_and_selector',
+ 'b4_process_binding_invocation_comparison_copy',
+ 'b4_process_binding_descriptor_real_permit',
+ 'b4_process_binding_runtime_generation_predicate_and_selector',
+ 'b4_process_binding_zero_generation_before_pin',
+ 'b4_process_binding_missing_required_generation',
+ 'b4_process_binding_drained_generation_state_and_selector',
+ 'b4_process_process_layouts_and_stream_caps')]
+PROCESS_CONTRACT = {'advance_reply': {'bytes': 32,
+                   'exact_echo': ['tenant', 'checkpoint', 'invocation', 'control_ordinal', 'case'],
+                   'magic': 'FOKSGA02',
+                   'reserved_zero': [30, 32],
+                   'status': {'accepted_scheduling': 0, 'refused': 1},
+                   'version': 2},
+ 'advance_request': {'bytes': 32,
+                     'checkpoint_range': [1, 24],
+                     'control_ordinal_positive': True,
+                     'integer_encoding': 'little-endian',
+                     'invocation_positive': True,
+                     'magic': 'FOKSGN01',
+                     'offsets': {'case': [28, 30],
+                                 'checkpoint': 11,
+                                 'control_ordinal': [20, 28],
+                                 'invocation': [12, 20],
+                                 'magic': [0, 8],
+                                 'opcode': 9,
+                                 'reserved_zero': [30, 32],
+                                 'tenant': 10,
+                                 'version': 8},
+                     'opcode': 3,
+                     'read_buffer_bytes': 33,
+                     'requires_write_half_eof': True,
+                     'tenant_ordinals': [0, 1, 2],
+                     'version': 2},
+ 'authority': ['initial-targets-seal-once-per-process',
+               'same-real-invocation-a2-token-root-op-child-identity',
+               'entered-before-one-use-advance',
+               'actual-control-owner-before-advance-mutation',
+               'no-observation-issuing-authority',
+               'ack-is-scheduling-only',
+               'no-control-after-stop-failure-or-seal',
+               'process-records-never-authorize-advance',
+               'release-callbacks-wakes-and-drops-outside-ownership-locks',
+               'original-forward-authority-rechecked-after-release',
+               'shutdown-release-armed-before-stop',
+               'canonical-reload-processes-new-generation-before-held-continuation',
+               'actual-actor-os-thread-exit-and-finished-only-join',
+               'sticky-cleanup-hold-survives-original-expiry',
+               'same-original-auxiliary-request-and-sequence-at-selected-checkpoint'],
+ 'case_count': 101,
+ 'cases': [{'activity': 0,
+            'checkpoint': 2,
+            'id': 1,
+            'lane': 255,
+            'name': 'cold-sync-retire',
+            'native_kind': 255,
+            'reaction': 'Continue',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 2,
+            'id': 2,
+            'lane': 255,
+            'name': 'restore-next-process',
+            'native_kind': 255,
+            'reaction': 'Continue',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 5,
+            'id': 3,
+            'lane': 3,
+            'name': 'two-slots',
+            'native_kind': 255,
+            'reaction': 'HoldThenContinue',
+            'targets': 2},
+           {'activity': 0,
+            'checkpoint': 4,
+            'id': 4,
+            'lane': 6,
+            'name': 'same-tenant-building',
+            'native_kind': 6,
+            'reaction': 'HoldThenContinue',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 5,
+            'id': 5,
+            'lane': 3,
+            'name': 'same-tenant-running',
+            'native_kind': 255,
+            'reaction': 'HoldThenContinue',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 16,
+            'id': 6,
+            'lane': 14,
+            'name': 'retiring-after-memory-busy',
+            'native_kind': 8,
+            'reaction': 'HoldThenContinue',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 16,
+            'id': 7,
+            'lane': 14,
+            'name': 'same-tenant-quarantined',
+            'native_kind': 8,
+            'reaction': 'OwnedLocalDispositionFailure',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 13,
+            'id': 8,
+            'lane': 9,
+            'name': 'failed-turn-gated',
+            'native_kind': 255,
+            'reaction': 'Continue',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 15,
+            'id': 9,
+            'lane': 3,
+            'name': 'tcp-write-held',
+            'native_kind': 255,
+            'reaction': 'PeerDrain',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 15,
+            'id': 10,
+            'lane': 3,
+            'name': 'tcp-disconnect',
+            'native_kind': 255,
+            'reaction': 'PeerClose',
+            'targets': 1},
+           {'activity': 255,
+            'checkpoint': 20,
+            'id': 11,
+            'lane': 255,
+            'name': 'descriptor-boot-no-prewarm',
+            'native_kind': 255,
+            'reaction': 'ObserveGuardedBootOnly',
+            'targets': 1},
+           {'activity': 255,
+            'checkpoint': 20,
+            'id': 12,
+            'lane': 255,
+            'name': 'descriptor-reload-no-prewarm',
+            'native_kind': 255,
+            'reaction': 'AutoReloadOnceAfterReadyObservation',
+            'targets': 1},
+           {'activity': 255,
+            'checkpoint': 0,
+            'id': 13,
+            'lane': 255,
+            'name': 'ordinary-primary-service-refusal-regression',
+            'native_kind': 255,
+            'reaction': 'OrdinaryDefaultHttp',
+            'targets': 1},
+           {'activity': 255,
+            'checkpoint': 23,
+            'id': 14,
+            'lane': 255,
+            'name': 'bucket-transport-refusal',
+            'native_kind': 255,
+            'reaction': 'CloseActualProbeConnection',
+            'targets': 1},
+           {'activity': 255,
+            'checkpoint': 23,
+            'id': 15,
+            'lane': 255,
+            'name': 'bucket-probe-timeout',
+            'native_kind': 255,
+            'reaction': 'HoldActualRetriedRangeGet',
+            'targets': 1},
+           {'activity': 255,
+            'checkpoint': 23,
+            'id': 16,
+            'lane': 255,
+            'name': 'bucket-contract-violation',
+            'native_kind': 255,
+            'reaction': 'FixedHttpContractViolation',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 5,
+            'id': 17,
+            'lane': 3,
+            'name': 'sync-held-pre-enqueue',
+            'native_kind': 255,
+            'reaction': 'HoldThenContinue',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 6,
+            'id': 18,
+            'lane': 255,
+            'name': 'sync-held-post-enqueue',
+            'native_kind': 255,
+            'reaction': 'HoldThenContinue',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 7,
+            'id': 19,
+            'lane': 255,
+            'name': 'sync-held-resident',
+            'native_kind': 255,
+            'reaction': 'HoldThenContinue',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 8,
+            'id': 20,
+            'lane': 5,
+            'name': 'sync-held-before-proof',
+            'native_kind': 255,
+            'reaction': 'HoldThenContinue',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 9,
+            'id': 21,
+            'lane': 5,
+            'name': 'sync-held-after-proof',
+            'native_kind': 255,
+            'reaction': 'HoldThenContinue',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 11,
+            'id': 22,
+            'lane': 255,
+            'name': 'sync-held-before-finish',
+            'native_kind': 255,
+            'reaction': 'HoldThenContinue',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 5,
+            'id': 23,
+            'lane': 3,
+            'name': 'sync-abandon-pre-enqueue-expiry',
+            'native_kind': 255,
+            'reaction': 'OriginalExpiry',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 5,
+            'id': 24,
+            'lane': 3,
+            'name': 'sync-abandon-pre-enqueue-reply-loss',
+            'native_kind': 255,
+            'reaction': 'AbandonOwnedProducerBeforeSend',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 5,
+            'id': 25,
+            'lane': 3,
+            'name': 'sync-abandon-pre-enqueue-parent-cancel',
+            'native_kind': 255,
+            'reaction': 'CanonicalParentCancel',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 5,
+            'id': 26,
+            'lane': 3,
+            'name': 'sync-abandon-pre-enqueue-swap',
+            'native_kind': 255,
+            'reaction': 'ForceReloadSwap',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 5,
+            'id': 27,
+            'lane': 3,
+            'name': 'sync-abandon-pre-enqueue-actor-loss',
+            'native_kind': 255,
+            'reaction': 'ActualActorExit',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 6,
+            'id': 28,
+            'lane': 255,
+            'name': 'sync-abandon-post-enqueue-expiry',
+            'native_kind': 255,
+            'reaction': 'OriginalExpiry',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 6,
+            'id': 29,
+            'lane': 255,
+            'name': 'sync-abandon-post-enqueue-reply-loss',
+            'native_kind': 255,
+            'reaction': 'DropActualReplyConsumer',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 6,
+            'id': 30,
+            'lane': 255,
+            'name': 'sync-abandon-post-enqueue-parent-cancel',
+            'native_kind': 255,
+            'reaction': 'CanonicalParentCancel',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 6,
+            'id': 31,
+            'lane': 255,
+            'name': 'sync-abandon-post-enqueue-swap',
+            'native_kind': 255,
+            'reaction': 'ForceReloadSwap',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 6,
+            'id': 32,
+            'lane': 255,
+            'name': 'sync-abandon-post-enqueue-actor-loss',
+            'native_kind': 255,
+            'reaction': 'ActualActorExit',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 7,
+            'id': 33,
+            'lane': 255,
+            'name': 'sync-abandon-resident-expiry',
+            'native_kind': 255,
+            'reaction': 'OriginalExpiry',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 7,
+            'id': 34,
+            'lane': 255,
+            'name': 'sync-abandon-resident-reply-loss',
+            'native_kind': 255,
+            'reaction': 'DropActualReplyConsumer',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 7,
+            'id': 35,
+            'lane': 255,
+            'name': 'sync-abandon-resident-parent-cancel',
+            'native_kind': 255,
+            'reaction': 'CanonicalParentCancel',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 7,
+            'id': 36,
+            'lane': 255,
+            'name': 'sync-abandon-resident-swap',
+            'native_kind': 255,
+            'reaction': 'ForceReloadSwap',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 7,
+            'id': 37,
+            'lane': 255,
+            'name': 'sync-abandon-resident-actor-loss',
+            'native_kind': 255,
+            'reaction': 'ActualActorExit',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 8,
+            'id': 38,
+            'lane': 5,
+            'name': 'sync-abandon-before-proof-expiry',
+            'native_kind': 255,
+            'reaction': 'OriginalExpiry',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 8,
+            'id': 39,
+            'lane': 5,
+            'name': 'sync-abandon-before-proof-reply-loss',
+            'native_kind': 255,
+            'reaction': 'DropActualReplyConsumer',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 8,
+            'id': 40,
+            'lane': 5,
+            'name': 'sync-abandon-before-proof-parent-cancel',
+            'native_kind': 255,
+            'reaction': 'CanonicalParentCancel',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 8,
+            'id': 41,
+            'lane': 5,
+            'name': 'sync-abandon-before-proof-swap',
+            'native_kind': 255,
+            'reaction': 'ForceReloadSwap',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 8,
+            'id': 42,
+            'lane': 5,
+            'name': 'sync-abandon-before-proof-actor-loss',
+            'native_kind': 255,
+            'reaction': 'ActualActorExit',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 9,
+            'id': 43,
+            'lane': 5,
+            'name': 'sync-abandon-after-proof-expiry',
+            'native_kind': 255,
+            'reaction': 'OriginalExpiry',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 9,
+            'id': 44,
+            'lane': 5,
+            'name': 'sync-abandon-after-proof-reply-loss',
+            'native_kind': 255,
+            'reaction': 'DropActualReplyConsumer',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 9,
+            'id': 45,
+            'lane': 5,
+            'name': 'sync-abandon-after-proof-parent-cancel',
+            'native_kind': 255,
+            'reaction': 'CanonicalParentCancel',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 9,
+            'id': 46,
+            'lane': 5,
+            'name': 'sync-abandon-after-proof-swap',
+            'native_kind': 255,
+            'reaction': 'ForceReloadSwap',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 9,
+            'id': 47,
+            'lane': 5,
+            'name': 'sync-abandon-after-proof-actor-loss',
+            'native_kind': 255,
+            'reaction': 'ActualActorExit',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 11,
+            'id': 48,
+            'lane': 255,
+            'name': 'sync-abandon-before-finish-expiry',
+            'native_kind': 255,
+            'reaction': 'OriginalExpiry',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 11,
+            'id': 49,
+            'lane': 255,
+            'name': 'sync-abandon-before-finish-reply-loss',
+            'native_kind': 255,
+            'reaction': 'DropActualReplyConsumer',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 11,
+            'id': 50,
+            'lane': 255,
+            'name': 'sync-abandon-before-finish-parent-cancel',
+            'native_kind': 255,
+            'reaction': 'CanonicalParentCancel',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 11,
+            'id': 51,
+            'lane': 255,
+            'name': 'sync-abandon-before-finish-swap',
+            'native_kind': 255,
+            'reaction': 'ForceReloadSwap',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 11,
+            'id': 52,
+            'lane': 255,
+            'name': 'sync-abandon-before-finish-actor-loss',
+            'native_kind': 255,
+            'reaction': 'ActualActorExit',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 4,
+            'id': 53,
+            'lane': 6,
+            'name': 'reload-held-before-construction',
+            'native_kind': 6,
+            'reaction': 'ForceReload',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 5,
+            'id': 54,
+            'lane': 3,
+            'name': 'reload-held-during-sync',
+            'native_kind': 255,
+            'reaction': 'ForceReload',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 14,
+            'id': 55,
+            'lane': 3,
+            'name': 'reload-held-before-output',
+            'native_kind': 255,
+            'reaction': 'ForceReload',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 16,
+            'id': 56,
+            'lane': 14,
+            'name': 'reload-held-during-retirement',
+            'native_kind': 8,
+            'reaction': 'ForceReload',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 8,
+            'id': 57,
+            'lane': 4,
+            'name': 'proof-held-primary-durable',
+            'native_kind': 255,
+            'reaction': 'HoldThenContinue',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 10,
+            'id': 58,
+            'lane': 4,
+            'name': 'proof-held-primary-ownership',
+            'native_kind': 255,
+            'reaction': 'HoldThenContinue',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 15,
+            'id': 59,
+            'lane': 3,
+            'name': 'cancel-write',
+            'native_kind': 255,
+            'reaction': 'CanonicalReleaseAll',
+            'targets': 1},
+           {'activity': 255,
+            'checkpoint': 1,
+            'id': 60,
+            'lane': 255,
+            'name': 'deadline-header',
+            'native_kind': 255,
+            'reaction': 'OriginalExpiry',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 2,
+            'id': 61,
+            'lane': 255,
+            'name': 'deadline-route',
+            'native_kind': 255,
+            'reaction': 'OriginalExpiry',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 3,
+            'id': 62,
+            'lane': 6,
+            'name': 'deadline-restore',
+            'native_kind': 255,
+            'reaction': 'OriginalExpiry',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 4,
+            'id': 63,
+            'lane': 6,
+            'name': 'deadline-build',
+            'native_kind': 6,
+            'reaction': 'OriginalExpiry',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 12,
+            'id': 64,
+            'lane': 3,
+            'name': 'deadline-driver',
+            'native_kind': 255,
+            'reaction': 'OriginalExpiry',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 13,
+            'id': 65,
+            'lane': 9,
+            'name': 'deadline-c1',
+            'native_kind': 255,
+            'reaction': 'OriginalExpiry',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 15,
+            'id': 66,
+            'lane': 3,
+            'name': 'deadline-write',
+            'native_kind': 255,
+            'reaction': 'OriginalExpiry',
+            'targets': 1},
+           {'activity': 255,
+            'checkpoint': 18,
+            'id': 67,
+            'lane': 255,
+            'name': 'deadline-retirement',
+            'native_kind': 255,
+            'reaction': 'OriginalExpiry',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 3,
+            'id': 68,
+            'lane': 6,
+            'name': 'effect-abandon-restore-caller-loss',
+            'native_kind': 255,
+            'reaction': 'DropActualConnectionConsumer',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 24,
+            'id': 69,
+            'lane': 6,
+            'name': 'effect-abandon-restore-reply-loss',
+            'native_kind': 255,
+            'reaction': 'DropActualEffectConsumer',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 3,
+            'id': 70,
+            'lane': 6,
+            'name': 'effect-abandon-restore-actor-loss',
+            'native_kind': 255,
+            'reaction': 'ActualActorExit',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 4,
+            'id': 71,
+            'lane': 6,
+            'name': 'effect-abandon-start-caller-loss',
+            'native_kind': 6,
+            'reaction': 'DropActualConnectionConsumer',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 24,
+            'id': 72,
+            'lane': 6,
+            'name': 'effect-abandon-start-reply-loss',
+            'native_kind': 255,
+            'reaction': 'DropActualEffectConsumer',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 4,
+            'id': 73,
+            'lane': 6,
+            'name': 'effect-abandon-start-actor-loss',
+            'native_kind': 6,
+            'reaction': 'ActualActorExit',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 9,
+            'id': 74,
+            'lane': 4,
+            'name': 'effect-abandon-proof-caller-loss',
+            'native_kind': 255,
+            'reaction': 'DropActualConnectionConsumer',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 24,
+            'id': 75,
+            'lane': 4,
+            'name': 'effect-abandon-proof-reply-loss',
+            'native_kind': 255,
+            'reaction': 'DropActualEffectConsumer',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 9,
+            'id': 76,
+            'lane': 4,
+            'name': 'effect-abandon-proof-actor-loss',
+            'native_kind': 255,
+            'reaction': 'ActualActorExit',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 10,
+            'id': 77,
+            'lane': 4,
+            'name': 'effect-abandon-verification-caller-loss',
+            'native_kind': 255,
+            'reaction': 'DropActualConnectionConsumer',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 24,
+            'id': 78,
+            'lane': 4,
+            'name': 'effect-abandon-verification-reply-loss',
+            'native_kind': 255,
+            'reaction': 'DropActualEffectConsumer',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 10,
+            'id': 79,
+            'lane': 4,
+            'name': 'effect-abandon-verification-actor-loss',
+            'native_kind': 255,
+            'reaction': 'ActualActorExit',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 17,
+            'id': 80,
+            'lane': 14,
+            'name': 'effect-abandon-stop-caller-loss',
+            'native_kind': 255,
+            'reaction': 'DropActualConnectionConsumer',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 24,
+            'id': 81,
+            'lane': 10,
+            'name': 'effect-abandon-stop-reply-loss',
+            'native_kind': 255,
+            'reaction': 'DropActualEffectConsumer',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 17,
+            'id': 82,
+            'lane': 14,
+            'name': 'effect-abandon-stop-actor-loss',
+            'native_kind': 255,
+            'reaction': 'ActualActorExit',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 16,
+            'id': 83,
+            'lane': 14,
+            'name': 'stop-after-memory-error',
+            'native_kind': 8,
+            'reaction': 'OwnedLocalDispositionFailure',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 22,
+            'id': 84,
+            'lane': 6,
+            'name': 'panic-construction',
+            'native_kind': 6,
+            'reaction': 'PanicAtOwnedBoundary',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 22,
+            'id': 85,
+            'lane': 6,
+            'name': 'panic-task',
+            'native_kind': 255,
+            'reaction': 'PanicAtOwnedBoundary',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 22,
+            'id': 86,
+            'lane': 3,
+            'name': 'panic-turn',
+            'native_kind': 255,
+            'reaction': 'PanicAtOwnedBoundary',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 22,
+            'id': 87,
+            'lane': 3,
+            'name': 'panic-payload-drop',
+            'native_kind': 255,
+            'reaction': 'PanicAtOwnedBoundary',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 22,
+            'id': 88,
+            'lane': 10,
+            'name': 'panic-teardown',
+            'native_kind': 7,
+            'reaction': 'PanicAtOwnedBoundary',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 16,
+            'id': 89,
+            'lane': 14,
+            'name': 'shutdown-handoff-complete',
+            'native_kind': 8,
+            'reaction': 'CanonicalShutdownThenRelease',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 16,
+            'id': 90,
+            'lane': 14,
+            'name': 'shutdown-handoff-cut',
+            'native_kind': 8,
+            'reaction': 'CanonicalShutdownKeepNativeHold',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 16,
+            'id': 91,
+            'lane': 14,
+            'name': 'shutdown-preserve-complete',
+            'native_kind': 8,
+            'reaction': 'CanonicalShutdownThenRelease',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 16,
+            'id': 92,
+            'lane': 14,
+            'name': 'shutdown-preserve-cut',
+            'native_kind': 8,
+            'reaction': 'CanonicalShutdownKeepNativeHold',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 21,
+            'id': 93,
+            'lane': 255,
+            'name': 'binding-wrong-owner',
+            'native_kind': 255,
+            'reaction': 'InvalidBindingAtRealValidator',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 21,
+            'id': 94,
+            'lane': 6,
+            'name': 'binding-wrong-epoch',
+            'native_kind': 255,
+            'reaction': 'InvalidBindingAtRealValidator',
+            'targets': 1},
+           {'activity': 1,
+            'checkpoint': 21,
+            'id': 95,
+            'lane': 255,
+            'name': 'binding-wrong-core-request',
+            'native_kind': 255,
+            'reaction': 'InvalidBindingAtRealValidator',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 21,
+            'id': 96,
+            'lane': 3,
+            'name': 'binding-wrong-invocation-sequence',
+            'native_kind': 255,
+            'reaction': 'InvalidBindingAtRealValidator',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 21,
+            'id': 97,
+            'lane': 6,
+            'name': 'binding-wrong-descriptor',
+            'native_kind': 6,
+            'reaction': 'InvalidBindingAtRealValidator',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 21,
+            'id': 98,
+            'lane': 6,
+            'name': 'binding-wrong-runtime-generation',
+            'native_kind': 255,
+            'reaction': 'InvalidBindingAtRealValidator',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 21,
+            'id': 99,
+            'lane': 6,
+            'name': 'binding-zero-runtime-generation',
+            'native_kind': 255,
+            'reaction': 'InvalidBindingAtRealValidator',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 21,
+            'id': 100,
+            'lane': 6,
+            'name': 'binding-missing-runtime-generation',
+            'native_kind': 255,
+            'reaction': 'InvalidBindingAtRealValidator',
+            'targets': 1},
+           {'activity': 0,
+            'checkpoint': 21,
+            'id': 101,
+            'lane': 6,
+            'name': 'binding-drained-runtime-generation',
+            'native_kind': 255,
+            'reaction': 'InvalidBindingAtRealValidator',
+            'targets': 1}],
+ 'checkpoint_ids': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
+ 'end': {'counts': 'recorded=emitted=received=highest-contiguous-sequence;sum(state_counts)+process_record_count=recorded',
+         'cutoff_scope': 'diagnostic-frontier-no-task-termination',
+         'fields': ['kind',
+                    'recorded_count',
+                    'emitted_count',
+                    'highest_record_sequence',
+                    'barrier_count',
+                    'consumed_control_count',
+                    'failed',
+                    'overflow',
+                    'state_counts',
+                    'process_record_count',
+                    'sealed',
+                    'cutoff_scope'],
+         'kind': 'b4_checkpoint_end',
+         'reject_post_end_records': True,
+         'sealed': True,
+         'state_count_entries': 7},
+ 'internal_process_state_ids': [7, 9, 14, 15, 16],
+ 'invocation_nullable_fields': {'control_ordinal': 'ordinal==0',
+                                'native_child_sequence': 'child_sequence==0',
+                                'operation': 'operation==0',
+                                'root_sequence': 'lane==255',
+                                'auxiliary_request': 'activity!=1',
+                                'auxiliary_sequence': 'activity!=1'},
+ 'invocation_record_fields': ['kind',
+                              'record_sequence',
+                              'case',
+                              'checkpoint',
+                              'state',
+                              'tenant',
+                              'bank_slot',
+                              'a2_slot',
+                              'a2_token',
+                              'invocation',
+                              'lane',
+                              'root_sequence',
+                              'native_kind',
+                              'native_child_sequence',
+                              'activity',
+                              'operation',
+                              'control_ordinal',
+                              'auxiliary_request',
+                              'auxiliary_sequence'],
+ 'limits': {'barrier_cells': 2,
+            'control_reply_seconds': 1,
+            'controls_per_case': 64,
+            'header_cell_bytes': 33,
+            'header_cells': 4,
+            'journal_bytes': 8192,
+            'journal_rows': 64,
+            'original_request_seconds': 15,
+            'p1_snapshot_bytes': 264192,
+            'p1_snapshots': 2,
+            'record_bytes': 512,
+            'reload_operations': 1,
+            'reload_slots': 1,
+            'retained_bytes': 131072,
+            'serializer_bytes': 65536,
+            'stream_bytes': 34816,
+            'structured_stdout_bytes': 563200},
+ 'process_checkpoint_ids': {'header': [15, 16],
+                            'header_checkpoint': 1,
+                            'other_checkpoint': 20,
+                            'probe': [2, 3, 12],
+                            'probe_checkpoint': 23},
+ 'process_optional_fields': {'from_generation': {'present_for_state_ids': [6, 8], 'source': 'first'},
+                             'process_operation': {'present_for_state_ids': [4, 5, 6, 7, 8, 13], 'value': 1},
+                             'to_generation': {'first_for_state_ids': [1, 7],
+                                               'otherwise': 'second',
+                                               'present_for_state_ids': [1, 5, 6, 7, 8]}},
+ 'process_record_fields': ['kind',
+                           'record_sequence',
+                           'case',
+                           'checkpoint',
+                           'process_operation',
+                           'state',
+                           'from_generation',
+                           'to_generation',
+                           'first',
+                           'second'],
+ 'process_states': {'1': 'ReadyInitialSnapshotComplete',
+                    '10': 'ActorExit',
+                    '11': 'CanonicalCut',
+                    '12': 'ProbeSucceeded',
+                    '13': 'ReloadFailed',
+                    '14': 'MainWorkCharged',
+                    '15': 'HeaderEntered',
+                    '16': 'HeaderExpired',
+                    '2': 'ProbeEntered',
+                    '3': 'ProbeRefused',
+                    '4': 'ReloadRequested',
+                    '5': 'ReloadBuildRetained',
+                    '6': 'ReloadAdopted',
+                    '7': 'GenerationChangedProcessed',
+                    '8': 'DrainedOldGeneration',
+                    '9': 'ShutdownStarted'},
+ 'proof_scope': 'b4-p2-components-only;main-ownership-and-all101process-cases-require-P3',
+ 'reload_states': ['Unissued',
+                   'PointerRead',
+                   'GraphLoading',
+                   'BuildSubmitted',
+                   'BuildJoinedResultHeld',
+                   'AdoptedOrRefused',
+                   'GenerationChangedProcessedOrFailed',
+                   'ReplyDisposed',
+                   'CompletedOrStopped'],
+ 'states': {'1': 'entered',
+            '2': 'advanced',
+            '3': 'consumer_dropped',
+            '4': 'continued',
+            '5': 'expired',
+            '6': 'failed',
+            '7': 'cut'}}
+PROCESS_LAYOUT_POLICY = {'crosslinks': {'header_cell33': 'same-run-B1.layouts.header_cell',
+                'p1_retained_bytes': 'same-run-P1-retained_bytes',
+                'qualification_bytes': 'row1.size'},
+ 'extra_scratch_bytes': 0,
+ 'frontend_constructor_maximum': 65536,
+ 'main_work_bytes': 0,
+ 'main_work_scope': 'library-component-zero;actual-main-measurement-is-process-journal-kind14',
+ 'maximum_record_bytes': 4096,
+ 'prefix': 'FOKS_B4_PROCESS_LAYOUT=',
+ 'record_fields': ['schema', 'rows', 'retained_bytes', 'retained_terms'],
+ 'registry_arc_maximum': 65536,
+ 'retained_bytes_maximum': 131072,
+ 'retained_term_fields': ['p1_retained_bytes',
+                          'qualification_bytes',
+                          'main_work_bytes',
+                          'extra_scratch_bytes',
+                          'sync_mutex_bytes',
+                          'sync_condvar_bytes'],
+ 'row_fields': ['id', 'size', 'align'],
+ 'rows': [{'ceiling_bytes': 16384, 'id': 1, 'maximum_alignment': 16, 'name': 'qualification_state'},
+          {'ceiling_bytes': 8192, 'id': 2, 'maximum_alignment': 16, 'name': 'journal_full'},
+          {'ceiling_bytes': 1024, 'id': 3, 'maximum_alignment': 16, 'name': 'barrier_cell'},
+          {'ceiling_bytes': 8192, 'id': 4, 'maximum_alignment': 16, 'name': 'reload_request_state'},
+          {'ceiling_bytes': 256, 'id': 5, 'maximum_alignment': 16, 'name': 'header_cell33'},
+          {'ceiling_bytes': 4096, 'id': 6, 'maximum_alignment': 16, 'name': 'header_lease33'},
+          {'ceiling_bytes': 49152, 'id': 7, 'maximum_alignment': 16, 'name': 'FramePayload'},
+          {'ceiling_bytes': 49152, 'id': 8, 'maximum_alignment': 16, 'name': 'GatedFrame'},
+          {'ceiling_bytes': 49152, 'id': 9, 'maximum_alignment': 16, 'name': 'SocketWork'},
+          {'ceiling_bytes': 49152, 'id': 10, 'maximum_alignment': 16, 'name': 'socket_future'},
+          {'ceiling_bytes': 4096, 'id': 11, 'maximum_alignment': 16, 'name': 'socket_result'},
+          {'ceiling_bytes': 49152, 'id': 12, 'maximum_alignment': 16, 'name': 'catch_closure'},
+          {'ceiling_bytes': 4096, 'id': 13, 'maximum_alignment': 16, 'name': 'negative_config_arc'}],
+ 'schema': 1,
+ 'scratch_compiled_gate_maximum': 1024,
+ 'socket_constructor_maximum': 49152,
+ 'sync_backing': {'fields': ['sync_mutex_bytes', 'sync_condvar_bytes'],
+                  'both_positive': True,
+                  'combined_maximum': 256,
+                  'types': ['existing-libc-pthread_mutex_t', 'existing-libc-pthread_cond_t'],
+                  'allocation': 'two-requested-PAL-Box-payloads;allocator-and-kernel-overhead-excluded',
+                  'precharge': 'both-before-Qualification-construction',
+                  'initialize': 'fresh-unshared-mutex-try_lock-drop-then-condvar-notify_all-before-sharing',
+                  'toolchain': {'rustc_version': 'rustc 1.95.0 (59807616e 2026-04-14)',
+                                'commit': '59807616e1fa2540724bfbac14d7976d7e4a3860',
+                                'target': 'aarch64-apple-darwin',
+                                'sources': ['https://raw.githubusercontent.com/rust-lang/rust/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/sync/mutex/mod.rs',
+                                            'https://raw.githubusercontent.com/rust-lang/rust/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/sync/condvar/mod.rs',
+                                            'https://raw.githubusercontent.com/rust-lang/rust/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/sync/mutex/pthread.rs',
+                                            'https://raw.githubusercontent.com/rust-lang/rust/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/sync/condvar/pthread.rs',
+                                            'https://raw.githubusercontent.com/rust-lang/rust/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/sync/once_box.rs',
+                                            'https://raw.githubusercontent.com/rust-lang/rust/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/pal/unix/sync/mutex.rs',
+                                            'https://raw.githubusercontent.com/rust-lang/rust/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/pal/unix/sync/condvar.rs']},
+                  'other_toolchain_or_target': 'requires-new-backend-source-review'}}
+PROCESS_FRONTEND_CONTRACT = {'commands': {'begin': {'opcode': 1, 'phases': [0]},
+              'observe': {'opcode': 2, 'pending_phase': 1, 'phases': [0, 1]},
+              'release_refused': {'versions': [1], 'opcode': 3},
+              'advance': {'version': 2, 'opcode': 3, 'bytes': 32}},
+ 'control_allocation': 'original-control-owner-and-a0-control-pool',
+ 'header': {'bytes': 16,
+            'magic': 'FOKSGN01',
+            'requires_write_half_eof': True,
+            'reserved_zero_bytes': 4,
+            'retained_bytes': 33,
+            'tenant_ordinals': [0, 1, 2],
+            'version': 1},
+ 'large_output_scenarios': ['tcp-write-held',
+                            'tcp-disconnect',
+                            'cancel-write',
+                            'deadline-write',
+                            'shutdown-handoff-cut',
+                            'shutdown-preserve-cut'],
+ 'limits': {'connections': 4,
+            'control_seconds': 1,
+            'dispatchers': 2,
+            'encoded_report_bytes': 65536,
+            'invocation_bytes': 8388608,
+            'maximum_frame_bytes': 4194304,
+            'ordinary_frame_bytes': 32,
+            'process_bytes': 1048576,
+            'report_bytes': 131072,
+            'request_seconds': 15,
+            'slots': 2},
+ 'output_allocation': 'one-shot-original-debt-and-a0-response-pool',
+ 'response': {'base_bytes': 32,
+              'driver_or_proof_failure_publishes': False,
+              'failure_payload_zero': True,
+              'large_tail': 'repeated-actual-payload',
+              'length_encoding': 'u32-le',
+              'magic': 'FOKSGO01',
+              'payload_bytes': 12,
+              'status': {'gated_handler_failure': 1, 'success': 0},
+              'version': 1},
+ 'retirement_ticket': 'scalar-process-registry-sequence-no-record-weak',
+ 'scenarios': ['cold-sync-retire',
+               'restore-next-process',
+               'two-slots',
+               'same-tenant-building',
+               'same-tenant-running',
+               'retiring-after-memory-busy',
+               'same-tenant-quarantined',
+               'failed-turn-gated',
+               'tcp-write-held',
+               'tcp-disconnect',
+               'descriptor-boot-no-prewarm',
+               'descriptor-reload-no-prewarm',
+               'ordinary-primary-service-refusal-regression',
+               'bucket-transport-refusal',
+               'bucket-probe-timeout',
+               'bucket-contract-violation',
+               'sync-held-pre-enqueue',
+               'sync-held-post-enqueue',
+               'sync-held-resident',
+               'sync-held-before-proof',
+               'sync-held-after-proof',
+               'sync-held-before-finish',
+               'sync-abandon-pre-enqueue-expiry',
+               'sync-abandon-pre-enqueue-reply-loss',
+               'sync-abandon-pre-enqueue-parent-cancel',
+               'sync-abandon-pre-enqueue-swap',
+               'sync-abandon-pre-enqueue-actor-loss',
+               'sync-abandon-post-enqueue-expiry',
+               'sync-abandon-post-enqueue-reply-loss',
+               'sync-abandon-post-enqueue-parent-cancel',
+               'sync-abandon-post-enqueue-swap',
+               'sync-abandon-post-enqueue-actor-loss',
+               'sync-abandon-resident-expiry',
+               'sync-abandon-resident-reply-loss',
+               'sync-abandon-resident-parent-cancel',
+               'sync-abandon-resident-swap',
+               'sync-abandon-resident-actor-loss',
+               'sync-abandon-before-proof-expiry',
+               'sync-abandon-before-proof-reply-loss',
+               'sync-abandon-before-proof-parent-cancel',
+               'sync-abandon-before-proof-swap',
+               'sync-abandon-before-proof-actor-loss',
+               'sync-abandon-after-proof-expiry',
+               'sync-abandon-after-proof-reply-loss',
+               'sync-abandon-after-proof-parent-cancel',
+               'sync-abandon-after-proof-swap',
+               'sync-abandon-after-proof-actor-loss',
+               'sync-abandon-before-finish-expiry',
+               'sync-abandon-before-finish-reply-loss',
+               'sync-abandon-before-finish-parent-cancel',
+               'sync-abandon-before-finish-swap',
+               'sync-abandon-before-finish-actor-loss',
+               'reload-held-before-construction',
+               'reload-held-during-sync',
+               'reload-held-before-output',
+               'reload-held-during-retirement',
+               'proof-held-primary-durable',
+               'proof-held-primary-ownership',
+               'cancel-write',
+               'deadline-header',
+               'deadline-route',
+               'deadline-restore',
+               'deadline-build',
+               'deadline-driver',
+               'deadline-c1',
+               'deadline-write',
+               'deadline-retirement',
+               'effect-abandon-restore-caller-loss',
+               'effect-abandon-restore-reply-loss',
+               'effect-abandon-restore-actor-loss',
+               'effect-abandon-start-caller-loss',
+               'effect-abandon-start-reply-loss',
+               'effect-abandon-start-actor-loss',
+               'effect-abandon-proof-caller-loss',
+               'effect-abandon-proof-reply-loss',
+               'effect-abandon-proof-actor-loss',
+               'effect-abandon-verification-caller-loss',
+               'effect-abandon-verification-reply-loss',
+               'effect-abandon-verification-actor-loss',
+               'effect-abandon-stop-caller-loss',
+               'effect-abandon-stop-reply-loss',
+               'effect-abandon-stop-actor-loss',
+               'stop-after-memory-error',
+               'panic-construction',
+               'panic-task',
+               'panic-turn',
+               'panic-payload-drop',
+               'panic-teardown',
+               'shutdown-handoff-complete',
+               'shutdown-handoff-cut',
+               'shutdown-preserve-complete',
+               'shutdown-preserve-cut',
+               'binding-wrong-owner',
+               'binding-wrong-epoch',
+               'binding-wrong-core-request',
+               'binding-wrong-invocation-sequence',
+               'binding-wrong-descriptor',
+               'binding-wrong-runtime-generation',
+               'binding-zero-runtime-generation',
+               'binding-missing-runtime-generation',
+               'binding-drained-runtime-generation'],
+ 'scenario_aliases': {'shutdown-complete': 'shutdown-handoff-complete',
+                      'shutdown-cut': 'shutdown-handoff-cut'},
+ 'large_output_aliases': ['shutdown-cut'],
+ 'control_deadline': 'min(original-acceptance-plus15s,actual-reply-start-plus1s)'}
+PROCESS_HELP_IMAGE = (8227, 'a6c1d8c8912476a57d9a07f830c9edc84cff7d61687c22d6ddc6d32129a2e14a')
+PROCESS_REFUSALS = {'frontend-missing-scenario': (['foks-guarded-node'],
+                               b'Error: foks-guarded-node requires a closed scenario\n'),
+ 'frontend-unsupported-scenario': (['foks-guarded-node', 'unsupported'],
+                                   b'Error: unsupported foks-guarded-node scenario\n'),
+ 'frontend-absent': (['foks-guarded-node', 'cold-sync-retire'],
+                     b'Error: unknown command or option: foks-guarded-node; run `celld --help` for usage\n')}
 FRONTEND_ROLES = ("tcp", "bucket")
 FRONTEND_PORT_ENV = {"tcp": "FOKS_B3_TCP_PORT", "bucket": "FOKS_B3_BUCKET_PORT"}
 FRONTEND_POLICY = '(version 1)\n(allow default)\n(deny network*)\n' + "".join(
@@ -393,7 +1634,7 @@ def load_pins(root=ROOT, stage=None):
         if stage not in NODE_STAGES:
             fail("unsupported source stage")
         base = load_pins(root)
-        profile = {FOUNDATION: load_foundation, LIFETIMES: load_lifetimes, FRONTEND: load_frontend, OBSERVATIONS: load_observations}[stage](root, base)
+        profile = {FOUNDATION: load_foundation, LIFETIMES: load_lifetimes, FRONTEND: load_frontend, OBSERVATIONS: load_observations, PROCESS: load_process}[stage](root, base)
         return {**base, "profile": stage, "foundation": profile}
     pins = read_json(root / "runtime.lock.json")
     if not isinstance(pins, dict) or (pins.get("format"), pins.get("profile")) not in ((1, A1), (2, A2)) or type(pins.get("format")) is not int or pins.get("target") != TARGET:
@@ -444,6 +1685,8 @@ def patch_series(root, pins):
         return frontend_series(root, pins["foundation"])
     if pins["profile"] == OBSERVATIONS:
         return observations_series(root, pins["foundation"])
+    if pins["profile"] == PROCESS:
+        return process_series(root, pins["foundation"])
     path = root / "patches/series.json"
     series = read_json(path)
     if file_hash(path) != pins["patch_series_sha256"]:
@@ -484,7 +1727,7 @@ def patch_series(root, pins):
 
 def selected_mode(pins, mode):
     if pins["profile"] in NODE_STAGES:
-        modes = {FOUNDATION: FOUNDATION_MODES, LIFETIMES: LIFETIMES_MODES, FRONTEND: FRONTEND_MODES, OBSERVATIONS: OBSERVATIONS_MODES}[pins["profile"]]
+        modes = {FOUNDATION: FOUNDATION_MODES, LIFETIMES: LIFETIMES_MODES, FRONTEND: FRONTEND_MODES, OBSERVATIONS: OBSERVATIONS_MODES, PROCESS: PROCESS_MODES}[pins["profile"]]
         if mode not in modes:
             fail("unsupported graph/build mode for selected node profile")
         features = modes[mode]["root_features"]
@@ -503,6 +1746,8 @@ def stage_for_mode(mode):
         return FRONTEND
     if mode in OBSERVATIONS_MODES:
         return OBSERVATIONS
+    if mode in PROCESS_MODES:
+        return PROCESS
     if mode not in ("identity", "lifecycle", "node-baseline"):
         fail("unsupported graph/build mode")
     return None
@@ -1101,8 +2346,11 @@ def accepted_frontend(root):
 
 
 def load_observations(root, base):
+    return validate_observations(root, base, read_json(root / FOUNDATION_PROFILE), root / FOUNDATION_SERIES)
+
+
+def validate_observations(root, base, profile, series_path):
     accepted = accepted_frontend(root)
-    profile = read_json(root / FOUNDATION_PROFILE)
     closed_fields(profile, ("format", "profile", "target", "accepted_a2_commit", "accepted_a3a_commit", "accepted_b1_commit", "accepted_b2_commit", "accepted_b3_commit", "base", "pins", "node_series", "cargo_lock", "qualification"), "observations profile")
     identity = {"format": 1, "profile": OBSERVATIONS, "target": TARGET, "accepted_a2_commit": NODE_BASE, "accepted_a3a_commit": FOUNDATION_BASE, "accepted_b1_commit": LIFETIMES_BASE, "accepted_b2_commit": FRONTEND_BASE, "accepted_b3_commit": OBSERVATIONS_BASE}
     exact_json({name: profile[name] for name in identity}, identity, "observations profile identity")
@@ -1131,14 +2379,18 @@ def load_observations(root, base):
     exact_json(qualification["modes"], OBSERVATIONS_MODES, "observations modes")
     exact_json(qualification["observations"], observations_contract(), "observations policy")
     exact_json(qualification["observation_layout_evidence"], observation_layout_contract(), "observations layout policy")
-    observations_series(root, profile, accepted)
+    validate_observations_series(root, profile, accepted, series_path)
     return profile
 
 
 def observations_series(root, profile, accepted=None):
+    return validate_observations_series(root, profile, accepted, root / FOUNDATION_SERIES)
+
+
+def validate_observations_series(root, profile, accepted, series_path):
     accepted = accepted_frontend(root) if accepted is None else accepted
-    checked_file(root / FOUNDATION_SERIES, profile["node_series"])
-    series = read_json(root / FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    checked_file(series_path, profile["node_series"])
+    series = read_json(series_path, MAXIMUM_FOUNDATION_SERIES)
     closed_fields(series, ("format", "profile", "accepted_a2_commit", "accepted_a3a_commit", "accepted_b1_commit", "accepted_b2_commit", "accepted_b3_commit", "base_series", "patches"), "observations patch series")
     identity = {"format": 1, "profile": OBSERVATIONS, "accepted_a2_commit": NODE_BASE, "accepted_a3a_commit": FOUNDATION_BASE, "accepted_b1_commit": LIFETIMES_BASE, "accepted_b2_commit": FRONTEND_BASE, "accepted_b3_commit": OBSERVATIONS_BASE, "base_series": accepted["base"]["patch_series"]}
     exact_json({name: series[name] for name in identity}, identity, "observations series identity")
@@ -1162,6 +2414,97 @@ def observations_series(root, profile, accepted=None):
         validate_image(entry["before"])
         validate_image(entry["after"])
     checked_file(root / OBSERVATIONS_PATCH, selected)
+    return series
+
+
+def accepted_observations(root):
+    # P1 validation uses only its immutable images, never the live P2 profile.
+    for path, checksum in PROCESS_BASE_IMAGES.values():
+        value = read_json(root / path)
+        if file_hash(root / path) != checksum or not isinstance(value, dict):
+            fail("accepted observations input changed")
+    return validate_observations(root, load_pins(root), read_json(root / PROCESS_PROFILE), root / PROCESS_SERIES)
+
+
+def process_contract():
+    return copy.deepcopy(PROCESS_CONTRACT)
+
+
+def process_layout_contract():
+    return copy.deepcopy(PROCESS_LAYOUT_POLICY)
+
+
+def process_frontend_contract():
+    return copy.deepcopy(PROCESS_FRONTEND_CONTRACT)
+
+
+def load_process(root, base):
+    accepted = accepted_observations(root)
+    profile = read_json(root / FOUNDATION_PROFILE)
+    closed_fields(profile, ("format", "profile", "target", "accepted_a2_commit", "accepted_a3a_commit", "accepted_b1_commit", "accepted_b2_commit", "accepted_b3_commit", "accepted_b4_p1_commit", "base", "pins", "node_series", "cargo_lock", "qualification"), "process profile")
+    identity = {"format": 1, "profile": PROCESS, "target": TARGET, "accepted_a2_commit": NODE_BASE, "accepted_a3a_commit": FOUNDATION_BASE, "accepted_b1_commit": LIFETIMES_BASE, "accepted_b2_commit": FRONTEND_BASE, "accepted_b3_commit": OBSERVATIONS_BASE, "accepted_b4_p1_commit": PROCESS_BASE}
+    exact_json({name: profile[name] for name in identity}, identity, "process profile identity")
+    closed_fields(profile["base"], (*FOUNDATION_BASE_IMAGES, *LIFETIMES_BASE_IMAGES, *FRONTEND_BASE_IMAGES, *OBSERVATIONS_BASE_IMAGES, *PROCESS_BASE_IMAGES), "process base")
+    exact_json({name: profile["base"][name] for name in accepted["base"]}, accepted["base"], "process historical base")
+    for name, (path, checksum) in PROCESS_BASE_IMAGES.items():
+        image = profile["base"][name]
+        foundation_image(image, path)
+        if image["sha256"] != checksum:
+            fail("process accepted base changed")
+        checked_file(root / path, image)
+    exact_json(profile["pins"], base, "process inherited pins")
+    exact_json(profile["cargo_lock"], accepted["cargo_lock"], "process unchanged lock contract")
+    checked_file(root / "Cargo.lock", profile["cargo_lock"]["expected"])
+    foundation_image(profile["node_series"], FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    qualification = profile["qualification"]
+    closed_fields(qualification, ("claim", "source_roster", "tree", "program", "deployments", "tests", "modes", "not_qualified", "layout_evidence", "frontend", "native_execution", "frontend_layout_evidence", "observations", "observation_layout_evidence", "process", "process_layout_evidence"), "process qualification")
+    exact_json({name: qualification[name] for name in ("claim", "source_roster", "not_qualified")}, {"claim": "b4-p2-process-components-only", "source_roster": list(PROCESS_PATHS), "not_qualified": PROCESS_EXCLUSIONS}, "process scope")
+    tree = qualification["tree"]
+    closed_fields(tree, ("files", "payload_bytes", "inventory_sha256"), "process tree")
+    if type(tree["files"]) is not int or tree["files"] != accepted["qualification"]["tree"]["files"] + len(PROCESS_ADDITIONS) or type(tree["payload_bytes"]) is not int or not 0 < tree["payload_bytes"] <= MAXIMUM_FOUNDATION_SOURCE or not isinstance(tree["inventory_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", tree["inventory_sha256"]):
+        fail("invalid process tree envelope")
+    for name in ("program", "deployments", "layout_evidence", "native_execution", "frontend_layout_evidence", "observations", "observation_layout_evidence"):
+        exact_json(qualification[name], accepted["qualification"][name], "process unchanged " + name)
+    exact_json(qualification["frontend"], process_frontend_contract(), "process effective frontend policy")
+    exact_json(qualification["tests"], {"prefix": FRONTEND_TEST_PREFIX, "names": PROCESS_TESTS, "threads": 1}, "process test inventory")
+    exact_json(qualification["modes"], PROCESS_MODES, "process modes")
+    exact_json(qualification["process"], process_contract(), "process policy")
+    exact_json(qualification["process_layout_evidence"], process_layout_contract(), "process layout policy")
+    process_series(root, profile, accepted)
+    return profile
+
+
+def process_series(root, profile, accepted=None):
+    accepted = accepted_observations(root) if accepted is None else accepted
+    checked_file(root / FOUNDATION_SERIES, profile["node_series"])
+    series = read_json(root / FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    closed_fields(series, ("format", "profile", "accepted_a2_commit", "accepted_a3a_commit", "accepted_b1_commit", "accepted_b2_commit", "accepted_b3_commit", "accepted_b4_p1_commit", "base_series", "patches"), "process patch series")
+    identity = {"format": 1, "profile": PROCESS, "accepted_a2_commit": NODE_BASE, "accepted_a3a_commit": FOUNDATION_BASE, "accepted_b1_commit": LIFETIMES_BASE, "accepted_b2_commit": FRONTEND_BASE, "accepted_b3_commit": OBSERVATIONS_BASE, "accepted_b4_p1_commit": PROCESS_BASE, "base_series": accepted["base"]["patch_series"]}
+    exact_json({name: series[name] for name in identity}, identity, "process series identity")
+    patches = series["patches"]
+    if not isinstance(patches, list) or len(patches) != 6:
+        fail("process requires exactly six patches")
+    prefix = validate_observations_series(root, accepted, accepted_frontend(root), root / PROCESS_SERIES)
+    exact_json(patches[:5], prefix["patches"], "process immutable patch prefix")
+    selected = patches[5]
+    closed_fields(selected, ("path", "bytes", "sha256", "files"), "process sixth patch")
+    foundation_image({name: selected[name] for name in ("path", "bytes", "sha256")}, PROCESS_PATCH, MAXIMUM_FOUNDATION_PATCH)
+    if sum(entry["bytes"] for entry in patches) > MAXIMUM_PROCESS_PATCHES:
+        fail("process combined patch payload exceeds allowance")
+    files = selected["files"]
+    if not isinstance(files, list) or len(files) != len(PROCESS_PATHS) or len(PROCESS_PATHS) != 14 or len(PROCESS_ADDITIONS) != 1 or set(PROCESS_PATHS) - set(PROCESS_ADDITIONS) - set(FRONTEND_UNION):
+        fail("invalid process patch roster")
+    for path, entry in zip(PROCESS_PATHS, files, strict=True):
+        closed_fields(entry, ("path", "mode", "before", "after"), "process patch file")
+        if entry["path"] != path or entry["mode"] != "100644":
+            fail("process patch path/order/mode changed")
+        if path in PROCESS_ADDITIONS:
+            if entry["before"] is not None:
+                fail("process addition has an existing preimage")
+        else:
+            validate_image(entry["before"])
+        validate_image(entry["after"])
+    checked_file(root / PROCESS_PATCH, selected)
     return series
 
 
@@ -1617,7 +2960,7 @@ def prepare_assets(archive, binding, root=ROOT, stage=None):
 
 
 def foundation_assets(root, pins, base):
-    if pins["profile"] in (FRONTEND, OBSERVATIONS):
+    if pins["profile"] in (FRONTEND, OBSERVATIONS, PROCESS):
         accepted = accepted_lifetimes(root)
         foundation = accepted_foundation(root)
         historical_foundation = {"format": 1, "profile": FOUNDATION, "input_sha256": file_hash(root / LIFETIMES_PROFILE), "patch_series_sha256": foundation["node_series"]["sha256"], "base_receipt_sha256": file_hash(root / "runtime/artifacts/assets.json"), "assets": base}
@@ -1636,7 +2979,16 @@ def foundation_assets(root, pins, base):
             fail("accepted frontend asset receipt changed")
         exact_json(read_json(root / OBSERVATIONS_ASSETS), historical_frontend, "accepted frontend assets")
         checked_file(root / "runtime/assets-node-qualification.json", {"bytes": (root / OBSERVATIONS_ASSETS).stat().st_size, "sha256": OBSERVATIONS_ASSET_SHA256})
-        return {"format": 1, "profile": OBSERVATIONS, "input_sha256": file_hash(root / FOUNDATION_PROFILE), "patch_series_sha256": pins["foundation"]["node_series"]["sha256"], "base_receipt_sha256": file_hash(root / "runtime/artifacts/assets.json"), "foundation_receipt_sha256": LIFETIMES_ASSET_SHA256, "lifetimes_receipt_sha256": FRONTEND_ASSET_SHA256, "frontend_receipt_sha256": OBSERVATIONS_ASSET_SHA256, "assets": base}
+        observations = pins["foundation"] if pins["profile"] == OBSERVATIONS else accepted_observations(root)
+        observations_path = FOUNDATION_PROFILE if pins["profile"] == OBSERVATIONS else PROCESS_PROFILE
+        historical_observations = {"format": 1, "profile": OBSERVATIONS, "input_sha256": file_hash(root / observations_path), "patch_series_sha256": observations["node_series"]["sha256"], "base_receipt_sha256": file_hash(root / "runtime/artifacts/assets.json"), "foundation_receipt_sha256": LIFETIMES_ASSET_SHA256, "lifetimes_receipt_sha256": FRONTEND_ASSET_SHA256, "frontend_receipt_sha256": OBSERVATIONS_ASSET_SHA256, "assets": base}
+        if pins["profile"] == OBSERVATIONS:
+            return historical_observations
+        if file_hash(root / PROCESS_ASSETS) != PROCESS_ASSET_SHA256:
+            fail("accepted observations asset receipt changed")
+        exact_json(read_json(root / PROCESS_ASSETS), historical_observations, "accepted observations assets")
+        checked_file(root / "runtime/assets-node-observations.json", {"bytes": (root / PROCESS_ASSETS).stat().st_size, "sha256": PROCESS_ASSET_SHA256})
+        return {"format": 1, "profile": PROCESS, "input_sha256": file_hash(root / FOUNDATION_PROFILE), "patch_series_sha256": pins["foundation"]["node_series"]["sha256"], "base_receipt_sha256": file_hash(root / "runtime/artifacts/assets.json"), "foundation_receipt_sha256": LIFETIMES_ASSET_SHA256, "lifetimes_receipt_sha256": FRONTEND_ASSET_SHA256, "frontend_receipt_sha256": OBSERVATIONS_ASSET_SHA256, "observations_receipt_sha256": PROCESS_ASSET_SHA256, "assets": base}
     if pins["profile"] == LIFETIMES:
         accepted = accepted_foundation(root)
         historical = {"format": 1, "profile": FOUNDATION, "input_sha256": file_hash(root / LIFETIMES_PROFILE), "patch_series_sha256": accepted["node_series"]["sha256"], "base_receipt_sha256": file_hash(root / "runtime/artifacts/assets.json"), "assets": base}
@@ -2880,7 +4232,7 @@ def build_commands(root, toolchain, pins, mode="identity"):
 
 
 def foundation_test_commands(root, toolchain, pins):
-    if pins["profile"] in (FRONTEND, OBSERVATIONS):
+    if pins["profile"] in (FRONTEND, OBSERVATIONS, PROCESS):
         fail("frontend tests require the bound direct executable and two-port policy")
     selected_mode(pins, pins["profile"])
     prefix = LIFETIMES_TEST_PREFIX if pins["profile"] == LIFETIMES else FOUNDATION_TEST_PREFIX
@@ -2889,7 +4241,7 @@ def foundation_test_commands(root, toolchain, pins):
 
 
 def frontend_test_compile_command(root, toolchain, pins):
-    if pins["profile"] not in (FRONTEND, OBSERVATIONS):
+    if pins["profile"] not in (FRONTEND, OBSERVATIONS, PROCESS):
         fail("frontend compilation requires its exact stage")
     selected_mode(pins, pins["profile"])
     return network_command([toolchain / "bin/cargo", "test", "--locked", "--offline", "--manifest-path", str(root / "Cargo.toml"), "--no-default-features", "--package", "foks-celld-guarded", "--package", "celld@0.6.2", "--features", "foks-celld-guarded/node-qualification", "--lib", "-j", "2", "--target", TARGET, "--no-run", "--message-format=json"])
@@ -2945,7 +4297,7 @@ def frontend_test_environment(environment, ports):
 
 def verify_frontend_test_artifact(stdout_path, graph, root=ROOT, stage=FRONTEND):
     target = graph.get("node_test_target")
-    if stage not in (FRONTEND, OBSERVATIONS) or not isinstance(target, dict) or graph.get("profile") != stage or graph.get("mode") != stage:
+    if stage not in (FRONTEND, OBSERVATIONS, PROCESS) or not isinstance(target, dict) or graph.get("profile") != stage or graph.get("mode") != stage:
         fail("missing frontend library test target graph")
     artifacts, finished, consumed = [], [], 0
     path = Path(stdout_path)
@@ -2990,7 +4342,7 @@ def verify_frontend_test_artifact(stdout_path, graph, root=ROOT, stage=FRONTEND)
 def foundation_test_output(path, listing, stage=FOUNDATION):
     if stage not in NODE_STAGES:
         fail("unsupported component test stage")
-    expected = {FOUNDATION: FOUNDATION_TESTS, LIFETIMES: LIFETIMES_TESTS, FRONTEND: FRONTEND_TESTS, OBSERVATIONS: OBSERVATIONS_TESTS}[stage]
+    expected = {FOUNDATION: FOUNDATION_TESTS, LIFETIMES: LIFETIMES_TESTS, FRONTEND: FRONTEND_TESTS, OBSERVATIONS: OBSERVATIONS_TESTS, PROCESS: PROCESS_TESTS}[stage]
     return component_test_output(path, listing, expected)
 
 
@@ -3234,14 +4586,56 @@ def observation_layout_output(path, expected_stderr_sha256):
     return {"record": record, "raw_record_bytes": len(raw_record), "raw_record_sha256": digest(raw_record)}
 
 
+def process_layout_output(path, expected_stderr_sha256):
+    """P2 library measurements share the exact same owned stderr as P1/B1/B2/B3."""
+    policy = process_layout_contract()
+    record, raw_record = compiled_layout_record(path, expected_stderr_sha256, policy["prefix"].encode("ascii"), policy["maximum_record_bytes"])
+    closed_fields(record, policy["record_fields"], "process layout record")
+    exact_json(record["schema"], policy["schema"], "process layout schema")
+    rows = record["rows"]
+    if not isinstance(rows, list) or len(rows) != 13:
+        fail("process layout requires exactly thirteen compiled rows")
+    for entry, expected in zip(rows, policy["rows"], strict=True):
+        closed_fields(entry, policy["row_fields"], "process layout row")
+        exact_json(entry["id"], expected["id"], "process layout row identity/order")
+        size, alignment = entry["size"], entry["align"]
+        if type(size) is not int or not 0 < size <= expected["ceiling_bytes"] or type(alignment) is not int or not 0 < alignment <= expected["maximum_alignment"] or alignment & (alignment - 1) or size % alignment:
+            fail("invalid process layout size or alignment")
+    terms = record["retained_terms"]
+    closed_fields(terms, policy["retained_term_fields"], "process retained terms")
+    for value in terms.values():
+        if type(value) is not int or not 0 <= value <= policy["retained_bytes_maximum"]:
+            fail("invalid process retained term")
+    # Qualification includes its inline journal, both barrier cells and wake.
+    # Count that actual allocation once; separate rows remain independent bounds.
+    if rows[0]["size"] < rows[1]["size"] + 2 * rows[2]["size"]:
+        fail("process qualification omits its inline journal/barriers")
+    p1 = observation_layout_output(path, expected_stderr_sha256)["record"]
+    b1 = foundation_layout_output(path, expected_stderr_sha256, PROCESS)["record"]
+    frontend_layout_output(path, expected_stderr_sha256)
+    if terms["p1_retained_bytes"] != p1["retained_bytes"] or terms["qualification_bytes"] != rows[0]["size"] or rows[4] != {"id": 5, "size": b1["layouts"]["header_cell"]["bytes"], "align": b1["layouts"]["header_cell"]["alignment"]}:
+        fail("process measurements disagree with same-run predecessor records")
+    # This producer is a library component test. The actual binary-only future
+    # gets its separate process-owned charge/journal witness during P3.
+    exact_json(terms["main_work_bytes"], policy["main_work_bytes"], "process library main work scope")
+    exact_json(terms["extra_scratch_bytes"], policy["extra_scratch_bytes"], "process compiled scratch gate")
+    sync_fields = policy["sync_backing"]["fields"]
+    if any(terms[name] <= 0 for name in sync_fields) or sum(terms[name] for name in sync_fields) > policy["sync_backing"]["combined_maximum"]:
+        fail("process synchronization backing is missing or exceeds its precharge")
+    retained = sum(terms.values())
+    if type(record["retained_bytes"]) is not int or record["retained_bytes"] != retained or retained > policy["retained_bytes_maximum"]:
+        fail("process retained storage exceeds measured overlap")
+    return {"record": record, "raw_record_bytes": len(raw_record), "raw_record_sha256": digest(raw_record)}
+
+
 def foundation_probe_specs(mode):
     if mode not in NODE_BINARY_MODES:
         fail("unknown node binary probe mode")
     probes = {"version": (["--version"], 0), "help": (["--help"], 0), "invalid-option": (["--foks-guarded-node-qualification"], 1)}
-    if mode in (FRONTEND, OBSERVATIONS):
-        probes.update({name: (FRONTEND_REFUSALS[name][0], 1) for name in ("frontend-missing-scenario", "frontend-unsupported-scenario")})
-    elif mode in (FRONTEND + "-default", OBSERVATIONS + "-default"):
-        probes["frontend-absent"] = (FRONTEND_REFUSALS["frontend-absent"][0], 1)
+    if mode in (FRONTEND, OBSERVATIONS, PROCESS):
+        probes.update({name: ((PROCESS_REFUSALS if mode == PROCESS else FRONTEND_REFUSALS)[name][0], 1) for name in ("frontend-missing-scenario", "frontend-unsupported-scenario")})
+    elif mode in (FRONTEND + "-default", OBSERVATIONS + "-default", PROCESS + "-default"):
+        probes["frontend-absent"] = ((PROCESS_REFUSALS if mode == PROCESS + "-default" else FRONTEND_REFUSALS)["frontend-absent"][0], 1)
     return probes
 
 
@@ -3286,11 +4680,11 @@ def foundation_probe_output(directory, name, mode=None):
     if name == "version":
         accepted = out == b"celld 0.6.2 (debug)\n" and not err
     elif name == "help":
-        accepted = (len(out), digest(out)) == (FRONTEND_HELP_IMAGE if mode in (FRONTEND, OBSERVATIONS) else FOUNDATION_HELP_IMAGE) and not err
+        accepted = (len(out), digest(out)) == (PROCESS_HELP_IMAGE if mode == PROCESS else FRONTEND_HELP_IMAGE if mode in (FRONTEND, OBSERVATIONS) else FOUNDATION_HELP_IMAGE) and not err
     elif name == "invalid-option":
         accepted = not out and err == b"Error: unknown command or option: --foks-guarded-node-qualification; run `celld --help` for usage\n"
     else:
-        accepted = not out and err == FRONTEND_REFUSALS[name][1]
+        accepted = not out and err == (PROCESS_REFUSALS if mode in (PROCESS, PROCESS + "-default") else FRONTEND_REFUSALS)[name][1]
     if not accepted:
         fail("foundation binary probe outcome mismatch: " + name)
     # Raw files are untouched; these hashes/lengths refer to them, not to the
@@ -3300,7 +4694,7 @@ def foundation_probe_output(directory, name, mode=None):
 
 def run_frontend_components(focused, root, toolchain, pins, graph, environment, directory, slot):
     stage = pins["profile"]
-    if stage not in (FRONTEND, OBSERVATIONS):
+    if stage not in (FRONTEND, OBSERVATIONS, PROCESS):
         fail("unsupported direct component stage")
     timeout = pins["build"]["timeout_seconds"]
     focused["compile"] = run_owned(frontend_test_compile_command(root, toolchain, pins), root, environment, directory, "tests-compile", slot, timeout, lambda: resource_refusal(root))
@@ -3330,8 +4724,10 @@ def run_frontend_components(focused, root, toolchain, pins, graph, environment, 
     focused["layouts"] = foundation_layout_output(stderr, checksum, stage)
     focused["lifetimes_layouts"] = lifetimes_layout_output(stderr, checksum)
     focused["frontend_layouts"] = frontend_layout_output(stderr, checksum)
-    if stage == OBSERVATIONS:
+    if stage in (OBSERVATIONS, PROCESS):
         focused["observation_layouts"] = observation_layout_output(stderr, checksum)
+    if stage == PROCESS:
+        focused["process_layouts"] = process_layout_output(stderr, checksum)
     focused["transport_tests"] = {}
     for group, names in FRONTEND_TRANSPORT_TESTS.items():
         result = {"names": names.copy(), "threads": 1, "network": "deny-all", "scope": "root-workspace-a0-regression", "manifest": str(root.parents[1] / "Cargo.toml")}
@@ -3362,11 +4758,12 @@ def build_foundation(graph_directory, root, mode):
     toolchain, environment = controlled_environment(root)
     evidence_root = runtime_directory(root) / "evidence"
     evidence_root.mkdir(exist_ok=True)
-    directory = Path(tempfile.mkdtemp(prefix={FOUNDATION: "foundation-", LIFETIMES: "lifetimes-", FRONTEND: "frontend-", OBSERVATIONS: "observations-"}[stage], dir=evidence_root))
+    directory = Path(tempfile.mkdtemp(prefix={FOUNDATION: "foundation-", LIFETIMES: "lifetimes-", FRONTEND: "frontend-", OBSERVATIONS: "observations-", PROCESS: "process-"}[stage], dir=evidence_root))
     claims = {"node-foundation-default": "b1-default-bin-regression", "node-foundation": "b1-foundation-component-only", "node-foundation-lifecycle": "b1-a2-lifecycle-regression", "node-lifetimes-default": "b2-default-bin-regression", "node-lifetimes": "b2-lifetimes-components-only", "node-lifetimes-lifecycle": "b2-a2-lifecycle-regression"}
     claims.update({FRONTEND + "-default": "b3-default-bin-regression", FRONTEND: "b3-frontend-components-only", FRONTEND + "-lifecycle": "b3-a2-lifecycle-regression"})
     claims.update({OBSERVATIONS + "-default": "b4-p1-default-bin-regression", OBSERVATIONS: "b4-p1-observation-components-only", OBSERVATIONS + "-lifecycle": "b4-p1-a2-lifecycle-regression"})
-    receipt = {"format": 1, "profile": stage, "mode": mode, "claim": claims[mode], "status": "incomplete", "source": source, "assets": assets, "profile_sha256": file_hash(root / FOUNDATION_PROFILE), "series_sha256": pins["foundation"]["node_series"]["sha256"], "cargo_lock_sha256": file_hash(root / "Cargo.lock"), "graph_directory": str(Path(graph_directory).resolve()), "graph_sha256": digest(json.dumps(graph, sort_keys=True).encode()), "initial_resources": measured, "not_qualified": OBSERVATIONS_EXCLUSIONS if stage == OBSERVATIONS else FRONTEND_EXCLUSIONS if stage == FRONTEND else FOUNDATION_EXCLUSIONS}
+    claims.update({PROCESS + "-default": "b4-p2-default-bin-regression", PROCESS: "b4-p2-process-components-only", PROCESS + "-lifecycle": "b4-p2-a2-lifecycle-regression"})
+    receipt = {"format": 1, "profile": stage, "mode": mode, "claim": claims[mode], "status": "incomplete", "source": source, "assets": assets, "profile_sha256": file_hash(root / FOUNDATION_PROFILE), "series_sha256": pins["foundation"]["node_series"]["sha256"], "cargo_lock_sha256": file_hash(root / "Cargo.lock"), "graph_directory": str(Path(graph_directory).resolve()), "graph_sha256": digest(json.dumps(graph, sort_keys=True).encode()), "initial_resources": measured, "not_qualified": PROCESS_EXCLUSIONS if stage == PROCESS else OBSERVATIONS_EXCLUSIONS if stage == OBSERVATIONS else FRONTEND_EXCLUSIONS if stage == FRONTEND else FOUNDATION_EXCLUSIONS}
     write_json(directory / "receipt.json", receipt)
     with BuildSlot(root) as slot:
         try:
@@ -3396,11 +4793,11 @@ def build_foundation(graph_directory, root, mode):
                     receipt["probes"][name] = {"command": command, "output": foundation_probe_output(directory, name, mode)}
                     checked_file(binary, receipt["binary"])
                 if mode == stage:
-                    focused = {"prefix": FOUNDATION_TEST_PREFIX if stage == FOUNDATION else LIFETIMES_TEST_PREFIX, "names": {FOUNDATION: FOUNDATION_TESTS, LIFETIMES: LIFETIMES_TESTS, FRONTEND: FRONTEND_TESTS, OBSERVATIONS: OBSERVATIONS_TESTS}[stage], "threads": 1}
+                    focused = {"prefix": FOUNDATION_TEST_PREFIX if stage == FOUNDATION else LIFETIMES_TEST_PREFIX, "names": {FOUNDATION: FOUNDATION_TESTS, LIFETIMES: LIFETIMES_TESTS, FRONTEND: FRONTEND_TESTS, OBSERVATIONS: OBSERVATIONS_TESTS, PROCESS: PROCESS_TESTS}[stage], "threads": 1}
                     receipt["focused_tests"] = focused
-                    if stage in (FRONTEND, OBSERVATIONS):
+                    if stage in (FRONTEND, OBSERVATIONS, PROCESS):
                         run_frontend_components(focused, root, toolchain, pins, graph, environment, directory, slot)
-                    for name, argv in ({} if stage in (FRONTEND, OBSERVATIONS) else foundation_test_commands(root, toolchain, pins)).items():
+                    for name, argv in ({} if stage in (FRONTEND, OBSERVATIONS, PROCESS) else foundation_test_commands(root, toolchain, pins)).items():
                         focused[name] = run_owned(argv, root, environment, directory, "tests-" + name, slot, pins["build"]["timeout_seconds"], lambda: resource_refusal(root))
                         foundation_test_output(directory / ("tests-" + name + ".stdout"), name == "list", stage)
                         if name == "run":

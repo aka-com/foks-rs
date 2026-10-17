@@ -355,6 +355,56 @@ def repin_observations(root, data, patch_bytes=None):
     (root / p.FOUNDATION_PROFILE).write_text(json.dumps(data["profile"]))
 
 
+@contextmanager
+def process_fixture(root):
+    """Six closed patches with an immutable P1 source/profile/receipt prefix."""
+    with observations_fixture(root) as previous:
+        accepted = p.prepare(previous["archive"], root, p.OBSERVATIONS)
+        assets = p.prepare_assets(previous["native"], previous["binding"], root, p.OBSERVATIONS)
+        preserved = root / Path(p.PROCESS_MANIFEST).parent
+        preserved.mkdir(parents=True)
+        (root / "runtime/source").rename(preserved / "source")
+        (root / "runtime/source-manifest.json").rename(preserved / "source-manifest.json")
+        for original, target in ((p.FOUNDATION_PROFILE, p.PROCESS_PROFILE), (p.FOUNDATION_SERIES, p.PROCESS_SERIES), ("runtime/assets-node-observations.json", p.PROCESS_ASSETS)):
+            destination = root / target
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes((root / original).read_bytes())
+        accepted_images = {name: foundation_file(root, path) for name, (path, _) in p.PROCESS_BASE_IMAGES.items()}
+        files, chunks = [], []
+        final = {row["path"]: dict(row) for row in accepted["files"]}
+        for name in p.PROCESS_PATHS:
+            path = preserved / "source" / name
+            before = path.read_bytes() if path.exists() else None
+            after = ("process " + name + "\n").encode()
+            old_lines = [] if before is None else before.splitlines(keepends=True)
+            files.append({"path": name, "mode": "100644", "before": None if before is None else p.image_identity(before), "after": p.image_identity(after)})
+            chunks.append(("--- " + ("/dev/null" if before is None else "a/" + name) + "\n+++ b/" + name + "\n@@ -" + str(1 if old_lines else 0) + "," + str(len(old_lines)) + " +1,1 @@\n").encode() + b"".join(b"-" + line for line in old_lines) + b"+" + after)
+            final[name] = {"path": name, "mode": "100644", **p.image_identity(after)}
+        (root / p.PROCESS_PATCH).write_bytes(b"".join(chunks))
+        rows = sorted(final.values(), key=lambda row: row["path"])
+        series = copy.deepcopy(previous["series"])
+        series.update(profile=p.PROCESS, accepted_b4_p1_commit=p.PROCESS_BASE)
+        series["patches"].append({**foundation_file(root, p.PROCESS_PATCH), "files": files})
+        (root / p.FOUNDATION_SERIES).write_text(json.dumps(series))
+        profile = copy.deepcopy(previous["profile"])
+        profile.update(profile=p.PROCESS, accepted_b4_p1_commit=p.PROCESS_BASE, node_series=foundation_file(root, p.FOUNDATION_SERIES))
+        profile["base"].update(accepted_images)
+        profile["qualification"].update(claim="b4-p2-process-components-only", source_roster=list(p.PROCESS_PATHS), tree={"files": len(rows), "payload_bytes": sum(row["bytes"] for row in rows), "inventory_sha256": p.digest(json.dumps(rows, sort_keys=True, separators=(",", ":")).encode())}, tests={"prefix": p.FRONTEND_TEST_PREFIX, "names": p.PROCESS_TESTS.copy(), "threads": 1}, modes=copy.deepcopy(p.PROCESS_MODES), not_qualified=p.PROCESS_EXCLUSIONS.copy(), frontend=p.process_frontend_contract(), process=p.process_contract(), process_layout_evidence=p.process_layout_contract())
+        (root / p.FOUNDATION_PROFILE).write_text(json.dumps(profile))
+        base_hashes = {name: (entry["path"], entry["sha256"]) for name, entry in accepted_images.items()}
+        with patch.object(p, "PROCESS_BASE_IMAGES", base_hashes), patch.object(p, "PROCESS_ASSET_SHA256", p.file_hash(root / p.PROCESS_ASSETS)):
+            yield {**previous, "profile": profile, "series": series, "rows": rows, "accepted_p1": accepted, "accepted_p1_profile": previous["profile"], "accepted_p1_assets": assets, "accepted_p1_images": accepted_images}
+
+
+def repin_process(root, data, patch_bytes=None):
+    if patch_bytes is not None:
+        (root / p.PROCESS_PATCH).write_bytes(patch_bytes)
+        data["series"]["patches"][5].update(foundation_file(root, p.PROCESS_PATCH))
+    (root / p.FOUNDATION_SERIES).write_text(json.dumps(data["series"]))
+    data["profile"]["node_series"] = foundation_file(root, p.FOUNDATION_SERIES)
+    (root / p.FOUNDATION_PROFILE).write_text(json.dumps(data["profile"]))
+
+
 class ArchiveTests(unittest.TestCase):
     def test_exact_tree_preparation_reuses_only_identical_source(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2207,7 +2257,7 @@ class ObservationsTests(unittest.TestCase):
                     with self.subTest(mode=mode), self.assertRaises(ValueError):
                         p.selected_mode(pins, mode)
             with self.assertRaises(ValueError):
-                p.stage_for_mode("node-process")
+                p.stage_for_mode("node-process-unknown")
             path = root / "stdout"
             for listing in (True, False):
                 raw = FrontendTests.render_test_output(p.OBSERVATIONS_TESTS, listing)
@@ -2398,6 +2448,373 @@ class ObservationsTests(unittest.TestCase):
             with patch.object(p, "run_owned", side_effect=owned), patch.object(p, "choose_frontend_ports", return_value=ports), patch.object(p, "network_command", side_effect=lambda argv: ["DENY-ALL", *map(str, argv)]), self.assertRaises(ValueError):
                 p.run_frontend_components({}, root, Path("/toolchain"), pins, graph, {}, evidence, slot)
             self.assertEqual([row[0] for row in calls], ["tests-compile", "tests-list", "tests-run"])
+
+
+class ProcessTests(unittest.TestCase):
+    def test_sixth_patch_roundtrip_preserves_every_accepted_observations_image(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with process_fixture(root) as data:
+                names = (p.PATCH_PATH, p.FOUNDATION_PATCH, p.LIFETIMES_PATCH, p.FRONTEND_PATCH, p.OBSERVATIONS_PATCH, p.PROCESS_PROFILE, p.PROCESS_SERIES, p.PROCESS_MANIFEST, p.PROCESS_ASSETS)
+                before = {name: (root / name).read_bytes() for name in names}
+                source = p.prepare(data["archive"], root, p.PROCESS)
+                self.assertEqual(source["files"], data["rows"])
+                self.assertEqual(len(source["files"]), len(data["accepted_p1"]["files"]) + 1)
+                self.assertEqual((source["profile"], source["kind"]), (p.PROCESS, "patched-source"))
+                self.assertEqual(len(p.PROCESS_PATHS), 14)
+                self.assertEqual(p.PROCESS_ADDITIONS, {"crates/celld/guarded_node/qualification.rs"})
+                self.assertEqual(p.prepare(data["archive"], root, p.PROCESS), source)
+                self.assertEqual(p.accepted_observations(root), data["accepted_p1_profile"])
+                data["archive"].unlink()
+                self.assertEqual(p.verify_source(root, p.PROCESS), source)
+                self.assertEqual({name: (root / name).read_bytes() for name in names}, before)
+                for stage in (None, p.FOUNDATION, p.LIFETIMES, p.FRONTEND, p.OBSERVATIONS):
+                    with self.subTest(stage=stage), self.assertRaises(ValueError):
+                        p.verify_source(root, stage)
+
+    def test_observations_tree_and_manifest_are_not_implicitly_upgraded(self):
+        import shutil
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with process_fixture(root) as data:
+                previous = root / Path(p.PROCESS_MANIFEST).parent
+                shutil.copytree(previous / "source", root / "runtime/source")
+                shutil.copyfile(previous / "source-manifest.json", root / "runtime/source-manifest.json")
+                manifest = (root / "runtime/source-manifest.json").read_bytes()
+                with self.assertRaises(ValueError):
+                    p.prepare(data["archive"], root, p.PROCESS)
+                self.assertEqual((root / "runtime/source-manifest.json").read_bytes(), manifest)
+                self.assertEqual(p.accepted_observations(root), data["accepted_p1_profile"])
+
+    def test_process_profile_is_closed_and_keeps_historical_policy(self):
+        mutations = (
+            lambda x: x.update(format=True), lambda x: x.update(profile=p.OBSERVATIONS),
+            lambda x: x.update(extra=1), lambda x: x.pop("accepted_b4_p1_commit"),
+            lambda x: x.update(accepted_b4_p1_commit="0" * 40),
+            lambda x: x["base"].pop("observations_series"),
+            lambda x: x["base"]["observations_profile"].update(path=p.FOUNDATION_PROFILE),
+            lambda x: x["cargo_lock"]["expected"].update(sha256="0" * 64),
+            lambda x: x["qualification"]["tree"].update(files=True),
+            lambda x: x["qualification"]["tree"].update(files=x["qualification"]["tree"]["files"] - 1),
+            lambda x: x["qualification"]["tree"].update(files=x["qualification"]["tree"]["files"] + 1),
+            lambda x: x["qualification"]["tree"].update(payload_bytes=8388609),
+            lambda x: x["qualification"]["source_roster"].append("crates/celld/ltx_repl.rs"),
+            lambda x: x["qualification"]["tests"]["names"].pop(),
+            lambda x: x["qualification"].update(frontend=p.frontend_contract()),
+            lambda x: x["qualification"]["native_execution"].update(compile_network="loopback"),
+            lambda x: x["qualification"]["observations"]["archive"].update(entries=65),
+            lambda x: x["qualification"]["process"].update(extra=1),
+            lambda x: x["qualification"]["process_layout_evidence"].update(extra=1),
+            lambda x: x["qualification"]["process_layout_evidence"]["sync_backing"].update(combined_maximum=257),
+            lambda x: x["qualification"]["process_layout_evidence"]["sync_backing"]["toolchain"].update(commit="0" * 40),
+            lambda x: x["qualification"].update(not_qualified=[]),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with process_fixture(root) as data:
+                original = copy.deepcopy(data["profile"])
+                for index, mutate in enumerate(mutations):
+                    data["profile"] = copy.deepcopy(original)
+                    mutate(data["profile"])
+                    repin_process(root, data)
+                    with self.subTest(index=index), self.assertRaises(ValueError):
+                        p.load_pins(root, p.PROCESS)
+                data["profile"] = original
+                repin_process(root, data)
+                for name in (p.PROCESS_PROFILE, p.PROCESS_SERIES, p.PROCESS_MANIFEST):
+                    path = root / name
+                    saved = path.read_bytes()
+                    path.write_bytes(saved + b"\n")
+                    with self.subTest(name=name), self.assertRaises(ValueError):
+                        p.load_pins(root, p.PROCESS)
+                    path.write_bytes(saved)
+
+    def test_sixth_patch_rejects_prefix_edits_roster_modes_and_late_hash_failure(self):
+        addition = p.PROCESS_PATHS.index("crates/celld/guarded_node/qualification.rs")
+        mutations = (
+            lambda x: x["patches"][4]["files"][0]["after"].update(sha256="0" * 64),
+            lambda x: x["patches"].pop(),
+            lambda x: x["patches"].append(copy.deepcopy(x["patches"][-1])),
+            lambda x: x["patches"].reverse(),
+            lambda x: x["patches"][5].update(bytes=524289),
+            lambda x: x["patches"][5]["files"].reverse(),
+            lambda x: x["patches"][5]["files"].pop(),
+            lambda x: x["patches"][5]["files"].append(copy.deepcopy(x["patches"][5]["files"][0])),
+            lambda x: x["patches"][5]["files"][0].update(mode="100755"),
+            lambda x: x["patches"][5]["files"][0].update(before=None),
+            lambda x: x["patches"][5]["files"][addition].update(before=p.image_identity(b"existing\n")),
+            lambda x: x["patches"][5]["files"][0]["before"].update(sha256="0" * 64),
+            lambda x: x["patches"][5]["files"][-1]["after"].update(sha256="0" * 64),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with process_fixture(root) as data:
+                original = copy.deepcopy(data["series"])
+                for index, mutate in enumerate(mutations):
+                    data["series"] = copy.deepcopy(original)
+                    mutate(data["series"])
+                    repin_process(root, data)
+                    with self.subTest(index=index), self.assertRaises(ValueError):
+                        p.prepare(data["archive"], root, p.PROCESS)
+                    self.assertFalse((root / "runtime/source").exists())
+                    self.assertFalse(list((root / "runtime").glob("source-staging-*")))
+                data["series"] = original
+                data["profile"]["qualification"]["tree"]["inventory_sha256"] = "0" * 64
+                repin_process(root, data)
+                with self.assertRaises(ValueError):
+                    p.prepare(data["archive"], root, p.PROCESS)
+                self.assertFalse((root / "runtime/source").exists())
+
+    def test_assets_preserve_four_predecessor_receipts_and_exact_archives(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with process_fixture(root) as data:
+                old = ("runtime/artifacts/assets.json", "runtime/artifacts/librusty_v8.a", "runtime/assets-node-foundation.json", "runtime/assets-node-lifetimes.json", "runtime/assets-node-qualification.json", "runtime/assets-node-observations.json", p.LIFETIMES_ASSETS, p.FRONTEND_ASSETS, p.OBSERVATIONS_ASSETS, p.PROCESS_ASSETS)
+                before = {name: (root / name).read_bytes() for name in old}
+                result = p.prepare_assets(data["native"], data["binding"], root, p.PROCESS)
+                self.assertEqual(result["profile"], p.PROCESS)
+                self.assertEqual(result["observations_receipt_sha256"], p.file_hash(root / p.PROCESS_ASSETS))
+                self.assertEqual(result["assets"], data["accepted_p1_assets"]["assets"])
+                self.assertEqual(p.verify_assets(root, p.PROCESS), result)
+                self.assertEqual({name: (root / name).read_bytes() for name in old}, before)
+                for name in (*old, "runtime/assets-node-process.json"):
+                    if name.endswith("librusty_v8.a"):
+                        continue
+                    path = root / name
+                    saved = path.read_bytes()
+                    path.write_bytes(b"{}\n")
+                    with self.subTest(name=name), self.assertRaises(ValueError):
+                        p.verify_assets(root, p.PROCESS)
+                    path.write_bytes(saved)
+
+    def test_process_modes_and_native_inventory_are_closed_without_controller_execution(self):
+        self.assertGreater(len(p.PROCESS_TESTS), 86)
+        self.assertEqual(len(set(p.PROCESS_TESTS)), len(p.PROCESS_TESTS))
+        self.assertEqual(p.PROCESS_TESTS[:86], p.OBSERVATIONS_TESTS)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with process_fixture(root):
+                pins = p.load_pins(root, p.PROCESS)
+                with patch.object(p, "network_command", side_effect=lambda argv: list(map(str, argv))):
+                    for mode, contract in p.PROCESS_MODES.items():
+                        self.assertEqual(p.stage_for_mode(mode), p.PROCESS)
+                        commands = p.build_commands(root, Path("/toolchain"), pins, mode)
+                        self.assertIn("--locked", commands["build"])
+                        self.assertIn("--offline", commands["build"])
+                        self.assertEqual("--features" in commands["build"], bool(contract["root_features"]))
+                        self.assertEqual("lifecycle" in commands, mode.endswith("lifecycle"))
+                    with self.assertRaises(ValueError):
+                        p.foundation_test_commands(root, Path("/toolchain"), pins)
+                for mode in (*p.FOUNDATION_MODES, *p.LIFETIMES_MODES, *p.FRONTEND_MODES, *p.OBSERVATIONS_MODES, "identity", "node-baseline", "node-process-unknown"):
+                    with self.subTest(mode=mode), self.assertRaises(ValueError):
+                        p.selected_mode(pins, mode)
+            with self.assertRaises(ValueError):
+                p.stage_for_mode("node-process-unknown")
+            path = root / "stdout"
+            for listing in (True, False):
+                raw = FrontendTests.render_test_output(p.PROCESS_TESTS, listing)
+                path.write_text(raw)
+                self.assertEqual(p.foundation_test_output(path, listing, p.PROCESS), p.PROCESS_TESTS)
+                for changed in (FrontendTests.render_test_output(p.OBSERVATIONS_TESTS, listing), raw + raw, raw.replace(p.PROCESS_TESTS[-1], p.PROCESS_TESTS[0])):
+                    path.write_text(changed)
+                    with self.assertRaises(ValueError):
+                        p.foundation_test_output(path, listing, p.PROCESS)
+                path.write_text(raw)
+                with self.assertRaises(ValueError):
+                    p.foundation_test_output(path, listing, p.OBSERVATIONS)
+
+    def test_process_artifact_and_feature_probes_require_exact_stage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            binary, graph, message = FrontendTests.artifact_fixture(root)
+            path = root / "compile.stdout"
+            path.write_text(json.dumps(message) + "\n" + json.dumps({"reason": "build-finished", "success": True}) + "\n")
+            with self.assertRaises(ValueError):
+                p.verify_frontend_test_artifact(path, graph, root, p.PROCESS)
+            graph.update(profile=p.PROCESS, mode=p.PROCESS)
+            self.assertEqual(p.verify_frontend_test_artifact(path, graph, root, p.PROCESS)["sha256"], p.file_hash(binary))
+            with self.assertRaises(ValueError):
+                p.verify_frontend_test_artifact(path, graph, root)
+            for mode in (p.PROCESS + "-default", p.PROCESS + "-lifecycle", p.OBSERVATIONS):
+                graph["mode"] = mode
+                with self.subTest(mode=mode), self.assertRaises(ValueError):
+                    p.verify_frontend_test_artifact(path, graph, root, p.PROCESS)
+
+    def test_process_control_contract_has_exact_ordinals_offsets_and_state_machine(self):
+        contract = p.process_contract()
+        self.assertEqual([case["id"] for case in contract["cases"]], list(range(1, 102)))
+        self.assertEqual(len({case["name"] for case in contract["cases"]}), 101)
+        self.assertEqual(contract["cases"][-1]["name"], "binding-drained-runtime-generation")
+        self.assertEqual(contract["cases"][2]["targets"], 2)
+        self.assertTrue(all(case["targets"] == 1 for case in contract["cases"] if case["id"] != 3))
+        self.assertEqual(contract["checkpoint_ids"], list(range(1, 25)))
+        self.assertEqual(len({case["reaction"] for case in contract["cases"]}), 25)
+        request = contract["advance_request"]
+        self.assertEqual((request["version"], request["opcode"], request["bytes"], request["read_buffer_bytes"]), (2, 3, 32, 33))
+        self.assertEqual(request["offsets"], {"magic": [0, 8], "version": 8, "opcode": 9, "tenant": 10, "checkpoint": 11, "invocation": [12, 20], "control_ordinal": [20, 28], "case": [28, 30], "reserved_zero": [30, 32]})
+        self.assertTrue(request["requires_write_half_eof"])
+        self.assertEqual(contract["end"]["sealed"], True)
+        self.assertEqual(contract["end"]["cutoff_scope"], "diagnostic-frontier-no-task-termination")
+        self.assertEqual(list(contract["states"]), [str(value) for value in range(1, 8)])
+        self.assertEqual(len(contract["process_states"]), 16)
+        self.assertEqual(contract["process_states"]["14"], "MainWorkCharged")
+        self.assertEqual(contract["process_states"]["15"], "HeaderEntered")
+        self.assertEqual(contract["process_states"]["16"], "HeaderExpired")
+        self.assertNotIn("invocation", contract["process_record_fields"])
+        self.assertNotIn("control_ordinal", contract["process_record_fields"])
+        mutations = (
+            lambda x: x["advance_request"].update(version=1),
+            lambda x: x["advance_request"].update(opcode=2),
+            lambda x: x["advance_request"]["offsets"].update(case=[26, 28]),
+            lambda x: x["advance_request"].update(read_buffer_bytes=34),
+            lambda x: x["cases"][0].update(id=0),
+            lambda x: x["cases"][2].update(targets=1),
+            lambda x: x["cases"][-1].update(name="arbitrary"),
+            lambda x: x["end"].update(sealed=False),
+            lambda x: x["end"].update(cutoff_scope="all-tasks-terminated"),
+            lambda x: x["limits"].update(controls_per_case=65),
+            lambda x: x["process_record_fields"].append("invocation"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with process_fixture(root) as data:
+                original = copy.deepcopy(data["profile"])
+                for index, mutate in enumerate(mutations):
+                    data["profile"] = copy.deepcopy(original)
+                    mutate(data["profile"]["qualification"]["process"])
+                    repin_process(root, data)
+                    with self.subTest(index=index), self.assertRaises(ValueError):
+                        p.load_pins(root, p.PROCESS)
+                self.assertEqual(p.process_contract(), contract)
+
+    @staticmethod
+    def process_layout_record():
+        # Synthetic hostile-parser input only, not a compiled geometry proof.
+        sizes = [8192, 4096, 256, 64, 48, 128, 256, 320, 512, 1024, 8, 320, 128]
+        terms = {"p1_retained_bytes": 90880, "qualification_bytes": 8192, "main_work_bytes": 0, "extra_scratch_bytes": 0, "sync_mutex_bytes": 64, "sync_condvar_bytes": 48}
+        return {"schema": 1, "rows": [{"id": index + 1, "size": size, "align": 8} for index, size in enumerate(sizes)], "retained_bytes": sum(terms.values()), "retained_terms": terms}
+
+    @staticmethod
+    def process_layout_stderr(record=None):
+        b1 = {**FoundationTests.layout_record(), "cleanup_reserve": 532480}
+        b1["layouts"]["header_cell"] = {"bytes": 48, "alignment": 8}
+        records = [(b"FOKS_B1_LAYOUT ", b1), (b"FOKS_B2_LAYOUT ", ObservationsTests.b2_layout_record()), (b"FOKS_B3_LAYOUT ", FrontendTests.layout_record()), (b"FOKS_B4_OBSERVATION_LAYOUT=", ObservationsTests.layout_record()), (b"FOKS_B4_PROCESS_LAYOUT=", ProcessTests.process_layout_record() if record is None else record)]
+        return b"retained warning\n" + b"".join(prefix + json.dumps(value, separators=(",", ":")).encode() + b"\n" for prefix, value in records)
+
+    def test_process_layout_binds_all_same_run_predecessor_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "stderr"
+            raw = self.process_layout_stderr()
+            path.write_bytes(raw)
+            checksum = p.digest(raw)
+            self.assertEqual(p.process_layout_output(path, checksum)["record"], self.process_layout_record())
+            p.foundation_layout_output(path, checksum, p.PROCESS)
+            p.lifetimes_layout_output(path, checksum)
+            p.frontend_layout_output(path, checksum)
+            p.observation_layout_output(path, checksum)
+            row = self.process_layout_record()
+            self.assertEqual(row["retained_bytes"], 90880 + row["rows"][0]["size"] + 64 + 48)
+            self.assertEqual(set(row["retained_terms"]), {"p1_retained_bytes", "qualification_bytes", "main_work_bytes", "extra_scratch_bytes", "sync_mutex_bytes", "sync_condvar_bytes"})
+            self.assertEqual(p.process_layout_contract()["sync_backing"]["combined_maximum"], 256)
+            self.assertEqual(row["retained_terms"]["main_work_bytes"], 0)
+            self.assertEqual(row["retained_terms"]["extra_scratch_bytes"], 0)
+            self.assertEqual(len(p.process_layout_contract()["rows"]), 13)
+            self.assertEqual(p.process_layout_contract()["scratch_compiled_gate_maximum"], 1024)
+            with self.assertRaises(ValueError):
+                p.process_layout_output(path, "0" * 64)
+            for prefix in (b"FOKS_B1_LAYOUT ", b"FOKS_B2_LAYOUT ", b"FOKS_B3_LAYOUT ", b"FOKS_B4_OBSERVATION_LAYOUT="):
+                without = b"\n".join(line for line in raw.split(b"\n") if not line.startswith(prefix))
+                path.write_bytes(without)
+                with self.subTest(prefix=prefix), self.assertRaises(ValueError):
+                    p.process_layout_output(path, p.digest(without))
+
+    def test_process_layout_rejects_duplicate_missing_unknown_and_out_of_bound_fields(self):
+        def backing(record, mutex, condvar):
+            record["retained_terms"].update(sync_mutex_bytes=mutex, sync_condvar_bytes=condvar)
+            record["retained_bytes"] = sum(record["retained_terms"].values())
+        mutations = (
+            lambda x: x.update(schema=True), lambda x: x.update(extra=1),
+            lambda x: x["rows"].pop(), lambda x: x["rows"].append(copy.deepcopy(x["rows"][-1])),
+            lambda x: x["rows"].reverse(), lambda x: x["rows"][0].update(id=2),
+            lambda x: x["rows"][0].update(size=0), lambda x: x["rows"][0].update(size=16385),
+            lambda x: x["rows"][0].update(align=3), lambda x: x["rows"][0].update(align=32),
+            lambda x: x["rows"][0].update(extra=1), lambda x: x["rows"][0].pop("align"),
+            lambda x: x["rows"][0].update(size=1024),
+            lambda x: x["rows"][4].update(size=56),
+            lambda x: x["retained_terms"].update(main_work_bytes=1),
+            lambda x: x["retained_terms"].update(extra_scratch_bytes=1),
+            lambda x: x["retained_terms"].update(p1_retained_bytes=90872),
+            lambda x: x["retained_terms"].update(qualification_bytes=8184),
+            lambda x: x["retained_terms"].update(extra=0),
+            lambda x: x["retained_terms"].update(main_work_bytes=True),
+            lambda x: x["retained_terms"].pop("sync_mutex_bytes"),
+            lambda x: x["retained_terms"].pop("sync_condvar_bytes"),
+            lambda x: backing(x, 0, 48),
+            lambda x: backing(x, 64, 0),
+            lambda x: x["retained_terms"].update(sync_mutex_bytes=True),
+            lambda x: x["retained_terms"].update(sync_condvar_bytes=-1),
+            lambda x: backing(x, 256, 1),
+            lambda x: x.update(retained_bytes=131073), lambda x: x.update(retained_bytes=99192),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "stderr"
+            for index, mutate in enumerate(mutations):
+                record = self.process_layout_record()
+                mutate(record)
+                raw = self.process_layout_stderr(record)
+                path.write_bytes(raw)
+                with self.subTest(index=index), self.assertRaises(ValueError):
+                    p.process_layout_output(path, p.digest(raw))
+            raw = self.process_layout_stderr()
+            process_line = next(line for line in raw.splitlines(keepends=True) if line.startswith(b"FOKS_B4_PROCESS_LAYOUT="))
+            for changed in (raw + process_line, raw.replace(b'"schema":1', b'"schema":1,"schema":1'), raw[:-1], raw.replace(b'"schema":1', b'"schema":1.0')):
+                path.write_bytes(changed)
+                with self.subTest(changed=changed[-40:]), self.assertRaises(ValueError):
+                    p.process_layout_output(path, p.digest(changed))
+
+    def test_process_help_and_refusal_oracles_are_stage_specific(self):
+        cli = (ROOT / "runtime/source/crates/celld/main/cli.rs").read_text()
+        literal = cli.split("pub(crate) fn print_help() -> anyhow::Result<()> {", 1)[1].split('r#"', 1)[1].split('"#,', 1)[0]
+        base = (literal.replace("{shutdown_total_ms}", "40000") + "\n").encode()
+        suffix = b"\n\nGUARDED NODE QUALIFICATION (local components only):\n  celld foks-guarded-node SCENARIO [OPTIONS]\n  Examples: cold-sync-retire, failed-turn-gated, tcp-write-held,\n            tcp-disconnect, shutdown-complete, shutdown-cut\n  Accepts the 101 fixed B4 process cases; the shutdown names above\n  are retained aliases for shutdown-handoff-complete/cut.\n  Requires explicit local S3 and loopback listeners, bucket durability,\n  dummy credentials, and a fresh CELLD_TEST_DATA_DIR.\n"
+        enabled = base[:-1] + suffix + b"\n"
+        self.assertEqual((len(enabled), p.digest(enabled)), p.PROCESS_HELP_IMAGE)
+        self.assertNotEqual(p.PROCESS_HELP_IMAGE, p.FRONTEND_HELP_IMAGE)
+        self.assertEqual(p.process_frontend_contract()["scenario_aliases"], {"shutdown-complete": "shutdown-handoff-complete", "shutdown-cut": "shutdown-handoff-cut"})
+        self.assertIn("binding-drained-runtime-generation", p.process_frontend_contract()["scenarios"])
+        self.assertEqual(len(p.process_frontend_contract()["scenarios"]), 101)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            def observe(name, out, err, mode):
+                (root / (name + ".stdout")).write_bytes(out)
+                (root / (name + ".stderr")).write_bytes(err)
+                return p.foundation_probe_output(root, name, mode)
+            observe("help", enabled, b"", p.PROCESS)
+            observe("help", base, b"", p.PROCESS + "-default")
+            for mode in (p.FRONTEND, p.OBSERVATIONS, p.PROCESS + "-default"):
+                with self.subTest(mode=mode), self.assertRaises(ValueError):
+                    observe("help", enabled, b"", mode)
+            for name, (arguments, refusal) in p.PROCESS_REFUSALS.items():
+                mode = p.PROCESS + "-default" if name == "frontend-absent" else p.PROCESS
+                self.assertEqual(p.foundation_probe_specs(mode)[name], (arguments, 1))
+                observe(name, b"", refusal, mode)
+                for out, err in ((b"unexpected\n", refusal), (b"", refusal[:-1]), (b"", refusal + b"extra\n")):
+                    with self.assertRaises(ValueError):
+                        observe(name, out, err, mode)
+
+    def test_all_historical_stages_load_from_their_immutable_images(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with process_fixture(root) as data:
+                self.assertEqual(p.accepted_foundation(root), data["accepted_b1_profile"])
+                self.assertEqual(p.accepted_lifetimes(root), data["accepted_b2_profile"])
+                self.assertEqual(p.accepted_frontend(root), data["accepted_b3_profile"])
+                self.assertEqual(p.accepted_observations(root), data["accepted_p1_profile"])
+                self.assertEqual(p.load_pins(root, p.PROCESS)["foundation"], data["profile"])
+                # Byte-identical historical policy remains the actual P1 policy,
+                # despite the separate effective P2 frontend projection.
+                self.assertEqual(data["accepted_p1_profile"]["qualification"]["frontend"], p.frontend_contract())
+                self.assertNotEqual(data["profile"]["qualification"]["frontend"], p.frontend_contract())
 
 
 class AssetTests(unittest.TestCase):
