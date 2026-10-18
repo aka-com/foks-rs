@@ -747,7 +747,7 @@ def retirement_diagnostics_fixture(root):
         profile = copy.deepcopy(previous["profile"])
         profile.update(accepted_b4_control_retirement_commit=p.RETIREMENT_DIAGNOSTICS_BASE, node_series=foundation_file(root, p.FOUNDATION_SERIES))
         profile["base"].update(images)
-        profile["qualification"].update(claim="b4-main-work-retirement-diagnostics-components-only", source_roster=list(p.RETIREMENT_DIAGNOSTICS_PATHS), tree={"files": len(final), "payload_bytes": sum(row["bytes"] for row in final), "inventory_sha256": p.digest(json.dumps(final, sort_keys=True, separators=(",", ":")).encode())}, retirement_diagnostics=copy.deepcopy(p.RETIREMENT_DIAGNOSTICS_POLICY))
+        profile["qualification"].update(claim="b4-main-work-background-retirement-components-only", source_roster=list(p.RETIREMENT_DIAGNOSTICS_PATHS), tree={"files": len(final), "payload_bytes": sum(row["bytes"] for row in final), "inventory_sha256": p.digest(json.dumps(final, sort_keys=True, separators=(",", ":")).encode())}, retirement_diagnostics=copy.deepcopy(p.RETIREMENT_DIAGNOSTICS_POLICY))
         (root / p.FOUNDATION_PROFILE).write_text(json.dumps(profile))
         with patch.object(p, "RETIREMENT_DIAGNOSTICS_BASE_IMAGES", hashes):
             yield {**previous, "profile": profile, "series": series, "rows": final, "accepted_control": accepted, "accepted_control_profile": previous["profile"], "accepted_control_assets": assets}
@@ -4756,6 +4756,10 @@ class RetirementDiagnosticsRevisionTests(unittest.TestCase):
                 self.assertEqual({row["path"] for row in source["files"] if row != old_rows[row["path"]]}, set(p.RETIREMENT_DIAGNOSTICS_PATHS))
                 self.assertEqual(len(source["files"]), len(old_rows))
                 self.assertEqual(len(p.PROCESS_TESTS), 123)
+                self.assertEqual(p.MAXIMUM_PROCESS_PATCHES, 1536 * 1024)
+                self.assertIs(type(p.MAXIMUM_RETIREMENT_REV2_PATCHES), int)
+                self.assertEqual(p.MAXIMUM_RETIREMENT_REV2_PATCHES % 4096, 0)
+                self.assertLessEqual(p.MAXIMUM_RETIREMENT_REV2_PATCHES, 1664 * 1024)
                 self.assertTrue(set(p.RETIREMENT_DIAGNOSTICS_TEST_EXTENSIONS).issubset(p.PROCESS_TESTS))
                 pins = p.load_pins(root, p.MAIN_WORK)
                 for mode in p.MAIN_WORK_MODES:
@@ -4778,6 +4782,8 @@ class RetirementDiagnosticsRevisionTests(unittest.TestCase):
                         lambda x: x.update(accepted_b4_control_retirement_commit="0" * 40),
                         lambda x: x["qualification"].pop("retirement_diagnostics"),
                         lambda x: x["qualification"]["retirement_diagnostics"].update(revision=True),
+                        lambda x: x["qualification"]["retirement_diagnostics"].update(revision=1),
+                        lambda x: x["qualification"].update(retirement_diagnostics={"diagnostics": "error-only-stderr-bounded256x2-source16", "native_test_extensions": ["guarded_execution::node::tests::b4_observation_failed_retirement_retains_public_guard"], "predecessor": "accepted-control-retirement-nine-patch", "revision": 1}),
                         lambda x: x["qualification"]["retirement_diagnostics"].update(extra=True),
                         lambda x: x["qualification"]["retirement_diagnostics"]["native_test_extensions"].clear(),
                         lambda x: x["qualification"]["control_retirement"].update(revision=True),
@@ -4805,7 +4811,10 @@ class RetirementDiagnosticsRevisionTests(unittest.TestCase):
                         with self.subTest(series=index), self.assertRaises(ValueError):
                             p.load_pins(root, p.MAIN_WORK)
                     profile_path.write_bytes(profile_raw); series_path.write_bytes(series_raw)
-                    with patch.object(p, "MAXIMUM_PROCESS_PATCHES", sum(row["bytes"] for row in data["series"]["patches"]) - 1), self.assertRaisesRegex(ValueError, "combined patch payload"):
+                    total = sum(row["bytes"] for row in data["series"]["patches"])
+                    with patch.object(p, "MAXIMUM_RETIREMENT_REV2_PATCHES", total):
+                        self.assertEqual(p.load_pins(root, p.MAIN_WORK)["foundation"], data["profile"])
+                    with patch.object(p, "MAXIMUM_RETIREMENT_REV2_PATCHES", total - 1), self.assertRaisesRegex(ValueError, "combined patch payload"):
                         p.load_pins(root, p.MAIN_WORK)
                     for name in (p.RETIREMENT_DIAGNOSTICS_PROFILE, p.RETIREMENT_DIAGNOSTICS_SERIES,
                                  p.RETIREMENT_DIAGNOSTICS_MANIFEST, p.RETIREMENT_DIAGNOSTICS_ASSETS):

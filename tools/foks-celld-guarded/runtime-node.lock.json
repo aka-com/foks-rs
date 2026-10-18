@@ -197,7 +197,7 @@
   "node_series": {
     "bytes": 51583,
     "path": "patches/node-series.json",
-    "sha256": "51aca67939930c1fbf7faa7a6f18b6364c90b4bc916666ddf16e77c474a62afa"
+    "sha256": "5030d1c588f2d79f845969eb4f2e12edfa496be2700d4ee274ea67be23632bc1"
   },
   "pins": {
     "build": {
@@ -372,7 +372,7 @@
   },
   "profile": "node-main-work",
   "qualification": {
-    "claim": "b4-main-work-retirement-diagnostics-components-only",
+    "claim": "b4-main-work-background-retirement-components-only",
     "control_retirement": {
       "native_test_extensions": [
         "guarded_execution::node::tests::b1_last_strong_and_registry_retirement_hold_role",
@@ -3121,10 +3121,12 @@
     "retirement_diagnostics": {
       "diagnostics": "error-only-stderr-bounded256x2-source16",
       "native_test_extensions": [
-        "guarded_execution::node::tests::b4_observation_failed_retirement_retains_public_guard"
+        "guarded_execution::node::tests::b4_observation_failed_retirement_retains_public_guard",
+        "guarded_execution::node::tests::b2_compaction_cancel_keeps_native_result_owned",
+        "guarded_execution::node::tests::b2_original_deadline_denies_new_work_but_allows_reserved_cleanup"
       ],
       "predecessor": "accepted-control-retirement-nine-patch",
-      "revision": 1
+      "revision": 2
     },
     "source_roster": [
       "crates/celld/guarded_node.rs",
@@ -3263,8 +3265,8 @@
     },
     "tree": {
       "files": 289,
-      "inventory_sha256": "754511b54847eea8e8d70efbeada36bc31a45f58f0b93e28e3eff335c9820671",
-      "payload_bytes": 7598745
+      "inventory_sha256": "21f11af8ddf1450d85b7ece1357c898686ce9ee21475d1b36bcb2fa30157d2a9",
+      "payload_bytes": 7643083
     }
   },
   "target": "aarch64-apple-darwin"

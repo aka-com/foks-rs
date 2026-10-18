@@ -1638,10 +1638,12 @@ class RetirementDiagnosticsRevisionGraphTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "tools/fixture"
             with foundation_graph_fixture(root, p.MAIN_WORK, diagnostics_revision=True) as (metadata, pins, data):
-                variants = [copy.deepcopy(pins) for _ in range(3)]
+                variants = [copy.deepcopy(pins) for _ in range(5)]
                 variants[0]["foundation"] = data["accepted_control_profile"]
                 variants[1]["foundation"]["qualification"].pop("retirement_diagnostics")
                 variants[2]["foundation"]["qualification"]["retirement_diagnostics"].update(revision=True)
+                variants[3]["foundation"]["qualification"]["retirement_diagnostics"].update(revision=1)
+                variants[4]["foundation"]["qualification"]["retirement_diagnostics"] = {"diagnostics": "error-only-stderr-bounded256x2-source16", "native_test_extensions": ["guarded_execution::node::tests::b4_observation_failed_retirement_retains_public_guard"], "predecessor": "accepted-control-retirement-nine-patch", "revision": 1}
                 for changed in variants:
                     with self.assertRaises(ValueError):
                         c.graph_report(metadata, changed, p.MAIN_WORK, root)
@@ -1652,15 +1654,24 @@ class RetirementDiagnosticsRevisionGraphTests(unittest.TestCase):
                 profile_path, series_path = root / p.FOUNDATION_PROFILE, root / p.FOUNDATION_SERIES
                 current_profile, current_series = profile_path.read_bytes(), series_path.read_bytes()
                 try:
-                    for old9 in (True, False):
-                        if old9:
+                    for variant in ("old9", "markerless", "revision1", "original_revision1", "canonical_revision1"):
+                        if variant == "old9":
                             profile_path.write_bytes((root / p.RETIREMENT_DIAGNOSTICS_PROFILE).read_bytes())
                             series_path.write_bytes((root / p.RETIREMENT_DIAGNOSTICS_SERIES).read_bytes())
+                        elif variant == "canonical_revision1":
+                            archived = Path(__file__).resolve().parent / "runtime/evidence/accepted-b4-retirement-diagnostics-functional-base"
+                            profile_path.write_bytes((archived / "runtime-node.lock.json").read_bytes())
+                            series_path.write_bytes((archived / "patches/node-series.json").read_bytes())
                         else:
-                            markerless = json.loads(current_profile)
-                            markerless["qualification"].pop("retirement_diagnostics")
-                            profile_path.write_text(json.dumps(markerless)); series_path.write_bytes(current_series)
-                        with self.subTest(old9=old9), patch.object(c.preparation, "controlled_environment") as environment, self.assertRaisesRegex(ValueError, "retirement-diagnostics"):
+                            changed = json.loads(current_profile)
+                            if variant == "markerless":
+                                changed["qualification"].pop("retirement_diagnostics")
+                            elif variant == "revision1":
+                                changed["qualification"]["retirement_diagnostics"].update(revision=1)
+                            else:
+                                changed["qualification"]["retirement_diagnostics"] = copy.deepcopy(variants[4]["foundation"]["qualification"]["retirement_diagnostics"])
+                            profile_path.write_text(json.dumps(changed)); series_path.write_bytes(current_series)
+                        with self.subTest(variant=variant), patch.object(c.preparation, "controlled_environment") as environment, self.assertRaisesRegex(ValueError, "retirement-diagnostics"):
                             c.verify(evidence, root, p.MAIN_WORK)
                         environment.assert_not_called()
                 finally:

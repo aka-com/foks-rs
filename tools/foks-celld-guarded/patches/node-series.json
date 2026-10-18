@@ -1300,13 +1300,13 @@
       "sha256": "2b5c60510ec40a8fb43cac6b542f0c53406ab4d91811af52f9bc1db2ba55aeff"
     },
     {
-      "bytes": 28005,
+      "bytes": 88020,
       "files": [
         {
           "after": {
-            "bytes": 320871,
-            "git_sha1": "953ffa092e41072218495e6876efe5f90fab85df",
-            "sha256": "026111487191e3bfe8e388595f562889b50b47e45e6215cbde2add9d3bb68df6"
+            "bytes": 330409,
+            "git_sha1": "aab4ad1f5804a02560c579895403b28572695015",
+            "sha256": "f193084498543e50f31789fbf4702d4d8b7671a5131423e6a78ba3cb20710387"
           },
           "before": {
             "bytes": 314109,
@@ -1318,9 +1318,9 @@
         },
         {
           "after": {
-            "bytes": 291247,
-            "git_sha1": "fa1ea88020aaf57d07729cf356195a4f05e46854",
-            "sha256": "db74bd4d53e2726c7e6b133ad97866c387c36b049cba100a5701f96726ef7ed7"
+            "bytes": 306553,
+            "git_sha1": "f769da2f5837ac111b670636f735c293a33b2b60",
+            "sha256": "002f6f8e44905aedfd3a224cf509e7b5c9fd51d69aeac71ac2818fb45bd0cb4b"
           },
           "before": {
             "bytes": 282470,
@@ -1332,9 +1332,9 @@
         },
         {
           "after": {
-            "bytes": 384161,
-            "git_sha1": "bfcc2939b98015f1f1cba40610bb94e5bbef07ae",
-            "sha256": "6bc2c1ce6b6c73f6024fec504c0986d89d22c9911adcdb37c1e86b636fe09218"
+            "bytes": 403499,
+            "git_sha1": "ee5832ec92b7ff996f55459b435a59bbbad3674a",
+            "sha256": "ead643f878c2d43cd9a698546394a33665a90462399e6c18aa5abff8f3071f2c"
           },
           "before": {
             "bytes": 381996,
@@ -1346,9 +1346,9 @@
         },
         {
           "after": {
-            "bytes": 216274,
-            "git_sha1": "a741896d8cc96841ceae0546bfe2d66e138d92d6",
-            "sha256": "4d06f0f01c02e35f1a2004560dd9ec4c88f33a032844fcf43557cd7faa4f7df1"
+            "bytes": 216430,
+            "git_sha1": "33551bc814344d7d426890f2bd1914be3325e384",
+            "sha256": "62d4b241d29eaafe533b0b149b8fa66be22f6da9013046daac07ed0b169226db"
           },
           "before": {
             "bytes": 215160,
@@ -1360,7 +1360,7 @@
         }
       ],
       "path": "patches/0010-node-retirement-diagnostics.patch",
-      "sha256": "b4a80d694c53456e6b5269e6464f9a9ebeb07c602e16be5f542506f1eb8c390e"
+      "sha256": "02a810b1faf01af037ec9a42b69afdd9dacb4e166a37d7a130cb5c844ed5a26d"
     }
   ],
   "profile": "node-main-work"

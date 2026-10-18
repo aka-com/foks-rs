@@ -196,9 +196,353 @@
  
  pub struct GuardedNode {
      policy: DescriptorPolicy,
+@@ -955,6 +1144,14 @@
+     }
+ }
+ 
++#[derive(Clone, Copy)]
++struct BackgroundStopProof {
++    initiator: RootToken,
++    tokens: [RootToken; 3],
++    epoch: u64,
++    generation: Option<crate::generation::GenerationId>,
++    joined: u8,
++}
+ struct InvocationState {
+     observation: InvocationObservation,
+     roots: [RootCell; ROOT_COUNT],
+@@ -964,6 +1161,7 @@
+     generation: Option<crate::generation::GenerationId>,
+     fresh: Option<bool>,
+     attachment: Option<crate::ltx_repl::EpochAttachment>,
++    background_stop: Option<BackgroundStopProof>,
+     runtime: Option<NodeRuntime>,
+     final_alarm: Option<FinalAlarm>,
+     generation_pin: Option<crate::generation::GenerationPin>,
+@@ -1166,6 +1364,8 @@
+         } else {
+             record.control.check_identity()?;
+         }
++        #[cfg(test)]
++        tests::background_reserve_barrier(role)?;
+         let sequence = {
+             let mut state = if matches!(role, JobRole::Forward(_)) {
+                 record.state.try_lock().map_err(|_| Refusal::Contended)?
+@@ -1174,6 +1374,9 @@
+             };
+             if matches!(role, JobRole::Forward(_)) && (state.tainted || state.retiring) {
+                 return Err(Refusal::Failed);
++            }
++            if role.index() < 3 && state.background_stop.is_some() {
++                return Err(Refusal::Cancelled);
+             }
+             let root = &mut state.roots[role.index()];
+             if root.state != RootState::Empty || !root.child.clear() {
+@@ -2596,8 +2799,9 @@
+         &self,
+         role: ReplicaRole,
+         attachment: &crate::ltx_repl::EpochAttachment,
++        expected: RootToken,
+     ) -> Result<ReplicaWait, Refusal> {
+-        self.require_role(JobRole::Cleanup(CleanupLane::Retirement))?;
++        self.background_stop_role()?;
+         attachment.validate(self)?;
+         if role == ReplicaRole::Retirement {
+             return Err(Refusal::Invalid);
+@@ -2606,8 +2810,20 @@
+         let record = registry.record(self.token)?;
+         let context = {
+             let mut state = lock_owned(&record.state)?;
++            let proof = state.background_stop.ok_or(Refusal::Invalid)?;
++            if proof.initiator != self.token
++                || !Self::background_binding(&state, attachment, proof)
++                || !proof.tokens.contains(&expected)
++                || proof.joined & (1 << expected.lane) != 0
++            {
++                return Err(Refusal::Invalid);
++            }
+             let root = &mut state.roots[role.role().index()];
+-            if root.kind != Some(RootKind::Replica)
++            if expected.slot != self.token.slot
++                || expected.invocation != self.token.invocation
++                || expected.lane as usize != role.role().index()
++                || root.sequence != expected.sequence
++                || root.kind != Some(RootKind::Replica)
+                 || root.consumer
+                 || !matches!(root.state, RootState::Running | RootState::Joined)
+             {
+@@ -4957,6 +5173,7 @@
+                 generation: None,
+                 fresh: None,
+                 attachment: None,
++                background_stop: None,
+                 runtime: None,
+                 final_alarm: None,
+                 generation_pin: None,
+@@ -5346,7 +5563,218 @@
+         }
+         Ok(read(runtime))
+     }
++    fn background_stop_role(&self) -> Result<bool, Refusal> {
++        match self.role {
++            JobRole::Cleanup(CleanupLane::Stop) => {
++                self.check_job()?;
++                Ok(false)
++            }
++            #[cfg(test)]
++            JobRole::Cleanup(CleanupLane::Retirement) => {
++                self.check_job()?;
++                Ok(true)
++            }
++            _ => Err(Refusal::Invalid),
++        }
++    }
++    fn background_binding(
++        state: &InvocationState,
++        attachment: &crate::ltx_repl::EpochAttachment,
++        proof: BackgroundStopProof,
++    ) -> bool {
++        state.epoch == Some(proof.epoch)
++            && state.generation == proof.generation
++            && state
++                .attachment
++                .as_ref()
++                .is_some_and(|actual| actual.same_attachment(attachment))
++    }
++    fn background_disposed(state: &InvocationState, token: RootToken) -> bool {
++        if token.lane >= 3 {
++            return false;
++        }
++        let root = &state.roots[token.lane as usize];
++        token.sequence != 0
++            && root.sequence == token.sequence
++            && root.kind == Some(RootKind::Replica)
++            && root.state == RootState::Empty
++            && root.disposed()
++            && !root.consumer
++            && state.observation.roots_disposed & (1 << token.lane) != 0
++    }
++    pub(crate) fn begin_background_stop(
++        &self,
++        attachment: &crate::ltx_repl::EpochAttachment,
++    ) -> Result<[RootToken; 3], Refusal> {
++        let fixture = self.background_stop_role()?;
++        if !fixture {
++            self.control.check()?;
++        }
++        attachment.validate(self)?;
++        let registry = self.registry()?;
++        let record = registry.record(self.token)?;
++        let mut state = lock_owned(&record.state)?;
++        let driver = &state.roots[ForwardLane::Driver as usize];
++        if state.tainted || state.retiring || state.background_stop.is_some() || !driver.disposed()
++        {
++            return Err(Refusal::Busy);
++        }
++        if fixture {
++            if state.runtime.is_some() {
++                return Err(Refusal::Invalid);
++            }
++        } else {
++            if driver.kind != Some(RootKind::Driver)
++                || driver.sequence == 0
++                || driver.state != RootState::Empty
++                || state.observation.roots_disposed & (1 << ForwardLane::Driver as usize) == 0
++            {
++                return Err(Refusal::Busy);
++            }
++            let runtime = state.runtime.as_ref().ok_or(Refusal::NotReady)?;
++            if !runtime_binding_matches(
++                record.cell,
++                state.epoch,
++                state.generation,
++                runtime.binding(),
++                runtime.same_origin(self),
++            ) || state.generation == Some(0)
++            {
++                return Err(Refusal::Invalid);
++            }
++        }
++        let tokens = std::array::from_fn(|lane| RootToken {
++            slot: self.token.slot,
++            invocation: self.token.invocation,
++            lane: lane as u8,
++            sequence: state.roots[lane].sequence,
++        });
++        let proof = BackgroundStopProof {
++            initiator: self.token,
++            tokens,
++            epoch: state.epoch.ok_or(Refusal::Invalid)?,
++            generation: state.generation,
++            joined: 0,
++        };
++        if !Self::background_binding(&state, attachment, proof) {
++            return Err(Refusal::Invalid);
++        }
++        for token in tokens {
++            let root = &state.roots[token.lane as usize];
++            if token.sequence == 0
++                || root.kind != Some(RootKind::Replica)
++                || root.consumer
++                || !matches!(root.state, RootState::Running | RootState::Joined)
++            {
++                return Err(Refusal::Busy);
++            }
++        }
++        state.background_stop = Some(proof);
++        Ok(tokens)
++    }
++    pub(crate) fn background_joined(
++        &self,
++        attachment: &crate::ltx_repl::EpochAttachment,
++        token: RootToken,
++    ) -> Result<(), Refusal> {
++        self.background_stop_role()?;
++        attachment.validate(self)?;
++        let registry = self.registry()?;
++        let record = registry.record(self.token)?;
++        let mut state = lock_owned(&record.state)?;
++        let mut proof = state.background_stop.ok_or(Refusal::Invalid)?;
++        if proof.initiator != self.token
++            || !Self::background_binding(&state, attachment, proof)
++            || !proof.tokens.contains(&token)
++            || !Self::background_disposed(&state, token)
++            || proof.joined & (1 << token.lane) != 0
++        {
++            return Err(Refusal::Invalid);
++        }
++        proof.joined |= 1 << token.lane;
++        state.background_stop = Some(proof);
++        Ok(())
++    }
++    pub(crate) fn background_continuation(
++        &self,
++        attachment: &crate::ltx_repl::EpochAttachment,
++    ) -> Result<(), Refusal> {
++        self.check_job()?;
++        attachment.validate(self)?;
++        let registry = self.registry()?;
++        let record = registry.record(self.token)?;
++        let state = lock_owned(&record.state)?;
++        let proof = state.background_stop.ok_or(Refusal::Cancelled)?;
++        if !Self::background_binding(&state, attachment, proof)
++            || !proof.tokens.contains(&self.token)
++            || proof.joined & (1 << self.token.lane) != 0
++        {
++            return Err(Refusal::Cancelled);
++        }
++        Ok(())
++    }
++    pub(crate) fn verify_background_stop(
++        &self,
++        attachment: &crate::ltx_repl::EpochAttachment,
++    ) -> Result<(), Refusal> {
++        self.require_role(JobRole::Cleanup(CleanupLane::Retirement))?;
++        attachment.validate(self)?;
++        let registry = self.registry()?;
++        let record = registry.record(self.token)?;
++        let mut state = lock_owned(&record.state)?;
++        let proof = state.background_stop.ok_or(Refusal::Invalid)?;
++        if !Self::background_binding(&state, attachment, proof)
++            || proof.joined != 7
++            || !proof
++                .tokens
++                .into_iter()
++                .all(|token| Self::background_disposed(&state, token))
++        {
++            return Err(Refusal::Invalid);
++        }
++        if proof.initiator.slot != self.token.slot
++            || proof.initiator.invocation != self.token.invocation
++        {
++            return Err(Refusal::Invalid);
++        }
++        match proof.initiator.lane as usize {
++            lane if lane == JobRole::Cleanup(CleanupLane::Stop).index() => {
++                if !state.retiring || state.runtime.is_some() || proof.generation.is_none() {
++                    return Err(Refusal::Invalid);
++                }
++                let stop = OwnedEffectRegistry::root(&mut state, proof.initiator)?;
++                if stop.kind != Some(RootKind::Actor) || stop.state != RootState::Running {
++                    return Err(Refusal::Invalid);
++                }
++            }
++            #[cfg(test)]
++            lane if lane == JobRole::Cleanup(CleanupLane::Retirement).index() => {
++                if proof.initiator != self.token
++                    || state.runtime.is_some()
++                    || state.retiring
++                    || !state.roots[ForwardLane::Driver as usize].disposed()
++                {
++                    return Err(Refusal::Invalid);
++                }
++            }
++            _ => return Err(Refusal::Invalid),
++        }
++        Ok(())
++    }
++    #[cfg(test)]
+     pub(crate) fn take_runtime_for_stop(&self) -> Result<NodeRuntime, Refusal> {
++        self.take_stopped_runtime(None)
++    }
++    pub(crate) fn take_runtime_for_stop_bound(
++        &self,
++        attachment: &crate::ltx_repl::EpochAttachment,
++    ) -> Result<NodeRuntime, Refusal> {
++        self.take_stopped_runtime(Some(attachment))
++    }
++    fn take_stopped_runtime(
++        &self,
++        expected: Option<&crate::ltx_repl::EpochAttachment>,
++    ) -> Result<NodeRuntime, Refusal> {
+         self.require_role(JobRole::Cleanup(CleanupLane::Stop))?;
+         let registry = self.registry()?;
+         let record = registry.record(self.token)?;
+@@ -5363,10 +5791,24 @@
+         {
+             return Err(Refusal::Invalid);
+         }
++        let alarm = runtime.alarm_snapshot()?;
++        let proof = state.background_stop.ok_or(Refusal::Busy)?;
++        let attachment = expected.ok_or(Refusal::Invalid)?;
++        if proof.initiator != self.token
++            || proof.joined != 7
++            || proof.generation != Some(generation)
++            || !Self::background_binding(&state, attachment, proof)
++            || !proof
++                .tokens
++                .into_iter()
++                .all(|token| Self::background_disposed(&state, token))
++        {
++            return Err(Refusal::Busy);
++        }
+         state.final_alarm = Some(FinalAlarm {
+             epoch,
+             generation,
+-            alarm: runtime.alarm_snapshot()?,
++            alarm,
+         });
+         state.retiring = true;
+         state.observation.phase = ObservationPhase::Retiring as u8;
 --- a/crates/celld/guarded_node/tests.rs
 +++ b/crates/celld/guarded_node/tests.rs
-@@ -5349,6 +5349,222 @@
+@@ -2502,6 +2502,7 @@
+ 
+ #[test]
+ fn b2_compaction_cancel_keeps_native_result_owned() {
++    b2_background_quiescence();
+     crate::actor::guarded_test_runtime().block_on(async {
+         let fixture = super::component::ActorFixture::new().expect("concrete original owners");
+         crate::ltx_repl::guarded_component_for_test(
+@@ -2579,6 +2580,7 @@
+ 
+ #[test]
+ fn b2_original_deadline_denies_new_work_but_allows_reserved_cleanup() {
++    b2_sync_stop_capture();
+     crate::actor::guarded_test_runtime().block_on(async {
+         let accepted = Instant::now().checked_sub(Duration::from_secs(14)).unwrap();
+         let fixture =
+@@ -5349,6 +5351,222 @@
  }
  #[test]
  fn b4_observation_failed_retirement_retains_public_guard() {
@@ -421,6 +765,382 @@
      let node = b3_local_node();
      let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
      let guard =
+@@ -7078,3 +7296,375 @@
+     b4_poison_qualification(&poisoned);
+     assert_eq!(poisoned.main_work_bytes(), Err(Refusal::Failed));
+ }
++
++// Components use real submitted Replica tasks, but no NodeRuntime/Driver is
++// fabricated. Full C5/Worker ordering still requires actual process evidence.
++fn b2_background_quiescence() {
++    // All three schedules share this original helper bound. The expiry case
++    // additionally waits for the real, older accepted-owner deadline.
++    let deadline = Instant::now() + Duration::from_secs(5);
++    for mode in 0..3 {
++        crate::actor::guarded_test_runtime().block_on(async {
++            let fixture = if mode == 2 {
++                lifetimes::ActorFixture::with_stamp(
++                    control::AcceptedStamp::at(Instant::now() - Duration::from_secs(13)).unwrap(),
++                )
++                .unwrap()
++            } else {
++                lifetimes::ActorFixture::new().unwrap()
++            };
++            crate::ltx_repl::guarded_component_for_test(
++                crate::ltx_repl::GuardedLtxCase::Quiescence(mode, deadline),
++                &fixture,
++            )
++            .await
++            .expect("actual roots retained, then explicitly joined before storage closes");
++        });
++    }
++}
++fn b2_sync_stop_capture() {
++    let deadline = Instant::now() + Duration::from_secs(5);
++    for mode in 0..3 {
++        let case = crate::ltx_repl::GuardedLtxCase::SyncStop(mode, deadline);
++        crate::actor::guarded_test_runtime().block_on(async {
++            let fixture = lifetimes::ActorFixture::new().unwrap();
++            crate::ltx_repl::guarded_component_for_test(case, &fixture)
++                .await
++                .expect("real native capture classified before benign stop");
++        });
++    }
++}
++impl JobContext {
++    pub(crate) fn background_before_for_test(
++        &self,
++        attachment: &crate::ltx_repl::EpochAttachment,
++        wrong: &crate::ltx_repl::EpochAttachment,
++    ) -> Result<bool, Refusal> {
++        let registry = self.registry()?;
++        let record = registry.record(self.token)?;
++        let wrong_pointer = wrong.validate(self).is_ok()
++            && self.begin_background_stop(wrong) == Err(Refusal::Invalid);
++        let mut reserved = true;
++        // Actual tasks are all paused on their explicit release channels.
++        for lane in 0..3 {
++            for field in 0..5 {
++                let old = {
++                    let mut state = record.state.lock().unwrap();
++                    let root = &mut state.roots[lane];
++                    let old = (root.state, root.kind, root.sequence, root.consumer);
++                    match field {
++                        0 => root.state = RootState::Reserved,
++                        1 => root.state = RootState::Empty,
++                        2 => root.consumer = true,
++                        3 => root.kind = Some(RootKind::Actor),
++                        _ => root.sequence = 0,
++                    }
++                    old
++                };
++                reserved &= self.begin_background_stop(attachment) == Err(Refusal::Busy);
++                let mut state = record.state.lock().unwrap();
++                let root = &mut state.roots[lane];
++                (root.state, root.kind, root.sequence, root.consumer) = old;
++            }
++        }
++        record.state.lock().unwrap().tainted = true;
++        reserved &= self.begin_background_stop(attachment) == Err(Refusal::Busy);
++        record.state.lock().unwrap().tainted = false;
++        let untouched = record.state.lock().unwrap().background_stop.is_none();
++        Ok(wrong_pointer && reserved && untouched)
++    }
++    pub(crate) fn background_gate_for_test(
++        &self,
++        attachment: &crate::ltx_repl::EpochAttachment,
++        submitted: [RootToken; 3],
++    ) -> Result<bool, Refusal> {
++        let registry = self.registry()?;
++        let record = registry.record(self.token)?;
++        let proof = record
++            .state
++            .lock()
++            .unwrap()
++            .background_stop
++            .ok_or(Refusal::Invalid)?;
++        let mut denied = self.begin_background_stop(attachment) == Err(Refusal::Busy);
++        for role in [
++            ForwardLane::Hydration,
++            ForwardLane::Sync,
++            ForwardLane::Compaction,
++        ] {
++            for kind in [RootKind::Replica, RootKind::Actor] {
++                denied &= matches!(
++                    registry.reserve(self.token.slot as usize, JobRole::Forward(role), kind, None),
++                    Err(Refusal::Cancelled)
++                );
++            }
++        }
++        Ok(denied
++            && proof.tokens == submitted
++            && proof.tokens.iter().all(|token| token.sequence != 0))
++    }
++    pub(crate) fn background_retained_for_test(&self) -> Result<bool, Refusal> {
++        let registry = self.registry()?;
++        let record = registry.record(self.token)?;
++        let state = record.state.lock().unwrap();
++        let proof = state.background_stop.ok_or(Refusal::Invalid)?;
++        Ok(proof.joined == 0
++            && !state.retiring
++            && state.runtime.is_none()
++            && proof.tokens.iter().all(|token| {
++                let root = &state.roots[token.lane as usize];
++                root.sequence == token.sequence
++                    && root.kind == Some(RootKind::Replica)
++                    && root.state == RootState::Running
++                    && root.handle.is_some()
++                    && root.receiver.is_some()
++                    && root.result.is_none()
++                    && !root.consumer
++                    && state.observation.roots_disposed & (1 << token.lane) == 0
++            }))
++    }
++    pub(crate) fn background_poison_for_test(
++        &self,
++        attachment: &crate::ltx_repl::EpochAttachment,
++    ) -> Result<bool, Refusal> {
++        let registry = self.registry()?;
++        let record = registry.record(self.token)?;
++        let before = record
++            .state
++            .lock()
++            .unwrap()
++            .background_stop
++            .ok_or(Refusal::Invalid)?;
++        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++            let _held = record.state.lock().unwrap();
++            panic!("quiescence protocol record poison negative");
++        }))
++        .is_err();
++        let refused = self.begin_background_stop(attachment) == Err(Refusal::Failed)
++            && self.background_joined(attachment, before.tokens[0]) == Err(Refusal::Failed)
++            && self.verify_background_stop(attachment) == Err(Refusal::Failed)
++            && matches!(
++                self.stop_replica(ReplicaRole::Hydration, attachment, before.tokens[0]),
++                Err(Refusal::Failed)
++            );
++        let retained = {
++            let state = match record.state.lock() {
++                Err(poison) => poison.into_inner(),
++                Ok(_) => return Err(Refusal::Invalid),
++            };
++            state.background_stop.is_some_and(|proof| {
++                proof.tokens == before.tokens
++                    && proof.initiator == before.initiator
++                    && proof.joined == 0
++            }) && !state.retiring
++                && state.runtime.is_none()
++                && before.tokens.iter().all(|token| {
++                    let root = &state.roots[token.lane as usize];
++                    root.sequence == token.sequence
++                        && root.state == RootState::Running
++                        && root.handle.is_some()
++                        && root.receiver.is_some()
++                        && !root.consumer
++                })
++        };
++        // TEST CLEANUP ONLY: production has no poison recovery. Clearing this
++        // injected poison permits release/join of the still-owned real tasks;
++        // no error is normalized and no join/disposal bit was manufactured.
++        record.state.clear_poison();
++        Ok(poisoned && refused && retained && self.background_retained_for_test()?)
++    }
++    pub(crate) fn background_expiry_for_test(
++        &self,
++        forward: &JobContext,
++        attachment: &crate::ltx_repl::EpochAttachment,
++        helper_deadline: Instant,
++    ) -> Result<bool, Refusal> {
++        let original = forward.original_deadline();
++        if Instant::now() >= original || original >= helper_deadline {
++            return Err(Refusal::Expired);
++        }
++        let (_held_sender, receiver) = std::sync::mpsc::sync_channel::<()>(1);
++        let elapsed = matches!(
++            receiver.recv_timeout(original.saturating_duration_since(Instant::now())),
++            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
++        );
++        let first = forward.background_continuation(attachment);
++        let later = forward.background_continuation(attachment);
++        Ok(elapsed
++            && Instant::now() >= original
++            && Instant::now() < helper_deadline
++            && first == Err(Refusal::Expired)
++            && later == Err(Refusal::Failed)
++            && forward.original_deadline() == original
++            && self.background_retained_for_test()?)
++    }
++    pub(crate) fn background_complete_for_test(
++        &self,
++        attachment: &crate::ltx_repl::EpochAttachment,
++    ) -> Result<bool, Refusal> {
++        self.verify_background_stop(attachment)?;
++        let registry = self.registry()?;
++        let record = registry.record(self.token)?;
++        let state = record.state.lock().unwrap();
++        let proof = state.background_stop.ok_or(Refusal::Invalid)?;
++        Ok(proof.joined == 7
++            && !state.retiring
++            && state.runtime.is_none()
++            && proof
++                .tokens
++                .iter()
++                .all(|token| Self::background_disposed(&state, *token)))
++    }
++    pub(crate) fn background_after_for_test(
++        &self,
++        attachment: &crate::ltx_repl::EpochAttachment,
++    ) -> Result<bool, Refusal> {
++        let registry = self.registry()?;
++        let record = registry.record(self.token)?;
++        let proof = record
++            .state
++            .lock()
++            .unwrap()
++            .background_stop
++            .ok_or(Refusal::Invalid)?;
++        let mut valid = self.verify_background_stop(attachment).is_ok() && proof.joined == 7;
++        record.state.lock().unwrap().background_stop = None;
++        valid &= self.verify_background_stop(attachment) == Err(Refusal::Invalid);
++        record.state.lock().unwrap().background_stop = Some(proof);
++        for field in 0..6 {
++            let mut bad = proof;
++            match field {
++                0 => bad.joined = 3,
++                1 => bad.tokens[0].sequence += 1,
++                2 => bad.epoch += 1,
++                3 => bad.generation = Some(99),
++                4 => bad.initiator.sequence += 1,
++                _ => bad.tokens[0].lane = 7,
++            }
++            record.state.lock().unwrap().background_stop = Some(bad);
++            valid &= self.verify_background_stop(attachment).is_err();
++            record.state.lock().unwrap().background_stop = Some(proof);
++        }
++        for field in 0..3 {
++            {
++                let mut state = record.state.lock().unwrap();
++                let root = &mut state.roots[0];
++                match field {
++                    0 => root.consumer = true,
++                    1 => root.kind = Some(RootKind::Actor),
++                    _ => root.sequence = 0,
++                }
++            }
++            valid &= self.verify_background_stop(attachment).is_err();
++            {
++                let mut state = record.state.lock().unwrap();
++                let root = &mut state.roots[0];
++                root.consumer = false;
++                root.kind = Some(RootKind::Replica);
++                root.sequence = proof.tokens[0].sequence;
++            }
++        }
++        valid &= self.background_joined(attachment, proof.tokens[0]) == Err(Refusal::Invalid);
++        // Empty cannot be reused after the gate, even with a different kind.
++        valid &= matches!(
++            registry.reserve(
++                self.token.slot as usize,
++                JobRole::Forward(ForwardLane::Hydration),
++                RootKind::Actor,
++                None
++            ),
++            Err(Refusal::Cancelled)
++        );
++        Ok(valid
++            && proof
++                .tokens
++                .iter()
++                .all(|token| Self::background_disposed(&record.state.lock().unwrap(), *token)))
++    }
++}
++
++thread_local! {
++    static BACKGROUND_RESERVE_BARRIER: std::cell::RefCell<Option<(Instant,
++        std::sync::mpsc::SyncSender<()>, std::sync::mpsc::Receiver<()>)>> = const { std::cell::RefCell::new(None) };
++}
++pub(super) fn background_reserve_barrier(role: JobRole) -> Result<(), Refusal> {
++    if role != JobRole::Forward(ForwardLane::Hydration) {
++        return Ok(());
++    }
++    BACKGROUND_RESERVE_BARRIER.with(|slot| {
++        let Some((deadline, entered, release)) = slot.borrow_mut().take() else {
++            return Ok(());
++        };
++        if Instant::now() >= deadline {
++            return Err(Refusal::Expired);
++        }
++        entered.send(()).map_err(|_| Refusal::Failed)?;
++        release
++            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
++            .map_err(|_| Refusal::Expired)?;
++        if Instant::now() >= deadline {
++            return Err(Refusal::Expired);
++        }
++        Ok(())
++    })
++}
++pub(crate) struct BackgroundClaimTest {
++    release: Option<std::sync::mpsc::SyncSender<()>>,
++    worker: Option<std::thread::JoinHandle<Result<ReplicaJobPermit, Refusal>>>,
++    deadline: Instant,
++}
++impl BackgroundClaimTest {
++    pub(crate) fn finish(mut self) -> bool {
++        if let Some(release) = self.release.take() {
++            let _ = release.send(());
++        }
++        let result = self.worker.take().unwrap().join();
++        Instant::now() < self.deadline && matches!(result, Ok(Err(Refusal::Cancelled)))
++    }
++}
++impl Drop for BackgroundClaimTest {
++    fn drop(&mut self) {
++        if let Some(release) = self.release.take() {
++            let _ = release.send(());
++        }
++        if let Some(worker) = self.worker.take() {
++            let _ = worker.join();
++        }
++    }
++}
++impl JobContext {
++    pub(crate) fn background_claim_for_test(
++        &self,
++        attachment: &crate::ltx_repl::EpochAttachment,
++        deadline: Instant,
++    ) -> Result<BackgroundClaimTest, Refusal> {
++        let (entered, observed) = std::sync::mpsc::sync_channel(1);
++        let (release, released) = std::sync::mpsc::sync_channel(1);
++        let context = self.clone();
++        let attachment = attachment.clone();
++        let worker = std::thread::spawn(move || {
++            BACKGROUND_RESERVE_BARRIER.with(|slot| {
++                *slot.borrow_mut() = Some((deadline, entered, released));
++            });
++            let result = context.claim_replica(ReplicaRole::Hydration, &attachment);
++            BACKGROUND_RESERVE_BARRIER.with(|slot| {
++                slot.borrow_mut().take();
++            });
++            result
++        });
++        let held = BackgroundClaimTest {
++            release: Some(release),
++            worker: Some(worker),
++            deadline,
++        };
++        if Instant::now() >= deadline
++            || observed
++                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
++                .is_err()
++            || Instant::now() >= deadline
++        {
++            return Err(Refusal::Expired);
++        }
++        Ok(held)
++    }
++}
 --- a/crates/celld/ltx_repl.rs
 +++ b/crates/celld/ltx_repl.rs
 @@ -5885,7 +5885,8 @@
@@ -433,7 +1153,146 @@
      };
      use std::alloc::Layout;
      use std::io;
-@@ -6698,6 +6699,13 @@
+@@ -5993,6 +5994,14 @@
+         installed: bool,
+     }
+ 
++    #[cfg(test)]
++    struct SyncCaptureGate {
++        entered: std::sync::mpsc::SyncSender<()>,
++        release: std::sync::mpsc::Receiver<()>,
++        deadline: std::time::Instant,
++        fail: bool,
++    }
++
+     pub(super) struct EpochJobs {
+         epoch: u64,
+         registration_slot: usize,
+@@ -6010,6 +6019,8 @@
+         // no Cell/Db/host/owner backlink, so this is not an ownership cycle.
+         host_scratch: Mutex<Option<(RootToken, Box<NativeResource>)>>,
+         failed_callback: AtomicBool,
++        #[cfg(test)]
++        sync_capture_gate: Mutex<Option<SyncCaptureGate>>,
+         // Last: a failed/uncertain final drop retains this original witness.
+         owner: Option<JobContext>,
+     }
+@@ -6058,6 +6069,9 @@
+             Ok(())
+         }
+ 
++        pub(crate) fn same_attachment(&self, other: &Self) -> bool {
++            Arc::ptr_eq(&self.0, &other.0)
++        }
+         pub(crate) fn retired(&self) -> bool {
+             self.0.retired.load(Ordering::Acquire)
+         }
+@@ -6106,7 +6120,13 @@
+             .ok_or_else(|| refusal(self.owner(), Refusal::Invalid))?;
+             context.check_job()?;
+             if matches!(context.role(), JobRole::Forward(_)) && self.stopped() {
+-                return Err(refusal(&context, Refusal::Cancelled));
++                let attachment = context.attachment()?;
++                if !std::ptr::eq(attachment.0.as_ref(), self) {
++                    return Err(refusal(&context, Refusal::Invalid));
++                }
++                context
++                    .background_continuation(&attachment)
++                    .map_err(|reason| refusal(&context, reason))?;
+             }
+             Ok(context)
+         }
+@@ -6602,7 +6622,42 @@
+                         }
+                         None => NativeOutput::Empty,
+                     },
+-                    NativeInput::Sync(handle) => NativeOutput::Sync(capture_sync(&handle)),
++                    NativeInput::Sync(handle) => {
++                        #[cfg(test)]
++                        let gate = {
++                            let mut slot = self.attachment.0.sync_capture_gate.lock().unwrap();
++                            slot.take()
++                        };
++                        #[cfg(test)]
++                        if let Some(gate) = gate {
++                            // Actual context/kind admission already succeeded. No guard spans this wait.
++                            let ready = gate.entered.send(()).is_ok();
++                            let released = std::time::Instant::now() < gate.deadline
++                                && gate
++                                    .release
++                                    .recv_timeout(
++                                        gate.deadline
++                                            .saturating_duration_since(std::time::Instant::now()),
++                                    )
++                                    .is_ok()
++                                && std::time::Instant::now() < gate.deadline;
++                            if !ready || !released || gate.fail {
++                                self.resource.output = NativeOutput::Sync(Some(Err(())));
++                                return LtxNativeCompletion {
++                                    resource: self.resource,
++                                    kind: self.kind,
++                                    token: self.token,
++                                    status: if ready && released {
++                                        Ok(())
++                                    } else {
++                                        Err(Refusal::Expired)
++                                    },
++                                    attachment: self.attachment,
++                                };
++                            }
++                        }
++                        NativeOutput::Sync(capture_sync(&handle))
++                    }
+                     NativeInput::Snapshot { handle, budget } => {
+                         NativeOutput::Snapshot(capture_snapshot(&handle, budget))
+                     }
+@@ -6638,6 +6693,45 @@
+                 attachment: self.attachment,
+             }
+         }
++    }
++
++    // Shared by the real C5 join and fixture-only cancellation cleanup. Actual
++    // result consumption/finish_root precedes every joined-proof mutation.
++    fn finish_background_join(
++        context: &JobContext,
++        attachment: &EpochAttachment,
++        role: ReplicaRole,
++        token: RootToken,
++        joined: crate::guarded_execution::node::OwnedReplicaCompletion,
++    ) -> Result<(), Refusal> {
++        let mut outcome = Err(Refusal::Invalid);
++        joined.consume_ltx(|completion| {
++            let expected_role = role;
++            let job_role = match role {
++                ReplicaRole::Hydration => JobRole::Forward(ForwardLane::Hydration),
++                ReplicaRole::Sync => JobRole::Forward(ForwardLane::Sync),
++                ReplicaRole::Compaction => JobRole::Forward(ForwardLane::Compaction),
++                ReplicaRole::Retirement => JobRole::Cleanup(CleanupLane::Retirement),
++            };
++            let token_matches = lock(&attachment.0.state).is_ok_and(|state| {
++                state.contexts[role_index(job_role)]
++                    .as_ref()
++                    .is_some_and(|bound| bound.root_token() == completion.token)
++            });
++            if completion.role != expected_role
++                || completion.token != token
++                || !token_matches
++                || !Arc::ptr_eq(&completion.attachment.0, &attachment.0)
++            {
++                context.fail();
++                std::mem::forget(completion);
++                return;
++            }
++            outcome = completion.result;
++        })?;
++        outcome?;
++        context.background_joined(attachment, token)?;
++        Ok(())
+     }
+ 
+     async fn native(
+@@ -6698,6 +6792,13 @@
          role: ReplicaRole,
          result: anyhow::Result<()>,
      ) -> LtxRootCompletion {
@@ -447,7 +1306,85 @@
          let result = result.map_err(|error| {
              let reason = if error.is::<crate::replication::EvictionAbandoned>() {
                  Refusal::Cancelled
-@@ -7518,12 +7526,15 @@
+@@ -6862,6 +6963,10 @@
+         }
+     }
+ 
++    fn valid_sync_capture(staged: &Option<Result<SyncStaged, ()>>) -> bool {
++        matches!(staged, Some(Ok(_)))
++    }
++
+     async fn sync_owned(
+         context: &JobContext,
+         attachment: &EpochAttachment,
+@@ -6886,11 +6991,11 @@
+             _ => return Err(refusal(context, Refusal::Invalid).into()),
+         };
+         *resource = Some(slot);
++        if !valid_sync_capture(&staged) {
++            return Err(refusal(context, Refusal::Failed).into());
++        }
+         if matches!(context.role(), JobRole::Forward(_)) && attachment.0.stopped() {
+             return Ok(false);
+-        }
+-        if !matches!(staged, Some(Ok(_))) {
+-            return Err(refusal(context, Refusal::Failed).into());
+         }
+         // This is the canonical upload/credit path. Its async work remains
+         // inside this root; no timeout drops a native capture or its result.
+@@ -7230,6 +7335,8 @@
+                     sync_gate: tokio::sync::Mutex::new(()),
+                     host_scratch: Mutex::new(None),
+                     failed_callback: AtomicBool::new(false),
++                    #[cfg(test)]
++                    sync_capture_gate: Mutex::new(None),
+                     owner: Some(context.clone()),
+                 });
+                 registration.guarded_epochs += 1;
+@@ -7513,57 +7620,63 @@
+             Ok((position, celld_logic::ProofSource::Bucket))
+         }
+ 
++        pub(crate) async fn quiesce_background_guarded(
++            &self,
++            context: &JobContext,
++            attachment: &EpochAttachment,
++        ) -> anyhow::Result<()> {
++            let tokens = context.begin_background_stop(attachment)?;
++            let handle = self.guarded_handle(context, attachment)?;
++            let mut stage = RetirementFailureStage::JoinHydration;
++            let result: anyhow::Result<()> = async {
++                attachment.0.stop_forward();
++                if let Some(hydration) = &handle.hydration {
++                    hydration.cancelled.store(true, Ordering::Release);
++                }
++                cancel_compaction(&handle);
++                for (role, token) in [
++                    ReplicaRole::Hydration,
++                    ReplicaRole::Sync,
++                    ReplicaRole::Compaction,
++                ]
++                .into_iter()
++                .zip(tokens)
++                {
++                    stage = match role {
++                        ReplicaRole::Hydration => RetirementFailureStage::JoinHydration,
++                        ReplicaRole::Sync => RetirementFailureStage::JoinSync,
++                        ReplicaRole::Compaction => RetirementFailureStage::JoinCompaction,
++                        ReplicaRole::Retirement => RetirementFailureStage::ValidateRoleAttachment,
++                    };
++                    let joined = context.stop_replica(role, attachment, token)?.await?;
++                    finish_background_join(context, attachment, role, token, joined)?;
++                }
++                Ok(())
++            }
++            .await;
++            drop(handle);
++            retirement_stage_result(context, stage, result)
++        }
++
+         pub(crate) async fn retire_guarded(
+             &self,
              context: &JobContext,
              attachment: &EpochAttachment,
              mode: StopMode,
@@ -461,30 +1398,51 @@
              }
 +            *stage = RetirementFailureStage::ResolveHandle;
              let handle = self.guarded_handle(context, attachment)?;
-             attachment.0.stop_forward();
-             if let Some(hydration) = &handle.hydration {
-@@ -7535,6 +7546,12 @@
-                 ReplicaRole::Sync,
-                 ReplicaRole::Compaction,
-             ] {
-+                *stage = match role {
-+                    ReplicaRole::Hydration => RetirementFailureStage::JoinHydration,
-+                    ReplicaRole::Sync => RetirementFailureStage::JoinSync,
-+                    ReplicaRole::Compaction => RetirementFailureStage::JoinCompaction,
-+                    ReplicaRole::Retirement => RetirementFailureStage::ValidateRoleAttachment,
-+                };
-                 let joined = context.stop_replica(role, attachment)?.await?;
-                 let mut outcome = Err(Refusal::Invalid);
-                 joined.consume_ltx(|completion| {
-@@ -7564,6 +7581,7 @@
-             }
+-            attachment.0.stop_forward();
+-            if let Some(hydration) = &handle.hydration {
+-                hydration.cancelled.store(true, Ordering::Release);
+-            }
+-            cancel_compaction(&handle);
+-            for role in [
+-                ReplicaRole::Hydration,
+-                ReplicaRole::Sync,
+-                ReplicaRole::Compaction,
+-            ] {
+-                let joined = context.stop_replica(role, attachment)?.await?;
+-                let mut outcome = Err(Refusal::Invalid);
+-                joined.consume_ltx(|completion| {
+-                    let expected_role = role;
+-                    let job_role = match role {
+-                        ReplicaRole::Hydration => JobRole::Forward(ForwardLane::Hydration),
+-                        ReplicaRole::Sync => JobRole::Forward(ForwardLane::Sync),
+-                        ReplicaRole::Compaction => JobRole::Forward(ForwardLane::Compaction),
+-                        ReplicaRole::Retirement => JobRole::Cleanup(CleanupLane::Retirement),
+-                    };
+-                    let token_matches = lock(&attachment.0.state).is_ok_and(|state| {
+-                        state.contexts[role_index(job_role)]
+-                            .as_ref()
+-                            .is_some_and(|bound| bound.root_token() == completion.token)
+-                    });
+-                    if completion.role != expected_role
+-                        || !token_matches
+-                        || !Arc::ptr_eq(&completion.attachment.0, &attachment.0)
+-                    {
+-                        context.fail();
+-                        std::mem::forget(completion);
+-                        return;
+-                    }
+-                    outcome = completion.result;
+-                })?;
+-                outcome?;
+-            }
++            context.verify_background_stop(attachment)?;
              // Move the exact resident into the stopped map under close
              // exclusion. No ordinary close path is allowed to consume it.
 +            *stage = RetirementFailureStage::TransferStoppedCell;
              context.charge_owned(context.cell().len().checked_mul(2).ok_or(Refusal::Bounds)?)?;
              let key = (context.cell().to_owned(), attachment.0.epoch);
              let transferred = (|| {
-@@ -7587,10 +7605,12 @@
+@@ -7587,10 +7700,12 @@
              })();
              transferred.map_err(|reason| refusal(context, reason))?;
              let mut resource = None;
@@ -497,7 +1455,7 @@
                      if !sync_owned(context, attachment, &handle, &mut resource).await? {
                          return Err(refusal(context, Refusal::Failed).into());
                      }
-@@ -7609,6 +7629,7 @@
+@@ -7609,6 +7724,7 @@
                      if abandon.as_ref().is_some_and(|signal| signal.requested()) {
                          return Err(abandoned());
                      }
@@ -505,7 +1463,7 @@
                      let budget =
                          usize::try_from(self.snapshot_budget_bytes.load(Ordering::Relaxed))
                              .unwrap_or(usize::MAX);
-@@ -7630,6 +7651,7 @@
+@@ -7630,6 +7746,7 @@
                      }
                      let mut durable = false;
                      if let Some(snapshot) = snapshot {
@@ -513,7 +1471,7 @@
                          let publish = async {
                              let info = handle
                                  .client
-@@ -7669,6 +7691,7 @@
+@@ -7669,6 +7786,7 @@
                              handle.snapshot_declined.store(true, Ordering::Relaxed);
                          }
                      }
@@ -521,7 +1479,7 @@
                      if !durable
                          && (!sync_owned(context, attachment, &handle, &mut resource).await?
                              || !handle.client.0.has_any_object().await?)
-@@ -7684,6 +7707,7 @@
+@@ -7684,6 +7802,7 @@
              };
              // Bound the epoch's decimal path and all direct sibling copies
              // before allocating the first owned path for this native job.
@@ -529,7 +1487,7 @@
              let path_bytes = self
                  .watch
                  .as_os_str()
-@@ -7704,14 +7728,17 @@
+@@ -7704,14 +7823,17 @@
                      disposition,
                  },
              )?;
@@ -547,7 +1505,7 @@
              if let Some(path) = preserved {
                  self.preserved
                      .lock()
-@@ -7723,6 +7750,7 @@
+@@ -7723,6 +7845,7 @@
                  attachment.0.epoch,
                  percell_coverage(&handle),
              );
@@ -555,7 +1513,7 @@
              let removed = (|| {
                  let mut stopped = lock(&self.stopped_cells)?;
                  if Arc::strong_count(&handle) != 2
-@@ -7737,6 +7765,7 @@
+@@ -7737,6 +7860,7 @@
              // The actual Cell/Db/VFS owner is disposed only outside its map.
              drop(removed.map_err(|reason| refusal(context, reason))?);
              drop(handle);
@@ -563,7 +1521,7 @@
              let scratch = lock(&attachment.0.host_scratch)
                  .map_err(|reason| refusal(context, reason))?
                  .take();
-@@ -7751,6 +7780,7 @@
+@@ -7751,6 +7875,7 @@
              }
              // Actual native jobs/results and Cell resources have been disposed.
              // Release registration exclusion only at this final proven cut.
@@ -571,7 +1529,7 @@
              let released = (|| {
                  let mut registration = lock(&attachment.0.registration)?;
                  if registration.current.is_some() || registration.guarded_epochs == 0 {
-@@ -7783,7 +7813,13 @@
+@@ -7783,7 +7908,13 @@
              attachment: EpochAttachment,
              mode: StopMode,
          ) -> LtxRootCompletion {
@@ -586,6 +1544,428 @@
              root_completion(&context, attachment, ReplicaRole::Retirement, result)
          }
      }
+@@ -7796,6 +7927,8 @@
+         Hydration,
+         SyncTimeout,
+         CompactionCancel,
++        Quiescence(u8, std::time::Instant),
++        SyncStop(u8, std::time::Instant),
+         BoundedQueue,
+         HeldCell,
+         CloseFailure,
+@@ -8181,14 +8314,19 @@
+                 0,
+                 JobRole::Cleanup(CleanupLane::Retirement),
+                 move |context| async move {
+-                    let result = repl
+-                        .retire_job_guarded(
++                    let result = async {
++                        repl.quiesce_background_guarded(&context, &owned_attachment)
++                            .await
++                            .map_err(|_| Refusal::Failed)?;
++                        repl.retire_job_guarded(
+                             context.clone(),
+                             owned_attachment.clone(),
+                             StopMode::Discard,
+                         )
+                         .await
+-                        .retirement_result(&context, &owned_attachment);
++                        .retirement_result(&context, &owned_attachment)
++                    }
++                    .await;
+                     if expected_failure {
+                         check_disposition(
+                             result == Err(Refusal::Failed),
+@@ -8663,6 +8801,91 @@
+                     )
+                     .await
+             }
++            GuardedLtxCase::Quiescence(mode, deadline) => {
++                component_quiescence(fixture, component, context, attachment, mode, deadline).await
++            }
++            GuardedLtxCase::SyncStop(mode, deadline) => {
++                let deadline = deadline.min(context.original_deadline());
++                let handle = component
++                    .open_cell(context, &attachment, None)
++                    .await
++                    .map_err(|_| Refusal::Failed)?;
++                fixture
++                    .run_component(
++                        0,
++                        JobRole::Forward(ForwardLane::Sync),
++                        move |context| async move {
++                            attachment.0.bind(&context)?;
++                            let admitted = !attachment.0.stopped();
++                            let resident = if mode == 1 {
++                                handle.replica.lock().unwrap().take()
++                            } else {
++                                None
++                            };
++                            let (entered, observed) = std::sync::mpsc::sync_channel(1);
++                            let (release, released) = std::sync::mpsc::sync_channel(1);
++                            *attachment.0.sync_capture_gate.lock().unwrap() =
++                                Some(SyncCaptureGate {
++                                    entered,
++                                    release: released,
++                                    deadline,
++                                    fail: mode == 2,
++                                });
++                            let mut resource = None;
++                            let result = {
++                                let mut capture = std::pin::pin!(sync_owned(
++                                    &context,
++                                    &attachment,
++                                    &handle,
++                                    &mut resource
++                                ));
++                                let pending = std::future::poll_fn(|cx| {
++                                    std::task::Poll::Ready(
++                                        std::future::Future::poll(capture.as_mut(), cx)
++                                            .is_pending(),
++                                    )
++                                })
++                                .await;
++                                let entered =
++                                    std::time::Instant::now() < deadline
++                                        && observed
++                                            .recv_timeout(deadline.saturating_duration_since(
++                                                std::time::Instant::now(),
++                                            ))
++                                            .is_ok();
++                                attachment.0.stop_forward();
++                                let _ = release.send(());
++                                let result = tokio::time::timeout_at(
++                                    tokio::time::Instant::from_std(deadline),
++                                    &mut capture,
++                                )
++                                .await;
++                                if !pending || !entered {
++                                    context.fail();
++                                }
++                                result
++                            };
++                            if let Some(resident) = resident {
++                                *handle.replica.lock().unwrap() = Some(resident);
++                            }
++                            let native_disposed =
++                                context.native_child_disposed_for_test() == Ok(true);
++                            // Mode2 injects typed SomeErr inside the real admitted native slot; no actual db.sync fault is claimed.
++                            check_component(
++                                admitted
++                                    && native_disposed
++                                    && std::time::Instant::now() < deadline
++                                    && if mode != 0 {
++                                        matches!(result, Ok(Err(_)))
++                                            && context.check_forward().is_err()
++                                    } else {
++                                        matches!(result, Ok(Ok(false)))
++                                    },
++                            )
++                        },
++                    )
++                    .await
++            }
+             GuardedLtxCase::CompactionCancel => {
+                 let base = component.repl.ltx_host.clone();
+                 fixture
+@@ -8746,6 +8969,7 @@
+             GuardedLtxCase::BoundedQueue
+             | GuardedLtxCase::HeldCell
+             | GuardedLtxCase::CloseFailure => {
++                context.install_attachment(attachment.clone())?;
+                 let handle = component
+                     .open_cell(context, &attachment, None)
+                     .await
+@@ -8790,14 +9014,19 @@
+                         0,
+                         JobRole::Cleanup(CleanupLane::Retirement),
+                         move |context| async move {
+-                            let result = repl
+-                                .retire_job_guarded(
++                            let result = async {
++                                repl.quiesce_background_guarded(&context, &owned_attachment)
++                                    .await
++                                    .map_err(|_| Refusal::Failed)?;
++                                repl.retire_job_guarded(
+                                     context.clone(),
+                                     owned_attachment.clone(),
+                                     StopMode::Discard,
+                                 )
+                                 .await
+-                                .retirement_result(&context, &owned_attachment);
++                                .retirement_result(&context, &owned_attachment)
++                            }
++                            .await;
+                             if expected_failure {
+                                 check_component(result.is_err() && !owned_attachment.retired())
+                             } else {
+@@ -8829,12 +9058,228 @@
+     }
+ 
+     #[cfg(test)]
++    async fn component_quiescence(
++        fixture: &crate::guarded_execution::node::component::ActorFixture,
++        component: &ComponentFixture,
++        context: &JobContext,
++        attachment: EpochAttachment,
++        mode: u8,
++        deadline: std::time::Instant,
++    ) -> Result<(), Refusal> {
++        if std::time::Instant::now() >= deadline {
++            return Err(Refusal::Expired);
++        }
++        context.install_attachment(attachment.clone())?;
++        let handle = component
++            .open_cell(context, &attachment, None)
++            .await
++            .map_err(|_| Refusal::Failed)?;
++        drop(handle);
++        let mut releases = Vec::new();
++        let mut ready = Vec::new();
++        let callbacks = Arc::new(AtomicU64::new(0));
++        for role in [
++            ReplicaRole::Hydration,
++            ReplicaRole::Sync,
++            ReplicaRole::Compaction,
++        ] {
++            let (entered, observed) = tokio::sync::oneshot::channel();
++            ready.push(observed);
++            let attachment = attachment.clone();
++            let base = component.repl.ltx_host.clone();
++            let (release, released) = tokio::sync::oneshot::channel();
++            releases.push(release);
++            let callbacks = callbacks.clone();
++            let permit = context.claim_replica(role, &attachment)?;
++            let wait = permit.submit_ltx(move |context| async move {
++                let result = async {
++                    attachment.0.bind(&context)?;
++                    let host = if role == ReplicaRole::Compaction {
++                        Some(attachment.0.scoped_host(&context, &base)?)
++                    } else {
++                        None
++                    };
++                    let _ = entered.send(());
++                    released.await.map_err(|_| Refusal::Failed)?;
++                    if let Some(host) = host.filter(|_| mode != 2) {
++                        for value in [7u64, 11] {
++                            let actual = host.run_blocking(move || value).await?;
++                            if actual != value {
++                                return Err(Refusal::Invalid.into());
++                            }
++                            callbacks.fetch_add(1, Ordering::SeqCst);
++                        }
++                    }
++                    Ok(())
++                }
++                .await;
++                root_completion(&context, attachment, role, result)
++            })?;
++            drop(wait);
++        }
++        for ready in ready {
++            if std::time::Instant::now() >= deadline {
++                return Err(Refusal::Expired);
++            }
++            tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), ready)
++                .await
++                .map_err(|_| Refusal::Expired)?
++                .map_err(|_| Refusal::Failed)?;
++            if std::time::Instant::now() >= deadline {
++                return Err(Refusal::Expired);
++            }
++        }
++        // A second actual registration has no Cell/Db/native user. It supplies a
++        // distinct same-invocation/epoch pointer for the installed-pointer negative.
++        let other = ComponentFixture::new().map_err(|_| Refusal::Failed)?;
++        let wrong = other.repl.attach_guarded(context, context.cell(), 1)?;
++        let claim = context.background_claim_for_test(&attachment, deadline)?;
++        let submitted = {
++            let state = attachment.0.state.lock().unwrap();
++            std::array::from_fn(|lane| state.contexts[lane].as_ref().unwrap().root_token())
++        };
++        let repl = component.repl.clone();
++        let owned = attachment.clone();
++        let callbacks_after = callbacks.clone();
++        let result = fixture
++            .run_component(
++                0,
++                JobRole::Cleanup(CleanupLane::Retirement),
++                move |context| async move {
++                    let before = context.background_before_for_test(&owned, &wrong)?;
++                    // This uninstalled auxiliary registration never opened a DB/VFS.
++                    {
++                        let mut registration = wrong.0.registration.lock().unwrap();
++                        registration.guarded_scopes[wrong.0.registration_slot] = None;
++                        registration.guarded_epochs -= 1;
++                    }
++                    wrong.0.retired.store(true, Ordering::Release);
++                    drop(wrong);
++                    let mut stop = Box::pin(repl.quiesce_background_guarded(&context, &owned));
++                    let pending = std::future::poll_fn(|cx| {
++                        std::task::Poll::Ready(
++                            std::future::Future::poll(stop.as_mut(), cx).is_pending(),
++                        )
++                    })
++                    .await;
++                    let gate_check = context.background_gate_for_test(&owned, submitted);
++                    let admission = claim.finish();
++                    let gate = gate_check? && admission;
++                    // Dropping this owned future really drops its pending ReplicaWait.
++                    // The bank must retain the same handles/receivers and zero joined
++                    // proof bits. Mode zero separately exercises uninterrupted helper.
++                    let negative = if mode != 0 {
++                        drop(stop);
++                        let retained = context.background_retained_for_test()?;
++                        let checked = if mode == 1 {
++                            context.background_poison_for_test(&owned)?
++                        } else {
++                            let bound = owned.0.state.lock().unwrap().contexts[2]
++                                .as_ref()
++                                .cloned()
++                                .ok_or(Refusal::Invalid)?;
++                            context.background_expiry_for_test(&bound, &owned, deadline)?
++                        };
++                        for release in releases {
++                            let _ = release.send(());
++                        }
++                        let joined = tokio::time::timeout_at(
++                            tokio::time::Instant::from_std(deadline),
++                            component_join_background(&context, &owned, submitted),
++                        )
++                        .await;
++                        match joined {
++                            Ok(Ok(())) if std::time::Instant::now() < deadline => {}
++                            _ => {
++                                context.fail();
++                                return Err(Refusal::Failed);
++                            }
++                        }
++                        retained && checked
++                    } else {
++                        for release in releases {
++                            let _ = release.send(());
++                        }
++                        let joined = tokio::time::timeout_at(
++                            tokio::time::Instant::from_std(deadline),
++                            &mut stop,
++                        )
++                        .await;
++                        match joined {
++                            Ok(Ok(())) if std::time::Instant::now() < deadline => {}
++                            _ => {
++                                context.fail();
++                                return Err(Refusal::Failed);
++                            }
++                        }
++                        drop(stop);
++                        true
++                    };
++                    let after = if mode == 2 {
++                        context.background_complete_for_test(&owned)?
++                    } else {
++                        context.background_after_for_test(&owned)?
++                    };
++                    let no_late_callback = {
++                        let bound = owned.0.state.lock().unwrap().contexts[2]
++                            .as_ref()
++                            .cloned()
++                            .ok_or(Refusal::Invalid)?;
++                        owned.0.context(bound.root_token()).is_err()
++                    };
++                    let completion = repl
++                        .clone()
++                        .retire_job_guarded(context.clone(), owned.clone(), StopMode::Discard)
++                        .await;
++                    let result = completion.retirement_result(&context, &owned);
++                    result?;
++                    check_component(
++                        before
++                            && pending
++                            && gate
++                            && negative
++                            && after
++                            && no_late_callback
++                            && callbacks_after.load(Ordering::SeqCst)
++                                == (if mode == 2 { 0 } else { 2 })
++                            && owned.retired(),
++                    )
++                },
++            )
++            .await;
++        other.finish(result).await
++    }
++
++    // Cancellation cleanup consumes only the captured, actually submitted
++    // roots. It never begins a second proof or reserves new roots/credits.
++    #[cfg(test)]
++    async fn component_join_background(
++        context: &JobContext,
++        attachment: &EpochAttachment,
++        tokens: [RootToken; 3],
++    ) -> Result<(), Refusal> {
++        for (role, token) in [
++            ReplicaRole::Hydration,
++            ReplicaRole::Sync,
++            ReplicaRole::Compaction,
++        ]
++        .into_iter()
++        .zip(tokens)
++        {
++            let joined = context.stop_replica(role, attachment, token)?.await?;
++            finish_background_join(context, attachment, role, token, joined)?;
++        }
++        Ok(())
++    }
++
++    #[cfg(test)]
+     async fn component_hydration(
+         fixture: &crate::guarded_execution::node::component::ActorFixture,
+         component: &ComponentFixture,
+         context: &JobContext,
+         attachment: EpochAttachment,
+     ) -> Result<(), Refusal> {
++        context.install_attachment(attachment.clone())?;
+         let source = component
+             .directory
+             .as_ref()
+@@ -8889,14 +9334,22 @@
+             0,
+             JobRole::Cleanup(CleanupLane::Retirement),
+             move |context| async move {
+-                let retirement = repl.retire_job_guarded(
+-                    context.clone(),
+-                    owned_attachment.clone(),
+-                    StopMode::Discard,
+-                );
++                let retirement = async {
++                    repl.quiesce_background_guarded(&context, &owned_attachment)
++                        .await
++                        .map_err(|_| Refusal::Failed)?;
++                    Ok::<_, Refusal>(
++                        repl.retire_job_guarded(
++                            context.clone(),
++                            owned_attachment.clone(),
++                            StopMode::Discard,
++                        )
++                        .await,
++                    )
++                };
+                 let mut retirement = std::pin::pin!(retirement);
+                 let mut joining = Some(joining);
+-                // C6's first asynchronous boundary is its real F0 join. The
++                // The explicit quiesce helper's first boundary is its real F0 join. The
+                 // native page barrier is still held, so Pending witnesses the
+                 // actual retirement attempt, not merely a queued task handle.
+                 let completion = std::future::poll_fn(|cx| {
+@@ -8909,7 +9362,7 @@
+                     result
+                 })
+                 .await;
+-                completion.retirement_result(&context, &owned_attachment)
++                completion?.retirement_result(&context, &owned_attachment)
+             },
+         );
+         let mut retirement = std::pin::pin!(retirement);
 --- a/crates/celld/runtime.rs
 +++ b/crates/celld/runtime.rs
 @@ -3800,8 +3800,9 @@
@@ -600,13 +1980,30 @@
      };
      use crate::ltx_repl::{EpochAttachment, GuardedActivation, GuardedProof};
      use celld_logic::wake::AlarmSnapshot;
-@@ -5415,9 +5416,13 @@
+@@ -5398,7 +5399,11 @@
+             // This either observes an already-disposed F3 or consumes the one
+             // existing C7 result. It cannot acquire another C7 cleanup credit.
+             context.cancel_driver_and_join().await?;
+-            let runtime = context.take_runtime_for_stop()?;
++            replication
++                .ltx()
++                .quiesce_background_guarded(context, &attachment)
++                .await?;
++            let runtime = context.take_runtime_for_stop_bound(&attachment)?;
+             match native(
+                 context,
+                 NativeKind::WorkerDestroy,
+@@ -5413,11 +5418,15 @@
+                 }
+                 _ => return Err(refused(context, Refusal::Invalid).into()),
              }
-             // C6 owns storage background joins, final capture/publication,
-             // managed close and VFS unregister after the actual Worker drop.
+-            // C6 owns storage background joins, final capture/publication,
+-            // managed close and VFS unregister after the actual Worker drop.
 -            let permit = context.claim_replica(
 -                crate::guarded_execution::node::ReplicaRole::Retirement,
 -                &attachment,
++            // C5 has joined storage roots before WorkerDestroy. C6 verifies
++            // that proof, then owns final capture, close and VFS unregister.
 +            let permit = retirement_stage_result(
 +                context,
 +                RetirementFailureStage::ClaimReplica,
@@ -617,7 +2014,7 @@
              )?;
              let cleanup = permit.context().clone();
              let work = LocalRetirementWork {
-@@ -5425,15 +5430,38 @@
+@@ -5425,15 +5434,38 @@
                  attachment: attachment.clone(),
                  mode,
              };

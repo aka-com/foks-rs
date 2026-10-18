@@ -232,6 +232,9 @@ PROCESS_BASE_IMAGES = {
 }
 PROCESS_ASSET_SHA256 = "2c1a0e4fc330a7a5c6b7541836dea170305173809e77e6d25790f43b9ad0c733"
 MAXIMUM_PROCESS_PATCHES = 1536 * 1024
+# Revision2 build-time source-patch bytes, measured n=3 and rounded to4KiB.
+# Historical loaders retain1536KiB; runtime retained-memory limits are separate.
+MAXIMUM_RETIREMENT_REV2_PATCHES = 1617920
 PROCESS_ADDITIONS = frozenset(("crates/celld/guarded_node/qualification.rs",))
 # Exact fourteen-path source roster; expansion requires a reviewed amendment.
 PROCESS_PATHS = tuple(sorted((
@@ -312,8 +315,8 @@ RETIREMENT_DIAGNOSTICS_MANIFEST = 'runtime/evidence/accepted-b4-control-retireme
 RETIREMENT_DIAGNOSTICS_ASSETS = 'runtime/evidence/accepted-b4-control-retirement-diagnostic-base/assets-node-main-work.json'
 RETIREMENT_DIAGNOSTICS_BASE_IMAGES = {'control_retirement_profile': ('runtime/evidence/accepted-b4-control-retirement-diagnostic-base/runtime-node.lock.json', 'd01a371d066051f29703b8b593adf2c16977f8e329f90d5015166bd261866354'), 'control_retirement_series': ('runtime/evidence/accepted-b4-control-retirement-diagnostic-base/patches/node-series.json', 'c4520f06e70c29998845c73cdac0db92294684dcd3e85fb322f37f5d2520682c'), 'control_retirement_assets': ('runtime/evidence/accepted-b4-control-retirement-diagnostic-base/assets-node-main-work.json', 'd89afbaec006f318297db59ebfa997a5f48b3183a8799248f328065e4ce2258b'), 'control_retirement_source_manifest': ('runtime/evidence/accepted-b4-control-retirement/prepared-inputs/source-manifest.json', 'd02cdc5e8ec53feab0451cd02393420c9fc6a5758419c0f9a9c05b802f209853')}
 RETIREMENT_DIAGNOSTICS_PATHS = ('crates/celld/guarded_node.rs', 'crates/celld/guarded_node/tests.rs', 'crates/celld/ltx_repl.rs', 'crates/celld/runtime.rs')
-RETIREMENT_DIAGNOSTICS_TEST_EXTENSIONS = ['guarded_execution::node::tests::b4_observation_failed_retirement_retains_public_guard']
-RETIREMENT_DIAGNOSTICS_POLICY = {'diagnostics': 'error-only-stderr-bounded256x2-source16', 'native_test_extensions': ['guarded_execution::node::tests::b4_observation_failed_retirement_retains_public_guard'], 'predecessor': 'accepted-control-retirement-nine-patch', 'revision': 1}
+RETIREMENT_DIAGNOSTICS_TEST_EXTENSIONS = ['guarded_execution::node::tests::b4_observation_failed_retirement_retains_public_guard', 'guarded_execution::node::tests::b2_compaction_cancel_keeps_native_result_owned', 'guarded_execution::node::tests::b2_original_deadline_denies_new_work_but_allows_reserved_cleanup']
+RETIREMENT_DIAGNOSTICS_POLICY = {'diagnostics': 'error-only-stderr-bounded256x2-source16', 'native_test_extensions': RETIREMENT_DIAGNOSTICS_TEST_EXTENSIONS, 'predecessor': 'accepted-control-retirement-nine-patch', 'revision': 2}
 
 MAIN_WORK_BIN_TEST = MAIN_WORK + "-bin-test"
 MAIN_WORK_BIN_TESTS = ["guarded::tests::guarded_reload_main_work_fits_qualified_fixture"]
@@ -2879,7 +2882,7 @@ def load_main_work(root, base):
     closed_fields(qualification, (*accepted["qualification"], "retirement_diagnostics"), "retirement-diagnostics qualification")
     changed = {"claim", "source_roster", "tree"}
     exact_json({name: qualification[name] for name in accepted["qualification"] if name not in changed}, {name: value for name, value in accepted["qualification"].items() if name not in changed}, "retirement-diagnostics unchanged policies")
-    exact_json({name: qualification[name] for name in ("claim", "source_roster")}, {"claim": "b4-main-work-retirement-diagnostics-components-only", "source_roster": list(RETIREMENT_DIAGNOSTICS_PATHS)}, "retirement-diagnostics scope")
+    exact_json({name: qualification[name] for name in ("claim", "source_roster")}, {"claim": "b4-main-work-background-retirement-components-only", "source_roster": list(RETIREMENT_DIAGNOSTICS_PATHS)}, "retirement-diagnostics scope")
     tree = qualification["tree"]
     closed_fields(tree, ("files", "payload_bytes", "inventory_sha256"), "retirement-diagnostics tree")
     if type(tree["files"]) is not int or tree["files"] != accepted["qualification"]["tree"]["files"] or type(tree["payload_bytes"]) is not int or not 0 < tree["payload_bytes"] <= MAXIMUM_FOUNDATION_SOURCE or not isinstance(tree["inventory_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", tree["inventory_sha256"]):
@@ -2905,8 +2908,8 @@ def main_work_series(root, profile, accepted=None):
     selected = patches[9]
     closed_fields(selected, ("path", "bytes", "sha256", "files"), "retirement-diagnostics tenth patch")
     foundation_image({name: selected[name] for name in ("path", "bytes", "sha256")}, RETIREMENT_DIAGNOSTICS_PATCH, MAXIMUM_FOUNDATION_PATCH)
-    if sum(entry["bytes"] for entry in patches) > MAXIMUM_PROCESS_PATCHES:
-        fail("retirement-diagnostics combined patch payload exceeds unchanged allowance")
+    if sum(entry["bytes"] for entry in patches) > MAXIMUM_RETIREMENT_REV2_PATCHES:
+        fail("retirement-diagnostics combined patch payload exceeds revision2 allowance")
     files = selected["files"]
     if not isinstance(files, list) or len(files) != len(RETIREMENT_DIAGNOSTICS_PATHS):
         fail("invalid retirement-diagnostics tenth-patch roster")
