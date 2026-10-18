@@ -2,6 +2,12 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("read dependency coordinate changed")]
+    ReadDependencyChanged,
+    #[error("read dependency schema invariant failed: {0}")]
+    ReadDependencySchema(&'static str),
+    #[error("chunk storage admission refused: {0}")]
+    ChunkAdmission(&'static str),
     #[error("browser ticket belongs to another account")]
     WebWrongUser,
     #[error("SQLite storage failed: {0}")]

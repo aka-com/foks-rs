@@ -7,7 +7,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use clap::Parser as _;
 use foks_server::installation::LimitsConfig;
 use foks_server::keys::{read_root_key_file, read_secret_file};
-use foks_server::{RateLimitConfig, RunningStandaloneServer, StandaloneConfig};
+use foks_server::{
+    ChunkCapacityConfig, RateLimitConfig, RunningStandaloneServer, StandaloneConfig,
+};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
@@ -64,6 +66,36 @@ enum Command {
     },
     /// Creates a validated online backup of an installation.
     Backup(BackupArguments),
+    /// Moves inline encrypted chunks to the configured store; stop the server first.
+    ExternalizeChunks {
+        #[arg(long)]
+        config: PathBuf,
+    },
+    /// Verifies and binds legacy external chunks; stop the server first.
+    AdoptChunkStore {
+        #[arg(long)]
+        config: PathBuf,
+    },
+    /// Offline report-only object inventory; never deletes objects.
+    InventoryChunkStore {
+        #[arg(long)]
+        config: PathBuf,
+        /// Restart enumeration after correcting missing objects or a stale cursor.
+        #[arg(long)]
+        restart: bool,
+    },
+    /// Reclaim one offline batch of unreferenced, terminal filesystem objects.
+    /// S3 backends remain report-only until mutation termination is qualified.
+    CollectChunkStore {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long, default_value_t = 128)]
+        maximum_objects: usize,
+        #[arg(long,default_value_t=1024*1024*1024)]
+        maximum_bytes: u64,
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Installs a validated backup into an empty installation.
     Restore(RestoreArguments),
     /// Atomically rewraps installation keys under a new operator root key.
@@ -292,6 +324,19 @@ struct InitArguments {
 
 #[derive(clap::Args)]
 struct ServeArguments {
+    #[arg(long, default_value_t = ChunkCapacityConfig::default().maximum_bytes)]
+    maximum_chunk_bytes: u64,
+    #[arg(long, default_value_t = ChunkCapacityConfig::default().maximum_objects)]
+    maximum_chunk_objects: u64,
+    #[arg(long, default_value_t = ChunkCapacityConfig::default().maximum_unresolved_attempts)]
+    maximum_chunk_unresolved_attempts: u64,
+    #[arg(long, default_value_t = ChunkCapacityConfig::default().maximum_uncertain_bytes)]
+    maximum_chunk_uncertain_bytes: u64,
+    #[arg(skip)]
+    chunk_store: Option<foks_server::chunks::ChunkStoreConfig>,
+    /// TOML chunk-store settings (the contents of an installation's chunk_store table).
+    #[arg(long)]
+    chunk_store_config: Option<PathBuf>,
     #[arg(skip)]
     web_admin: Option<foks_server::web_admin::WebAdminConfig>,
     #[arg(long, default_value = "")]
@@ -328,6 +373,10 @@ struct ServeArguments {
     maximum_active_connections: usize,
     #[arg(long, default_value_t = LimitsConfig::default().maximum_pending_connections)]
     maximum_pending_connections: usize,
+    /// Anonymous KEX receive limit, capped at half the active connections
+    /// (zero disables).
+    #[arg(long, default_value_t = LimitsConfig::default().maximum_kex_receive_polls)]
+    maximum_kex_receive_polls: usize,
     #[arg(long, default_value_t = LimitsConfig::default().maximum_in_flight_requests)]
     maximum_in_flight_requests: usize,
     #[arg(long, default_value_t = LimitsConfig::default().maximum_realtime_polls_per_account)]
@@ -370,6 +419,9 @@ struct ServeArguments {
 
 #[derive(clap::Args)]
 struct BackupArguments {
+    /// Required when the source database contains external chunk references.
+    #[arg(long)]
+    chunk_store_config: Option<PathBuf>,
     #[arg(long)]
     database: PathBuf,
     #[arg(long)]
@@ -447,6 +499,15 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
         Command::Usage { config, json } => usage(config, json),
         Command::ClientBootstrap { config, output } => client_bootstrap(config, output),
         Command::Backup(arguments) => backup(arguments),
+        Command::ExternalizeChunks { config } => externalize_chunks(config),
+        Command::AdoptChunkStore { config } => adopt_chunk_store(config),
+        Command::InventoryChunkStore { config, restart } => inventory_chunk_store(config, restart),
+        Command::CollectChunkStore {
+            config,
+            maximum_objects,
+            maximum_bytes,
+            dry_run,
+        } => collect_chunk_store(config, maximum_objects, maximum_bytes, dry_run),
         Command::Restore(arguments) => restore(arguments),
         Command::RotateOperatorRoot(arguments) => rotate_operator_root(arguments),
         Command::BeginHostKeyRotation { config } => rotate_host_key(config),
@@ -584,6 +645,12 @@ fn serve_config(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let limits = config.limits;
     let rate_limits = config.rate_limits;
     serve(ServeArguments {
+        maximum_chunk_bytes: config.chunk_capacity.maximum_bytes,
+        maximum_chunk_objects: config.chunk_capacity.maximum_objects,
+        maximum_chunk_unresolved_attempts: config.chunk_capacity.maximum_unresolved_attempts,
+        maximum_chunk_uncertain_bytes: config.chunk_capacity.maximum_uncertain_bytes,
+        chunk_store: config.chunk_store,
+        chunk_store_config: None,
         oidc: config.oidc,
         web_admin: config.web_admin,
         vhost_management_host: config.vhost_management_host,
@@ -604,6 +671,7 @@ fn serve_config(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         maximum_read_connections: limits.maximum_read_connections,
         maximum_active_connections: limits.maximum_active_connections,
         maximum_pending_connections: limits.maximum_pending_connections,
+        maximum_kex_receive_polls: limits.maximum_kex_receive_polls,
         maximum_in_flight_requests: limits.maximum_in_flight_requests,
         maximum_realtime_polls_per_account: limits.maximum_realtime_polls_per_account,
         request_timeout_seconds: limits.request_timeout_seconds,
@@ -738,6 +806,7 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
         maximum_read_connections: arguments.maximum_read_connections,
         maximum_active_connections: arguments.maximum_active_connections,
         maximum_pending_connections: arguments.maximum_pending_connections,
+        maximum_kex_receive_polls: arguments.maximum_kex_receive_polls,
         maximum_in_flight_requests: arguments.maximum_in_flight_requests,
         maximum_realtime_polls_per_account: arguments.maximum_realtime_polls_per_account,
         request_timeout_seconds: arguments.request_timeout_seconds,
@@ -756,6 +825,12 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
     let now_microseconds =
         u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros())?;
     let server = foks_server::start_standalone(StandaloneConfig {
+        chunk_store: match (&arguments.chunk_store, &arguments.chunk_store_config) {
+            (Some(config), None) => Some(config.build()?),
+            (None, Some(path)) => Some(load_chunk_store(path)?.build()?),
+            (None, None) => None,
+            (Some(_), Some(_)) => return Err("specify one chunk-store configuration".into()),
+        },
         vhost_management_host: arguments.vhost_management_host,
         web_admin: arguments.web_admin,
         oidc: arguments
@@ -771,7 +846,15 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
         authenticated_address: arguments.authenticated_address,
         management_address: arguments.management_address,
         probe_tls,
-        database: waitlist.database_config(arguments.database_limits),
+        database: waitlist.database_config(
+            ChunkCapacityConfig {
+                maximum_bytes: arguments.maximum_chunk_bytes,
+                maximum_objects: arguments.maximum_chunk_objects,
+                maximum_unresolved_attempts: arguments.maximum_chunk_unresolved_attempts,
+                maximum_uncertain_bytes: arguments.maximum_chunk_uncertain_bytes,
+            }
+            .database_config_from(arguments.database_limits)?,
+        ),
         limits,
         rate_limits: foks_server::RateLimitConfig {
             connection_burst: arguments.connection_rate_burst,
@@ -862,12 +945,20 @@ fn exit_after_fatal_thread(
 
 fn backup(arguments: BackupArguments) -> Result<(), Box<dyn std::error::Error>> {
     let root_key = read_root_key_file(&arguments.root_key_file)?;
-    foks_server::backup_standalone_installation(
+    let store = arguments
+        .chunk_store_config
+        .as_deref()
+        .map(load_chunk_store)
+        .transpose()?
+        .map(|config| config.build())
+        .transpose()?;
+    foks_server::backup_standalone_installation_with_chunk_store(
         arguments.database,
         arguments.key_directory,
         *root_key,
         arguments.destination,
         backup_database_limits(arguments.config)?,
+        store.as_deref(),
     )?;
     Ok(())
 }
@@ -883,6 +974,116 @@ fn backup_database_limits(
         Some(path) => foks_server::installation::load_config(path)?.database_config(),
         None => foks_server_db::Config::default(),
     })
+}
+
+fn load_chunk_store(
+    path: &Path,
+) -> Result<foks_server::chunks::ChunkStoreConfig, Box<dyn std::error::Error>> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(65_537)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > 65_536 {
+        return Err("chunk-store configuration is too large".into());
+    }
+    let config: foks_server::chunks::ChunkStoreConfig =
+        toml::from_str(std::str::from_utf8(&bytes)?)?;
+    config.validate()?;
+    Ok(config)
+}
+
+fn externalize_chunks(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let config = foks_server::installation::load_config(path)?;
+    let store = config
+        .chunk_store
+        .as_ref()
+        .ok_or("installation has no chunk-store configuration")?
+        .build()?;
+    let converted = foks_server::externalize_chunks(
+        &config.database,
+        config.database_config(),
+        store.as_ref(),
+    )?;
+    println!("externalized {converted} encrypted chunks");
+    Ok(())
+}
+
+fn adopt_chunk_store(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!("Before first adoption, preserve a consistent offline SQLite backup (including committed WAL). Adoption pins the chosen store even if verification fails; there is no automatic reset or rebind.");
+    let config = foks_server::installation::load_config(path)?;
+    let store = config
+        .chunk_store
+        .as_ref()
+        .ok_or("installation has no chunk-store configuration")?
+        .build()?;
+    let result = foks_server::adopt_chunk_store(
+        &config.database,
+        config.database_config(),
+        store.as_ref(),
+        |progress| {
+            eprintln!(
+                "verified {} external references ({} encoded bytes)",
+                progress.verified_objects, progress.verified_bytes
+            );
+        },
+    )?;
+    println!(
+        "chunk store bound; verified {} references ({} encoded bytes)",
+        result.verified_objects, result.verified_bytes
+    );
+    Ok(())
+}
+
+fn inventory_chunk_store(path: PathBuf, restart: bool) -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!("Inventory requires a stopped installation and drained legacy remote publishers. A timeout or missing object does not prove a prior PUT stopped. This command accounts objects and never deletes them.");
+    let config = foks_server::installation::load_config(path)?;
+    let store = config
+        .chunk_store
+        .as_ref()
+        .ok_or("installation has no chunk store")?
+        .build()?;
+    let usage = foks_server::inventory_chunk_store(
+        &config.database,
+        config.database_config(),
+        store.as_ref(),
+        restart,
+        |checkpoint| {
+            eprintln!(
+                "inventory generation={} continuation={}",
+                checkpoint.generation,
+                checkpoint.cursor.is_some()
+            )
+        },
+    )?;
+    println!("inventory_complete={} present_bytes={} reserved_bytes={} uncertain_bytes={} objects={} unresolved_attempts={} admission_rejections={} orphan_objects={} orphan_bytes={} unknown_objects={} unknown_bytes={} missing_objects={} missing_referenced_objects={} oldest_attempt_micros={:?}",usage.inventory_complete,usage.present_bytes,usage.reserved_bytes,usage.uncertain_bytes,usage.objects,usage.unresolved_attempts,usage.admission_rejections,usage.orphan_objects,usage.orphan_bytes,usage.unknown_objects,usage.unknown_bytes,usage.missing_objects,usage.missing_referenced_objects,usage.oldest_attempt_micros);
+    println!("unknown_publication_attempts={} retrying_remote_publications={} acknowledged_remote_publications={} remote_termination_qualified=false",usage.unknown_publication_attempts,usage.retrying_remote_publications,usage.acknowledged_remote_publications);
+    Ok(())
+}
+
+fn collect_chunk_store(
+    path: PathBuf,
+    maximum_objects: usize,
+    maximum_bytes: u64,
+    dry_run: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let config = foks_server::installation::load_config(path)?;
+    let store = config
+        .chunk_store
+        .as_ref()
+        .ok_or("collection requires configured chunk storage")?
+        .build()?;
+    eprintln!("Offline collection requires exclusive installation ownership. Unknown objects and uncertain publishers remain charged. Remote backends are report-only.");
+    let report = foks_server::collect_chunk_store(
+        &config.database,
+        config.database_config(),
+        store.as_ref(),
+        maximum_objects,
+        maximum_bytes,
+        dry_run,
+    )?;
+    println!("report_only={} backend_qualified={} ledger_candidates={} deleted_objects={} deleted_bytes={} charged_objects={} deleting_objects={} deleting_bytes={} tombstones={} unresolved_attempts={} unknown_objects={}",report.report_only,report.backend_qualified,report.eligible_objects,report.deleted_objects,report.deleted_bytes,report.usage.objects,report.usage.deleting_objects,report.usage.deleting_bytes,report.usage.tombstones,report.usage.unresolved_attempts,report.usage.unknown_objects);
+    println!("unknown_publication_attempts={} retrying_remote_publications={} acknowledged_remote_publications={} remote_termination_qualified=false",report.usage.unknown_publication_attempts,report.usage.retrying_remote_publications,report.usage.acknowledged_remote_publications);
+    Ok(())
 }
 
 fn restore(arguments: RestoreArguments) -> Result<(), Box<dyn std::error::Error>> {

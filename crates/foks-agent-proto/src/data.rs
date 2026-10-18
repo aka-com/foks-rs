@@ -199,7 +199,20 @@ pub struct DataStat {
     pub target: Option<String>,
 }
 
-/// Whether the adapter clock admits new assistant data writes for one account.
+/// Which receipt clock an [`crate::Operation::AdapterClockStatus`] or
+/// [`crate::Operation::RepairAdapterClock`] request addresses. The two clocks
+/// sample the same process clock but anchor and repair independently.
+#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReceiptClockDomain {
+    /// Admits MCP data-write handles (kv_adapter_clocks).
+    Adapter,
+    /// Admits file-upload handles (kv_upload_clocks).
+    Upload,
+}
+
+/// Whether a receipt clock admits new handles for one account: assistant data
+/// writes for the adapter domain, file uploads for the upload domain.
 #[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AdapterClockAdmission {

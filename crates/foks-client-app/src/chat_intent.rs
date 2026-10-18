@@ -1,6 +1,5 @@
 use crate::{encode_private_json, ClientCredentials, CredentialBackend, Error, Result};
 use foks_keystore::{EncryptedFileSecretStore, SecretStore};
-use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{fs::File, path::Path};
@@ -224,7 +223,7 @@ impl LocalChatIntentStore {
             options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
         }
         let lock = options.open(directory.join(".intent.lock"))?;
-        lock.lock_exclusive()?;
+        crate::runtime::controlled_lock(&lock)?;
         let credentials = if ClientCredentials::is_initialized(&directory)? {
             ClientCredentials::open(&directory)?
         } else {

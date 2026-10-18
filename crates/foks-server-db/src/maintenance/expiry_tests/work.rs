@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{Connection, StatementStatus};
 
 use super::{expiry, fixture::*};
@@ -48,7 +49,7 @@ fn plan(connection: &Connection, sql: &str, cutoff: u64) -> Vec<String> {
     connection
         .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
         .unwrap()
-        .query_map([super::fixture::sql(cutoff)], |r| r.get(3))
+        .query_map([super::fixture::sql(cutoff)], |r| r.budgeted_get(3))
         .unwrap()
         .map(Result::unwrap)
         .collect()

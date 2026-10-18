@@ -1,0 +1,24 @@
+[package]
+name = "foks-hosted-transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared FOKS request allocation ownership and monotonic framing budgets"
+
+[features]
+default = []
+qualification = []
+test-support = ["qualification"]
+
+[dependencies]
+foks-metadata-core = { path = "../foks-metadata-core", default-features = false, features = ["owned-list"] }
+foks-rpc = { workspace = true }
+foks-snowpack = { workspace = true }
+thiserror = { workspace = true }
+tokio = { version = "1", default-features = false, features = ["io-util", "sync", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

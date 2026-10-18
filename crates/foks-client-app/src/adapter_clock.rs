@@ -1,42 +1,23 @@
 //! Narrow injectable wall/monotonic clock for adapter admission and retention.
 use crate::{Error, Result};
 use foks_client_db::AdapterTimeSample;
-use std::{
-    sync::OnceLock,
-    time::{Instant, SystemTime, UNIX_EPOCH},
-};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub trait AdapterClock: Send + Sync {
     fn sample(&self) -> Result<AdapterTimeSample>;
 }
 
-/// Pairs wall time with a monotonic clock that keeps counting while the
-/// computer sleeps: `CLOCK_BOOTTIME` on Linux and `CLOCK_MONOTONIC_RAW` on macOS.
-/// `std::time::Instant` stops during sleep on both, so a sleep longer than the
-/// admission skew would read as a wall-clock jump. Other platforms fall back to
-/// `Instant` and report no boot identity.
+/// Samples [`foks_client::receipt_time_sample`], which pairs wall time with a
+/// monotonic clock that keeps counting while the computer sleeps and records
+/// the boot identity. The upload receipt domain samples the same clock.
 #[derive(Default)]
 pub struct SystemAdapterClock;
 impl AdapterClock for SystemAdapterClock {
     fn sample(&self) -> Result<AdapterTimeSample> {
-        static PROCESS: OnceLock<Option<ProcessClock>> = OnceLock::new();
-        let process = PROCESS
-            .get_or_init(ProcessClock::start)
-            .as_ref()
-            .ok_or(Error::Randomness)?;
-        let wall_seconds = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| untrusted())?
-            .as_secs();
-        let monotonic_seconds = match process.monotonic {
-            Monotonic::Boot => boot_clock_seconds().ok_or_else(untrusted)?,
-            Monotonic::Process(started) => started.elapsed().as_secs(),
-        };
-        Ok(AdapterTimeSample {
-            process_id: process.id,
-            boot_id: process.boot_id,
-            wall_seconds,
-            monotonic_seconds,
+        // One process clock, shared with the upload receipt domain.
+        foks_client::receipt_time_sample().map_err(|error| match error {
+            foks_client::ReceiptClockError::Randomness => Error::Randomness,
+            foks_client::ReceiptClockError::Untrusted => untrusted(),
         })
     }
 }
@@ -45,108 +26,9 @@ fn untrusted() -> Error {
     Error::ClientDatabase(foks_client_db::Error::AdapterClockUntrusted)
 }
 
-struct ProcessClock {
-    id: [u8; 16],
-    /// Present only with `Monotonic::Boot`, whose readings other processes in
-    /// the same boot can compare.
-    boot_id: Option<[u8; 16]>,
-    monotonic: Monotonic,
-}
-
-/// Chosen once per process so that every sample in the process reads the
-/// same clock.
-enum Monotonic {
-    Boot,
-    Process(Instant),
-}
-
-impl ProcessClock {
-    fn start() -> Option<Self> {
-        let mut id = [0; 16];
-        getrandom::fill(&mut id).ok()?;
-        let (boot_id, monotonic) = match boot_clock_seconds() {
-            Some(_) => (boot_identity(), Monotonic::Boot),
-            None => (None, Monotonic::Process(Instant::now())),
-        };
-        Some(Self {
-            id,
-            boot_id,
-            monotonic,
-        })
-    }
-}
-
-/// Seconds since boot, including time spent suspended. As in the server's
-/// administration clock, macOS uses `CLOCK_MONOTONIC_RAW`, which wall-clock
-/// changes cannot step.
-fn boot_clock_seconds() -> Option<u64> {
-    #[cfg(target_os = "linux")]
-    let id = nix::time::ClockId::CLOCK_BOOTTIME;
-    #[cfg(target_os = "macos")]
-    let id = nix::time::ClockId::from_raw(libc::CLOCK_MONOTONIC_RAW);
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        u64::try_from(nix::time::clock_gettime(id).ok()?.tv_sec()).ok()
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        None
-    }
-}
-
-/// A random identifier the kernel chooses at each boot. Without one, a
-/// restarted process cannot tell whether the stored boot-clock anchor is
-/// comparable to its own readings.
-fn boot_identity() -> Option<[u8; 16]> {
-    #[cfg(target_os = "linux")]
-    {
-        let text = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
-        parse_uuid(text.trim())
-    }
-    #[cfg(target_os = "macos")]
-    {
-        // This crate forbids unsafe code, which rules out calling sysctl(3)
-        // directly; the process reads the value once at its first sample. If
-        // the child cannot run, restarts fall back to the restart-gap rule.
-        let output = std::process::Command::new("/usr/sbin/sysctl")
-            .args(["-n", "kern.bootsessionuuid"])
-            .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        parse_uuid(std::str::from_utf8(&output.stdout).ok()?.trim())
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        None
-    }
-}
-
-/// Parses the hyphenated 36-character UUID form; the result is never all zero.
-fn parse_uuid(text: &str) -> Option<[u8; 16]> {
-    if text.len() != 36
-        || [8, 13, 18, 23]
-            .iter()
-            .any(|&index| text.as_bytes()[index] != b'-')
-    {
-        return None;
-    }
-    let digits: Vec<u8> = text.bytes().filter(|byte| *byte != b'-').collect();
-    if digits.len() != 32 || !digits.iter().all(u8::is_ascii_hexdigit) {
-        return None;
-    }
-    let mut id = [0; 16];
-    for (byte, pair) in id.iter_mut().zip(digits.chunks_exact(2)) {
-        *byte = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
-    }
-    (id != [0; 16]).then_some(id)
-}
-
 pub use foks_agent_proto::data::{
     AdapterClockAdmission, AdapterClockPreview, AdapterClockRepair, AdapterClockStatus,
+    ReceiptClockDomain,
 };
 
 /// How far a confirmed repair time may be from the wall time sampled when the
@@ -155,21 +37,61 @@ pub use foks_agent_proto::data::{
 /// that later writes may use; one minute leaves most of the five.
 pub const ADAPTER_CLOCK_CONFIRM_SKEW_SECONDS: u64 = 60;
 
+/// Domain-separation tag of a repair preview digest. The domains keep
+/// distinct tags, so a digest previewed for one clock never confirms the
+/// other.
+fn preview_domain_tag(domain: ReceiptClockDomain) -> u64 {
+    match domain {
+        ReceiptClockDomain::Adapter => 0x136a_9e87_018e_946c,
+        ReceiptClockDomain::Upload => 0x086a_9c32_a21e_7351,
+    }
+}
+
+fn identity_conflict(domain: ReceiptClockDomain) -> Error {
+    Error::ClientDatabase(match domain {
+        ReceiptClockDomain::Adapter => foks_client_db::Error::AdapterIdentityConflict,
+        ReceiptClockDomain::Upload => foks_client_db::Error::UploadIdentityConflict,
+    })
+}
+
+fn read_clock(
+    hard: &foks_client_db::HardStateStore,
+    domain: ReceiptClockDomain,
+    host: &[u8],
+    user: &[u8],
+) -> Result<Option<foks_client_db::AdapterClockState>> {
+    Ok(match domain {
+        ReceiptClockDomain::Adapter => hard.adapter_clock(host, user)?,
+        ReceiptClockDomain::Upload => hard.upload_clock(host, user)?,
+    })
+}
+
 impl crate::CheckedProfileSession<'_> {
-    /// Reports whether data-write admission for `alias` would accept new
-    /// handles now. Reads only local state: it neither anchors nor advances
-    /// the clock, and it takes the account identity from the pinned host and
-    /// the stored credential, as [`Self::check_data_identity`] does, rather
-    /// than authenticating to the server.
+    /// [`Self::receipt_clock_status`] for the adapter clock.
     pub fn adapter_clock_status(
         &self,
+        alias: &str,
+        vault: &mut crate::AccountVault<'_>,
+    ) -> Result<AdapterClockStatus> {
+        self.receipt_clock_status(ReceiptClockDomain::Adapter, alias, vault)
+    }
+
+    /// Reports whether the receipt clock in `domain` would admit new handles
+    /// for `alias` now: MCP data writes for the adapter clock, file uploads
+    /// for the upload clock. Reads only local state: it neither anchors nor
+    /// advances the clock, and it takes the account identity from the pinned
+    /// host and the stored credential, as [`Self::check_data_identity`] does,
+    /// rather than authenticating to the server.
+    pub fn receipt_clock_status(
+        &self,
+        domain: ReceiptClockDomain,
         alias: &str,
         vault: &mut crate::AccountVault<'_>,
     ) -> Result<AdapterClockStatus> {
         let user = vault.account(alias)?.credential.uid.clone();
         let host = self.pinned_host()?.host_id().clone();
         let hard = foks_client_db::HardStateStore::open(&self.paths.hard_database)?;
-        let state = hard.adapter_clock(host.as_bytes(), user.as_bytes())?;
+        let state = read_clock(&hard, domain, host.as_bytes(), user.as_bytes())?;
         let sample = self.adapter_clock.sample();
         let local_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -178,7 +100,15 @@ impl crate::CheckedProfileSession<'_> {
         let admission = match (&state, sample) {
             (None, Ok(_)) => AdapterClockAdmission::Unanchored,
             (Some(_), Ok(sample)) => {
-                match hard.validated_adapter_clock(host.as_bytes(), user.as_bytes(), sample)? {
+                let validated = match domain {
+                    ReceiptClockDomain::Adapter => {
+                        hard.validated_adapter_clock(host.as_bytes(), user.as_bytes(), sample)?
+                    }
+                    ReceiptClockDomain::Upload => {
+                        hard.validated_upload_clock(host.as_bytes(), user.as_bytes(), sample)?
+                    }
+                };
+                match validated {
                     None => AdapterClockAdmission::Paused,
                     Some(next) if next.validated_time_floor < next.reject_issued_before => {
                         AdapterClockAdmission::Behind
@@ -198,8 +128,19 @@ impl crate::CheckedProfileSession<'_> {
         })
     }
 
+    /// [`Self::receipt_clock_preview`] for the adapter clock.
     pub fn adapter_clock_preview(
         &self,
+        alias: &str,
+        proposed: u64,
+        vault: &mut crate::AccountVault<'_>,
+    ) -> Result<AdapterClockPreview> {
+        self.receipt_clock_preview(ReceiptClockDomain::Adapter, alias, proposed, vault)
+    }
+
+    pub fn receipt_clock_preview(
+        &self,
+        domain: ReceiptClockDomain,
         alias: &str,
         proposed: u64,
         vault: &mut crate::AccountVault<'_>,
@@ -207,9 +148,13 @@ impl crate::CheckedProfileSession<'_> {
         let (host_id, user_id) = self.data_identity(alias, vault)?;
         let host = crate::entity_id_from_hex(&host_id)?;
         let user = crate::entity_id_from_hex(&user_id)?;
-        let state = foks_client_db::HardStateStore::open(&self.paths.hard_database)?
-            .adapter_clock(host.as_bytes(), user.as_bytes())?
-            .ok_or(Error::InvalidAccount("adapter clock has not been anchored"))?;
+        let hard = foks_client_db::HardStateStore::open(&self.paths.hard_database)?;
+        let state = read_clock(&hard, domain, host.as_bytes(), user.as_bytes())?.ok_or(
+            Error::InvalidAccount(match domain {
+                ReceiptClockDomain::Adapter => "adapter clock has not been anchored",
+                ReceiptClockDomain::Upload => "upload clock has not been anchored",
+            }),
+        )?;
         let mut binding = Vec::new();
         binding.extend_from_slice(host.as_bytes());
         binding.extend_from_slice(user.as_bytes());
@@ -234,18 +179,13 @@ impl crate::CheckedProfileSession<'_> {
             reject_issued_before: state.reject_issued_before,
             proposed_wall: proposed,
             confirmation_digest: crate::hex(&foks_crypto::prefixed_hash(
-                0x136a_9e87_018e_946c,
+                preview_domain_tag(domain),
                 &binding,
             )),
         })
     }
 
-    /// The agent exposes this to the CLI and the desktop, never to MCP tools.
-    /// The caller publishes the returned audit result after the checked-session
-    /// boundary has checkpointed. `proposed` must be within
-    /// [`ADAPTER_CLOCK_CONFIRM_SKEW_SECONDS`] of the wall time sampled here,
-    /// after the identity check, so the time that check takes counts against
-    /// the confirmation rather than the admission skew.
+    /// [`Self::reanchor_receipt_clock`] for the adapter clock.
     pub fn reanchor_adapter_clock(
         &self,
         alias: &str,
@@ -253,29 +193,55 @@ impl crate::CheckedProfileSession<'_> {
         confirmation: &str,
         vault: &mut crate::AccountVault<'_>,
     ) -> Result<AdapterClockRepair> {
-        let preview = self.adapter_clock_preview(alias, proposed, vault)?;
+        self.reanchor_receipt_clock(
+            ReceiptClockDomain::Adapter,
+            alias,
+            proposed,
+            confirmation,
+            vault,
+        )
+    }
+
+    /// The agent exposes this to the CLI and the desktop, never to MCP tools.
+    /// The caller publishes the returned audit result after the checked-session
+    /// boundary has checkpointed. `proposed` must be within
+    /// [`ADAPTER_CLOCK_CONFIRM_SKEW_SECONDS`] of the wall time sampled here,
+    /// after the identity check, so the time that check takes counts against
+    /// the confirmation rather than the admission skew. The two domains are
+    /// independent: repairing one leaves the other unchanged.
+    pub fn reanchor_receipt_clock(
+        &self,
+        domain: ReceiptClockDomain,
+        alias: &str,
+        proposed: u64,
+        confirmation: &str,
+        vault: &mut crate::AccountVault<'_>,
+    ) -> Result<AdapterClockRepair> {
+        let preview = self.receipt_clock_preview(domain, alias, proposed, vault)?;
         if confirmation != preview.confirmation_digest {
-            return Err(foks_client_db::Error::AdapterIdentityConflict.into());
+            return Err(identity_conflict(domain));
         }
         let host = crate::entity_id_from_hex(&preview.host_id)?;
         let user = crate::entity_id_from_hex(&preview.user_id)?;
         let mut hard = foks_client_db::HardStateStore::open(&self.paths.hard_database)?;
-        let old = hard
-            .adapter_clock(host.as_bytes(), user.as_bytes())?
-            .ok_or(foks_client_db::Error::AdapterIdentityConflict)?;
+        let old = read_clock(&hard, domain, host.as_bytes(), user.as_bytes())?
+            .ok_or_else(|| identity_conflict(domain))?;
         let sample = self.adapter_clock.sample()?;
         if proposed.abs_diff(sample.wall_seconds) > ADAPTER_CLOCK_CONFIRM_SKEW_SECONDS {
             return Err(Error::AdapterClockConfirmationStale);
         }
-        let updated = hard.reanchor_adapter_clock(
-            host.as_bytes(),
-            user.as_bytes(),
-            &old,
-            AdapterTimeSample {
-                wall_seconds: proposed,
-                ..sample
-            },
-        )?;
+        let sample = AdapterTimeSample {
+            wall_seconds: proposed,
+            ..sample
+        };
+        let updated = match domain {
+            ReceiptClockDomain::Adapter => {
+                hard.reanchor_adapter_clock(host.as_bytes(), user.as_bytes(), &old, sample)?
+            }
+            ReceiptClockDomain::Upload => {
+                hard.reanchor_upload_clock(host.as_bytes(), user.as_bytes(), &old, sample)?
+            }
+        };
         Ok(AdapterClockRepair {
             preview,
             resulting_floor: updated.validated_time_floor,
@@ -290,38 +256,18 @@ mod tests {
     use crate::*;
 
     #[test]
-    fn boot_identities_parse_only_the_hyphenated_uuid_form() {
-        assert_eq!(
-            parse_uuid("0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0"),
-            Some([
-                0x0f, 0x1e, 0x2d, 0x3c, 0x4b, 0x5a, 0x69, 0x78, 0x87, 0x96, 0xa5, 0xb4, 0xc3, 0xd2,
-                0xe1, 0xf0
-            ])
-        );
-        assert_eq!(
-            parse_uuid("0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0"),
-            parse_uuid("0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0")
-        );
-        for text in [
-            "",
-            "00000000-0000-0000-0000-000000000000",
-            "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
-            "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f",
-            "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1fg",
-            "+f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
-            "0f1e2d3c-4b5a-6978-8796a-5b4c3d2e1f0",
-        ] {
-            assert_eq!(parse_uuid(text), None, "{text}");
-        }
-    }
-
-    #[test]
     fn system_clock_reads_one_suspend_inclusive_clock_per_process() {
         let first = SystemAdapterClock.sample().unwrap();
         let second = SystemAdapterClock.sample().unwrap();
         assert_eq!(first.process_id, second.process_id);
         assert_eq!(first.boot_id, second.boot_id);
         assert!(second.monotonic_seconds >= first.monotonic_seconds);
+        // The upload receipt domain samples the same process clock.
+        let upload = foks_client::upload_time_sample().unwrap();
+        assert_eq!(
+            (upload.process_id, upload.boot_id),
+            (first.process_id, first.boot_id)
+        );
         #[cfg(target_os = "linux")]
         {
             // /proc/uptime reads CLOCK_BOOTTIME; Instant would count from
@@ -588,6 +534,77 @@ mod tests {
             );
             assert!(expired
                 .verify_descends_from(&s.rollback_checkpoint()?)
+                .is_err());
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn upload_clock_repair_requires_preview_preserves_floor_and_adapter_domain() {
+        let f = crate::test_support::AccountFixture::start();
+        f.run(|s, v, k| s.create_account("me", "uploadclock", "laptop", "", "", None, v, k));
+        let context = f.run(|s, v, _| s.kv_upload_issuance("me", None, v));
+        let status = f.run(|s, v, _| s.receipt_clock_status(ReceiptClockDomain::Upload, "me", v));
+        assert_eq!(status.admission, AdapterClockAdmission::Trusted);
+        let proposed = context.issued_at.saturating_sub(100_000);
+        let preview =
+            f.run(|s, v, _| s.receipt_clock_preview(ReceiptClockDomain::Upload, "me", proposed, v));
+        // A digest previewed for one domain never confirms the other.
+        let adapter = f.run(|s, v, _| {
+            let (host, uid) = s.data_identity("me", v)?;
+            let (host, uid) = (entity_id_from_hex(&host)?, entity_id_from_hex(&uid)?);
+            let mut hard = HardStateStore::open(&s.paths.hard_database)?;
+            hard.check_adapter_admission(
+                host.as_bytes(),
+                uid.as_bytes(),
+                SubmissionHandle::new(context.issued_at, [8; 16]),
+                s.adapter_clock.sample()?,
+            )?;
+            s.adapter_clock_preview("me", proposed, v)
+        });
+        assert_ne!(adapter.confirmation_digest, preview.confirmation_digest);
+        let earlier = || std::sync::Arc::new(WallClock(proposed));
+        f.run_with_clock(earlier(), |s, v, _| {
+            assert!(s
+                .reanchor_receipt_clock(
+                    ReceiptClockDomain::Upload,
+                    "me",
+                    proposed + 1,
+                    &preview.confirmation_digest,
+                    v
+                )
+                .is_err());
+            assert!(s
+                .reanchor_adapter_clock("me", proposed, &preview.confirmation_digest, v)
+                .is_err());
+            let host = entity_id_from_hex(&preview.host_id)?;
+            let uid = entity_id_from_hex(&preview.user_id)?;
+            let before = HardStateStore::open(&s.paths.hard_database)?
+                .adapter_clock(host.as_bytes(), uid.as_bytes())?;
+            let repaired = s.reanchor_receipt_clock(
+                ReceiptClockDomain::Upload,
+                "me",
+                proposed,
+                &preview.confirmation_digest,
+                v,
+            )?;
+            assert_eq!(repaired.resulting_floor, proposed);
+            let hard = HardStateStore::open(&s.paths.hard_database)?;
+            assert_eq!(
+                hard.upload_clock(host.as_bytes(), uid.as_bytes())?
+                    .unwrap()
+                    .reject_issued_before,
+                preview.reject_issued_before
+            );
+            assert_eq!(hard.adapter_clock(host.as_bytes(), uid.as_bytes())?, before);
+            assert!(s
+                .reanchor_receipt_clock(
+                    ReceiptClockDomain::Upload,
+                    "me",
+                    proposed,
+                    &preview.confirmation_digest,
+                    v
+                )
                 .is_err());
             Ok(())
         });

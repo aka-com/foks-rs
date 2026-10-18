@@ -26,6 +26,7 @@ pub enum ErrorKind {
     LengthOverflow,
     DepthLimit,
     ValueLimit,
+    AllocationLimit,
 }
 
 /// A closed, offset-bearing Snowpack failure.
@@ -81,6 +82,7 @@ impl fmt::Display for Error {
             }
             ErrorKind::LengthOverflow => write!(formatter, "length exceeds u32"),
             ErrorKind::DepthLimit => write!(formatter, "maximum nesting depth exceeded"),
+            ErrorKind::AllocationLimit => write!(formatter, "allocation allowance exhausted"),
             ErrorKind::ValueLimit => write!(formatter, "maximum decoded value count exceeded"),
         }
     }

@@ -188,8 +188,8 @@ fn check_repair_time(
 pub(super) fn adapter_clock(
     state_dir: &Path,
     registry: &ProfileRegistry,
-    profile: String,
-    account_alias: String,
+    account: foks_agent_proto::AccountStoreRef,
+    domain: foks_agent_proto::data::ReceiptClockDomain,
     repair: Option<foks_agent_proto::data::AdapterClockRepairAction>,
     timeout: Duration,
     cancellation: CancellationToken,
@@ -202,18 +202,27 @@ pub(super) fn adapter_clock(
             .as_secs();
         check_repair_time(action, now).map_err(Box::new)?;
     }
+    let foks_agent_proto::AccountStoreRef {
+        profile,
+        account_alias,
+    } = account;
     let session =
         crate::read_cache::open_profile_session(registry, &profile, timeout, cancellation)?;
     with_vault(state_dir, &session, |session, vault| {
         Ok(match repair {
-            None => serde_json::to_value(session.adapter_clock_status(&account_alias, vault)?)?,
+            None => serde_json::to_value(session.receipt_clock_status(
+                domain,
+                &account_alias,
+                vault,
+            )?)?,
             Some(AdapterClockRepairAction::Preview { unix_seconds }) => serde_json::to_value(
-                session.adapter_clock_preview(&account_alias, unix_seconds, vault)?,
+                session.receipt_clock_preview(domain, &account_alias, unix_seconds, vault)?,
             )?,
             Some(AdapterClockRepairAction::Confirm {
                 unix_seconds,
                 confirmation_digest,
-            }) => serde_json::to_value(session.reanchor_adapter_clock(
+            }) => serde_json::to_value(session.reanchor_receipt_clock(
+                domain,
                 &account_alias,
                 unix_seconds,
                 &confirmation_digest,

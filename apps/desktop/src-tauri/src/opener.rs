@@ -14,44 +14,95 @@
 //! Services and exits once it has been handed off. Both programs are named by
 //! absolute path, so a `PATH` entry cannot substitute another program.
 
+//! The step that hands the address to another process (the portal call, or
+//! starting the program) runs inside a caller-supplied [`HandOff`], so a caller
+//! can serialize it with application locking. Connecting to the session bus
+//! and waiting for a started program run outside it.
+
+/// Runs one hand-off step, or refuses with `E` without running it.
+pub type HandOff<'a, E> = dyn Fn(&mut dyn FnMut()) -> Result<(), E> + 'a;
+
+/// Why [`open_gated`] did not open the address.
+#[derive(Debug)]
+pub enum Failure<E> {
+    /// The [`HandOff`] refused the step.
+    Refused(E),
+    /// The platform mechanism failed.
+    Failed(String),
+}
+
+/// Runs `step` through `hand_off` and returns what it produced.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn gated<T, E>(hand_off: &HandOff<'_, E>, step: impl FnOnce() -> T) -> Result<T, Failure<E>> {
+    let mut step = Some(step);
+    let mut output = None;
+    hand_off(&mut || output = step.take().map(|step| step())).map_err(Failure::Refused)?;
+    output.ok_or_else(|| Failure::Failed("The hand-off step did not run.".to_owned()))
+}
+
+/// Opens `target` with the desktop's default handler for its scheme, without
+/// a hand-off gate.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn open(target: &str) -> Result<(), String> {
+    let ungated = |step: &mut dyn FnMut()| -> Result<(), std::convert::Infallible> {
+        step();
+        Ok(())
+    };
+    open_gated(target, &ungated).map_err(|failure| match failure {
+        Failure::Refused(never) => match never {},
+        Failure::Failed(reason) => reason,
+    })
+}
+
 /// Opens `target` with the desktop's default handler for its scheme.
 #[cfg(target_os = "macos")]
-pub fn open(target: &str) -> Result<(), String> {
-    let status = std::process::Command::new("/usr/bin/open")
-        .arg(target)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map_err(|error| format!("Could not start /usr/bin/open: {error}"))?;
+pub fn open_gated<E>(target: &str, hand_off: &HandOff<'_, E>) -> Result<(), Failure<E>> {
+    let mut child = gated(hand_off, || {
+        std::process::Command::new("/usr/bin/open")
+            .arg(target)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+    })?
+    .map_err(|error| Failure::Failed(format!("Could not start /usr/bin/open: {error}")))?;
+    let status = child
+        .wait()
+        .map_err(|error| Failure::Failed(format!("Could not wait for /usr/bin/open: {error}")))?;
     if status.success() {
         Ok(())
     } else {
-        Err(format!("/usr/bin/open exited with {status}"))
+        Err(Failure::Failed(format!(
+            "/usr/bin/open exited with {status}"
+        )))
     }
 }
 
 /// Opens `target` with the desktop's default handler for its scheme.
 #[cfg(all(unix, not(target_os = "macos")))]
-pub fn open(target: &str) -> Result<(), String> {
-    match portal::open_uri(target) {
+pub fn open_gated<E>(target: &str, hand_off: &HandOff<'_, E>) -> Result<(), Failure<E>> {
+    match portal::open_uri(target, hand_off)? {
         Ok(()) => Ok(()),
         // The portal may still act on a request it did not acknowledge in
         // time, so starting xdg-open here could open the address twice.
-        Err(portal::Failure::Unanswered) => Err("The desktop portal did not answer.".to_owned()),
-        Err(portal::Failure::Rejected(reason)) => {
-            Err(format!("The desktop portal refused the request: {reason}"))
-        }
+        Err(portal::Failure::Unanswered) => Err(Failure::Failed(
+            "The desktop portal did not answer.".to_owned(),
+        )),
+        Err(portal::Failure::Rejected(reason)) => Err(Failure::Failed(format!(
+            "The desktop portal refused the request: {reason}"
+        ))),
         Err(portal::Failure::Unavailable(reason)) => {
             tracing::debug!(%reason, "Desktop portal unavailable; starting xdg-open");
-            spawn_detached(std::path::Path::new(XDG_OPEN), target)
+            spawn_detached(std::path::Path::new(XDG_OPEN), target, hand_off)
         }
     }
 }
 
 #[cfg(not(unix))]
-pub fn open(_target: &str) -> Result<(), String> {
-    Err("Opening links is unavailable on this platform.".to_owned())
+pub fn open_gated<E>(_target: &str, _hand_off: &HandOff<'_, E>) -> Result<(), Failure<E>> {
+    Err(Failure::Failed(
+        "Opening links is unavailable on this platform.".to_owned(),
+    ))
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -66,22 +117,34 @@ const EARLY_EXIT_WINDOW: std::time::Duration = std::time::Duration::from_secs(1)
 /// Starts `program` with one argument. A non-zero exit within
 /// [`EARLY_EXIT_WINDOW`] is reported as an error; a program still running at
 /// the end of the window is treated as started, and a thread waits for it so it
-/// does not remain a zombie process.
+/// does not remain a zombie process. Only starting the program runs inside
+/// `hand_off`.
 #[cfg(all(unix, not(target_os = "macos")))]
-fn spawn_detached(program: &std::path::Path, argument: &str) -> Result<(), String> {
+fn spawn_detached<E>(
+    program: &std::path::Path,
+    argument: &str,
+    hand_off: &HandOff<'_, E>,
+) -> Result<(), Failure<E>> {
     const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
-    let mut child = std::process::Command::new(program)
-        .arg(argument)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|error| format!("Could not start {}: {error}", program.display()))?;
+    let mut child = gated(hand_off, || {
+        std::process::Command::new(program)
+            .arg(argument)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+    })?
+    .map_err(|error| Failure::Failed(format!("Could not start {}: {error}", program.display())))?;
     let deadline = std::time::Instant::now() + EARLY_EXIT_WINDOW;
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(status)) => return Err(format!("{} exited with {status}", program.display())),
+            Ok(Some(status)) => {
+                return Err(Failure::Failed(format!(
+                    "{} exited with {status}",
+                    program.display()
+                )))
+            }
             Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(POLL_INTERVAL),
             // Still running at the deadline, or the status could not be read.
             Ok(None) | Err(_) => break,
@@ -128,23 +191,33 @@ mod portal {
         Unanswered,
     }
 
-    pub(super) fn open_uri(target: &str) -> Result<(), Failure> {
-        let connection = Builder::session()
+    /// Calls `OpenURI` through `hand_off`. The outer error is the hand-off's
+    /// refusal; the inner one is the portal's outcome.
+    pub(super) fn open_uri<E>(
+        target: &str,
+        hand_off: &super::HandOff<'_, E>,
+    ) -> Result<Result<(), Failure>, super::Failure<E>> {
+        let connection = match Builder::session()
             .and_then(|builder| builder.method_timeout(REPLY_TIMEOUT).build())
-            .map_err(|error| Failure::Unavailable(error.to_string()))?;
+        {
+            Ok(connection) => connection,
+            Err(error) => return Ok(Err(Failure::Unavailable(error.to_string()))),
+        };
         // An empty parent window identifier: the host process has no
         // exported window handle to pass.
         let options: HashMap<&str, Value<'_>> = HashMap::new();
-        connection
-            .call_method(
-                Some(DESTINATION),
-                PATH,
-                Some(INTERFACE),
-                "OpenURI",
-                &("", target, options),
-            )
-            .map(|_request_handle| ())
-            .map_err(classify)
+        super::gated(hand_off, || {
+            connection
+                .call_method(
+                    Some(DESTINATION),
+                    PATH,
+                    Some(INTERFACE),
+                    "OpenURI",
+                    &("", target, options),
+                )
+                .map(|_request_handle| ())
+                .map_err(classify)
+        })
     }
 
     /// Maps a failed `OpenURI` call to the action the caller takes: only
@@ -166,10 +239,38 @@ mod portal {
 #[cfg(test)]
 mod tests {
     #[cfg(all(unix, not(target_os = "macos")))]
+    fn ungated(step: &mut dyn FnMut()) -> Result<(), ()> {
+        step();
+        Ok(())
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn failure(result: Result<(), super::Failure<()>>) -> String {
+        match result {
+            Err(super::Failure::Failed(reason)) => reason,
+            other => panic!("expected a platform failure, got {other:?}"),
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn refused_hand_off_does_not_start_the_program() {
+        let refuse = |_step: &mut dyn FnMut()| Err("locked");
+        let marker = std::env::temp_dir().join(format!("foks-opener-{}", std::process::id()));
+        let result = super::spawn_detached(
+            std::path::Path::new("/usr/bin/touch"),
+            marker.to_str().unwrap(),
+            &refuse,
+        );
+        assert!(matches!(result, Err(super::Failure::Refused("locked"))));
+        assert!(!marker.exists());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn fallback_opener_returns_while_the_handler_is_still_running() {
         let started = std::time::Instant::now();
-        super::spawn_detached(std::path::Path::new("/bin/sleep"), "30").unwrap();
+        super::spawn_detached(std::path::Path::new("/bin/sleep"), "30", &ungated).unwrap();
         assert!(
             started.elapsed() < super::EARLY_EXIT_WINDOW + std::time::Duration::from_secs(5),
             "starting the handler must not wait for it to exit"
@@ -179,21 +280,28 @@ mod tests {
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn fallback_opener_reports_an_early_failed_exit() {
-        let error = super::spawn_detached(std::path::Path::new("/bin/false"), "x").unwrap_err();
+        let error = failure(super::spawn_detached(
+            std::path::Path::new("/bin/false"),
+            "x",
+            &ungated,
+        ));
         assert!(error.contains("/bin/false exited with"), "{error}");
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn fallback_opener_accepts_an_early_successful_exit() {
-        super::spawn_detached(std::path::Path::new("/bin/true"), "x").unwrap();
+        super::spawn_detached(std::path::Path::new("/bin/true"), "x", &ungated).unwrap();
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn fallback_opener_reports_a_program_that_cannot_start() {
-        let error =
-            super::spawn_detached(std::path::Path::new("/nonexistent/xdg-open"), "x").unwrap_err();
+        let error = failure(super::spawn_detached(
+            std::path::Path::new("/nonexistent/xdg-open"),
+            "x",
+            &ungated,
+        ));
         assert!(error.contains("/nonexistent/xdg-open"), "{error}");
     }
 

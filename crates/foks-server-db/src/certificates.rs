@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, OptionalExtension as _};
 
 use crate::{error::sql_integer, Database, Error, ReadDatabase, ReadSnapshot, Result};
@@ -59,7 +60,13 @@ impl Database {
                 "SELECT not_before, not_after, exact_certificate FROM issued_certificates
                  WHERE uid = ?1 AND credential_id = ?2 ORDER BY not_after DESC LIMIT 1",
                 params![uid, device_id],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get(2)?)),
+                |row| {
+                    Ok((
+                        row.budgeted_get::<_, i64>(0)?,
+                        row.budgeted_get::<_, i64>(1)?,
+                        row.budgeted_get(2)?,
+                    ))
+                },
             )
             .optional()
             .map_err(Into::into)
@@ -109,10 +116,10 @@ impl ReadDatabase {
                 params![exact_certificate, sql_integer(now)?],
                 |row| {
                     Ok((
-                        row.get::<_, Vec<u8>>(0)?,
-                        row.get::<_, Vec<u8>>(1)?,
-                        row.get::<_, i64>(2)?,
-                        row.get::<_, i64>(3)?,
+                        row.budgeted_get::<_, Vec<u8>>(0)?,
+                        row.budgeted_get::<_, Vec<u8>>(1)?,
+                        row.budgeted_get::<_, i64>(2)?,
+                        row.budgeted_get::<_, i64>(3)?,
                     ))
                 },
             )
@@ -172,7 +179,7 @@ pub(crate) fn active_credential_owner(
             "SELECT device_id FROM devices
              WHERE uid = ?1 AND active = 1 AND (device_id = ?2 OR subkey_id = ?2)",
             params![uid, credential_id],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )
         .optional()
         .map_err(Into::into)
@@ -189,7 +196,7 @@ pub(crate) fn active_owner_role_credential(
              WHERE uid = ?1 AND active = 1 AND role_type = 3 AND visibility = 0
                AND (device_id = ?2 OR subkey_id = ?2)",
             params![uid, credential_id],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )
         .optional()
         .map_err(Into::into)

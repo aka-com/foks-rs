@@ -219,6 +219,9 @@ enum Command {
         store: KvStoreArguments,
         path: String,
         version: u64,
+        /// Entry identity from the catalog, as 32 hexadecimal characters.
+        #[arg(long)]
+        dirent_id: String,
     },
     KvCreateText {
         #[command(flatten)]
@@ -493,18 +496,52 @@ fn main() {
 }
 
 fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
-    let call = backend_call_for_command(arguments.command)?;
+    let started = std::time::Instant::now();
+    let original = started
+        .checked_add(std::time::Duration::from_secs(
+            arguments.request_timeout_seconds,
+        ))
+        .ok_or("invalid request deadline")?;
+    let deadline = foks_local_deadline::Deadline::capture(original)?;
+    struct PendingCall(Option<BackendCall>);
+    impl Drop for PendingCall {
+        fn drop(&mut self) {
+            if let Some(BackendCall::Operation(operation)) = &mut self.0 {
+                operation.zeroize_plaintext();
+            }
+        }
+    }
+    let mut call = PendingCall(Some(backend_call_for_command(arguments.command)?));
     let mut client = AgentClient::new(arguments.agent_socket);
     client.set_timeout(std::time::Duration::from_secs(
         arguments.request_timeout_seconds,
     ))?;
-    let response = match call {
+    let client = client.with_local_deadline(deadline.clone())?;
+    let response = match call.0.take().expect("owned backend call") {
         BackendCall::Operation(operation) => client.call(operation)?,
-        BackendCall::Upload { header, mut source } => client.put_kv_stream(header, &mut source)?,
+        BackendCall::Upload {
+            mut header,
+            mut source,
+        } => {
+            foks_desktop::ensure_upload_identity(&client, &mut header)?;
+            client.put_kv_stream(header, &mut source)?
+        }
     };
-    match response.result {
+    struct ErasingResponse(foks_agent_proto::Response);
+    impl Drop for ErasingResponse {
+        fn drop(&mut self) {
+            self.0.zeroize_plaintext();
+        }
+    }
+    let response = ErasingResponse(response);
+    deadline.check()?;
+    match &response.0.result {
         ResponseResult::Success { value } => {
-            println!("{}", serde_json::to_string_pretty(&value)?);
+            let output = zeroize::Zeroizing::new(serde_json::to_string_pretty(value)?);
+            deadline.check()?;
+            // A synchronous stdout write already entered cannot be preempted.
+            use std::io::Write as _;
+            writeln!(std::io::stdout().lock(), "{}", output.as_str())?;
             Ok(())
         }
         ResponseResult::Error { code, message, .. } => {
@@ -519,6 +556,17 @@ enum BackendCall {
         header: KvUploadHeader,
         source: File,
     },
+}
+
+fn parse_dirent_id(value: &str) -> Result<[u8; 16], Box<dyn std::error::Error>> {
+    if value.len() != 32 || !value.is_ascii() {
+        return Err("dirent identity must contain 32 hexadecimal characters".into());
+    }
+    let mut result = [0; 16];
+    for (index, byte) in result.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)?;
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -889,9 +937,11 @@ fn backend_call_for_command(command: Command) -> Result<BackendCall, Box<dyn std
             store,
             path,
             version,
+            dirent_id,
         } => Operation::ReadKv {
             store: store.kv_store_ref()?,
             path: checked_kv_path(path)?,
+            dirent_id: parse_dirent_id(&dirent_id)?,
             version,
         },
         Command::KvCreateText {
@@ -1589,6 +1639,7 @@ mod tests {
                 },
                 path: "/password".to_owned(),
                 version: 9,
+                dirent_id: "00".repeat(16),
             })
         };
         assert!(matches!(

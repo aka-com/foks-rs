@@ -1,8 +1,51 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, OptionalExtension as _, TransactionBehavior};
 
 use crate::{error::sql_integer, Database, Error, ReadDatabase, ReadSnapshot, Result};
 
 impl Database {
+    /// New username operations require an active interactive owner. Historical
+    /// chain verification deliberately has a different, compatibility contract.
+    pub fn require_username_change_signer(
+        &self,
+        uid: &[u8],
+        credential: &[u8],
+        signer: &[u8],
+    ) -> Result<()> {
+        require_username_change_owner_for_signer(&self.connection, uid, credential, Some(signer))
+    }
+
+    pub fn reserve_name_for_username_change(
+        &mut self,
+        uid: &[u8],
+        credential: &[u8],
+        normalized_name: &[u8],
+        token: &[u8; 17],
+        now: u64,
+        expires_at: u64,
+    ) -> Result<()> {
+        if normalized_name.is_empty()
+            || normalized_name.len() > self.config.maximum_name_bytes
+            || expires_at <= now
+        {
+            return Err(Error::Invalid("name reservation"));
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_username_change_owner(&transaction, uid, credential)?;
+        reserve_on(
+            &transaction,
+            normalized_name,
+            token,
+            1,
+            sql_integer(now)?,
+            expires_at,
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn change_username_display(
         &mut self,
         uid: &[u8],
@@ -17,10 +60,7 @@ impl Database {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let active: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM devices WHERE uid=?1 AND (device_id=?2 OR subkey_id=?2) AND active=1)", params![uid, credential], |r|r.get(0))?;
-        if !active {
-            return Err(Error::AuthorizationChanged);
-        }
+        require_username_change_owner(&tx, uid, credential)?;
         if tx.execute("UPDATE users SET username_utf8=?1 WHERE uid=?2 AND normalized_name=?3 AND username_utf8=?4", params![display, uid, expected_name, expected_display])? != 1 {
             return Err(Error::StaleRoot);
         }
@@ -72,6 +112,10 @@ impl Database {
 }
 
 impl ReadDatabase {
+    pub fn require_username_change_owner(&self, uid: &[u8], credential: &[u8]) -> Result<()> {
+        require_username_change_owner(&self.connection, uid, credential)
+    }
+
     pub fn uid_by_normalized_name(&self, normalized_name: &[u8]) -> Result<Option<Vec<u8>>> {
         uid_by_normalized_name(&self.connection, normalized_name)
     }
@@ -117,7 +161,7 @@ fn uid_by_normalized_name(
         .query_row(
             "SELECT uid FROM names WHERE normalized_name = ?1 AND uid IS NOT NULL AND dead = 0",
             [normalized_name],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )
         .optional()?)
 }
@@ -168,7 +212,7 @@ pub(crate) fn reserve_on(
         .query_row(
             "SELECT uid, expires_at FROM names WHERE normalized_name = ?1",
             [normalized_name],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
         )
         .optional()?;
     if existing.is_some_and(|(uid, expiry)| uid.is_some() || expiry.is_none_or(|value| value > now))
@@ -185,5 +229,44 @@ pub(crate) fn reserve_on(
                 uid = NULL",
             params![normalized_name, token, sql_integer(sequence)?, sql_integer(expires_at)?],
         )?;
+    Ok(())
+}
+
+/// The canonical signer may be a Yubi parent; TLS authenticates its delegated
+/// subkey. Never authorize a bot/backup merely because it has OWNER role.
+pub(crate) fn require_username_change_owner(
+    connection: &rusqlite::Connection,
+    uid: &[u8],
+    credential: &[u8],
+) -> Result<()> {
+    require_username_change_owner_for_signer(connection, uid, credential, None)
+}
+
+pub(crate) fn require_username_change_owner_for_signer(
+    connection: &rusqlite::Connection,
+    uid: &[u8],
+    credential: &[u8],
+    signer: Option<&[u8]>,
+) -> Result<()> {
+    let kind = foks_proto::EntityId::from_bytes(credential.to_vec())
+        .map_err(|_| Error::AuthorizationChanged)?
+        .entity_type();
+    if !matches!(
+        kind,
+        foks_proto::ENTITY_DEVICE | foks_proto::ENTITY_YUBI | foks_proto::ENTITY_SUBKEY
+    ) {
+        return Err(Error::AuthorizationChanged);
+    }
+    let owner: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM devices
+         WHERE uid=?1 AND active=1 AND role_type=3 AND visibility=0
+           AND (device_id=?2 OR (subkey_id=?2 AND substr(device_id,1,1)=x'08'))
+           AND (?3 IS NULL OR device_id=?3))",
+        params![uid, credential, signer],
+        |row| row.budgeted_get(0),
+    )?;
+    if !owner {
+        return Err(Error::AuthorizationChanged);
+    }
     Ok(())
 }

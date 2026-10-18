@@ -1,6 +1,8 @@
 mod checkpoint;
 mod expiry;
+pub(crate) mod kex;
 pub use expiry::{ExpiryKind, ExpiryMetricsSnapshot};
+pub use kex::KexMetricsSnapshot;
 pub(crate) mod realtime;
 pub use realtime::{FanoutMetricsSnapshot, RealtimeMetricsSnapshot, ReconcileMetricsSnapshot};
 
@@ -33,16 +35,22 @@ pub enum AdmissionRejection {
     RequestHandlers,
     /// The account already held its maximum realtime inbox polls.
     AccountRealtimePolls,
+    /// The server held its maximum outstanding KEX receives.
+    KexReceivePolls,
+    /// The request's decoded working memory did not fit the shared budget.
+    RequestMemory,
 }
 
 impl AdmissionRejection {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::ConnectionRate,
         Self::SourceConnections,
         Self::AdmissionQueue,
         Self::RequestRate,
         Self::RequestHandlers,
         Self::AccountRealtimePolls,
+        Self::KexReceivePolls,
+        Self::RequestMemory,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -53,6 +61,8 @@ impl AdmissionRejection {
             Self::RequestRate => "request_rate",
             Self::RequestHandlers => "request_handlers",
             Self::AccountRealtimePolls => "account_realtime_polls",
+            Self::KexReceivePolls => "kex_receive_polls",
+            Self::RequestMemory => "request_memory",
         }
     }
 }
@@ -95,6 +105,7 @@ pub struct ServerMetricsSnapshot {
     pub checkpoint: CheckpointMetricsSnapshot,
     pub expiry: ExpiryMetricsSnapshot,
     pub realtime: RealtimeMetricsSnapshot,
+    pub kex: KexMetricsSnapshot,
     pub admin_cleanup_attempts: u64,
     pub admin_cleanup_failures: u64,
     pub admin_reclaimed_records: u64,
@@ -146,6 +157,7 @@ pub struct ServerMetrics {
     checkpoint: checkpoint::CheckpointMetrics,
     expiry: expiry::ExpiryMetrics,
     pub(crate) realtime: realtime::RealtimeMetrics,
+    pub(crate) kex: kex::KexMetrics,
     admin_cleanup_attempts: AtomicU64,
     admin_cleanup_failures: AtomicU64,
     admin_reclaimed_records: AtomicU64,
@@ -219,6 +231,7 @@ impl ServerMetrics {
             checkpoint: self.checkpoint.snapshot(),
             expiry: self.expiry.snapshot(),
             realtime: self.realtime.snapshot(),
+            kex: self.kex.snapshot(),
             admin_cleanup_attempts: self.admin_cleanup_attempts.load(Ordering::Relaxed),
             admin_cleanup_failures: self.admin_cleanup_failures.load(Ordering::Relaxed),
             admin_reclaimed_records: self.admin_reclaimed_records.load(Ordering::Relaxed),
@@ -355,8 +368,9 @@ impl ServerMetrics {
         self.admission_rejected(AdmissionRejection::ConnectionRate);
     }
 
-    /// Counts a request refused by the source's request token bucket
-    /// (`RequestRate`) or by saturated handler permits (`RequestHandlers`).
+    /// Counts a request refused by an admission limit, such as the source's
+    /// request token bucket (`RequestRate`) or saturated handler permits
+    /// (`RequestHandlers`).
     pub(crate) fn request_rate_limited(&self, reason: AdmissionRejection) {
         self.rate_limited_requests.fetch_add(1, Ordering::Relaxed);
         self.admission_rejected(reason);

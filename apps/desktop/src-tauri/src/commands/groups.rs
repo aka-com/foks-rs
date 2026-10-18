@@ -22,7 +22,6 @@ use foks_agent_proto::{
 use foks_desktop::{ops, AgentError as DesktopAgentError, CatalogStoreRef};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
-use tauri::State;
 
 pub(super) fn member_not_actionable() -> AgentError {
     AgentError::new(
@@ -678,7 +677,7 @@ pub(super) fn group_discovery_changed_bindings(value: &serde_json::Value) -> boo
 pub async fn discover_groups(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     account_alias: String,
 ) -> Result<GroupDiscoveryDto, AgentError> {
@@ -713,11 +712,11 @@ pub async fn discover_groups(
 #[tauri::command]
 pub async fn list_group_details(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
 ) -> Result<GroupDetailsDto, AgentError> {
     require_main_window(&webview)?;
-    let transport = state.agent.transport_for("list_group_details", None);
+    let transport = state.transport_for("list_group_details", None)?;
     load_group_details(&state, store_id, transport, true).await
 }
 
@@ -727,44 +726,53 @@ pub(super) async fn load_group_details(
     transport: std::sync::Arc<dyn foks_desktop::AgentTransport>,
     retain: bool,
 ) -> Result<GroupDetailsDto, AgentError> {
+    let transport = foks_desktop::bind_transport_deadline(transport, state.deadline()?.clone())
+        .map_err(AgentError::from_desktop)?;
     let generation = state.catalog_generation().load(Ordering::Acquire);
     let (profile, team_alias) = state.selected_team(&store_id)?;
     let expected_profile = profile.clone();
     let expected_team_alias = team_alias.clone();
     let result_store = store_id.clone();
-    let details = tauri::async_runtime::spawn_blocking(move || {
-        let value = transport
-            .call(Operation::ListTeamDetails {
-                profile,
-                team_alias,
-            })
-            .map_err(AgentError::from_desktop)?;
-        let details: TeamDetailsSummary =
-            serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?;
-        let parties = group_detail_result(details.members, |value| {
-            require_response_row_cap(&value, "group roster entries")?;
-            let members: Vec<MemberResponse> = serde_json::from_value(value)
-                .map_err(|error| invalid_response(error.to_string()))?;
-            party_dtos(&result_store, members)
-        })?;
-        let federation = group_detail_result(details.federation, |value| {
-            require_response_row_cap(&value, "federation entries")?;
-            let memberships: Vec<FederationResponse> = serde_json::from_value(value)
-                .map_err(|error| invalid_response(error.to_string()))?;
-            federation_dtos(
-                &result_store,
-                &expected_profile,
-                &expected_team_alias,
-                memberships,
-            )
-        })?;
-        Ok::<_, AgentError>(GroupDetailsDto {
-            parties,
-            federation,
-        })
-    })
-    .await
-    .map_err(|error| AgentError::unknown(format!("failed to load group details: {error}")))??;
+    let details = {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            false,
+            move || {
+                let value = transport
+                    .call(Operation::ListTeamDetails {
+                        profile,
+                        team_alias,
+                    })
+                    .map_err(AgentError::from_desktop)?;
+                let details: TeamDetailsSummary = serde_json::from_value(value)
+                    .map_err(|error| invalid_response(error.to_string()))?;
+                let parties = group_detail_result(details.members, |value| {
+                    require_response_row_cap(&value, "group roster entries")?;
+                    let members: Vec<MemberResponse> = serde_json::from_value(value)
+                        .map_err(|error| invalid_response(error.to_string()))?;
+                    party_dtos(&result_store, members)
+                })?;
+                let federation = group_detail_result(details.federation, |value| {
+                    require_response_row_cap(&value, "federation entries")?;
+                    let memberships: Vec<FederationResponse> = serde_json::from_value(value)
+                        .map_err(|error| invalid_response(error.to_string()))?;
+                    federation_dtos(
+                        &result_store,
+                        &expected_profile,
+                        &expected_team_alias,
+                        memberships,
+                    )
+                })?;
+                Ok::<_, AgentError>(GroupDetailsDto {
+                    parties,
+                    federation,
+                })
+            },
+            |_| {},
+        )
+        .await
+    }?;
     let parties = match &details.parties {
         GroupDetailResultDto::Success { value } => Some(value.as_slice()),
         GroupDetailResultDto::Error { .. } => None,
@@ -782,28 +790,35 @@ pub(super) async fn load_group_details(
 #[tauri::command]
 pub async fn list_parties(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
 ) -> Result<Vec<PartyDto>, AgentError> {
     require_main_window(&webview)?;
     let generation = state.catalog_generation().load(Ordering::Acquire);
     let (profile, team_alias) = state.selected_team(&store_id)?;
-    let transport = state.agent.transport();
+    let transport = state.transport()?;
     let cache_key = store_id.clone();
-    let parties = tauri::async_runtime::spawn_blocking(move || {
-        let value = transport
-            .call(Operation::ListTeamMembers {
-                profile,
-                team_alias,
-            })
-            .map_err(AgentError::from_desktop)?;
-        require_response_row_cap(&value, "group roster entries")?;
-        let members: Vec<MemberResponse> =
-            serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?;
-        party_dtos(&store_id, members)
-    })
-    .await
-    .map_err(|error| AgentError::unknown(format!("failed to load group roster: {error}")))??;
+    let parties = {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            false,
+            move || {
+                let value = transport
+                    .call(Operation::ListTeamMembers {
+                        profile,
+                        team_alias,
+                    })
+                    .map_err(AgentError::from_desktop)?;
+                require_response_row_cap(&value, "group roster entries")?;
+                let members: Vec<MemberResponse> = serde_json::from_value(value)
+                    .map_err(|error| invalid_response(error.to_string()))?;
+                party_dtos(&store_id, members)
+            },
+            |_| {},
+        )
+        .await
+    }?;
     state.retain_roster(generation, cache_key, &parties)?;
     Ok(parties)
 }
@@ -811,37 +826,42 @@ pub async fn list_parties(
 #[tauri::command]
 pub async fn list_federation(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
 ) -> Result<Vec<FederationEntryDto>, AgentError> {
     require_main_window(&webview)?;
     let generation = state.catalog_generation().load(Ordering::Acquire);
     let (profile, team_alias) = state.selected_team(&store_id)?;
-    let transport = state.agent.transport();
+    let transport = state.transport()?;
     let cache_key = store_id.clone();
     let expected_profile = profile.clone();
     let expected_team_alias = team_alias.clone();
-    let entries = tauri::async_runtime::spawn_blocking(move || {
-        let value = transport
-            .call(Operation::ListFederatedTeams {
-                profile,
-                team_alias,
-            })
-            .map_err(AgentError::from_desktop)?;
-        require_response_row_cap(&value, "federation entries")?;
-        let memberships: Vec<FederationResponse> =
-            serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?;
-        federation_dtos(
-            &store_id,
-            &expected_profile,
-            &expected_team_alias,
-            memberships,
+    let entries = {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            false,
+            move || {
+                let value = transport
+                    .call(Operation::ListFederatedTeams {
+                        profile,
+                        team_alias,
+                    })
+                    .map_err(AgentError::from_desktop)?;
+                require_response_row_cap(&value, "federation entries")?;
+                let memberships: Vec<FederationResponse> = serde_json::from_value(value)
+                    .map_err(|error| invalid_response(error.to_string()))?;
+                federation_dtos(
+                    &store_id,
+                    &expected_profile,
+                    &expected_team_alias,
+                    memberships,
+                )
+            },
+            |_| {},
         )
-    })
-    .await
-    .map_err(|error| {
-        AgentError::unknown(format!("failed to load federation entries: {error}"))
-    })??;
+        .await
+    }?;
     state.retain_federation(generation, cache_key, &entries)?;
     Ok(entries)
 }
@@ -850,7 +870,7 @@ pub async fn list_federation(
 pub async fn create_group(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     account_store_id: String,
     team_alias: String,
     name: String,
@@ -870,7 +890,7 @@ pub async fn create_group(
 pub async fn add_group_member(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     username: String,
     destination: RoleInput,
@@ -889,7 +909,7 @@ pub async fn add_group_member(
 pub async fn resume_group_member_addition(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     username: String,
 ) -> Result<MutationDto, AgentError> {
@@ -911,7 +931,7 @@ pub async fn resume_group_member_addition(
 pub async fn promote_group_member(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     username: String,
     destination: RoleInput,
@@ -933,7 +953,7 @@ pub async fn promote_group_member(
 pub async fn demote_group_member(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     username: String,
     destination: RoleInput,
@@ -955,7 +975,7 @@ pub async fn demote_group_member(
 pub async fn remove_group_member(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     username: String,
 ) -> Result<MutationDto, AgentError> {
@@ -975,7 +995,7 @@ pub async fn remove_group_member(
 pub async fn resume_group_member_edit(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
@@ -994,7 +1014,7 @@ pub async fn resume_group_member_edit(
 pub async fn add_federated_team_member(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     remote_store_id: String,
     visibility: i16,
@@ -1013,7 +1033,7 @@ pub async fn add_federated_team_member(
 pub async fn rerun_federated_team_member_add(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     operation_id: String,
 ) -> Result<MutationDto, AgentError> {
@@ -1034,7 +1054,7 @@ pub async fn rerun_federated_team_member_add(
 pub async fn expel_federated_group(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     remote_host_id_hex: String,
     remote_team_id_hex: String,
@@ -1079,7 +1099,7 @@ pub async fn expel_federated_group(
 pub async fn resume_group_creation(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
@@ -1111,7 +1131,7 @@ pub async fn resume_group_creation(
 pub async fn abandon_group_creation(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;

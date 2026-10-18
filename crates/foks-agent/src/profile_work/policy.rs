@@ -82,7 +82,12 @@ pub(crate) fn operation_scope(operation: &Operation) -> Scope {
         }
         Chat { store, .. } | ListTeamKv { store, .. } => Scope::profile(&store.profile),
         ListKv { store, .. } => Scope::profile(&store.profile),
-        ReadKv { store, .. }
+        KvUploadIssuance { store }
+        | PrepareKvUpload { store, .. }
+        | ListKvUploads { store, .. }
+        | ResumeKvUpload { store, .. }
+        | CancelKvUpload { store, .. }
+        | ReadKv { store, .. }
         | ReadKvChunk { store, .. }
         | PutKv { store, .. }
         | PutKvSymlink { store, .. }

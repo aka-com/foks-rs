@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::TransactionBehavior;
 
 #[cfg(test)]
@@ -176,9 +177,13 @@ impl Database {
     }
 
     fn checkpoint_sql(&self, sql: &str) -> Result<CheckpointReport> {
-        let (busy, log, done) = self
-            .connection
-            .query_row(sql, [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        let (busy, log, done) = self.connection.query_row(sql, [], |row| {
+            Ok((
+                row.budgeted_get(0)?,
+                row.budgeted_get(1)?,
+                row.budgeted_get(2)?,
+            ))
+        })?;
         CheckpointReport::decode(busy, log, done)
     }
 

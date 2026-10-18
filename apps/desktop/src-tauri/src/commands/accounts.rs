@@ -21,7 +21,6 @@ use foks_desktop::{ops, CatalogSnapshot, CatalogStoreRef, CatalogStoreSummary};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
-use tauri::State;
 use zeroize::Zeroizing;
 
 #[derive(Deserialize)]
@@ -617,20 +616,23 @@ pub(super) fn load_backup_enrollments(
 #[tauri::command]
 pub async fn list_account_devices(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     account_store_id: String,
 ) -> Result<Vec<DeviceDto>, AgentError> {
     require_main_window(&webview)?;
     let generation = state.catalog_generation().load(Ordering::Acquire);
     let account = state.selected_account(&account_store_id)?;
-    let transport = state
-        .agent
-        .transport_for("list_account_devices", Some(&account.profile));
-    let devices = tauri::async_runtime::spawn_blocking(move || {
-        load_account_devices(transport.as_ref(), &account)
-    })
-    .await
-    .map_err(|error| AgentError::unknown(format!("Failed to load account devices: {error}")))??;
+    let transport = state.transport_for("list_account_devices", Some(&account.profile))?;
+    let devices = {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            false,
+            move || load_account_devices(transport.as_ref(), &account),
+            |_| {},
+        )
+        .await
+    }?;
     state.retain_devices(generation, account_store_id, &devices)?;
     Ok(devices)
 }
@@ -638,26 +640,29 @@ pub async fn list_account_devices(
 #[tauri::command]
 pub async fn list_backup_enrollments(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     account_store_id: String,
 ) -> Result<Vec<BackupEnrollmentDto>, AgentError> {
     require_main_window(&webview)?;
     let account = state.selected_account(&account_store_id)?;
-    let transport = state
-        .agent
-        .transport_for("list_backup_enrollments", Some(&account.profile));
-    tauri::async_runtime::spawn_blocking(move || {
-        load_backup_enrollments(transport.as_ref(), &account)
-    })
-    .await
-    .map_err(|error| AgentError::unknown(format!("Failed to load backup enrollments: {error}")))?
+    let transport = state.transport_for("list_backup_enrollments", Some(&account.profile))?;
+    {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            false,
+            move || load_backup_enrollments(transport.as_ref(), &account),
+            |_| {},
+        )
+        .await
+    }
 }
 
 #[tauri::command]
 pub async fn revoke_owner_backup(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     account_store_id: String,
     backup_alias: String,
     backup_id: String,
@@ -699,7 +704,7 @@ pub async fn revoke_owner_backup(
 pub async fn remove_account_device(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     account_store_id: String,
     device_id: String,
 ) -> Result<DeviceRemovalDto, AgentError> {
@@ -728,7 +733,7 @@ pub async fn remove_account_device(
 pub async fn prepare_owner_backup(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     account_alias: String,
     backup_alias: String,
@@ -740,14 +745,19 @@ pub async fn prepare_owner_backup(
     let operation =
         ops::accounts::prepare_owner_backup_operation(&profile, &account_alias, &backup_alias)?;
     let value = read_profile_operation_value(&state, profile, operation).await?;
-    recovery_phrase_response(value, &backup_alias)
+    let result = recovery_phrase_response(value, &backup_alias)?;
+    state
+        .deadline()?
+        .check()
+        .map_err(super::deadline::clock_error)?;
+    Ok(result)
 }
 
 #[tauri::command]
 pub async fn commit_owner_backup(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     account_alias: String,
     backup_alias: String,
@@ -777,7 +787,7 @@ pub async fn commit_owner_backup(
 pub async fn verify_recovery_phrase(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     account_store_id: String,
     phrase: String,
 ) -> Result<RecoveryPhraseCheckDto, AgentError> {
@@ -831,7 +841,7 @@ async fn account_passphrase_mutation(
 pub async fn set_account_passphrase(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     account_store_id: String,
     passphrase: String,
     confirmation: String,
@@ -853,7 +863,7 @@ pub async fn set_account_passphrase(
 pub async fn change_account_passphrase(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     account_store_id: String,
     current: Option<String>,
     passphrase: String,
@@ -880,7 +890,7 @@ pub async fn change_account_passphrase(
 #[tauri::command]
 pub async fn account_passphrase_status(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     account_store_id: String,
 ) -> Result<PassphraseStatusDto, AgentError> {
     require_main_window(&webview)?;
@@ -907,7 +917,7 @@ pub async fn account_passphrase_status(
 pub async fn verify_account_passphrase(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     account_store_id: String,
     passphrase: String,
 ) -> Result<PassphraseReportDto, AgentError> {
@@ -931,7 +941,7 @@ pub async fn verify_account_passphrase(
 #[tauri::command]
 pub async fn list_accounts(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     generation: Option<u64>,
 ) -> Result<Vec<AccountDto>, AgentError> {
     require_main_window(&webview)?;
@@ -943,11 +953,17 @@ pub async fn list_accounts(
             true,
         )
     })?;
-    let transport = state.agent.transport();
-    let accounts =
-        tauri::async_runtime::spawn_blocking(move || load_accounts(transport.as_ref(), &catalog))
-            .await
-            .map_err(|error| AgentError::unknown(format!("failed to load accounts: {error}")))??;
+    let transport = state.transport()?;
+    let accounts = {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            false,
+            move || load_accounts(transport.as_ref(), &catalog),
+            |_| {},
+        )
+        .await
+    }?;
     state.retain_accounts(generation, &accounts)?;
     Ok(accounts)
 }

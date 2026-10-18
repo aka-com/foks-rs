@@ -107,7 +107,7 @@ fn read(
     let mut reader = reader.lock().map_err(|_| Error::Thread)?;
     let connection = match reader.take() {
         Some(connection) => connection,
-        None => ReadDatabase::open_pooled(&database.path, database.database.clone())?,
+        None => ReadDatabase::open(&database.path, database.database.clone())?,
     };
     let result = rollout_status(&connection);
     if result.is_ok() {

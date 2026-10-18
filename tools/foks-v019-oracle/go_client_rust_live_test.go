@@ -20,6 +20,7 @@ import (
 	proto "github.com/foks-proj/go-foks/proto/lib"
 	"github.com/foks-proj/go-foks/proto/rem"
 	"github.com/foks-proj/go-snowpack-rpc/rpc"
+	"golang.org/x/crypto/nacl/secretbox"
 )
 
 type goLiveUser struct {
@@ -140,6 +141,7 @@ func TestGoClientAgainstRustServer(t *testing.T) {
 	liveKVPutGet(t, ctx, authRPC, &user)
 	liveRename(t, ctx, &userClient, &merkleClient, &user)
 	liveBot(t, ctx, &userClient, &regClient, &merkleClient, &user, authenticatedAddress, serviceRoots)
+	writePersonalContextFixture(t, certChain, user.uid, deviceID)
 	t.Logf("official Go client completed user=%s team=%s", user.uid, teamID)
 }
 
@@ -942,5 +944,151 @@ func liveKVPutGet(
 	}
 	if _, err := client.KvUsage(ctx, auth); err != nil {
 		t.Fatalf("Go KV usage: %v", err)
+	}
+	liveKVLargeRoundtrip(t, ctx, authRPC, rootKeys, directoryKeys, rootID, roleAndGeneration)
+}
+
+// Exercise the actual v0.1.9 Go bindings and crypto over the existing RPCs.
+// The first full input chunk crosses the format's padding boundary; the final
+// short chunk checks offsets, final encrypted size, and exact replay accounting.
+func liveKVLargeRoundtrip(t *testing.T, ctx context.Context, authRPC *rpc.Client,
+	rootKeys, directoryKeys *kv.KeyBundle, rootID proto.DirID, rg proto.RoleAndGen) {
+	t.Helper()
+	client := core.NewKVStoreClient(authRPC, nil)
+	auth := rem.KVAuth{}
+	var id proto.FileID
+	var seed proto.FileKeySeed
+	for i := range id {
+		id[i] = byte(0x10 + i)
+	}
+	for i := range seed {
+		seed[i] = byte(0x30 + i)
+	}
+	keyBox, err := rootKeys.Box(&lcl.FileKeyBoxPayload{Id: id, Vers: 1, Seed: seed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := proto.LargeFileMetadata{Rg: rg, KeySeed: *keyBox, Vers: 1}
+	plaintext := make([]byte, kv.MaxInputFileChunkSize+17)
+	for i := range plaintext {
+		plaintext[i] = byte(i*31 + 7)
+	}
+	nonce := func(offset proto.Offset, final bool) *[24]byte {
+		hash, err := core.PrefixedHash(&lcl.ChunkNoncePayload{Id: id, Offset: offset, Final: final})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result [24]byte
+		copy(result[:], (*hash)[:24])
+		return &result
+	}
+	var encryptedSize proto.Size
+	chunks := make([]proto.UploadChunk, 2)
+	for i, offset := range []int{0, kv.MaxInputFileChunkSize} {
+		end := offset + kv.MaxInputFileChunkSize
+		if end > len(plaintext) {
+			end = len(plaintext)
+		}
+		plain := proto.ChunkPlaintext(plaintext[offset:end])
+		raw, err := core.EncodeToBytes(&plain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		padded, err := kv.PadChunk(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data := secretbox.Seal(nil, padded, nonce(proto.Offset(offset), i == 1), (*[32]byte)(&seed))
+		encryptedSize += proto.Size(len(data))
+		chunks[i] = proto.UploadChunk{Data: data, Offset: proto.Offset(offset)}
+		if i == 1 {
+			chunks[i].Final = &proto.UploadFinal{Sz: encryptedSize}
+		}
+	}
+	init := rem.KvFileUploadInitArg{Auth: auth, FileID: id, Md: metadata, Chunk: chunks[0]}
+	if err := client.KvFileUploadInit(ctx, init); err != nil {
+		t.Fatalf("Go large init: %v", err)
+	}
+	if err := client.KvFileUploadInit(ctx, init); err != nil {
+		t.Fatalf("Go exact large init replay: %v", err)
+	}
+	final := rem.KvFileUploadChunkArg{Auth: auth, FileID: id, Chunk: chunks[1]}
+	for i := 0; i < 2; i++ {
+		if err := client.KvFileUploadChunk(ctx, final); err != nil {
+			t.Fatalf("Go final chunk/replay: %v", err)
+		}
+	}
+	conflicting := final
+	conflicting.Chunk.Data = append(proto.NaclCiphertext(nil), final.Chunk.Data...)
+	conflicting.Chunk.Data[0] ^= 1
+	if err := client.KvFileUploadChunk(ctx, conflicting); err == nil {
+		t.Fatal("Go conflicting final replay unexpectedly succeeded")
+	}
+	namePayload := lcl.KVDirentNamePayload{ParentDir: rootID, DirVersion: 1, Name: "large.bin"}
+	nameBox, err := directoryKeys.Box(&namePayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nameMAC, err := directoryKeys.Hmac(&namePayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var direntID proto.DirentID
+	for i := range direntID {
+		direntID[i] = byte(0xe0 + i)
+	}
+	dirent := proto.KVDirent{ParentDir: rootID, Id: direntID, Value: id.KVNodeID(),
+		Version: 1, DirVersion: 1, WriteRole: proto.OwnerRole, NameMac: *nameMAC,
+		NameBox: *nameBox, DirStatus: proto.KVDirStatus_Active}
+	binding, err := directoryKeys.Hmac(dirent.ToBindingPayload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirent.BindingMac = *binding
+	if err := client.KvPut(ctx, rem.KvPutArg{Hdr: rem.KVReqHeader{Auth: auth}, Dirents: []proto.KVDirent{dirent}}); err != nil {
+		t.Fatalf("Go large dirent put: %v", err)
+	}
+	got, err := client.KvGet(ctx, rem.KvGetArg{Hdr: rem.KVReqHeader{Auth: auth},
+		Path:   rem.KVNodePathMultiple{ParentDir: rootID, Names: []rem.KVNameMACAtDirVersion{{DirVers: 1, Mac: *nameMAC}}},
+		Follow: rem.FollowBehavior_Any})
+	if err != nil || got.Data == nil {
+		t.Fatalf("Go large composed get: %v", err)
+	}
+	typ, err := got.Data.GetT()
+	if err != nil || typ != proto.KVNodeType_File {
+		t.Fatalf("Go large node type: %v, %v", typ, err)
+	}
+	var recoveredSeed lcl.FileKeyBoxPayload
+	if err := rootKeys.Unbox(&recoveredSeed, got.Data.File().KeySeed); err != nil {
+		t.Fatalf("Go large metadata decryption: %v", err)
+	}
+	if recoveredSeed.Id != id || recoveredSeed.Seed != seed || recoveredSeed.Vers != 1 {
+		t.Fatal("Go large file metadata changed")
+	}
+	var recovered []byte
+	for i, chunk := range chunks {
+		response, err := client.KvGetEncryptedChunk(ctx, rem.KvGetEncryptedChunkArg{Auth: auth, Id: id, Offset: chunk.Offset})
+		if err != nil {
+			t.Fatalf("Go large download: %v", err)
+		}
+		if response.Offset != chunk.Offset || response.Final != (i == 1) {
+			t.Fatal("Go large chunk response offset/final mismatch")
+		}
+		padded, ok := secretbox.Open(nil, response.Chunk, nonce(response.Offset, response.Final), (*[32]byte)(&recoveredSeed.Seed))
+		if !ok {
+			t.Fatal("Go large chunk decryption failed")
+		}
+		var plain proto.ChunkPlaintext
+		if err := core.DecodeFromBytes(&plain, padded); err != nil {
+			t.Fatal(err)
+		}
+		recovered = append(recovered, plain...)
+	}
+	if !bytes.Equal(recovered, plaintext) {
+		t.Fatal("Go large file plaintext changed")
+	}
+	usage, err := client.KvUsage(ctx, auth)
+	if err != nil || usage.Large.Base.Num != 1 || usage.Large.NumChunks != 2 || usage.Large.Base.Sum != encryptedSize {
+		t.Fatalf("Go large usage/replay accounting: %+v, %v", usage, err)
 	}
 }

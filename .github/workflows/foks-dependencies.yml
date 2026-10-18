@@ -63,7 +63,7 @@ jobs:
       matrix:
         # Every Cargo.lock in the repository; test_dependency_audit.py checks
         # that this list stays complete.
-        manifest: [Cargo.toml, fuzz/Cargo.toml]
+        manifest: [Cargo.toml, fuzz/Cargo.toml, tools/foks-celld-guarded/Cargo.toml, tools/foks-hosted-transport-check/Cargo.toml]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -75,12 +75,12 @@ jobs:
       - name: Check advisories, licenses, bans and sources
         env:
           MANIFEST: ${{ matrix.manifest }}
-        # deny.toml serves both workspaces. Its ignore and skip entries for
-        # root-only crates are unused in the fuzz graph, so the fuzz check
-        # allows those two lints; the root check still reports stale entries.
+        # deny.toml serves every workspace. Its ignore and skip entries for
+        # root-only crates are unused in the other graphs, so their checks
+        # allow those two lints; the root check still reports stale entries.
         run: |
           lints=()
-          if [ "$MANIFEST" = fuzz/Cargo.toml ]; then
+          if [ "$MANIFEST" != Cargo.toml ]; then
             lints=(--allow advisory-not-detected --allow unmatched-skip)
           fi
           cargo deny --manifest-path "$MANIFEST" --config deny.toml --locked check "${lints[@]}"

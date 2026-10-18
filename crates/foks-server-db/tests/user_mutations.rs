@@ -104,6 +104,7 @@ fn every_user_mutation_publication_boundary_is_atomic() {
             username: None,
             uid: &[1; 33],
             signer_device_id: &[4; 33],
+            authenticated_credential_id: &[4; 33],
             expected_sequence: 2,
             expected_tail_hash: &[0x32; 32],
             link_hash: &link_hash,
@@ -133,6 +134,7 @@ fn every_user_mutation_publication_boundary_is_atomic() {
             now: 1_000_001,
             idempotency_expires_at: 2_000_001,
         };
+        let coordinate = fixture.database.read_dependency().unwrap();
         assert!(fixture
             .database
             .commit_user_mutation_with_failure(&mutation, Some(point))
@@ -160,7 +162,9 @@ fn every_user_mutation_publication_boundary_is_atomic() {
                 .is_empty(),
             "{point:?}"
         );
+        assert_eq!(fixture.database.read_dependency().unwrap(), coordinate);
         assert!(fixture.database.commit_user_mutation(&mutation).is_ok());
+        assert!(fixture.database.read_dependency().unwrap().revision > coordinate.revision);
         let authority = fixture.database.user_authority(&[1; 33]).unwrap().unwrap();
         assert_eq!(authority.chain_sequence, 2);
         assert_eq!(authority.current_root_epoch, 2);
@@ -305,6 +309,7 @@ fn revocation_rejects_generic_links_signed_after_its_cited_root() {
         username: None,
         uid: uid.as_bytes(),
         signer_device_id: signer.as_bytes(),
+        authenticated_credential_id: signer.as_bytes(),
         expected_sequence: 2,
         expected_tail_hash: &[0x32; 32],
         link_hash: &user_hash,

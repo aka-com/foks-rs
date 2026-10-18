@@ -117,7 +117,89 @@ impl RunningServer {
         listeners: BoundListeners,
         fatal: FatalSignal,
     ) -> Result<Self> {
+        Self::start_inner(
+            config,
+            listeners,
+            fatal,
+            #[cfg(feature = "celld-proof")]
+            None,
+        )
+    }
+
+    #[cfg(feature = "celld-proof")]
+    pub(crate) fn start_proof(
+        config: Config,
+        proof: Arc<dyn crate::proof::RpcProof>,
+    ) -> Result<Self> {
+        if config.writer.is_some()
+            || config.sso.is_some()
+            || config.web_admin.is_some()
+            || config.chunk_store.is_some()
+        {
+            return Err(Error::Config(
+                "proof startup requires no ordinary writer or secondary services",
+            ));
+        }
+        let listeners = bind_addresses(
+            config.probe_address,
+            config.public_address,
+            config.authenticated_address,
+        )?;
+        Self::start_inner(config, listeners, FatalSignal::default(), Some(proof))
+    }
+
+    fn start_inner(
+        config: Config,
+        listeners: BoundListeners,
+        fatal: FatalSignal,
+        #[cfg(feature = "celld-proof")] proof: Option<Arc<dyn crate::proof::RpcProof>>,
+    ) -> Result<Self> {
         config.limits.validate()?;
+        let startup_storage = config
+            .read_database
+            .as_ref()
+            .map(|database| {
+                crate::storage_lease::StorageLease::with_store(
+                    &database.path,
+                    config.chunk_store.as_deref(),
+                    false,
+                )
+            })
+            .transpose()?;
+        if let Some(database) = &config.read_database {
+            let source_storage = startup_storage
+                .as_ref()
+                .ok_or(Error::Chunk("missing source storage lease"))?;
+            if let Some(writer) = &config.writer {
+                source_storage.require_writer(writer)?;
+            }
+            let reader =
+                foks_server_db::ReadDatabase::open(&database.path, database.database.clone())?;
+            if config.chunk_store.is_some()
+                && reader.chunk_storage_binding()?.is_none_or(|binding| {
+                    binding.state != foks_server_db::ChunkStorageBindingState::Active
+                })
+            {
+                let writer = config.writer.as_ref().ok_or(Error::Chunk(
+                    "chunk storage initialization requires writer ownership",
+                ))?;
+                crate::chunk_binding::initialize_online(
+                    writer,
+                    config.chunk_store.as_deref(),
+                    source_storage,
+                )?;
+            }
+            crate::chunk_binding::verify_reader(
+                &reader,
+                config.chunk_store.as_deref(),
+                source_storage,
+            )?;
+            if let (Some(writer), Some(store)) = (&config.writer, &config.chunk_store) {
+                crate::chunk_ledger::initialize_online(writer, store.as_ref())?;
+            }
+        } else if config.chunk_store.is_some() {
+            return Err(Error::Chunk("chunk storage requires a bound database"));
+        }
         let BoundListeners {
             probe,
             public,
@@ -125,7 +207,10 @@ impl RunningServer {
             addresses,
         } = listeners;
         let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(config.rate_limits)?);
-        let service_data = Arc::new(ServerData::from_config(&config, Arc::clone(&rate_limiter))?);
+        let service_data = ServerData::from_config(&config, Arc::clone(&rate_limiter))?;
+        #[cfg(feature = "celld-proof")]
+        let service_data = service_data.with_proof(proof);
+        let service_data = Arc::new(service_data);
         let (stop, stop_receiver) = watch::channel(false);
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(config.limits.worker_threads)

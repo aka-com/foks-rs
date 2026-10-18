@@ -71,6 +71,33 @@ fn ipc_mapping_uses_code_policy_without_confusing_transience_and_health() {
 }
 
 #[test]
+fn upload_admission_errors_preserve_actionable_codes_without_automatic_retry() {
+    for code in [
+        ErrorCode::UploadExpired,
+        ErrorCode::UploadIdentityConflict,
+        ErrorCode::UploadGenerationMismatch,
+        ErrorCode::UploadLegacyReadOnly,
+        ErrorCode::UploadPendingFull,
+        ErrorCode::UploadRetentionFull,
+        ErrorCode::UploadSpoolFull,
+        ErrorCode::UploadClockUntrusted,
+        ErrorCode::UploadFuture,
+    ] {
+        let mapped = AgentError::from_desktop(DesktopAgentError::Protocol {
+            code,
+            message: "recover the existing upload before retrying".into(),
+            fields: Box::default(),
+        });
+        assert_eq!(serde_json::to_value(code).unwrap(), mapped.code);
+        assert_eq!(
+            mapped.message,
+            "recover the existing upload before retrying"
+        );
+        assert!(!mapped.retryable && !mapped.ambiguous && !mapped.fatal);
+    }
+}
+
+#[test]
 fn client_and_desktop_mappings_preserve_health_separately_from_ambiguity() {
     use foks_agent_client::Error;
     let errors = vec![

@@ -11,6 +11,7 @@ use zeroize::Zeroizing;
 
 use crate::{ProtectedMutationStore, ProtectedStoreError};
 
+const WRITE_GENERATION: &str = ".write-generation-v1";
 const FILE_MAGIC: &[u8; 8] = b"FOKSPMS\x01";
 const NONCE_BYTES: usize = 24;
 const TAG_BYTES: usize = 16;
@@ -35,6 +36,7 @@ pub struct ProtectedTemporaryScan {
     directory: PathBuf,
     entries: fs::ReadDir,
     identity: fs::Metadata,
+    write_generation: Option<[u8; 16]>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -46,6 +48,9 @@ pub struct ProtectedTemporaryReport {
 }
 
 impl EncryptedFileMutationStore {
+    /// Local scan invalidation state; portability recreates it with the new protected store.
+    pub const WRITE_GENERATION_FILENAME: &'static str = WRITE_GENERATION;
+
     pub fn open(
         directory: impl AsRef<Path>,
         master_key: Zeroizing<[u8; 32]>,
@@ -86,6 +91,7 @@ impl EncryptedFileMutationStore {
             directory: self.directory.clone(),
             entries: fs::read_dir(&self.directory).map_err(io_backend)?,
             identity: fs::symlink_metadata(&self.directory).map_err(io_backend)?,
+            write_generation: self.write_generation()?,
         })
     }
 
@@ -104,7 +110,16 @@ impl EncryptedFileMutationStore {
         scan: &mut ProtectedTemporaryScan,
         deadline: std::time::Instant,
     ) -> Result<ProtectedTemporaryReport, ProtectedStoreError> {
-        self.cleanup_batch(scan, deadline, None)
+        self.cleanup_batch(scan, deadline, None, 256)
+    }
+
+    pub fn cleanup_temporary_budgeted(
+        &self,
+        scan: &mut ProtectedTemporaryScan,
+        deadline: std::time::Instant,
+        removals: usize,
+    ) -> Result<ProtectedTemporaryReport, ProtectedStoreError> {
+        self.cleanup_batch(scan, deadline, None, removals.min(8))
     }
 
     /// A complete, current inventory is the only authority for final-file absence.
@@ -116,7 +131,23 @@ impl EncryptedFileMutationStore {
         revision: foks_client_db::HardStateMetadata,
         deadline: std::time::Instant,
     ) -> Result<ProtectedTemporaryReport, ProtectedStoreError> {
-        self.cleanup_batch(scan, deadline, Some(inventory.records(revision)?))
+        self.cleanup_batch(scan, deadline, Some(inventory.records(revision)?), 256)
+    }
+
+    pub fn reconcile_unowned_budgeted(
+        &self,
+        scan: &mut ProtectedTemporaryScan,
+        inventory: &crate::ProtectedRecordInventory,
+        revision: foks_client_db::HardStateMetadata,
+        deadline: std::time::Instant,
+        removals: usize,
+    ) -> Result<ProtectedTemporaryReport, ProtectedStoreError> {
+        self.cleanup_batch(
+            scan,
+            deadline,
+            Some(inventory.records(revision)?),
+            removals.min(8),
+        )
     }
 
     fn cleanup_batch(
@@ -124,6 +155,7 @@ impl EncryptedFileMutationStore {
         scan: &mut ProtectedTemporaryScan,
         deadline: std::time::Instant,
         owners: Option<&std::collections::BTreeMap<String, crate::ProtectedRecordDescriptor>>,
+        maximum_removals: usize,
     ) -> Result<ProtectedTemporaryReport, ProtectedStoreError> {
         if scan.directory != self.directory {
             return Err(backend("protected scan directory changed"));
@@ -139,9 +171,20 @@ impl EncryptedFileMutationStore {
                 return Err(backend("protected scan directory identity changed"));
             }
         }
+        // A failed protected write can leave a temporary without changing the DB.
+        // Every temporary creator advances this durable generation first. Restart
+        // enumeration after any such write, including writes by another process.
+        let generation = self.write_generation()?;
+        if scan.write_generation != generation {
+            scan.entries = fs::read_dir(&self.directory).map_err(io_backend)?;
+            scan.write_generation = generation;
+        }
         let mut report = ProtectedTemporaryReport::default();
         let result = (|| {
-            while report.examined < 256 && std::time::Instant::now() < deadline {
+            while report.examined < 256
+                && report.removed < maximum_removals as u64
+                && std::time::Instant::now() < deadline
+            {
                 let Some(entry) = scan.entries.next() else {
                     report.complete = true;
                     break;
@@ -152,6 +195,10 @@ impl EncryptedFileMutationStore {
                 let name = name
                     .to_str()
                     .ok_or_else(|| backend("invalid protected filename"))?;
+                if name == WRITE_GENERATION {
+                    self.write_generation()?;
+                    continue;
+                }
                 let lower_hex =
                     |value: &str| value.bytes().all(|b| matches!(b,b'0'..=b'9'|b'a'..=b'f'));
                 let temporary = name
@@ -163,13 +210,22 @@ impl EncryptedFileMutationStore {
                 if !temporary && !final_record {
                     return Err(backend("invalid protected filename"));
                 }
-                if !entry.file_type().map_err(io_backend)?.is_file() {
+                let file_type = match entry.file_type() {
+                    Ok(value) => value,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(io_backend(error)),
+                };
+                if !file_type.is_file() {
                     return Err(backend("protected entry is not a regular file"));
                 }
                 if temporary || owners.is_some_and(|owners| !owners.contains_key(name)) {
                     // Revalidate the candidate itself immediately before unlinking;
                     // do not trust a cached directory entry across lock reacquisition.
-                    let identity = fs::symlink_metadata(entry.path()).map_err(io_backend)?;
+                    let identity = match fs::symlink_metadata(entry.path()) {
+                        Ok(value) => value,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(error) => return Err(io_backend(error)),
+                    };
                     if !identity.is_file() {
                         return Err(backend("protected candidate identity changed"));
                     }
@@ -296,7 +352,57 @@ impl EncryptedFileMutationStore {
         Ok(Zeroizing::new(plaintext))
     }
 
+    fn write_generation(&self) -> Result<Option<[u8; 16]>, ProtectedStoreError> {
+        let mut file = match open_record_for_read(&self.directory.join(WRITE_GENERATION)) {
+            Ok(file) => file,
+            Err(ProtectedStoreError::Missing) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        validate_generation_file(&file, true)?;
+        if file.metadata().map_err(io_backend)?.len() < 16 {
+            // Only the initial marker can be short: temp creation follows its
+            // full fsync. Finish that interrupted initialization under the same
+            // profile exclusion; any retained scan will restart on the new ID.
+            drop(file);
+            self.advance_write_generation()?;
+            return self.write_generation();
+        }
+        let mut generation = [0; 16];
+        file.read_exact(&mut generation).map_err(io_backend)?;
+        Ok(Some(generation))
+    }
+
+    fn advance_write_generation(&self) -> Result<(), ProtectedStoreError> {
+        // In-place overwrite avoids creating a temporary before the marker is
+        // durable. Interrupted/short initial installation is completed under exclusion; an
+        // interrupted replacement either changes the marker or preceded no temp.
+        let path = self.directory.join(WRITE_GENERATION);
+        let mut options = OpenOptions::new();
+        options.write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        let mut file = match options.open(&path) {
+            Ok(file) => {
+                validate_generation_file(&file, true)?;
+                file
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                create_private_file(&path).map_err(io_backend)?
+            }
+            Err(error) => return Err(io_backend(error)),
+        };
+        let mut generation = [0; 16];
+        getrandom::fill(&mut generation).map_err(|_| backend("OS randomness unavailable"))?;
+        file.write_all(&generation).map_err(io_backend)?;
+        file.sync_all().map_err(io_backend)?;
+        self.sync()
+    }
+
     fn create_temporary(&self) -> Result<(PathBuf, File), ProtectedStoreError> {
+        self.advance_write_generation()?;
         for _ in 0..32 {
             let mut suffix = [0u8; 16];
             getrandom::fill(&mut suffix).map_err(|_| backend("OS randomness unavailable"))?;
@@ -319,6 +425,20 @@ impl EncryptedFileMutationStore {
 }
 
 impl ProtectedMutationStore for EncryptedFileMutationStore {
+    fn cleanup_upload_temporaries(&mut self) -> Result<bool, ProtectedStoreError> {
+        let mut scan = self.temporary_scan()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+        for _ in 0..64 {
+            if self.cleanup_temporary_until(&mut scan, deadline)?.complete {
+                return Ok(true);
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+        }
+        Ok(false)
+    }
+
     fn put_if_absent(&mut self, key: &[u8], material: &[u8]) -> Result<(), ProtectedStoreError> {
         let path = self.record_path(key)?;
         match self.read_record(&path, key) {
@@ -355,6 +475,10 @@ impl ProtectedMutationStore for EncryptedFileMutationStore {
         }
     }
 
+    fn sync(&mut self) -> Result<(), ProtectedStoreError> {
+        EncryptedFileMutationStore::sync(self)
+    }
+
     fn get(&mut self, key: &[u8]) -> Result<Zeroizing<Vec<u8>>, ProtectedStoreError> {
         self.read_record(&self.record_path(key)?, key)
     }
@@ -370,6 +494,26 @@ impl ProtectedMutationStore for EncryptedFileMutationStore {
             Err(error) => Err(io_backend(error)),
         }
     }
+}
+
+fn validate_generation_file(
+    file: &File,
+    allow_incomplete: bool,
+) -> Result<(), ProtectedStoreError> {
+    let metadata = file.metadata().map_err(io_backend)?;
+    if !metadata.is_file() || metadata.len() > 16 || (!allow_incomplete && metadata.len() != 16) {
+        return Err(backend("invalid protected write generation"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if metadata.nlink() != 1 || metadata.permissions().mode() & 0o077 != 0 {
+            return Err(backend(
+                "protected write generation must be private and unaliased",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn record_aad(key: &[u8]) -> Result<Vec<u8>, ProtectedStoreError> {
@@ -466,6 +610,135 @@ mod tests {
 
     fn store(path: &Path, byte: u8) -> EncryptedFileMutationStore {
         EncryptedFileMutationStore::open(path, Zeroizing::new([byte; 32])).unwrap()
+    }
+
+    #[test]
+    fn exhausted_sweep_restarts_after_unjournaled_temporary_creation() {
+        let directory = tempfile::tempdir().unwrap();
+        let protected = store(directory.path(), 9);
+        let mut scan = protected.temporary_scan().unwrap();
+        assert!(
+            protected
+                .cleanup_temporary_batch(&mut scan)
+                .unwrap()
+                .complete
+        );
+        // This is the shared production temporary creator, before any DB write.
+        let (temporary, file) = protected.create_temporary().unwrap();
+        drop(file);
+        let result = protected.cleanup_temporary_batch(&mut scan).unwrap();
+        assert!(result.complete);
+        assert_eq!(result.removed, 1);
+        assert!(!temporary.exists());
+        assert!(directory.path().join(WRITE_GENERATION).exists());
+    }
+
+    #[test]
+    fn interrupted_initial_generation_is_completed_before_scanning() {
+        let directory = tempfile::tempdir().unwrap();
+        let protected = store(directory.path(), 9);
+        let file = create_private_file(&directory.path().join(WRITE_GENERATION)).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+        let mut scan = protected.temporary_scan().unwrap();
+        assert!(
+            protected
+                .cleanup_temporary_batch(&mut scan)
+                .unwrap()
+                .complete
+        );
+        assert_eq!(
+            fs::metadata(directory.path().join(WRITE_GENERATION))
+                .unwrap()
+                .len(),
+            16
+        );
+    }
+
+    #[test]
+    fn marker_sync_failure_prevents_creation_and_aliases_fail_closed() {
+        let directory = tempfile::tempdir().unwrap();
+        let protected = store(directory.path(), 9);
+        FAIL_NEXT_DIRECTORY_SYNC.set(true);
+        assert!(protected.create_temporary().is_err());
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+        let (temporary, file) = protected.create_temporary().unwrap();
+        drop(file);
+        fs::remove_file(temporary).unwrap();
+        let marker = directory.path().join(WRITE_GENERATION);
+        #[cfg(unix)]
+        {
+            let alias = directory.path().join("aliased");
+            fs::hard_link(&marker, &alias).unwrap();
+            assert!(protected.create_temporary().is_err());
+            assert!(protected.temporary_scan().is_err());
+            fs::remove_file(&alias).unwrap();
+            fs::remove_file(&marker).unwrap();
+            std::os::unix::fs::symlink("missing", &marker).unwrap();
+            assert!(protected.create_temporary().is_err());
+            assert!(protected.temporary_scan().is_err());
+        }
+    }
+
+    #[test]
+    fn saved_temporary_scan_tolerates_other_owner_removal_and_restarts_after_creator() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut protected = store(directory.path(), 7);
+        for n in 0u32..300 {
+            protected.put_if_absent(&n.to_be_bytes(), b"owner").unwrap();
+        }
+        let (old_temp, old_file) = protected.create_temporary().unwrap();
+        drop(old_file);
+        let mut scan = protected.temporary_scan().unwrap();
+        let first = protected
+            .cleanup_temporary_budgeted(
+                &mut scan,
+                std::time::Instant::now() + std::time::Duration::from_secs(2),
+                8,
+            )
+            .unwrap();
+        assert!(!first.complete);
+        for n in 0u32..300 {
+            protected.remove(&n.to_be_bytes()).unwrap();
+        }
+        // Another owner also finishes erasing an old temporary. Resume without
+        // any creator/generation change, so cached deleted DirEntries are real.
+        match fs::remove_file(&old_temp) {
+            Ok(()) => (),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => panic!("{error}"),
+        }
+        let unchanged = scan.write_generation;
+        let stale = protected
+            .cleanup_temporary_budgeted(
+                &mut scan,
+                std::time::Instant::now() + std::time::Duration::from_secs(2),
+                8,
+            )
+            .unwrap();
+        assert!(stale.complete);
+        assert_eq!(scan.write_generation, unchanged);
+        // A failed/interrupted writer creates a new temp without a journal row.
+        let (new_temp, new_file) = protected.create_temporary().unwrap();
+        drop(new_file);
+        let old_generation = scan.write_generation;
+        let mut done = false;
+        for _ in 0..8 {
+            let report = protected
+                .cleanup_temporary_budgeted(
+                    &mut scan,
+                    std::time::Instant::now() + std::time::Duration::from_secs(2),
+                    8,
+                )
+                .unwrap();
+            assert!(scan.write_generation != old_generation);
+            if report.complete {
+                done = true;
+                break;
+            }
+        }
+        assert!(done);
+        assert!(!old_temp.exists() && !new_temp.exists());
     }
 
     #[test]

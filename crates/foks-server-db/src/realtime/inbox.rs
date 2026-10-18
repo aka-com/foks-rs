@@ -1,5 +1,6 @@
 //! Durable membership reconciliation, read pointers and inbox fanout.
 use super::*;
+use crate::allocation::RowAllocationExt as _;
 
 fn recipients(c: &Connection, a: &RealtimeActor, md: &RtChannelMetadata) -> Result<Vec<Vec<u8>>> {
     let mut query = c.prepare("SELECT party_id, role_type, visibility FROM team_members WHERE team_id=?1
@@ -13,9 +14,9 @@ fn recipients(c: &Connection, a: &RealtimeActor, md: &RtChannelMetadata) -> Resu
         ],
         |r| {
             Ok((
-                r.get::<_, Vec<u8>>(0)?,
-                r.get::<_, i64>(1)?,
-                r.get::<_, i64>(2)?,
+                r.budgeted_get::<_, Vec<u8>>(0)?,
+                r.budgeted_get::<_, i64>(1)?,
+                r.budgeted_get::<_, i64>(2)?,
             ))
         },
     )?;
@@ -49,7 +50,7 @@ pub(super) fn stamp(
         let old: i64 = c.query_row(
             "SELECT version FROM rt_user_inboxes WHERE uid=?1 AND app_id=1",
             params![uid],
-            |r| r.get(0),
+            |r| r.budgeted_get(0),
         )?;
         let next = old.checked_add(1).ok_or(Error::IntegerRange)?;
         c.execute(
@@ -81,7 +82,7 @@ fn next_inbox_version(c: &Connection, uid: &[u8], app: RtAppId) -> Result<u64> {
     let old: i64 = c.query_row(
         "SELECT version FROM rt_user_inboxes WHERE uid=?1 AND app_id=?2",
         params![uid, app as i64],
-        |r| r.get(0),
+        |r| r.budgeted_get(0),
     )?;
     let next = old.checked_add(1).ok_or(Error::IntegerRange)?;
     c.execute(
@@ -99,7 +100,7 @@ fn inbox_state(
     let row = c.query_row(
         "SELECT version,reconcile_dirty,reconcile_after FROM rt_user_inboxes WHERE uid=?1 AND app_id=?2",
         params![actor.uid, app as i64],
-        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<Vec<u8>>>(2)?)),
+        |r| Ok((r.budgeted_get::<_, i64>(0)?, r.budgeted_get::<_, i64>(1)?, r.budgeted_get::<_, Option<Vec<u8>>>(2)?)),
     ).optional()?;
     let Some((version, dirty, cursor)) = row else {
         return Ok((
@@ -138,7 +139,7 @@ fn remove_user_channel(
         .query_row(
             "SELECT accessible FROM rt_user_channels WHERE uid=?1 AND app_id=?2 AND channel_id=?3",
             params![uid, app as i64, channel.0.as_slice()],
-            |row| row.get::<_, i64>(0),
+            |row| row.budgeted_get::<_, i64>(0),
         )
         .optional()?;
     if accessible != Some(1) {
@@ -168,7 +169,7 @@ fn insert_user_channel(
         .query_row(
             "SELECT accessible FROM rt_user_channels WHERE uid=?1 AND channel_id=?2",
             params![uid, channel.0.as_slice()],
-            |row| row.get::<_, i64>(0),
+            |row| row.budgeted_get::<_, i64>(0),
         )
         .optional()?;
     if accessible == Some(1) {
@@ -266,9 +267,9 @@ impl Database {
                 params![app as i64, actor.uid, after, (page_size + 1) as i64],
                 |r| {
                     Ok((
-                        r.get::<_, Vec<u8>>(0)?,
-                        r.get::<_, Vec<u8>>(1)?,
-                        r.get::<_, Option<Vec<u8>>>(2)?,
+                        r.budgeted_get::<_, Vec<u8>>(0)?,
+                        r.budgeted_get::<_, Vec<u8>>(1)?,
+                        r.budgeted_get::<_, Option<Vec<u8>>>(2)?,
                     ))
                 },
             )?;
@@ -365,7 +366,7 @@ impl Database {
             .query_row(
                 "SELECT read_through,accessible FROM rt_user_channels WHERE uid=?1 AND channel_id=?2",
                 params![actor.uid, arg.read.channel.0.as_slice()],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.budgeted_get(0)?, r.budgeted_get(1)?)),
             )
             .optional()?;
         let changed = match current {
@@ -433,7 +434,7 @@ impl ReadSnapshot<'_> {
             .query_row(
                 "SELECT version FROM rt_user_inboxes WHERE uid=?1 AND app_id=?2",
                 params![actor.uid, app as i64],
-                |r| r.get::<_, i64>(0),
+                |r| r.budgeted_get::<_, i64>(0),
             )
             .optional()?
             .map(crate::error::unsigned)
@@ -456,7 +457,7 @@ impl ReadSnapshot<'_> {
             .query_row(
                 "SELECT version FROM rt_user_inboxes WHERE uid=?1 AND app_id=?2",
                 params![actor.uid, arg.query.app as i64],
-                |r| r.get::<_, i64>(0),
+                |r| r.budgeted_get::<_, i64>(0),
             )
             .optional()?
             .map(crate::error::unsigned)
@@ -492,9 +493,9 @@ impl ReadSnapshot<'_> {
                 ],
                 |r| {
                     Ok((
-                        r.get::<_, Vec<u8>>(0)?,
-                        r.get::<_, i64>(1)?,
-                        r.get::<_, i64>(2)?,
+                        r.budgeted_get::<_, Vec<u8>>(0)?,
+                        r.budgeted_get::<_, i64>(1)?,
+                        r.budgeted_get::<_, i64>(2)?,
                     ))
                 },
             )?;

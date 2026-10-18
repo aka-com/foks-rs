@@ -1,0 +1,289 @@
+--- a/crates/celld/guarded_node.rs
++++ b/crates/celld/guarded_node.rs
+@@ -67,6 +67,9 @@
+ }
+ 
+ impl GuardedNode {
++    /// Main reload ownership suballocation inside the unchanged 128 KiB process bound.
++    pub const PROCESS_MAIN_WORK_BYTES: usize = 12 * 1024;
++
+     /// Once-only policy installation; Run readiness requires the sealed bind below.
+     pub fn install() -> Result<Arc<Self>, Refusal> {
+         if INSTALL_STARTED.swap(true, Ordering::AcqRel) {
+@@ -8453,7 +8456,7 @@
+         self.effects.qualification.processed_generation()
+     }
+     pub fn charge_process_work(&self, bytes: usize, alignment: usize) -> Result<(), Refusal> {
+-        if bytes > 8192 || alignment > 16 || alignment == 0 {
++        if bytes > Self::PROCESS_MAIN_WORK_BYTES || alignment > 16 || alignment == 0 {
+             return Err(Refusal::Bounds);
+         }
+         process_layouts_for(
+@@ -8623,7 +8626,7 @@
+         .iter()
+         .zip(caps)
+         .any(|(row, cap)| row.size > cap || row.align > 16)
+-        || main_work_bytes > 8192
++        || main_work_bytes > GuardedNode::PROCESS_MAIN_WORK_BYTES
+     {
+         return Err(Refusal::Bounds);
+     }
+--- a/crates/celld/guarded_node/qualification.rs
++++ b/crates/celld/guarded_node/qualification.rs
+@@ -2040,7 +2040,7 @@
+         Ok(())
+     }
+     pub fn main_work(&self, bytes: usize, alignment: usize) -> Result<(), Refusal> {
+-        if bytes > 8192 || alignment > 16 || alignment == 0 {
++        if bytes > super::GuardedNode::PROCESS_MAIN_WORK_BYTES || alignment > 16 || alignment == 0 {
+             return Err(Refusal::Bounds);
+         }
+         let mut s = self.state()?;
+--- a/crates/celld/guarded_node/tests.rs
++++ b/crates/celld/guarded_node/tests.rs
+@@ -6612,7 +6612,17 @@
+         actual.retained_terms.sync_mutex_bytes + actual.retained_terms.sync_condvar_bytes <= 256
+     );
+     assert!(actual.retained_bytes <= 131072);
+-    assert!(process_layouts_for(8193).is_err());
++    let ceiling = process_layouts_for(GuardedNode::PROCESS_MAIN_WORK_BYTES).unwrap();
++    assert_eq!(ceiling.retained_terms.main_work_bytes, 12 * 1024);
++    assert_eq!(
++        ceiling.retained_bytes,
++        actual.retained_bytes + GuardedNode::PROCESS_MAIN_WORK_BYTES
++    );
++    assert!(ceiling.retained_bytes <= 131072);
++    assert!(matches!(
++        process_layouts_for(GuardedNode::PROCESS_MAIN_WORK_BYTES + 1),
++        Err(Refusal::Bounds)
++    ));
+     assert!(qualification::Qualification::layouts()[1].0 <= 8192);
+     let value = serde_json::to_string(&actual).unwrap();
+     let line = format!("FOKS_B4_PROCESS_LAYOUT={value}\n");
+--- a/crates/celld/main/guarded.rs
++++ b/crates/celld/main/guarded.rs
+@@ -686,6 +686,45 @@
+     layout(reload_operation)
+ }
+ 
++#[cfg(feature = "foks-guarded-node-qualification")]
++fn reload_work_layout(
++    string_lengths: [usize; 5],
++) -> Result<(usize, usize), celld::GuardedNodeRefusal> {
++    use celld::GuardedNodeRefusal::Bounds;
++    use std::alloc::Layout;
++    let capture = Layout::new::<ReloadContext>();
++    let future = reload_future_layout();
++    let owner = Layout::new::<ReloadOwner>();
++    let result = Layout::new::<celld::generation::ReloadOutcome>();
++    let stop_arc = Layout::new::<StopArcAllocation>();
++    let thread = Layout::new::<Option<std::thread::JoinHandle<()>>>();
++    let align = capture
++        .align()
++        .max(future.align())
++        .max(owner.align())
++        .max(result.align())
++        .max(stop_arc.align())
++        .max(thread.align());
++    let strings = string_lengths
++        .into_iter()
++        .try_fold(0usize, |sum, length| sum.checked_add(length))
++        .ok_or(Bounds)?;
++    // The stored context and transient construction capture can coexist with
++    // both the concrete stack future and its requested Box storage. Result
++    // storage and both cloned-string sets remain separately charged. Opaque
++    // SDK/graph/engine allocations remain runtime overhead, not a typed RSS bound.
++    let bytes = capture
++        .size()
++        .checked_add(owner.size())
++        .and_then(|n| future.size().checked_mul(2).and_then(|v| n.checked_add(v)))
++        .and_then(|n| n.checked_add(result.size()))
++        .and_then(|n| strings.checked_mul(2).and_then(|v| n.checked_add(v)))
++        .and_then(|n| n.checked_add(stop_arc.size()))
++        .and_then(|n| n.checked_add(thread.size()))
++        .ok_or(Bounds)?;
++    Ok((bytes, align))
++}
++
+ impl Run {
+     pub(super) fn fence(&mut self, error: &anyhow::Error) -> ! {
+         tracing::error!(%error, "guarded process operation failed; fencing");
+@@ -703,7 +742,6 @@
+     ) -> anyhow::Result<()> {
+         #[cfg(feature = "foks-guarded-node-qualification")]
+         if let Some(enabled) = &mut self.enabled {
+-            use std::alloc::Layout;
+             anyhow::ensure!(
+                 enabled.reload.is_none(),
+                 "guarded reload owner already configured"
+@@ -722,45 +760,29 @@
+                 runtime.cron_cell().is_none(),
+                 "guarded fixture unexpectedly declares cron"
+             );
+-            let capture = Layout::new::<ReloadContext>();
+-            let future = reload_future_layout();
+-            let owner = Layout::new::<ReloadOwner>();
+-            let result = Layout::new::<celld::generation::ReloadOutcome>();
+-            let stop_arc = Layout::new::<StopArcAllocation>();
+-            let thread = Layout::new::<Option<std::thread::JoinHandle<()>>>();
+-            let align = capture
+-                .align()
+-                .max(future.align())
+-                .max(owner.align())
+-                .max(result.align())
+-                .max(stop_arc.align())
+-                .max(thread.align());
+-            let strings = _node
+-                .len()
+-                .checked_add(_region.len())
+-                .and_then(|n| n.checked_add(_app.advertise.len()))
+-                .and_then(|n| n.checked_add(bucket.name.len()))
+-                .and_then(|n| n.checked_add(bucket.prefix.len()))
+-                .ok_or_else(|| anyhow::anyhow!("guarded reload string overflow"))?;
+-            // The stored context and transient construction capture can coexist
+-            // with both the concrete stack future and its requested Box storage.
+-            // Result storage and both possible cloned-string sets are separate.
+-            // Existing opaque SDK/graph/engine allocations remain runtime overhead.
+-            let bytes = capture
+-                .size()
+-                .checked_add(owner.size())
+-                .and_then(|n| future.size().checked_mul(2).and_then(|v| n.checked_add(v)))
+-                .and_then(|n| n.checked_add(result.size()))
+-                .and_then(|n| strings.checked_mul(2).and_then(|v| n.checked_add(v)))
+-                .and_then(|n| n.checked_add(stop_arc.size()))
+-                .and_then(|n| n.checked_add(thread.size()))
+-                .ok_or_else(|| anyhow::anyhow!("guarded reload layout overflow"))?;
++            let (bytes, align) = reload_work_layout([
++                _node.len(),
++                _region.len(),
++                _app.advertise.len(),
++                bucket.name.len(),
++                bucket.prefix.len(),
++            ])
++            .map_err(refused)?;
+             // Charge before cloning strings, constructing the stop Arc/context,
+-            // concrete future or Box. Kind14 records this actual main measurement.
+-            enabled
+-                .node
+-                .charge_process_work(bytes, align)
+-                .map_err(refused)?;
++            // concrete future or Box. Kind14 records only successful admission.
++            if let Err(error) = enabled.node.charge_process_work(bytes, align) {
++                // Fixed metadata and scalar fields: no owned diagnostic String
++                // or success journal entry is constructed before admission.
++                tracing::error!(
++                    bytes,
++                    alignment = align,
++                    individual_limit = celld::GuardedNode::PROCESS_MAIN_WORK_BYTES,
++                    aggregate_limit = 131072usize,
++                    ?error,
++                    "guarded main-work precharge refused"
++                );
++                return Err(refused(error));
++            }
+             let stopped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+             enabled.reload = Some(ReloadOwner {
+                 context: ReloadContext {
+@@ -1090,3 +1112,102 @@
+         }
+     }
+ }
++
++// This separate binary-unit process measures the real main future and owner,
++// rather than the library-only main_work=0 projection. Actual Run kind14 and
++// the all101 process suite remain separate integration requirements.
++#[cfg(all(test, feature = "foks-guarded-node-qualification"))]
++mod tests {
++    use super::*;
++    use celld::{GuardedNode, GuardedNodeRefusal};
++
++    #[test]
++    fn guarded_reload_main_work_fits_qualified_fixture() {
++        // Fixed all101 controller fixture maxima: node34, us-east-1=9,
++        // IPv4 loopback with5-digit port15, bucket32, case-NNN prefix23.
++        // These lengths do not qualify arbitrary operator-supplied strings.
++        let (bytes, align) = reload_work_layout([34, 9, 15, 32, 23]).unwrap();
++        assert!(bytes > 0 && bytes <= GuardedNode::PROCESS_MAIN_WORK_BYTES);
++        assert!(align > 0 && align <= 16);
++        let (without_strings, same_align) = reload_work_layout([0; 5]).unwrap();
++        assert_eq!(bytes, without_strings + 2 * 113);
++        assert_eq!(align, same_align);
++        // This is the actual opaque production future, not a synthetic pending
++        // future or a hardcoded size from the previously accepted binary.
++        assert!(without_strings >= reload_future_layout().size() * 2);
++        assert!(matches!(
++            reload_work_layout([usize::MAX, 1, 0, 0, 0]),
++            Err(GuardedNodeRefusal::Bounds)
++        ));
++        assert!(matches!(
++            reload_work_layout([usize::MAX / 2 + 1, 0, 0, 0, 0]),
++            Err(GuardedNodeRefusal::Bounds)
++        ));
++
++        // Installation is once-only, so the native supervisor runs this exact
++        // binary test in its own process. No worker/SDK/native Ready is faked.
++        let node = GuardedNode::install().unwrap();
++        node.install_process_case(1).unwrap();
++        let initial = serde_json::to_value(node.process_layouts().unwrap()).unwrap();
++        assert_eq!(initial["retained_terms"]["main_work_bytes"], 0);
++        let initial_count = node.checkpoint_counts().unwrap();
++        let initial_debt = node.foundation().unwrap().debt;
++        let (too_large, _) =
++            reload_work_layout([GuardedNode::PROCESS_MAIN_WORK_BYTES, 0, 0, 0, 0]).unwrap();
++        for (charge, alignment) in [
++            (GuardedNode::PROCESS_MAIN_WORK_BYTES + 1, align),
++            (too_large, align),
++            (bytes, 0),
++            (bytes, 32),
++        ] {
++            assert!(matches!(
++                node.charge_process_work(charge, alignment),
++                Err(GuardedNodeRefusal::Bounds)
++            ));
++            assert_eq!(node.checkpoint_counts().unwrap(), initial_count);
++            assert_eq!(node.foundation().unwrap().debt, initial_debt);
++            assert_eq!(
++                serde_json::to_value(node.process_layouts().unwrap()).unwrap(),
++                initial
++            );
++        }
++        node.charge_process_work(bytes, align).unwrap();
++        let charged = serde_json::to_value(node.process_layouts().unwrap()).unwrap();
++        assert_eq!(charged["retained_terms"]["main_work_bytes"], bytes);
++        assert_eq!(
++            charged["retained_bytes"].as_u64().unwrap(),
++            initial["retained_bytes"].as_u64().unwrap() + bytes as u64
++        );
++        let retained_terms = &charged["retained_terms"];
++        let retained_sum: u64 = [
++            "p1_retained_bytes",
++            "qualification_bytes",
++            "main_work_bytes",
++            "extra_scratch_bytes",
++            "sync_mutex_bytes",
++            "sync_condvar_bytes",
++        ]
++        .into_iter()
++        .map(|key| retained_terms[key].as_u64().unwrap())
++        .sum();
++        assert_eq!(charged["retained_bytes"].as_u64().unwrap(), retained_sum);
++        assert!(retained_sum <= 131072);
++        assert_eq!(node.foundation().unwrap().debt, initial_debt + bytes);
++        let after_count = node.checkpoint_counts().unwrap();
++        assert_eq!(after_count.0, initial_count.0 + 1);
++        let actual =
++            serde_json::to_value(node.checkpoint_record(initial_count.0).unwrap().unwrap())
++                .unwrap();
++        assert_eq!(actual["kind"], "b4_process_checkpoint");
++        assert_eq!(actual["case"], 1);
++        assert_eq!(actual["state"], "MainWorkCharged");
++        assert_eq!(actual["first"], bytes);
++        assert_eq!(actual["second"], align);
++        assert!(node.charge_process_work(bytes, align).is_err());
++        assert_eq!(node.checkpoint_counts().unwrap(), after_count);
++        assert_eq!(
++            serde_json::to_value(node.process_layouts().unwrap()).unwrap(),
++            charged
++        );
++    }
++}

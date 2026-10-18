@@ -30,8 +30,15 @@ fn root_requires_an_owned_matching_directory_and_replays_exactly() {
         key_generation: 1,
         exact: b"root",
     };
+    let before = test.database.read_dependency().unwrap();
     test.database.put_kv_root(&mutation).unwrap();
+    let published = test.database.read_dependency().unwrap();
+    assert!(published.revision > before.revision);
     test.database.put_kv_root(&mutation).unwrap();
+    // Namespace admission performs a real equal-value UPSERT even on replay.
+    let replayed = test.database.read_dependency().unwrap();
+    assert_eq!(replayed.incarnation, published.incarnation);
+    assert!(replayed.revision > published.revision);
     test.database
         .put_kv_root(&KvRootMutation {
             uid: &[1; 33],

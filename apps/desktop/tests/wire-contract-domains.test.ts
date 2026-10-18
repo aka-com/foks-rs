@@ -82,4 +82,9 @@ test('every golden record has explicit domain and shape or semantic-assertion co
   assert.ok(
     inventory.uncoveredPublicShapes.vault.includes('CatalogFailureDto'),
   );
+  // The agent's upload summaries pass through the native commands unchanged;
+  // tests/file-uploads.test.ts covers their decoder.
+  assert.ok(
+    inventory.uncoveredPublicShapes.vault.includes('FileUploads / FileUpload'),
+  );
 });

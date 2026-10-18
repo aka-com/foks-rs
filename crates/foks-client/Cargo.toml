@@ -10,6 +10,7 @@ autotests = false
 test-support = ["foks-client-db/test-support"]
 
 [dependencies]
+foks-local-deadline = { workspace = true, features = ["clock"] }
 chacha20poly1305 = { workspace = true }
 foks-client-db = { workspace = true }
 foks-crypto = { workspace = true }
@@ -27,6 +28,9 @@ thiserror = { workspace = true }
 webpki-roots = { workspace = true }
 url = { workspace = true }
 zeroize = { workspace = true }
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+nix = { version = "0.30", default-features = false, features = ["time"] }
 
 [dev-dependencies]
 foks-client-db = { workspace = true, features = ["test-support"] }

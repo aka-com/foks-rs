@@ -9,8 +9,10 @@ pub(crate) mod jobs;
 mod journals;
 mod metadata;
 pub(crate) mod protected;
+pub(crate) mod receipt_clock;
 pub(crate) mod sso;
 mod team;
+pub(crate) mod uploads;
 mod user;
 
 use rusqlite::{Transaction, TransactionBehavior};

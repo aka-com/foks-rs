@@ -518,7 +518,9 @@ fn kv_denial_does_not_revoke_account_or_chat_target_bindings() {
 fn a_catalog_listing_after_a_local_write_is_read_fresh() {
     let state = AppState::new(Arc::new(AgentHandle::new(
         "/tmp/unused-foks-agent.sock".into(),
-    )));
+    )))
+    .begin_operation(foks_agent_proto::DeadlineClass::Ordinary)
+    .unwrap();
     // Nothing has been written through this desktop, so the agent's retained
     // first pages are inside their own freshness bound.
     assert_eq!(state.catalog_read_freshness(false), (false, 0));
@@ -570,7 +572,9 @@ fn a_catalog_listing_after_a_local_write_is_read_fresh() {
 fn a_profile_listing_settles_that_profile_and_no_other() {
     let state = AppState::new(Arc::new(AgentHandle::new(
         "/tmp/unused-foks-agent.sock".into(),
-    )));
+    )))
+    .begin_operation(foks_agent_proto::DeadlineClass::Ordinary)
+    .unwrap();
     let work = state.for_profile("work.example").unwrap();
     let home = state.for_profile("home.example").unwrap();
     work.invalidate_catalog_items(&CatalogStoreRef::Account(account_ref(
@@ -624,7 +628,9 @@ fn a_profile_listing_settles_that_profile_and_no_other() {
 fn mutation_gate_refuses_a_second_write_until_the_first_finishes() {
     let state = AppState::new(Arc::new(AgentHandle::new(
         "/tmp/unused-foks-agent.sock".into(),
-    )));
+    )))
+    .begin_operation(foks_agent_proto::DeadlineClass::Ordinary)
+    .unwrap();
     let first = state.begin_mutation().unwrap();
     assert_eq!(
         state.begin_mutation().unwrap_err().code,
@@ -642,7 +648,9 @@ fn mutation_gate_refuses_a_second_write_until_the_first_finishes() {
 fn ambiguous_mutations_require_a_fresh_catalog_before_another_write() {
     let state = AppState::new(Arc::new(AgentHandle::new(
         "/tmp/unused-foks-agent.sock".into(),
-    )));
+    )))
+    .begin_operation(foks_agent_proto::DeadlineClass::Ordinary)
+    .unwrap();
     state
         .mutation_requires_refresh()
         .store(true, Ordering::Release);
@@ -1096,7 +1104,9 @@ fn mutation_scope_bookkeeping_is_bounded_without_evicting_ambiguity() {
 fn renderer_can_reuse_the_latest_native_file_until_it_is_released() {
     let state = AppState::new(Arc::new(AgentHandle::new(
         "/tmp/unused-foks-agent.sock".into(),
-    )));
+    )))
+    .begin_operation(foks_agent_proto::DeadlineClass::Ordinary)
+    .unwrap();
     let first = PathBuf::from("/tmp/first");
     let second = PathBuf::from("/tmp/second");
     assert_eq!(
@@ -1178,7 +1188,9 @@ fn catalog_reads_bound_to_a_generation_fail_once_it_is_replaced() {
 fn a_catalog_load_that_lost_its_generation_is_not_accepted() {
     let state = AppState::new(Arc::new(AgentHandle::new(
         "/tmp/unused-foks-agent.sock".into(),
-    )));
+    )))
+    .begin_operation(foks_agent_proto::DeadlineClass::Ordinary)
+    .unwrap();
     let (first, _first_token) = state.begin_catalog_load_checked().unwrap();
     let (second, _second_token) = state.begin_catalog_load_checked().unwrap();
     assert!(!state.accept_catalog(first, CatalogSnapshot::default()));
@@ -1449,4 +1461,25 @@ fn an_unrefreshed_profile_reports_catalog_required_rather_than_a_missing_store()
     let error = state.selected_chat(&id).unwrap_err();
     assert_eq!(error.code, "store-not-found");
     assert!(!error.retryable);
+}
+
+#[test]
+fn durable_upload_reconciliation_keeps_inflight_exclusion_and_does_not_clear_ambiguity() {
+    let state = AppState::new(std::sync::Arc::new(crate::agent::AgentHandle::new(
+        "/tmp/unused-upload-agent.sock".into(),
+    )))
+    .begin_operation(foks_agent_proto::DeadlineClass::Ordinary)
+    .unwrap();
+    state
+        .mutation_requires_refresh()
+        .store(true, std::sync::atomic::Ordering::Release);
+    assert!(state.begin_mutation().is_err());
+    let guard = state.begin_upload_reconciliation().unwrap();
+    assert!(state.begin_upload_reconciliation().is_err());
+    assert!(state.begin_mutation().is_err());
+    drop(guard);
+    assert!(state
+        .mutation_requires_refresh()
+        .load(std::sync::atomic::Ordering::Acquire));
+    assert!(state.begin_mutation().is_err());
 }

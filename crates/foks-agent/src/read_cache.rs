@@ -404,22 +404,30 @@ pub(crate) fn open_profile_session(
     timeout: Duration,
     cancellation: CancellationToken,
 ) -> foks_client_app::Result<ProfileSession> {
+    let control = crate::request_control::current()?;
+    control.check()?;
     note_profile(registry.root(), name);
     let opened = Instant::now();
     let _session_time = SessionTime(opened);
     let session = match base_client(registry, name) {
-        Ok(base) => ProfileSession::open_with_control_and_client(
+        Ok(base) => ProfileSession::open_with_deadline_and_client(
             registry,
             name,
-            timeout,
+            control.deadline.clone(),
             cancellation,
             &base,
         )?,
         // Building the base transport reads exactly what opening a session
         // reads, so the fallback surfaces the same failure rather than hiding
         // it.
-        Err(_) => ProfileSession::open_with_control(registry, name, timeout, cancellation)?,
+        Err(_) => ProfileSession::open_with_deadline(
+            registry,
+            name,
+            control.deadline.clone(),
+            cancellation,
+        )?,
     };
+    let session = session.with_rpc_timeout(timeout);
     Ok(if scope_serves_reads() {
         session.with_read_caches(caches())
     } else {

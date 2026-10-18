@@ -9,3 +9,6 @@ pub use rotation::{
     stage_host_key_rotation, HostKeyRotationObservation, HostKeyRotationState,
     MINIMUM_HOST_KEY_OBSERVATION_MICROS,
 };
+
+#[cfg(any(test, feature = "celld-proof"))]
+pub(crate) use bootstrap::validate_generation_ledger_against_probe;

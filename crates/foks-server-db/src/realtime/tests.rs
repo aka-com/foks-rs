@@ -1257,7 +1257,7 @@ fn capacity_report_lists_the_teams_with_the_most_message_bytes_first() {
             .unwrap();
     }
     drop(fixture);
-    let reader = ReadDatabase::open_pooled(&f.db.path, Config::default()).unwrap();
+    let reader = ReadDatabase::open(&f.db.path, Config::default()).unwrap();
     let report = reader.snapshot().unwrap().capacity_report(0).unwrap();
     assert_eq!(
         report

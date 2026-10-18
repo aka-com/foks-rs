@@ -45,7 +45,7 @@ impl Principal {
             _ => {
                 return Err(Error::Config(
                     "authenticated peer certificate has an unsupported credential kind",
-                ))
+                ));
             }
         };
         let (_, parsed) = parse_x509_certificate(certificate.as_ref())
@@ -120,6 +120,77 @@ fn certificate_public_key(certificate: &CertificateDer<'_>) -> Result<[u8; 32]> 
         .try_into()
         .map_err(|_| Error::Config("authenticated peer certificate public key has the wrong width"))
 }
+
+/// Parse the bounded hosted profile's certificate context after the frontend's
+/// TLS verifier has established possession. This helper does not authenticate
+/// the certificate against current database state or verify its signature.
+#[cfg(any(test, feature = "celld-proof"))]
+pub(crate) fn parse_hosted_peer_certificate(
+    certificate: &CertificateDer<'_>,
+) -> Result<foks_metadata_core::personal::PeerCertificate> {
+    use foks_metadata_core::personal::{PeerCertificate, MAX_PEER_CERTIFICATE_BYTES};
+
+    let der = certificate.as_ref();
+    if der.is_empty() || der.len() > MAX_PEER_CERTIFICATE_BYTES {
+        return Err(Error::Config(
+            "hosted peer certificate exceeds profile bounds",
+        ));
+    }
+    let (remaining, parsed) = parse_x509_certificate(der)
+        .map_err(|_| Error::Config("hosted peer certificate is malformed"))?;
+    if !remaining.is_empty() {
+        return Err(Error::Config("hosted peer certificate has trailing bytes"));
+    }
+    let public = parsed.public_key();
+    if public.algorithm.algorithm.to_id_string() != "1.3.101.112"
+        || public.subject_public_key.unused_bits != 0
+        || public.subject_public_key.data.len() != 32
+    {
+        return Err(Error::Config(
+            "hosted peer certificate is not an Ed25519 device",
+        ));
+    }
+    let key = public
+        .subject_public_key
+        .data
+        .as_ref()
+        .try_into()
+        .map_err(|_| Error::Config("hosted peer certificate public key width"))?;
+    let serial = hosted_serial_magnitude(parsed.raw_serial())?;
+    let expiry = u64::try_from(parsed.validity().not_after.timestamp())
+        .ok()
+        .and_then(|seconds| seconds.checked_mul(1_000_000))
+        .ok_or(Error::Config("hosted peer certificate expiry out of range"))?;
+    PeerCertificate::from_frontend_parts(der.to_vec(), serial.to_vec(), key, expiry)
+        .map_err(|_| Error::Config("hosted peer certificate context exceeds profile bounds"))
+}
+
+#[cfg(any(test, feature = "celld-proof"))]
+fn hosted_serial_magnitude(serial: &[u8]) -> Result<&[u8]> {
+    // x509-parser deliberately accepts negative ASN.1 integers as unsigned.
+    // The hosted profile accepts positive magnitudes only, including DER's
+    // leading sign zero. Preserve the single-byte representation of zero.
+    if serial.is_empty() || serial[0] & 0x80 != 0 {
+        return Err(Error::Config(
+            "hosted peer certificate serial is not unsigned",
+        ));
+    }
+    let first = serial
+        .iter()
+        .position(|byte| *byte != 0)
+        .unwrap_or(serial.len() - 1);
+    let magnitude = &serial[first..];
+    if magnitude.len() > 20 {
+        return Err(Error::Config(
+            "hosted peer certificate serial exceeds profile bounds",
+        ));
+    }
+    Ok(magnitude)
+}
+
+#[cfg(test)]
+#[path = "principal/hosted_tests.rs"]
+mod hosted_tests;
 
 #[cfg(test)]
 mod tests {

@@ -398,6 +398,7 @@ fn independent_stdio_client_reads_through_real_agent_and_keeps_agent_after_eof()
             .call(foks_agent_proto::Operation::AdapterClockStatus {
                 profile: "local".into(),
                 account_alias: "owner".into(),
+                domain: foks_agent_proto::data::ReceiptClockDomain::Adapter,
             })
             .unwrap();
         let foks_agent_proto::ResponseResult::Success { value } = reply.result else {

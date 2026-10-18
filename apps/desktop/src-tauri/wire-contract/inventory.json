@@ -149,7 +149,8 @@
       "EditTextRequest",
       "RemoveItemRequest",
       "ImportDroppedFileRequest",
-      "ReplaceDroppedFileRequest"
+      "ReplaceDroppedFileRequest",
+      "FileUploads / FileUpload"
     ],
     "groups": [
       "GroupDetailsDto / GroupDetailResult",

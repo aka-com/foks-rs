@@ -28,11 +28,25 @@ pub struct AgentBackend {
 
 impl AgentBackend {
     pub fn connect(socket: &Path, profile: String, account_alias: String) -> Result<Self, String> {
+        let deadline = foks_local_deadline::Deadline::capture(
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+        )
+        .map_err(|e| e.to_string())?;
+        Self::connect_with_deadline(socket, profile, account_alias, &deadline)
+    }
+
+    pub fn connect_with_deadline(
+        socket: &Path,
+        profile: String,
+        account_alias: String,
+        deadline: &foks_local_deadline::Deadline,
+    ) -> Result<Self, String> {
+        deadline.check().map_err(|e| e.to_string())?;
         let client = AgentClient::new(socket);
         // Agent startup can briefly hold the checked profile for local recovery.
         // Only this read-only binding retries explicit contention; write requests
         // and ambiguous transport failures retain their existing no-replay rules.
-        let account = bind_account(socket, &profile, &account_alias)?;
+        let account = bind_account(socket, &profile, &account_alias, deadline)?;
         if account.profile != profile
             || account.account_alias != account_alias
             || account.team_id.is_some()
@@ -165,8 +179,8 @@ impl AgentBackend {
     }
 }
 
-impl Backend for AgentBackend {
-    fn invoke(
+impl AgentBackend {
+    fn invoke_bound(
         &self,
         invocation: Invocation,
         cancelled: &CancellationToken,
@@ -537,6 +551,7 @@ impl AgentBackend {
             Operation::AdapterClockStatus {
                 profile: self.account.profile.clone(),
                 account_alias: self.account.account_alias.clone(),
+                domain: foks_agent_proto::data::ReceiptClockDomain::Adapter,
             },
             cancelled,
         )
@@ -567,26 +582,56 @@ impl AgentBackend {
     }
 }
 
-fn bind_account(socket: &Path, profile: &str, alias: &str) -> Result<DataScope, String> {
+impl Backend for AgentBackend {
+    fn invoke(
+        &self,
+        invocation: Invocation,
+        cancelled: &CancellationToken,
+        deadline: &foks_local_deadline::Deadline,
+    ) -> Result<CallToolResult, String> {
+        let scoped = Self {
+            client: self
+                .client
+                .with_local_deadline(deadline.clone())
+                .map_err(|e| e.to_string())?,
+            account: self.account.clone(),
+        };
+        scoped.invoke_bound(invocation, cancelled)
+    }
+}
+
+fn bind_account(
+    socket: &Path,
+    profile: &str,
+    alias: &str,
+    original: &foks_local_deadline::Deadline,
+) -> Result<DataScope, String> {
     use std::time::{Duration, Instant};
-    let mut client = AgentClient::new(socket);
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = original
+        .shorten(Instant::now() + Duration::from_secs(5))
+        .map_err(|e| e.to_string())?;
+    let client = AgentClient::new(socket)
+        .with_local_deadline(deadline.clone())
+        .map_err(|e| e.to_string())?;
     loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
+        deadline.check().map_err(|e| e.to_string())?;
+        let remaining = deadline.instant().saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return Err(
                 "selected profile remains busy; wait for local recovery and reconnect".into(),
             );
         }
-        client
-            .set_timeout(remaining)
-            .map_err(|_| "invalid binding timeout")?;
         let response = client
             .call(Operation::BindDataAccount {
                 profile: profile.to_owned(),
                 account_alias: alias.to_owned(),
             })
-            .map_err(|error| agent_failure(&error))?;
+            .map_err(|error| match error {
+                foks_agent_client::Error::DeadlineExceeded => {
+                    "local account binding deadline exceeded".to_owned()
+                }
+                error => agent_failure(&error),
+            })?;
         match response.result {
             ResponseResult::Success { value } => {
                 return serde_json::from_value(value)
@@ -598,7 +643,7 @@ fn bind_account(socket: &Path, profile: &str, alias: &str) -> Result<DataScope, 
             } => {
                 std::thread::sleep(
                     Duration::from_millis(25)
-                        .min(deadline.saturating_duration_since(Instant::now())),
+                        .min(deadline.instant().saturating_duration_since(Instant::now())),
                 );
             }
             ResponseResult::Error { code, message, .. } => {
@@ -619,9 +664,17 @@ fn error_code_name(code: foks_agent_proto::ErrorCode) -> String {
 /// mismatch is reported as such: the agent of another version refused the
 /// request without running it, and only stopping that agent resolves it.
 fn agent_failure(error: &foks_agent_client::Error) -> String {
-    if let foks_agent_client::Error::Ambiguous(_) = error {
-        return "submission outcome unknown; inspect status; do not repeat with a new submission ID"
-            .to_owned();
+    match error {
+        foks_agent_client::Error::Ambiguous(_) => {
+            return "submission outcome unknown; inspect status; do not repeat with a new submission ID"
+                .to_owned()
+        }
+        foks_agent_client::Error::DeadlineExceeded => {
+            return "local request deadline exceeded".to_owned()
+        }
+        foks_agent_client::Error::LocalDeadline(error) => return error.to_string(),
+        foks_agent_client::Error::Cancelled => return "local request cancelled".to_owned(),
+        _ => {}
     }
     match error.version_mismatch() {
         Some(mismatch) => format!(
@@ -740,5 +793,101 @@ mod tests {
         assert!(
             agent_failure(&Error::Io(lost())).starts_with("authenticated local agent unavailable")
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod deadline_tests {
+    use super::*;
+    use foks_agent_proto::{Request, Response};
+    use std::{
+        io::{Read, Write},
+        os::unix::{fs::PermissionsExt as _, net::UnixListener},
+        time::{Duration, Instant},
+    };
+
+    fn request(socket: &mut std::os::unix::net::UnixStream) -> Request {
+        socket
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut prefix = [0; 4];
+        socket.read_exact(&mut prefix).unwrap();
+        let mut body = vec![0; u32::from_be_bytes(prefix) as usize];
+        socket.read_exact(&mut body).unwrap();
+        foks_agent_proto::decode_request(&[prefix.as_slice(), body.as_slice()].concat()).unwrap()
+    }
+
+    #[test]
+    fn binding_contention_and_multicall_invocations_keep_the_supplied_expiry() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("agent.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let deadline =
+            foks_local_deadline::Deadline::capture(Instant::now() + Duration::from_secs(2))
+                .unwrap();
+        let expected = deadline.envelope().clone();
+        let scope = DataScope {
+            profile: "p".into(),
+            account_alias: "a".into(),
+            host_id: "host".into(),
+            user_id: "user".into(),
+            team_id: None,
+        };
+        let server_scope = scope.clone();
+        let server = std::thread::spawn(move || {
+            for ordinal in 0..4 {
+                let accept_deadline = Instant::now() + Duration::from_secs(5);
+                let mut socket = loop {
+                    match listener.accept() {
+                        Ok((socket, _)) => break socket,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(
+                                Instant::now() < accept_deadline,
+                                "agent request was not dispatched"
+                            );
+                            std::thread::park_timeout(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("accept failed: {error}"),
+                    }
+                };
+                socket.set_nonblocking(false).unwrap();
+                let request = request(&mut socket);
+                assert_eq!(request.deadline, expected);
+                let response = if ordinal == 0 {
+                    assert!(matches!(
+                        request.operation,
+                        Operation::BindDataAccount { .. }
+                    ));
+                    Response::error(request.id, foks_agent_proto::ErrorCode::ProfileBusy, "busy")
+                } else if ordinal == 1 {
+                    Response::success(request.id, serde_json::to_value(&server_scope).unwrap())
+                } else {
+                    assert!(matches!(request.operation, Operation::ReadData { .. }));
+                    Response::success(request.id, serde_json::Value::Null)
+                };
+                socket
+                    .write_all(&foks_agent_proto::encode(&response).unwrap())
+                    .unwrap();
+            }
+        });
+        let backend =
+            AgentBackend::connect_with_deadline(&socket_path, "p".into(), "a".into(), &deadline)
+                .unwrap();
+        assert_eq!(backend.account, scope);
+        let client = backend.client.with_local_deadline(deadline).unwrap();
+        for _ in 0..2 {
+            let _: serde_json::Value = call(
+                &client,
+                Operation::ReadData {
+                    scope: scope.clone(),
+                    query: DataRead::Catalog,
+                },
+                &CancellationToken::new(),
+            )
+            .unwrap();
+        }
+        server.join().unwrap();
     }
 }

@@ -50,7 +50,7 @@ fn small_node_ids_are_immutable_nonce_bindings() {
         uid: &UID,
         id: &node,
         node_type: 3,
-        exact: b"first-ciphertext",
+        exact: &common::small_box(b"first-ciphertext"),
     };
     test.database.put_kv_node(&original).unwrap();
     // Idempotent transport retries remain valid.
@@ -59,7 +59,7 @@ fn small_node_ids_are_immutable_nonce_bindings() {
     // deterministic v0.1.9 Secretbox nonce.
     assert!(matches!(
         test.database.put_kv_node(&KvNodeMutation {
-            exact: b"second-ciphertext",
+            exact: &common::small_box(b"second-ciphertext"),
             ..original
         }),
         Err(Error::KvConflict)
@@ -103,7 +103,7 @@ fn dirent_batch_is_atomic_and_updates_only_the_reachable_version_vector() {
             uid: &UID,
             id: &node,
             node_type: 3,
-            exact: b"small-file-box",
+            exact: &common::small_box(b"small-file-box"),
         })
         .unwrap();
     let entry = [0x61; 16];
@@ -178,7 +178,7 @@ fn dirent_batch_is_atomic_and_updates_only_the_reachable_version_vector() {
         .unwrap();
     assert_eq!(
         reader.kv_node(&UID, &node).unwrap().unwrap().exact,
-        b"small-file-box"
+        common::small_box(b"small-file-box")
     );
     assert_eq!(reader.kv_list(&UID, &root, None, 10).unwrap().len(), 1);
 
@@ -233,7 +233,7 @@ fn tombstone_removes_an_entry_from_listing_and_cache_preconditions() {
             uid: &UID,
             id: &node,
             node_type: 4,
-            exact: b"symlink-box",
+            exact: &common::small_box(b"symlink-box"),
         })
         .unwrap();
     let entry = [0x63; 16];
@@ -308,7 +308,7 @@ fn replacing_a_dirent_requires_its_stored_write_role() {
             uid: &UID,
             id: &node,
             node_type: 3,
-            exact: b"small-file-box",
+            exact: &common::small_box(b"small-file-box"),
         })
         .unwrap();
     let id = [0x65; 16];

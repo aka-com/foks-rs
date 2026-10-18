@@ -3,3 +3,6 @@ CREATE TABLE waitlist_entries (
     email TEXT NOT NULL CHECK(length(email) BETWEEN 3 AND 320),
     created_at INTEGER NOT NULL CHECK(created_at >= 0)
 ) STRICT;
+
+CREATE INDEX waitlist_entries_email_created
+    ON waitlist_entries(email, created_at);

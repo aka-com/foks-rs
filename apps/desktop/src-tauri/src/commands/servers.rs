@@ -1,14 +1,13 @@
 //! Server profiles, trust verification, status, and local reset.
 
 use crate::agent::AgentError;
-use crate::commands::context::AppState;
 use crate::commands::enrollment::{
     validated_pending_dtos, PendingOperationDto, PendingOperationResponse,
 };
 use crate::commands::execution::{
-    ambiguous_mutation_response, ambiguous_worker_failure, apply_operation_value,
-    apply_profile_operation_value, apply_profile_operation_with_profile, map_mutation_error,
-    read_profile_operation_value, MutationKind,
+    ambiguous_mutation_response, apply_operation_value, apply_profile_operation_value,
+    apply_profile_operation_with_profile, map_mutation_error, read_profile_operation_value,
+    MutationKind,
 };
 use crate::commands::types::MutationDto;
 use crate::commands::validation::{
@@ -23,7 +22,6 @@ use foks_protocol_metadata::PINNED_PROTOCOL_METADATA_SHA256;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use tauri::State;
 use zeroize::Zeroizing;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -932,7 +930,7 @@ pub(super) fn check_existing_or_add_profile(
 pub async fn check_and_add_profile(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile_name: String,
     probe: String,
 ) -> Result<CheckedProfileDto, AgentError> {
@@ -954,17 +952,17 @@ pub async fn check_and_add_profile(
         ));
     }
     state.invalidate_catalog();
-    let transport = state.agent.transport();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        check_existing_or_add_profile(transport.as_ref(), profile_name, probe, None)
-    })
-    .await
-    .map_err(|error| {
-        ambiguous_worker_failure(
-            &state,
-            format!("Server verification was interrupted before completion: {error}"),
+    let transport = state.transport()?;
+    let result = {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            true,
+            move || check_existing_or_add_profile(transport.as_ref(), profile_name, probe, None),
+            |_| {},
         )
-    })?;
+        .await
+    };
     match result {
         Ok(checked) => Ok(checked),
         Err(error) => {
@@ -982,7 +980,7 @@ pub async fn check_and_add_profile(
 pub async fn set_server_label(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     label: Option<String>,
 ) -> Result<ServerLabelDto, AgentError> {
@@ -1011,7 +1009,7 @@ pub async fn set_server_label(
 pub async fn remove_server_and_credentials(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile_name: String,
     confirmed_profile_name: String,
 ) -> Result<RemovedServerDto, AgentError> {
@@ -1039,7 +1037,7 @@ pub async fn remove_server_and_credentials(
 #[tauri::command]
 pub async fn describe_server_status(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     fresh: Option<bool>,
 ) -> Result<ServerStatusSnapshotDto, AgentError> {
@@ -1059,44 +1057,49 @@ pub async fn describe_server_status(
                 .find(|overview| overview.profile == profile)
                 .map(|overview| overview.server_status.clone())
         });
-    let transport = state
-        .agent
-        .transport_for("describe_server_status", Some(&profile));
-    tauri::async_runtime::spawn_blocking(move || {
-        let configured = transport_profile(transport.as_ref(), &profile)?;
-        let value = match cached {
-            Some(foks_agent_proto::ResponseResult::Success { value }) => value,
-            Some(foks_agent_proto::ResponseResult::Error {
-                code,
-                message,
-                fields,
-            }) => {
-                return Err(AgentError::from_desktop(
-                    foks_desktop::AgentError::Protocol {
+    let transport = state.transport_for("describe_server_status", Some(&profile))?;
+    {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            false,
+            move || {
+                let configured = transport_profile(transport.as_ref(), &profile)?;
+                let value = match cached {
+                    Some(foks_agent_proto::ResponseResult::Success { value }) => value,
+                    Some(foks_agent_proto::ResponseResult::Error {
                         code,
                         message,
-                        fields: fields.into(),
-                    },
-                ));
-            }
-            None => transport
-                .call(Operation::DescribeServerStatus {
-                    profile: profile.clone(),
-                })
-                .map_err(AgentError::from_desktop)?,
-        };
-        let lease_required = !matches!(configured.protocol, ProfileProtocolSummary::V019);
-        server_status_response(value, &expected, &configured.probe, lease_required)
-    })
-    .await
-    .map_err(|error| AgentError::unknown(format!("Failed to load server status: {error}")))?
+                        fields,
+                    }) => {
+                        return Err(AgentError::from_desktop(
+                            foks_desktop::AgentError::Protocol {
+                                code,
+                                message,
+                                fields: fields.into(),
+                            },
+                        ));
+                    }
+                    None => transport
+                        .call(Operation::DescribeServerStatus {
+                            profile: profile.clone(),
+                        })
+                        .map_err(AgentError::from_desktop)?,
+                };
+                let lease_required = !matches!(configured.protocol, ProfileProtocolSummary::V019);
+                server_status_response(value, &expected, &configured.probe, lease_required)
+            },
+            |_| {},
+        )
+        .await
+    }
 }
 
 #[tauri::command]
 pub async fn check_server(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
 ) -> Result<CheckedServerDto, AgentError> {
     require_main_window(&webview)?;
@@ -1133,7 +1136,7 @@ pub async fn check_server(
 pub async fn describe_reset(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
 ) -> Result<ResetPreviewDto, AgentError> {
     require_main_window(&webview)?;
@@ -1156,7 +1159,7 @@ pub async fn describe_reset(
 pub async fn reset_server(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile_name: String,
     confirmed_profile_name: String,
     token: String,
@@ -1190,7 +1193,7 @@ pub async fn reset_server(
 #[tauri::command]
 pub async fn list_servers(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     generation: Option<u64>,
 ) -> Result<Vec<ServerDto>, AgentError> {
     require_main_window(&webview)?;
@@ -1204,43 +1207,50 @@ pub async fn list_servers(
             true,
         ));
     }
-    let transport = state.agent.transport();
-    tauri::async_runtime::spawn_blocking(move || {
-        let value = transport
-            .call(Operation::ListProfiles)
-            .map_err(AgentError::from_desktop)?;
-        let profiles = profile_summaries(value)?;
-        Ok(profiles
-            .into_iter()
-            .map(|profile| {
-                let accounts = catalog
-                    .as_ref()
-                    .map(|catalog| {
-                        catalog
-                            .stores
-                            .iter()
-                            .filter_map(|store| match store {
-                                CatalogStoreSummary::Account { store }
-                                    if store.profile == profile.name =>
-                                {
-                                    Some(store.account_alias.clone())
-                                }
-                                _ => None,
+    let transport = state.transport()?;
+    {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            false,
+            move || {
+                let value = transport
+                    .call(Operation::ListProfiles)
+                    .map_err(AgentError::from_desktop)?;
+                let profiles = profile_summaries(value)?;
+                Ok(profiles
+                    .into_iter()
+                    .map(|profile| {
+                        let accounts = catalog
+                            .as_ref()
+                            .map(|catalog| {
+                                catalog
+                                    .stores
+                                    .iter()
+                                    .filter_map(|store| match store {
+                                        CatalogStoreSummary::Account { store }
+                                            if store.profile == profile.name =>
+                                        {
+                                            Some(store.account_alias.clone())
+                                        }
+                                        _ => None,
+                                    })
+                                    .collect()
                             })
-                            .collect()
+                            .unwrap_or_default();
+                        ServerDto {
+                            profile_name: profile.name,
+                            display_label: profile.label,
+                            configured_endpoint: profile.probe,
+                            accounts,
+                        }
                     })
-                    .unwrap_or_default();
-                ServerDto {
-                    profile_name: profile.name,
-                    display_label: profile.label,
-                    configured_endpoint: profile.probe,
-                    accounts,
-                }
-            })
-            .collect())
-    })
-    .await
-    .map_err(|error| AgentError::unknown(format!("failed to load servers: {error}")))?
+                    .collect())
+            },
+            |_| {},
+        )
+        .await
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -1384,25 +1394,30 @@ pub(super) fn reconcile_server_response(
 pub async fn reconcile_server(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
 ) -> Result<ReconcileServerDto, AgentError> {
     require_main_window(&webview)?;
     let generation = crate::applock::unlocked_generation(&app)?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let expected = profile.clone();
-    let transport = state
-        .agent
-        .transport_for("reconcile_server", Some(&profile));
+    let transport = state.transport_for("reconcile_server", Some(&profile))?;
     let worker_app = app.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        crate::applock::require_unlocked_generation(&worker_app, generation)?;
-        transport
-            .call(Operation::ReconcileProfile { profile })
-            .map_err(AgentError::from_desktop)
-    })
-    .await
-    .map_err(|_| AgentError::new("operation-failed", "Connectivity worker stopped.", false))?;
+    let result = {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            true,
+            move || {
+                crate::applock::require_unlocked_generation(&worker_app, generation)?;
+                transport
+                    .call(Operation::ReconcileProfile { profile })
+                    .map_err(AgentError::from_desktop)
+            },
+            |_| {},
+        )
+        .await
+    };
     crate::applock::require_unlocked_generation(&app, generation)?;
     reconcile_server_response(result?, &expected)
 }

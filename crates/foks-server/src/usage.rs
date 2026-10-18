@@ -33,9 +33,7 @@ pub fn usage_report(
             "database does not exist; the server creates it on first start",
         ));
     }
-    // The pooled open skips the KV tree capacity check, which would read the
-    // same rows as the report a second time.
-    let database = foks_server_db::ReadDatabase::open_pooled(database_path, database_config)?;
+    let database = foks_server_db::ReadDatabase::open(database_path, database_config)?;
     let capacity = database.snapshot()?.capacity_report(now)?;
     let wal_bytes = crate::installation::wal_bytes(database_path)?;
     Ok(UsageReport {

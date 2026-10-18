@@ -35,6 +35,135 @@ const OPERATION_LOCK_FILE: &str = ".profile-operation.lock";
 const SCHEDULER_LOCK_FILE: &str = ".scheduler-run.lock";
 const DATABASE_LOCK_DIRECTORY: &str = ".database-operation-locks";
 
+// Sync-only context for OS lock waits. Mandatory checkpoint publication suspends
+// it after effects; no guard is allowed to cross an async/thread boundary.
+#[derive(Clone)]
+struct SessionControl {
+    deadline: foks_local_deadline::Deadline,
+    cancellations: Vec<foks_client::CancellationToken>,
+}
+thread_local! {
+    static OPERATION: std::cell::RefCell<Option<SessionControl>> = const { std::cell::RefCell::new(None) };
+}
+pub struct OperationScope {
+    previous: Option<SessionControl>,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+impl OperationScope {
+    pub fn new(
+        deadline: foks_local_deadline::Deadline,
+        cancellation: foks_client::CancellationToken,
+    ) -> Result<Self> {
+        Self::enter(Some(&(deadline, cancellation)))
+    }
+    pub(crate) fn enter(
+        control: Option<&(
+            foks_local_deadline::Deadline,
+            foks_client::CancellationToken,
+        )>,
+    ) -> Result<Self> {
+        check_operation()?;
+        let mut next = OPERATION.with(|slot| slot.borrow().clone());
+        if let Some((deadline, cancellation)) = control {
+            deadline.check().map_err(foks_client::Error::from)?;
+            if cancellation.is_cancelled() {
+                return Err(foks_client::Error::Cancelled.into());
+            }
+            next = Some(match next {
+                Some(mut current) => {
+                    if current.cancellations.len() >= 64 {
+                        return Err(Error::InvalidConfig("operation nesting limit"));
+                    }
+                    current.deadline = current
+                        .deadline
+                        .intersect(deadline)
+                        .map_err(foks_client::Error::from)?;
+                    current.cancellations.push(cancellation.clone());
+                    current
+                }
+                None => SessionControl {
+                    deadline: deadline.clone(),
+                    cancellations: vec![cancellation.clone()],
+                },
+            });
+        }
+        Ok(Self {
+            previous: OPERATION.with(|slot| slot.replace(next)),
+            _thread: std::marker::PhantomData,
+        })
+    }
+    pub(crate) fn suspend() -> Self {
+        Self {
+            previous: OPERATION.with(|slot| slot.replace(None)),
+            _thread: std::marker::PhantomData,
+        }
+    }
+}
+impl Drop for OperationScope {
+    fn drop(&mut self) {
+        OPERATION.with(|slot| *slot.borrow_mut() = self.previous.take());
+    }
+}
+pub(crate) fn check_operation() -> Result<()> {
+    OPERATION.with(|slot| {
+        if let Some(control) = slot.borrow().as_ref() {
+            if control.cancellations.iter().any(|c| c.is_cancelled()) {
+                return Err(foks_client::Error::Cancelled.into());
+            }
+            control.deadline.check().map_err(foks_client::Error::from)?;
+        }
+        Ok(())
+    })
+}
+pub(crate) fn current_operation() -> Option<(
+    foks_local_deadline::Deadline,
+    foks_client::CancellationToken,
+)> {
+    OPERATION.with(|slot| {
+        slot.borrow().as_ref().map(|control| {
+            (
+                control.deadline.clone(),
+                control
+                    .cancellations
+                    .last()
+                    .expect("nonempty operation cancellations")
+                    .clone(),
+            )
+        })
+    })
+}
+pub(crate) fn controlled_lock(file: &File) -> Result<()> {
+    controlled_lock_mode(file, true)
+}
+pub(crate) fn controlled_lock_mode(file: &File, exclusive: bool) -> Result<()> {
+    let bounded = OPERATION.with(|slot| slot.borrow().is_some());
+    if !bounded {
+        if exclusive {
+            file.lock_exclusive()?;
+        } else {
+            fs2::FileExt::lock_shared(file)?;
+        }
+        return Ok(());
+    }
+    loop {
+        check_operation()?;
+        match if exclusive {
+            file.try_lock_exclusive()
+        } else {
+            fs2::FileExt::try_lock_shared(file)
+        } {
+            Ok(()) => {
+                check_operation()?;
+                return Ok(());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
 pub(crate) struct ProfileLock {
     file: Arc<File>,
     shared: bool,
@@ -93,7 +222,7 @@ impl ProfileLock {
 
     fn acquire(paths: &ProfilePaths, name: &str) -> Result<Self> {
         let file = open_lock(paths, name)?;
-        file.lock_exclusive()?;
+        controlled_lock(&file)?;
         Ok(Self {
             file: Arc::new(file),
             shared: false,
@@ -125,7 +254,7 @@ impl ProfileLock {
 impl NativeManifestLock {
     pub(crate) fn acquire(state_id: &str) -> Result<Self> {
         let file = crate::portability::manifest_lock_file(state_id)?;
-        file.lock_exclusive()?;
+        controlled_lock(&file)?;
         Ok(Self { file })
     }
 
@@ -147,7 +276,7 @@ impl NativeManifestLock {
 impl DatabaseLock {
     pub(crate) fn acquire(root: &std::path::Path, database_id: &[u8; 16]) -> Result<Self> {
         let file = open_database_lock(root, database_id)?;
-        file.lock_exclusive()?;
+        controlled_lock(&file)?;
         Ok(Self { file })
     }
 

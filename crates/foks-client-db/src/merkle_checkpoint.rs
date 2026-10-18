@@ -115,11 +115,11 @@ pub(super) const MERKLE_HEADS_V39: &str = r#"CREATE TABLE merkle_heads (
     FOREIGN KEY (host_id, epoch) REFERENCES merkle_roots(host_id, epoch)
 ) STRICT, WITHOUT ROWID;"#;
 
-/// Migrates a version 38 database to the current version in one IMMEDIATE
+/// Migrates a version 38 database to version 40 in one IMMEDIATE
 /// transaction. Version 38 stored legacy evidence spines in merkle_heads;
-/// each head is verified and rewritten as a `LocalCheckpoint`. The
-/// kv_adapter_clocks changes of versions 40 (the admission_floor rename) and
-/// 41 (boot_id) follow in the same transaction.
+/// each head is verified and rewritten as a `LocalCheckpoint` (version 39).
+/// The version 40 kv_adapter_clocks.admission_floor rename follows in the
+/// same transaction; later versions migrate in steps of their own.
 ///
 /// This step changes stored Merkle evidence, which host restore reads, so it
 /// increments hard_state_revision and rerolls write_token (the reinserted
@@ -130,7 +130,7 @@ pub(super) fn migrate(connection: &mut Connection) -> Result<()> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     // Another opener may have upgraded while this connection waited for the writer.
     let version: u32 = transaction.pragma_query_value(None, "user_version", |r| r.get(0))?;
-    if version == SCHEMA_VERSION {
+    if version > 38 && version <= SCHEMA_VERSION {
         return Ok(());
     }
     if version != 38 {
@@ -188,9 +188,8 @@ pub(super) fn migrate(connection: &mut Connection) -> Result<()> {
         )?;
     }
     super::rename_adapter_admission_floor(&transaction)?;
-    super::add_adapter_boot_id(&transaction)?;
     transaction.execute("UPDATE hard_state_metadata SET hard_state_revision=hard_state_revision+1, write_token=randomblob(16) WHERE singleton=1", [])?;
-    transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    transaction.pragma_update(None, "user_version", 40)?;
     transaction.commit()?;
     Ok(())
 }

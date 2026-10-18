@@ -18,7 +18,7 @@ mod grants;
 mod lookup;
 mod scopes;
 
-use crate::agent::AgentHandle;
+use crate::agent::{AgentError, AgentHandle};
 use crate::commands::accounts::{AccountDto, DeviceDto};
 use crate::commands::groups::{FederationEntryDto, PartyDto};
 use foks_desktop::{CatalogLoadToken, CatalogSnapshot};
@@ -69,6 +69,10 @@ struct MutationScopeState {
 #[derive(Clone)]
 pub struct AppState {
     pub agent: Arc<AgentHandle>,
+    /// The execution budget of the command this view serves. Set by
+    /// `begin_operation` or `with_deadline`; a view without one refuses
+    /// agent calls.
+    operation_deadline: Option<foks_local_deadline::Deadline>,
     pub(super) chat_views: Arc<Mutex<HashMap<String, Weak<AtomicBool>>>>,
     catalog_coordination: Arc<Mutex<()>>,
     next_catalog_generation: Arc<AtomicU64>,
@@ -106,6 +110,7 @@ impl AppState {
         let root = Arc::new(MutationScopeState::default());
         Self {
             agent,
+            operation_deadline: None,
             chat_views: Arc::default(),
             catalog_coordination: Arc::default(),
             next_catalog_generation: Arc::default(),
@@ -127,6 +132,69 @@ impl AppState {
             rosters: Arc::default(),
             federations: Arc::default(),
         }
+    }
+
+    /// Clones local coordination state while retaining one execution budget.
+    pub(super) fn begin_operation(
+        &self,
+        class: foks_agent_proto::DeadlineClass,
+    ) -> Result<Self, AgentError> {
+        let deadline =
+            foks_local_deadline::Deadline::capture(std::time::Instant::now() + class.cap())
+                .map_err(super::deadline::clock_error)?;
+        self.with_deadline(deadline)
+    }
+
+    pub(super) fn with_deadline(
+        &self,
+        deadline: foks_local_deadline::Deadline,
+    ) -> Result<Self, AgentError> {
+        let deadline = match &self.operation_deadline {
+            Some(existing) => existing
+                .intersect(&deadline)
+                .map_err(super::deadline::clock_error)?,
+            None => {
+                deadline.check().map_err(super::deadline::clock_error)?;
+                deadline
+            }
+        };
+        let mut view = self.clone();
+        view.operation_deadline = Some(deadline);
+        Ok(view)
+    }
+
+    pub(super) fn deadline(&self) -> Result<&foks_local_deadline::Deadline, AgentError> {
+        self.operation_deadline.as_ref().ok_or_else(|| {
+            AgentError::new(
+                "missing-deadline",
+                "The command has no execution deadline.",
+                false,
+            )
+        })
+    }
+
+    pub(super) fn transport(&self) -> Result<Arc<dyn foks_desktop::AgentTransport>, AgentError> {
+        foks_desktop::bind_transport_deadline(self.agent.transport(), self.deadline()?.clone())
+            .map_err(AgentError::from_desktop)
+    }
+
+    pub(super) fn transport_for(
+        &self,
+        command: &'static str,
+        scope: Option<&str>,
+    ) -> Result<Arc<dyn foks_desktop::AgentTransport>, AgentError> {
+        foks_desktop::bind_transport_deadline(
+            self.agent.transport_for(command, scope),
+            self.deadline()?.clone(),
+        )
+        .map_err(AgentError::from_desktop)
+    }
+
+    pub(super) async fn call(
+        &self,
+        operation: foks_agent_proto::Operation,
+    ) -> Result<foks_agent_proto::Response, AgentError> {
+        self.agent.call_until(operation, self.deadline()?).await
     }
 
     // The accessors below read the state of this view's scope: the root

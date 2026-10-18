@@ -45,6 +45,10 @@
     "cancel_chat_requests": {
       "viewId": "required"
     },
+    "cancel_file_upload": {
+      "storeId": "required",
+      "uploadId": "required"
+    },
     "change_account_passphrase": {
       "accountStoreId": "required",
       "confirmation": "required",
@@ -278,6 +282,10 @@
     "list_federation": {
       "storeId": "required"
     },
+    "list_file_uploads": {
+      "after": "optional",
+      "storeId": "required"
+    },
     "list_group_details": {
       "storeId": "required"
     },
@@ -444,6 +452,10 @@
     },
     "resume_device_pairing_offer": {
       "accountStoreId": "required"
+    },
+    "resume_file_upload": {
+      "storeId": "required",
+      "uploadId": "required"
     },
     "resume_first_run_account": {
       "alias": "required",

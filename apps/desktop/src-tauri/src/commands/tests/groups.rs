@@ -30,7 +30,9 @@ use std::sync::Arc;
 fn catalog_activity_and_profile_health_gate_group_writes() {
     let state = AppState::new(Arc::new(AgentHandle::new(
         "/tmp/unused-foks-agent.sock".into(),
-    )));
+    )))
+    .begin_operation(foks_agent_proto::DeadlineClass::Ordinary)
+    .unwrap();
     let team = foks_agent_proto::TeamStoreRef {
         profile: "foks.example".to_owned(),
         account_alias: "personal".to_owned(),
@@ -932,6 +934,30 @@ struct DiscoveryTransport {
 }
 
 impl foks_desktop::AgentTransport for DiscoveryTransport {
+    fn call_with_deadline(
+        &self,
+        mut operation: foks_agent_proto::Operation,
+        deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        if let Err(error) = deadline.check() {
+            operation.zeroize_plaintext();
+            return Err(foks_desktop::local_deadline_error(error));
+        }
+        self.call_cancellable(operation, cancelled)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        header: foks_agent_proto::KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+        deadline: &foks_local_deadline::Deadline,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        deadline
+            .check()
+            .map_err(foks_desktop::local_deadline_error)?;
+        self.put_kv_stream(header, reader)
+    }
+
     fn call(&self, operation: Operation) -> Result<serde_json::Value, DesktopAgentError> {
         match operation {
             Operation::ListProfiles => Ok(serde_json::json!([test_profile_value(

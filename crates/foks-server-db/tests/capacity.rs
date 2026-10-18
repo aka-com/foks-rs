@@ -44,10 +44,11 @@ fn initialized(config: foks_server_db::Config) -> (common::TestDatabase, [u8; 16
 fn namespace_byte_limit_accepts_minus_one_and_exact_but_rejects_plus_one() {
     // The initialized root consumes 18 exact bytes. Each case gets a fresh
     // database so the candidate mutation itself lands at limit - 1, limit,
-    // or limit + 1.
+    // or limit + 1. Encoded boxes have equal fixed overhead at these sizes.
     for (node_bytes, succeeds) in [(9, true), (10, true), (11, false)] {
         let config = foks_server_db::Config {
-            maximum_kv_namespace_bytes: 28,
+            maximum_kv_namespace_bytes: 18
+                + u64::try_from(common::small_box(&[0x41; 10]).len()).unwrap(),
             ..foks_server_db::Config::default()
         };
         let (mut test, _) = initialized(config);
@@ -55,7 +56,7 @@ fn namespace_byte_limit_accepts_minus_one_and_exact_but_rejects_plus_one() {
             uid: &UID,
             id: &[3; 17],
             node_type: 3,
-            exact: &vec![0x41; node_bytes],
+            exact: &common::small_box(&vec![0x41; node_bytes]),
         });
         assert_eq!(result.is_ok(), succeeds, "node bytes: {node_bytes}");
         if !succeeds {
@@ -65,41 +66,10 @@ fn namespace_byte_limit_accepts_minus_one_and_exact_but_rejects_plus_one() {
 }
 
 #[test]
-fn pooled_reader_open_skips_the_kv_tree_capacity_check() {
-    let (mut test, _) = initialized(foks_server_db::Config::default());
-    test.database
-        .put_kv_node(&KvNodeMutation {
-            uid: &UID,
-            id: &[3; 17],
-            node_type: 3,
-            exact: &[0x41; 5],
-        })
-        .unwrap();
-    let tighter = foks_server_db::Config {
-        maximum_kv_node_bytes: 4,
-        ..foks_server_db::Config::default()
-    };
-    assert!(matches!(
-        foks_server_db::ReadDatabase::open(&test.path, tighter.clone()),
-        Err(Error::QuotaExceeded)
-    ));
-    let reader = foks_server_db::ReadDatabase::open_pooled(&test.path, tighter).unwrap();
-    assert!(reader.kv_version_vector(&UID).unwrap().is_some());
-
-    let directory = tempfile::tempdir().unwrap();
-    let other = directory.path().join("other.sqlite");
-    rusqlite::Connection::open(&other).unwrap();
-    assert!(matches!(
-        foks_server_db::ReadDatabase::open_pooled(&other, foks_server_db::Config::default()),
-        Err(Error::ApplicationId { found: 0 })
-    ));
-}
-
-#[test]
 fn namespace_object_and_node_limits_are_exact_and_atomic() {
     let config = foks_server_db::Config {
         maximum_kv_namespace_objects: 3,
-        maximum_kv_node_bytes: 4,
+        maximum_kv_node_bytes: common::small_box(&[0x41; 4]).len(),
         ..foks_server_db::Config::default()
     };
     let (mut test, _) = initialized(config);
@@ -108,7 +78,7 @@ fn namespace_object_and_node_limits_are_exact_and_atomic() {
             uid: &UID,
             id: &[3; 17],
             node_type: 3,
-            exact: &[0x41; 4],
+            exact: &common::small_box(&[0x41; 4]),
         })
         .unwrap();
     assert!(matches!(
@@ -116,14 +86,14 @@ fn namespace_object_and_node_limits_are_exact_and_atomic() {
             uid: &UID,
             id: &[4; 17],
             node_type: 4,
-            exact: &[0x42; 4],
+            exact: &common::small_box(&[0x42; 4]),
         }),
         Err(Error::QuotaExceeded)
     ));
     assert!(test.database.integrity_check().unwrap());
 
     let config = foks_server_db::Config {
-        maximum_kv_node_bytes: 4,
+        maximum_kv_node_bytes: common::small_box(&[0x41; 4]).len(),
         ..foks_server_db::Config::default()
     };
     let (mut test, _) = initialized(config);
@@ -132,7 +102,7 @@ fn namespace_object_and_node_limits_are_exact_and_atomic() {
             uid: &UID,
             id: &[3; 17],
             node_type: 3,
-            exact: &[0x43; 5],
+            exact: &common::small_box(&[0x43; 5]),
         }),
         Err(Error::Invalid("KV node mutation"))
     ));
@@ -159,7 +129,7 @@ fn namespace_shape_limits_match_client_traversal_limits() {
         }),
         Err(Error::QuotaExceeded)
     ));
-    let directories = foks_server_db::ReadDatabase::open_pooled(&test.path, config)
+    let directories = foks_server_db::ReadDatabase::open(&test.path, config)
         .unwrap()
         .snapshot()
         .unwrap()
@@ -186,7 +156,7 @@ fn namespace_shape_limits_match_client_traversal_limits() {
             uid: &UID,
             id: &node,
             node_type: 3,
-            exact: b"small-file-box",
+            exact: &common::small_box(b"small-file-box"),
         })
         .unwrap();
     test.database
@@ -358,11 +328,11 @@ fn total_database_limit_is_enforced_at_the_existing_page_boundary() {
 
 #[test]
 fn capacity_report_counts_usage_as_the_limits_count_it() {
-    // The root and a 10-byte node fill the 28-byte namespace exactly, so the
-    // report must show no remaining bytes where the quota check refuses the
-    // next byte.
+    // The root and a node fill the namespace exactly, so the report must show
+    // no remaining bytes where the quota check refuses the next byte.
+    let full = 18 + u64::try_from(common::small_box(&[0x41; 10]).len()).unwrap();
     let config = foks_server_db::Config {
-        maximum_kv_namespace_bytes: 28,
+        maximum_kv_namespace_bytes: full,
         ..foks_server_db::Config::default()
     };
     let (mut test, _) = initialized(config.clone());
@@ -371,7 +341,7 @@ fn capacity_report_counts_usage_as_the_limits_count_it() {
             uid: &UID,
             id: &[3; 17],
             node_type: 3,
-            exact: &[0x41; 10],
+            exact: &common::small_box(&[0x41; 10]),
         })
         .unwrap();
     assert!(matches!(
@@ -379,7 +349,7 @@ fn capacity_report_counts_usage_as_the_limits_count_it() {
             uid: &UID,
             id: &[4; 17],
             node_type: 4,
-            exact: &[0x41; 1],
+            exact: &common::small_box(&[0x41; 1]),
         }),
         Err(Error::QuotaExceeded)
     ));
@@ -392,7 +362,7 @@ fn capacity_report_counts_usage_as_the_limits_count_it() {
         .join_waitlist(&waitlist_id, "a@example.com", 5)
         .unwrap();
 
-    let reader = foks_server_db::ReadDatabase::open_pooled(&test.path, config.clone()).unwrap();
+    let reader = foks_server_db::ReadDatabase::open(&test.path, config.clone()).unwrap();
     let snapshot = reader.snapshot().unwrap();
     let report = snapshot.capacity_report(2_500_000).unwrap();
     assert_eq!(
@@ -418,7 +388,7 @@ fn capacity_report_counts_usage_as_the_limits_count_it() {
     let kv_bytes = usage(CapacityResource::KvNamespaceBytes);
     assert_eq!(
         (kv_bytes.used, kv_bytes.limit, kv_bytes.remaining()),
-        (28, 28, 0)
+        (full, full, 0)
     );
     assert_eq!(usage(CapacityResource::KvNamespaceObjects).used, 3);
     assert_eq!(usage(CapacityResource::KvNamespaceDirectories).used, 1);
@@ -429,7 +399,7 @@ fn capacity_report_counts_usage_as_the_limits_count_it() {
         report.kv_namespaces,
         [KvNamespaceUsage {
             namespace_id: UID.to_vec(),
-            bytes: 28,
+            bytes: full,
             objects: 3,
         }]
     );
@@ -489,8 +459,7 @@ fn capacity_report_lists_the_largest_namespaces_first() {
     }
     drop(fixture);
     let reader =
-        foks_server_db::ReadDatabase::open_pooled(&test.path, foks_server_db::Config::default())
-            .unwrap();
+        foks_server_db::ReadDatabase::open(&test.path, foks_server_db::Config::default()).unwrap();
     let report = reader.snapshot().unwrap().capacity_report(0).unwrap();
     assert_eq!(
         report

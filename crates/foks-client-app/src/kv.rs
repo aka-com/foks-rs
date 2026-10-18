@@ -3,6 +3,8 @@ use foks_agent_proto::KvEntryShape;
 use foks_client_db::KvSmallFileShape;
 
 mod checked_move;
+mod uploads;
+pub use uploads::*;
 mod data;
 mod data_stat;
 pub use data_stat::*;
@@ -79,16 +81,18 @@ impl CheckedProfileSession<'_> {
         Ok(output)
     }
 
+    /// Read the selected entry; a path recreation never substitutes a new identity.
     pub fn read_kv_entry(
         &self,
         alias: &str,
         path: &str,
+        dirent_id: [u8; 16],
         version: u64,
         vault: &mut AccountVault<'_>,
     ) -> Result<KvReadReport> {
         self.profile.require(Capability::Kv)?;
         let (loaded, authenticated, directories) = self.resolved_user_path(alias, path, vault)?;
-        let entry = checked_entry(&directories, path, version)?;
+        let entry = checked_bound_entry(&directories, path, Some(dirent_id), version)?;
         let host = self.pinned_host()?;
         let fetched = self.client.read_user_kv_node(
             &host,
@@ -111,10 +115,12 @@ impl CheckedProfileSession<'_> {
     /// pair is not by itself evidence about a node, because a dirent version
     /// restarts at 1 after an unlink and a re-create on a fresh dirent
     /// identifier.
+    #[allow(clippy::too_many_arguments)]
     pub fn read_kv_chunk(
         &self,
         alias: &str,
         path: &str,
+        dirent_id: [u8; 16],
         version: u64,
         offset: u64,
         length: usize,
@@ -130,6 +136,7 @@ impl CheckedProfileSession<'_> {
             &loaded.credential,
             &loaded.credential.uid,
             path,
+            dirent_id,
             version,
         )?;
         if let Some((cache, key)) = &cache {
@@ -156,6 +163,7 @@ impl CheckedProfileSession<'_> {
                         )?;
                         return Ok(KvChunkReport {
                             path: path.to_owned(),
+                            dirent_id,
                             version,
                             offset,
                             eof: chunk.eof,
@@ -165,7 +173,7 @@ impl CheckedProfileSession<'_> {
                     // The server refused the vector. The remembered node is
                     // not the node at this path any more, or may not be;
                     // either way the path is walked again below, which is
-                    // what decides whether this version still resolves.
+                    // what decides whether the original identity and version still resolve.
                     Ok(None) => cache.invalidate(key),
                     Err(error) => {
                         cache.invalidate(key);
@@ -182,7 +190,7 @@ impl CheckedProfileSession<'_> {
             &self.paths.soft_database,
             &components,
         )?;
-        let entry = checked_entry(&directories, path, version)?;
+        let entry = checked_bound_entry(&directories, path, Some(dirent_id), version)?;
         if KvNodeId(entry.node_id).node_type()? != KvNodeType::File {
             return Err(Error::InvalidAccount("KV chunk path is not a large file"));
         }
@@ -215,6 +223,7 @@ impl CheckedProfileSession<'_> {
         }
         Ok(KvChunkReport {
             path: path.to_owned(),
+            dirent_id,
             version,
             offset,
             eof: chunk.eof,
@@ -222,18 +231,20 @@ impl CheckedProfileSession<'_> {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn read_team_kv_entry(
         &self,
         account_alias: &str,
         team_alias: &str,
         team_id_hex: &str,
         path: &str,
+        dirent_id: [u8; 16],
         version: u64,
         vault: &mut AccountVault<'_>,
     ) -> Result<KvReadReport> {
         let (account, team, directories) =
             self.resolved_team_path(account_alias, team_alias, team_id_hex, path, vault)?;
-        let entry = checked_entry(&directories, path, version)?;
+        let entry = checked_bound_entry(&directories, path, Some(dirent_id), version)?;
         let host = self.pinned_host()?;
         let fetched = self.client.read_team_kv_node(
             &host,
@@ -251,6 +262,7 @@ impl CheckedProfileSession<'_> {
         team_alias: &str,
         team_id_hex: &str,
         path: &str,
+        dirent_id: [u8; 16],
         version: u64,
         offset: u64,
         length: usize,
@@ -264,6 +276,7 @@ impl CheckedProfileSession<'_> {
             &account.credential,
             team.verified.team(),
             path,
+            dirent_id,
             version,
         )?;
         if let Some((cache, key)) = &cache {
@@ -291,6 +304,7 @@ impl CheckedProfileSession<'_> {
                         )?;
                         return Ok(KvChunkReport {
                             path: path.to_owned(),
+                            dirent_id,
                             version,
                             offset,
                             eof: chunk.eof,
@@ -312,7 +326,7 @@ impl CheckedProfileSession<'_> {
             &self.paths.soft_database,
             &components,
         )?;
-        let entry = checked_entry(&directories, path, version)?;
+        let entry = checked_bound_entry(&directories, path, Some(dirent_id), version)?;
         if KvNodeId(entry.node_id).node_type()? != KvNodeType::File {
             return Err(Error::InvalidAccount("KV chunk path is not a large file"));
         }
@@ -344,6 +358,7 @@ impl CheckedProfileSession<'_> {
         }
         Ok(KvChunkReport {
             path: path.to_owned(),
+            dirent_id,
             version,
             offset,
             eof: chunk.eof,
@@ -422,6 +437,8 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<KvWriteReport> {
+        let mut reader = self.upload_reader(reader)?;
+        let upload_sample = self.adapter_clock.sample()?;
         self.put_kv_node_checked(
             alias,
             path,
@@ -432,10 +449,61 @@ impl CheckedProfileSession<'_> {
             vault,
             master_key,
             |session, parent, name, options| {
+                session.bind_upload_admission_time(upload_sample);
                 session.put_file_with_size_bound(
                     parent,
                     name,
-                    reader,
+                    &mut reader,
+                    expected_size,
+                    options,
+                    precondition.dirent_id(),
+                )
+            },
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn put_kv_file_upload_with_size<R: Read>(
+        &self,
+        alias: &str,
+        path: &str,
+        reader: &mut R,
+        expected_size: Option<u64>,
+        upload_id: foks_proto::UploadHandle,
+        precondition: KvMutationPrecondition,
+        read_role: KvRoleSummary,
+        write_role: KvRoleSummary,
+        mkdir_p: bool,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<KvWriteReport> {
+        let intent = KvUploadIntent::checked(
+            path,
+            expected_size,
+            precondition,
+            read_role,
+            write_role,
+            mkdir_p,
+        );
+        let claim = self.claim_upload(alias, None, upload_id, &intent, vault)?;
+        let mut reader = self.upload_reader(reader)?;
+        let upload_sample = self.adapter_clock.sample()?;
+        self.put_kv_node_checked(
+            alias,
+            path,
+            precondition,
+            read_role,
+            write_role,
+            mkdir_p,
+            vault,
+            master_key,
+            |session, parent, name, options| {
+                session.bind_file_upload(claim)?;
+                session.bind_upload_admission_time(upload_sample);
+                session.put_file_with_size_bound(
+                    parent,
+                    name,
+                    &mut reader,
                     expected_size,
                     options,
                     precondition.dirent_id(),
@@ -491,6 +559,8 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<KvWriteReport> {
+        let mut reader = self.upload_reader(reader)?;
+        let upload_sample = self.adapter_clock.sample()?;
         self.put_team_kv_node_checked(
             account_alias,
             team_alias,
@@ -503,10 +573,66 @@ impl CheckedProfileSession<'_> {
             vault,
             master_key,
             |session, parent, name, options| {
+                session.bind_upload_admission_time(upload_sample);
                 session.put_file_with_size_bound(
                     parent,
                     name,
-                    reader,
+                    &mut reader,
+                    expected_size,
+                    options,
+                    precondition.dirent_id(),
+                )
+            },
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn put_team_kv_file_upload_with_size<R: Read>(
+        &self,
+        account_alias: &str,
+        team_alias: &str,
+        team_id_hex: &str,
+        path: &str,
+        reader: &mut R,
+        expected_size: Option<u64>,
+        upload_id: foks_proto::UploadHandle,
+        precondition: KvMutationPrecondition,
+        read_role: KvRoleSummary,
+        write_role: KvRoleSummary,
+        mkdir_p: bool,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<KvWriteReport> {
+        let intent = KvUploadIntent::checked(
+            path,
+            expected_size,
+            precondition,
+            read_role,
+            write_role,
+            mkdir_p,
+        );
+        let claim =
+            self.claim_upload(account_alias, Some(team_id_hex), upload_id, &intent, vault)?;
+        let mut reader = self.upload_reader(reader)?;
+        let upload_sample = self.adapter_clock.sample()?;
+        self.put_team_kv_node_checked(
+            account_alias,
+            team_alias,
+            team_id_hex,
+            path,
+            precondition,
+            read_role,
+            write_role,
+            mkdir_p,
+            vault,
+            master_key,
+            |session, parent, name, options| {
+                session.bind_file_upload(claim)?;
+                session.bind_upload_admission_time(upload_sample);
+                session.put_file_with_size_bound(
+                    parent,
+                    name,
+                    &mut reader,
                     expected_size,
                     options,
                     precondition.dirent_id(),
@@ -833,6 +959,7 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<KvWriteReport> {
+        let mut reader = self.upload_reader(reader)?;
         self.profile.require(Capability::Kv)?;
         let (parent_path, name) = split_parent(path)?;
         let loaded = vault.account(alias)?;
@@ -860,10 +987,81 @@ impl CheckedProfileSession<'_> {
             KvRoleSummary::Owner,
             Some((Role::OWNER, Role::OWNER)),
         )?;
+        session.bind_upload_admission_time(self.adapter_clock.sample()?);
         let result = session.put_file(
             parent,
             &name,
-            reader,
+            &mut reader,
+            KvWriteOptions {
+                read_role: Role::OWNER,
+                write_role: Role::OWNER,
+                overwrite,
+                expected_version: None,
+            },
+        )?;
+        Ok(KvWriteReport::from_path(
+            path,
+            result.dirent_version,
+            &result.path,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn put_kv_file_identified<R: Read>(
+        &self,
+        alias: &str,
+        path: &str,
+        reader: &mut R,
+        upload_id: foks_proto::UploadHandle,
+        overwrite: bool,
+        mkdir_p: bool,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<KvWriteReport> {
+        let intent = KvUploadIntent {
+            path: path.into(),
+            expected_size: None,
+            overwrite,
+            expected_version: None,
+            selected_dirent: None,
+            read_role: KvRoleSummary::Owner,
+            write_role: KvRoleSummary::Owner,
+            mkdir_p,
+        };
+        let claim = self.claim_upload(alias, None, upload_id, &intent, vault)?;
+        let mut reader = self.upload_reader(reader)?;
+        let (parent_path, name) = split_parent(path)?;
+        let loaded = vault.account(alias)?;
+        let host = self.pinned_host()?;
+        let authenticated = self
+            .client
+            .authenticate_and_pin(&host, &loaded.credential)?;
+        let mut mutations = EncryptedFileMutationStore::open(
+            &self.paths.protected_mutations,
+            derive_mutation_key(master_key),
+        )?;
+        let mut session = self.client.user_kv_write_session(
+            &host,
+            &loaded.credential,
+            &authenticated.verified,
+            &authenticated.puks,
+            &self.paths.soft_database,
+            &mut mutations,
+        )?;
+        let (parent, _tree) = resolve_write_parent(
+            &mut session,
+            &parent_path,
+            mkdir_p,
+            KvRoleSummary::Owner,
+            KvRoleSummary::Owner,
+            Some((Role::OWNER, Role::OWNER)),
+        )?;
+        session.bind_file_upload(claim)?;
+        session.bind_upload_admission_time(self.adapter_clock.sample()?);
+        let result = session.put_file(
+            parent,
+            &name,
+            &mut reader,
             KvWriteOptions {
                 read_role: Role::OWNER,
                 write_role: Role::OWNER,
@@ -1384,6 +1582,10 @@ impl KvRoleSummary {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct KvReadReport {
     pub path: String,
+    // Selected reads explicitly copy this into KvReadResult. The separate
+    // path-based data adapter retains its strict DataEntry serialization.
+    #[serde(skip_serializing)]
+    pub dirent_id: [u8; 16],
     pub node_type: String,
     pub version: u64,
     pub size: Option<u64>,
@@ -1400,6 +1602,10 @@ pub struct KvReadReport {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct KvChunkReport {
     pub path: String,
+    // Selected reads explicitly copy this into KvChunkResult; DataChunk is
+    // the separate path-based data adapter's strict serialization contract.
+    #[serde(skip_serializing)]
+    pub dirent_id: [u8; 16],
     pub version: u64,
     pub offset: u64,
     /// As on [`KvReadReport::content`]; the reader is
@@ -1562,6 +1768,7 @@ fn read_report_from_fetched(
     };
     Ok(KvReadReport {
         path: path.to_owned(),
+        dirent_id: entry.dirent_id,
         node_type: node_type_name(node_type)?,
         version,
         size,
@@ -2234,5 +2441,20 @@ mod tests {
         // not fetch content to compensate.
         assert_eq!(report.size, None);
         assert!(report.content.is_none());
+        assert_eq!(report.dirent_id, [1; 16]);
+        let adapter: foks_agent_proto::data::DataEntry =
+            serde_json::from_value(serde_json::to_value(&report).unwrap()).unwrap();
+        assert_eq!(adapter.path, report.path);
+        let chunk = KvChunkReport {
+            path: report.path.clone(),
+            dirent_id: report.dirent_id,
+            version: report.version,
+            offset: 0,
+            content: vec![42],
+            eof: true,
+        };
+        let adapter: foks_agent_proto::data::DataChunk =
+            serde_json::from_value(serde_json::to_value(&chunk).unwrap()).unwrap();
+        assert_eq!(adapter.content, chunk.content);
     }
 }

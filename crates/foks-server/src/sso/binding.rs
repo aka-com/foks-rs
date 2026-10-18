@@ -22,9 +22,11 @@ impl SsoService {
             changed.as_mut().enable();
             let service = self.clone();
             let arg = arg.clone();
-            let result = tokio::task::spawn_blocking(move || service.poll_once(&arg))
+            let work = crate::net::memory::retain_work(move || service.poll_once(&arg));
+            let result = tokio::task::spawn_blocking(move || work.run())
                 .await
                 .map_err(|_| foks_rpc::RpcStatus::TransactionRetry)?
+                .into_inner()
                 .map_err(status)?;
             if let Some(bytes) = result {
                 return Ok(bytes);
@@ -48,7 +50,7 @@ impl SsoService {
                 SsoSessionState::ExchangeUnknown => {
                     return Err(Error::Sso(
                         "exchange outcome unknown; new authentication required",
-                    ))
+                    ));
                 }
                 _ => return Err(Error::Sso("authentication rejected or expired")),
             }

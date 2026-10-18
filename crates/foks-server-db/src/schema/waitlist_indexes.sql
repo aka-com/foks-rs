@@ -1,4 +1,4 @@
--- Shared by fresh schema creation and the atomic version-49 writer upgrade.
+-- Applied by fresh schema creation and the atomic version-60 writer upgrade.
 -- One entry per address under ASCII case folding: a repeated join returns the
 -- stored identifier instead of adding a row.
 CREATE UNIQUE INDEX waitlist_entries_email

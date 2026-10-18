@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, OptionalExtension as _, TransactionBehavior};
 
 use crate::{error::sql_integer, Database, Error, Result};
@@ -39,12 +40,12 @@ impl Database {
         transaction.execute(RECLAIM_EXPIRED, [now])?;
         let global: i64 =
             transaction.query_row("SELECT count(*) FROM recovery_challenges", [], |row| {
-                row.get(0)
+                row.budgeted_get(0)
             })?;
         let per_entity: i64 = transaction.query_row(
             "SELECT count(*) FROM recovery_challenges WHERE entity_id = ?1",
             [entity_id],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         if usize::try_from(global).unwrap_or(usize::MAX)
             >= self.config.maximum_active_recovery_challenges
@@ -105,11 +106,11 @@ impl Database {
                     [entity_id],
                     |row| {
                         Ok((
-                            row.get::<_, Vec<u8>>(0)?,
-                            row.get::<_, Vec<u8>>(1)?,
-                            row.get::<_, Vec<u8>>(2)?,
-                            row.get::<_, i64>(3)?,
-                            row.get::<_, i64>(4)?,
+                            row.budgeted_get::<_, Vec<u8>>(0)?,
+                            row.budgeted_get::<_, Vec<u8>>(1)?,
+                            row.budgeted_get::<_, Vec<u8>>(2)?,
+                            row.budgeted_get::<_, i64>(3)?,
+                            row.budgeted_get::<_, i64>(4)?,
                         ))
                     },
                 )

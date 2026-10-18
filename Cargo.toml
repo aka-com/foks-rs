@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["tools/foks-celld-guarded/runtime/source"]
 members = [
     "crates/foks-agent",
     "crates/foks-agent-client",
@@ -13,12 +14,16 @@ members = [
     "crates/foks-desktop",
     "crates/foks-go-interop",
     "crates/foks-keystore",
+    "crates/foks-hosted-transport",
+    "crates/foks-local-deadline",
     "crates/foks-merkle-store",
     "crates/foks-mcp",
+    "crates/foks-metadata-core",
     "crates/foks-oidc",
     "crates/foks-proto",
     "crates/foks-protocol-metadata",
     "crates/foks-rpc",
+    "crates/foks-schema-contract",
     "crates/foks-server",
     "crates/foks-server-db",
     "crates/foks-server-testkit",
@@ -60,12 +65,16 @@ foks-compat-artifact = { path = "crates/foks-compat-artifact" }
 foks-crypto = { path = "crates/foks-crypto" }
 foks-go-interop = { path = "crates/foks-go-interop" }
 foks-keystore = { path = "crates/foks-keystore" }
+foks-hosted-transport = { path = "crates/foks-hosted-transport" }
+foks-local-deadline = { path = "crates/foks-local-deadline" }
 foks-merkle-store = { path = "crates/foks-merkle-store" }
 foks-mcp = { path = "crates/foks-mcp" }
+foks-metadata-core = { path = "crates/foks-metadata-core" }
 foks-oidc = { path = "crates/foks-oidc" }
 foks-proto = { path = "crates/foks-proto" }
 foks-protocol-metadata = { path = "crates/foks-protocol-metadata" }
 foks-rpc = { path = "crates/foks-rpc" }
+foks-schema-contract = { path = "crates/foks-schema-contract" }
 foks-server = { path = "crates/foks-server" }
 foks-server-db = { path = "crates/foks-server-db" }
 foks-server-testkit = { path = "crates/foks-server-testkit" }

@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, Connection, OptionalExtension as _, TransactionBehavior};
 
 use crate::{error::sql_integer, Database, Error, ReadDatabase, ReadSnapshot, Result};
@@ -103,7 +104,7 @@ impl Database {
                 "SELECT 1 FROM devices
                  WHERE uid = ?1 AND active = 1 AND (device_id = ?2 OR subkey_id = ?2)",
                 params![target_user_id, credential_id],
-                |row| row.get(0),
+                |row| row.budgeted_get(0),
             )
             .optional()?;
         if authorized != Some(1) {
@@ -168,7 +169,7 @@ impl Database {
                  WHERE target_user_id = ?1 AND viewer_party_id = ?2
                    AND viewer_host_id = ?3",
                 params![target_user_id, viewer_party_id, viewer_host_id],
-                |row| row.get(0),
+                |row| row.budgeted_get(0),
             )
             .optional()?;
         if existing_state.is_some() {
@@ -179,13 +180,13 @@ impl Database {
             "SELECT count(*) FROM federation_user_view_permissions
              WHERE state = 1 AND expires_at > ?1",
             [sql_integer(now)?],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         let scoped: i64 = transaction.query_row(
             "SELECT count(*) FROM federation_user_view_permissions
              WHERE target_user_id = ?1 AND state = 1 AND expires_at > ?2",
             params![target_user_id, sql_integer(now)?],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         if usize::try_from(global).unwrap_or(usize::MAX)
             >= self.config.maximum_active_remote_user_view_permissions
@@ -305,7 +306,7 @@ impl Database {
                     authority.visibility,
                     sql_integer(authority.generation)?
                 ],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
             )
             .optional()?;
         let Some((verify_key, grantor_party_id)) = authorized else {
@@ -373,7 +374,7 @@ impl Database {
                  WHERE target_team_id = ?1 AND viewer_party_id = ?2
                    AND viewer_host_id = ?3",
                 params![target_team_id, viewer_party_id, viewer_host_id],
-                |row| row.get(0),
+                |row| row.budgeted_get(0),
             )
             .optional()?;
         if existing_state.is_some() {
@@ -383,13 +384,13 @@ impl Database {
             "SELECT count(*) FROM federation_team_view_permissions
              WHERE state = 1 AND expires_at > ?1",
             [sql_integer(now)?],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         let scoped: i64 = transaction.query_row(
             "SELECT count(*) FROM federation_team_view_permissions
              WHERE target_team_id = ?1 AND state = 1 AND expires_at > ?2",
             params![target_team_id, sql_integer(now)?],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         if usize::try_from(global).unwrap_or(usize::MAX)
             >= self.config.maximum_active_remote_team_view_permissions
@@ -578,10 +579,10 @@ impl ReadSnapshot<'_> {
                 params![target_team_id, member_party_id, member_host_id],
                 |row| {
                     Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, i64>(2)?,
-                        row.get::<_, Vec<u8>>(3)?,
+                        row.budgeted_get::<_, i64>(0)?,
+                        row.budgeted_get::<_, i64>(1)?,
+                        row.budgeted_get::<_, i64>(2)?,
+                        row.budgeted_get::<_, Vec<u8>>(3)?,
                     ))
                 },
             )
@@ -613,12 +614,12 @@ impl ReadSnapshot<'_> {
         let tokens = statement
             .query_map([target_team_id], |row| {
                 Ok((
-                    row.get::<_, Vec<u8>>(0)?,
-                    row.get::<_, Vec<u8>>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, Vec<u8>>(5)?,
+                    row.budgeted_get::<_, Vec<u8>>(0)?,
+                    row.budgeted_get::<_, Vec<u8>>(1)?,
+                    row.budgeted_get::<_, i64>(2)?,
+                    row.budgeted_get::<_, i64>(3)?,
+                    row.budgeted_get::<_, i64>(4)?,
+                    row.budgeted_get::<_, Vec<u8>>(5)?,
                 ))
             })?
             .map(|row| {
@@ -698,13 +699,13 @@ fn permission_for_scope(
             params![target_user_id, viewer_party_id, viewer_host_id],
             |row| {
                 Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                    row.budgeted_get(3)?,
+                    row.budgeted_get(4)?,
+                    row.budgeted_get(5)?,
+                    row.budgeted_get(6)?,
                 ))
             },
         )
@@ -754,7 +755,7 @@ fn token_is_current(
                  WHERE d.uid = p.target_user_id AND d.active = 1
                )",
             params![token_hash, target_user_id, sql_integer(now)?],
-            |row| row.get::<_, i64>(0),
+            |row| row.budgeted_get::<_, i64>(0),
         )
         .optional()?
         == Some(1))
@@ -776,13 +777,13 @@ fn team_permission_for_scope(
             params![target_team_id, viewer_party_id, viewer_host_id],
             |row| {
                 Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                    row.budgeted_get(3)?,
+                    row.budgeted_get(4)?,
+                    row.budgeted_get(5)?,
+                    row.budgeted_get(6)?,
                 ))
             },
         )
@@ -831,7 +832,7 @@ fn team_token_is_current(
              WHERE p.token_hash = ?1 AND p.target_team_id = ?2
                AND p.state = 1 AND p.expires_at > ?3",
             params![token_hash, target_team_id, sql_integer(now)?],
-            |row| row.get::<_, i64>(0),
+            |row| row.budgeted_get::<_, i64>(0),
         )
         .optional()?
         == Some(1))

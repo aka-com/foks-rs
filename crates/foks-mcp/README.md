@@ -130,12 +130,15 @@ lifts the pause; `clock-untrusted` refusals carry the same explanation, and an
 `expired` write result carries the same fields and explanation in place of the
 advice to issue a new handle.
 The agent reads this clock status from local state only. First use establishes
-the anchor.
+the anchor. File uploads keep a separate receipt clock with the same rules;
+both sample one process clock, but each has its own anchor and watermark, and
+repairing one leaves the other unchanged.
 
 Repair runs in the resident agent and is not an MCP tool: a person confirms the
 time in the desktop app's account settings or with the CLI, which starts the
 agent if needed. `retention clock-status` reports the account's admission;
-`retention reanchor` previews the current time and then confirms it:
+`retention reanchor` previews the current time and then confirms it. Both take
+`--domain adapter` (the default, for MCP writes) or `--domain upload`:
 
 ```sh
 foks-rs --state-dir /absolute/client/state retention clock-status \
@@ -176,9 +179,9 @@ are reclaimed in bounded, restartable batches. Server maintenance metrics report
 failures, reclaimed bytes and deferred work. Pinned Go-host upload retention remains
 that host's responsibility; these changes add no remote FOKS methods.
 
-The current hard-state schema is 41 and the agent IPC protocol is 37. Opening a
-supported schema-38, schema-39 or schema-40 database upgrades it to schema 41;
-other older development schemas are rejected. Upgrade the CLI and resident agent
+The current hard-state schema is 43 and the agent IPC protocol is 38. Opening a
+supported schema-38 through schema-42 database upgrades it to schema 43 one
+version at a time; other older development schemas are rejected. Upgrade the CLI and resident agent
 together, and restart the agent so their IPC versions match. Before serving, the
 CLI exchanges a version-independent Hello; when a resident agent of another
 version answers, it reports both versions and does not start a second agent.

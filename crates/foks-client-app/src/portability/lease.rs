@@ -95,6 +95,7 @@ struct LeaseInner {
 pub struct ClientStateLease(Arc<LeaseInner>);
 impl ClientStateLease {
     pub fn acquire(root: impl AsRef<Path>) -> Result<Self> {
+        crate::checkpoint::private::upgrade_if_needed(root.as_ref())?;
         let path = ClientStatePathLease::acquire(root)?;
         let base = lock_directory()?;
         // Read configuration only after path exclusion. No native get or registry

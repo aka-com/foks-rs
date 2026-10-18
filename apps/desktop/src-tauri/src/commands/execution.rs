@@ -30,6 +30,8 @@ pub(super) fn ambiguous_mutation_response(
     error
 }
 
+// Test fixtures inject an ambiguous physical outcome through this helper.
+#[cfg(test)]
 pub(super) fn ambiguous_worker_failure(state: &AppState, message: impl Into<String>) -> AgentError {
     state
         .mutation_requires_refresh()
@@ -89,6 +91,21 @@ pub(super) fn map_mutation_error(
     error
 }
 
+// Inline mutations can carry plaintext before transport admission.
+struct PendingKvMutation(Option<KvAccountMutation>);
+impl PendingKvMutation {
+    fn take(&mut self) -> KvAccountMutation {
+        self.0.take().expect("owned KV mutation")
+    }
+}
+impl Drop for PendingKvMutation {
+    fn drop(&mut self) {
+        if let Some(KvAccountMutation::Inline(operation)) = &mut self.0 {
+            operation.zeroize_plaintext();
+        }
+    }
+}
+
 pub(super) fn execute_kv_mutation(
     transport: &dyn foks_desktop::AgentTransport,
     mutation: KvAccountMutation,
@@ -101,9 +118,11 @@ pub(super) fn execute_kv_mutation(
                 .map_err(|error| map_mutation_error(error, kind))?;
         }
         KvAccountMutation::Stream {
-            header,
+            mut header,
             mut content,
         } => {
+            foks_desktop::ensure_upload_identity(transport, &mut header)
+                .map_err(|error| map_mutation_error(error, kind))?;
             let mut reader = std::io::Cursor::new(content.as_mut_slice());
             transport
                 .put_kv_stream(header, &mut reader)
@@ -118,7 +137,9 @@ pub(super) async fn apply_kv_mutation(
     mutation: KvAccountMutation,
     kind: MutationKind,
 ) -> Result<MutationDto, AgentError> {
-    apply_kv_mutation_with_transport(state, mutation, kind, state.agent.transport()).await
+    let mut mutation = PendingKvMutation(Some(mutation));
+    let transport = state.transport()?;
+    apply_kv_mutation_with_transport(state, mutation.take(), kind, transport).await
 }
 
 /// The store a KV write lands in. Every KV mutation names one; an operation
@@ -151,18 +172,22 @@ pub(super) async fn apply_kv_mutation_with_transport(
     kind: MutationKind,
     transport: std::sync::Arc<dyn foks_desktop::AgentTransport>,
 ) -> Result<MutationDto, AgentError> {
-    let store = kv_mutation_store(&mutation);
+    let mut mutation = PendingKvMutation(Some(mutation));
+    let transport = foks_desktop::bind_transport_deadline(transport, state.deadline()?.clone())
+        .map_err(AgentError::from_desktop)?;
+    let store = kv_mutation_store(mutation.0.as_ref().expect("owned KV mutation"));
     run_kv_writes(state, store.as_ref(), move || {
-        execute_kv_mutation(transport.as_ref(), mutation, kind)
+        execute_kv_mutation(transport.as_ref(), mutation.take(), kind)
     })
     .await
     .map(|()| MutationDto { applied: true })
 }
 
-/// Runs KV writes into `store` on a blocking worker. The store's catalog
-/// items are discarded first, since the writes change them whatever their
-/// outcome, and an ambiguous failure requires a refresh before the next
-/// mutation.
+/// Runs KV writes into `store` on an admitted native worker under the
+/// command's deadline. The store's catalog items are discarded first, since
+/// the writes change them whatever their outcome, and an ambiguous failure
+/// requires a refresh before the next mutation. `writes` must use a
+/// transport bound to the same deadline.
 pub(super) async fn run_kv_writes<T: Send + 'static>(
     state: &AppState,
     store: Option<&CatalogStoreRef>,
@@ -174,14 +199,7 @@ pub(super) async fn run_kv_writes<T: Send + 'static>(
         // whole catalog rather than leave any of it stale.
         None => state.invalidate_catalog(),
     }
-    let result = tauri::async_runtime::spawn_blocking(writes)
-        .await
-        .map_err(|error| {
-            ambiguous_worker_failure(
-                state,
-                format!("The background operation stopped before reporting its outcome: {error}"),
-            )
-        })?;
+    let result = super::deadline::run(state.deadline()?, true, writes, |_| {}).await;
     if let Err(error) = &result {
         if error.ambiguous {
             state
@@ -207,20 +225,20 @@ pub(super) async fn apply_operation_value(
     operation: Operation,
     kind: MutationKind,
 ) -> Result<serde_json::Value, AgentError> {
+    let mut operation = foks_desktop::PendingOperation::new(operation);
     state.invalidate_catalog();
-    let transport = state.agent.transport();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        transport
-            .call(operation)
-            .map_err(|error| map_mutation_error(error, kind))
-    })
-    .await
-    .map_err(|error| {
-        ambiguous_worker_failure(
-            state,
-            format!("The background operation stopped before reporting its outcome: {error}"),
-        )
-    })?;
+    let transport = state.transport()?;
+    let result = super::deadline::run(
+        state.deadline()?,
+        true,
+        move || {
+            transport
+                .call(operation.take())
+                .map_err(|error| map_mutation_error(error, kind))
+        },
+        super::vault::clear_response,
+    )
+    .await;
     match result {
         Ok(value) => Ok(value),
         Err(error) => {
@@ -271,11 +289,12 @@ pub(super) fn execute_pending_operation(
     pending_target: Option<&str>,
     operation: Operation,
 ) -> Result<serde_json::Value, AgentError> {
+    let mut operation = foks_desktop::PendingOperation::new(operation);
     let pending = pending_operations(transport, profile)?;
     validated_pending_dtos(&pending)?;
     require_one_pending_operation(&pending, pending_kind, pending_alias, pending_target)?;
     transport
-        .call(operation)
+        .call(operation.take())
         .map_err(|error| map_mutation_error(error, MutationKind::Resume))
 }
 
@@ -287,25 +306,25 @@ pub(super) async fn apply_pending_operation_value(
     pending_target: Option<String>,
     operation: Operation,
 ) -> Result<serde_json::Value, AgentError> {
+    let mut operation = foks_desktop::PendingOperation::new(operation);
     state.invalidate_catalog();
-    let transport = state.agent.transport();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        execute_pending_operation(
-            transport.as_ref(),
-            &profile,
-            pending_kind,
-            &pending_alias,
-            pending_target.as_deref(),
-            operation,
-        )
-    })
-    .await
-    .map_err(|error| {
-        ambiguous_worker_failure(
-            state,
-            format!("The resume operation stopped before reporting its outcome: {error}"),
-        )
-    })?;
+    let transport = state.transport()?;
+    let result = super::deadline::run(
+        state.deadline()?,
+        true,
+        move || {
+            execute_pending_operation(
+                transport.as_ref(),
+                &profile,
+                pending_kind,
+                &pending_alias,
+                pending_target.as_deref(),
+                operation.take(),
+            )
+        },
+        super::vault::clear_response,
+    )
+    .await;
     match result {
         Ok(value) => Ok(value),
         Err(error) => {
@@ -324,12 +343,15 @@ pub(super) async fn read_profile_operation_value(
     profile: String,
     operation: Operation,
 ) -> Result<serde_json::Value, AgentError> {
-    let transport = state.agent.transport();
-    tauri::async_runtime::spawn_blocking(move || {
-        execute_read_profile_operation(transport.as_ref(), &profile, operation)
-    })
+    let mut operation = foks_desktop::PendingOperation::new(operation);
+    let transport = state.transport()?;
+    super::deadline::run(
+        state.deadline()?,
+        false,
+        move || execute_read_profile_operation(transport.as_ref(), &profile, operation.take()),
+        super::vault::clear_response,
+    )
     .await
-    .map_err(|error| AgentError::unknown(format!("Failed to read setup details: {error}")))?
 }
 
 pub(super) fn execute_read_profile_operation(
@@ -337,8 +359,11 @@ pub(super) fn execute_read_profile_operation(
     profile: &str,
     operation: Operation,
 ) -> Result<serde_json::Value, AgentError> {
+    let mut operation = foks_desktop::PendingOperation::new(operation);
     require_transport_profile(transport, profile)?;
-    transport.call(operation).map_err(AgentError::from_desktop)
+    transport
+        .call(operation.take())
+        .map_err(AgentError::from_desktop)
 }
 
 pub(super) async fn apply_profile_operation_value(
@@ -347,18 +372,16 @@ pub(super) async fn apply_profile_operation_value(
     operation: Operation,
     kind: MutationKind,
 ) -> Result<serde_json::Value, AgentError> {
+    let mut operation = foks_desktop::PendingOperation::new(operation);
     state.invalidate_catalog();
-    let transport = state.agent.transport();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        execute_profile_operation(transport.as_ref(), &profile, operation, kind)
-    })
-    .await
-    .map_err(|error| {
-        ambiguous_worker_failure(
-            state,
-            format!("The setup operation stopped before reporting its outcome: {error}"),
-        )
-    })?;
+    let transport = state.transport()?;
+    let result = super::deadline::run(
+        state.deadline()?,
+        true,
+        move || execute_profile_operation(transport.as_ref(), &profile, operation.take(), kind),
+        super::vault::clear_response,
+    )
+    .await;
     match result {
         Ok(value) => Ok(value),
         Err(error) => {
@@ -387,13 +410,15 @@ pub(super) async fn apply_surveying_profile_operation_value(
     kind: MutationKind,
     changed: fn(&serde_json::Value) -> bool,
 ) -> Result<serde_json::Value, AgentError> {
+    let mut operation = foks_desktop::PendingOperation::new(operation);
+    let transport = state.transport()?;
     apply_surveying_profile_operation_with_transport(
         state,
         profile,
-        operation,
+        operation.take(),
         kind,
         changed,
-        state.agent.transport(),
+        transport,
     )
     .await
 }
@@ -406,17 +431,16 @@ pub(super) async fn apply_surveying_profile_operation_with_transport(
     changed: fn(&serde_json::Value) -> bool,
     transport: std::sync::Arc<dyn foks_desktop::AgentTransport>,
 ) -> Result<serde_json::Value, AgentError> {
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        execute_profile_operation(transport.as_ref(), &profile, operation, kind)
-    })
-    .await
-    .map_err(|error| {
-        state.invalidate_catalog();
-        ambiguous_worker_failure(
-            state,
-            format!("The setup operation stopped before reporting its outcome: {error}"),
-        )
-    })?;
+    let mut operation = foks_desktop::PendingOperation::new(operation);
+    let transport = foks_desktop::bind_transport_deadline(transport, state.deadline()?.clone())
+        .map_err(AgentError::from_desktop)?;
+    let result = super::deadline::run(
+        state.deadline()?,
+        true,
+        move || execute_profile_operation(transport.as_ref(), &profile, operation.take(), kind),
+        super::vault::clear_response,
+    )
+    .await;
     match result {
         Ok(value) => {
             if changed(&value) {
@@ -444,22 +468,22 @@ pub(super) async fn apply_profile_operation_with_profile(
     operation: Operation,
     kind: MutationKind,
 ) -> Result<(serde_json::Value, ProfileSummary), AgentError> {
+    let mut operation = foks_desktop::PendingOperation::new(operation);
     state.invalidate_catalog();
-    let transport = state.agent.transport();
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<_, AgentError> {
-        let configured = transport_profile(transport.as_ref(), &profile)?;
-        let value = transport
-            .call(operation)
-            .map_err(|error| map_mutation_error(error, kind))?;
-        Ok((value, configured))
-    })
-    .await
-    .map_err(|error| {
-        ambiguous_worker_failure(
-            state,
-            format!("The server check stopped before reporting its outcome: {error}"),
-        )
-    })?;
+    let transport = state.transport()?;
+    let result = super::deadline::run(
+        state.deadline()?,
+        true,
+        move || -> Result<_, AgentError> {
+            let configured = transport_profile(transport.as_ref(), &profile)?;
+            let value = transport
+                .call(operation.take())
+                .map_err(|error| map_mutation_error(error, kind))?;
+            Ok((value, configured))
+        },
+        |value| super::vault::clear_response(&mut value.0),
+    )
+    .await;
     match result {
         Ok(value) => Ok(value),
         Err(error) => {
@@ -479,8 +503,9 @@ fn execute_profile_operation(
     operation: Operation,
     kind: MutationKind,
 ) -> Result<serde_json::Value, AgentError> {
+    let mut operation = foks_desktop::PendingOperation::new(operation);
     require_transport_profile(transport, profile)?;
     transport
-        .call(operation)
+        .call(operation.take())
         .map_err(|error| map_mutation_error(error, kind))
 }

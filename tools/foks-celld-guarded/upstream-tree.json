@@ -1,0 +1,2582 @@
+{
+  "sha": "90b43017241f81189453d326d05948f388b34652",
+  "url": "https://api.github.com/repos/denoland/celld/git/trees/90b43017241f81189453d326d05948f388b34652",
+  "tree": [
+    {
+      "path": ".github",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "a844947bd598c816a7e18592e186538931f011c6",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/a844947bd598c816a7e18592e186538931f011c6"
+    },
+    {
+      "path": ".github/workflows",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "06810b7507524a8b2259ffe7443e4156a873e79a",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/06810b7507524a8b2259ffe7443e4156a873e79a"
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a8526cc486000748af264ea192f5ccadae32e376",
+      "size": 10849,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/a8526cc486000748af264ea192f5ccadae32e376"
+    },
+    {
+      "path": ".gitignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ea64cca5883716f6eb8cac246899c01ec78f0a1b",
+      "size": 69,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/ea64cca5883716f6eb8cac246899c01ec78f0a1b"
+    },
+    {
+      "path": "Cargo.lock",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "09b2f25be63d5471af41a8d20a1be005af593db2",
+      "size": 104116,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/09b2f25be63d5471af41a8d20a1be005af593db2"
+    },
+    {
+      "path": "Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "13ad0345de54e4902f4c5baa83985659a49c5fcc",
+      "size": 6638,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/13ad0345de54e4902f4c5baa83985659a49c5fcc"
+    },
+    {
+      "path": "Dockerfile",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1dc4bb0a1a70ec5ad1276a1c7565cecd3b2dd934",
+      "size": 2058,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/1dc4bb0a1a70ec5ad1276a1c7565cecd3b2dd934"
+    },
+    {
+      "path": "LICENSE",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+      "size": 11358,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/d645695673349e3947e8e5ae42332d0ac3164cd7"
+    },
+    {
+      "path": "NOTICE",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0d457adab013e2a704b97a5083aae1410ebd35ab",
+      "size": 1112,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/0d457adab013e2a704b97a5083aae1410ebd35ab"
+    },
+    {
+      "path": "README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "541cb08e55d4f1e49f940bff86daf6f5b3f374ae",
+      "size": 18975,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/541cb08e55d4f1e49f940bff86daf6f5b3f374ae"
+    },
+    {
+      "path": "clippy.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "68207d99b57d869f7a1fdc7729f5a56e21fbfe68",
+      "size": 9191,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/68207d99b57d869f7a1fdc7729f5a56e21fbfe68"
+    },
+    {
+      "path": "crates",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "45e30ba10d5190e11fdc474ce394db909e045c0e",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/45e30ba10d5190e11fdc474ce394db909e045c0e"
+    },
+    {
+      "path": "crates/celld",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "00e92578e2e04f10904ca193d6799b6bac7445da",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/00e92578e2e04f10904ca193d6799b6bac7445da"
+    },
+    {
+      "path": "crates/celld/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "98c9ac95730e64b7e615f215358cce7b08378b4d",
+      "size": 2384,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/98c9ac95730e64b7e615f215358cce7b08378b4d"
+    },
+    {
+      "path": "crates/celld/actor.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f6649a6f5222385d83fec00ffec92ccab3c1051b",
+      "size": 179979,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/f6649a6f5222385d83fec00ffec92ccab3c1051b"
+    },
+    {
+      "path": "crates/celld/actor",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "a816d6e25f83f7d60c37ba3f38f46909f95c6794",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/a816d6e25f83f7d60c37ba3f38f46909f95c6794"
+    },
+    {
+      "path": "crates/celld/actor/effects.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "51bfa476eedf159c727489653bb6ef912e64ffbb",
+      "size": 10366,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/51bfa476eedf159c727489653bb6ef912e64ffbb"
+    },
+    {
+      "path": "crates/celld/actor/local_request.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f477531e6f6c9e20961fc4d2e3942ef960b8af7c",
+      "size": 4586,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/f477531e6f6c9e20961fc4d2e3942ef960b8af7c"
+    },
+    {
+      "path": "crates/celld/actor/production.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2620a8dc8ee3486a869b45738fedad2e562cc422",
+      "size": 1736,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/2620a8dc8ee3486a869b45738fedad2e562cc422"
+    },
+    {
+      "path": "crates/celld/assets.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c6ec2dc7e5d343988706f191cb7df5adbe11781a",
+      "size": 52372,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/c6ec2dc7e5d343988706f191cb7df5adbe11781a"
+    },
+    {
+      "path": "crates/celld/asyncrt.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "51a7d3f655a94c31f52429b0057023869966fe95",
+      "size": 18298,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/51a7d3f655a94c31f52429b0057023869966fe95"
+    },
+    {
+      "path": "crates/celld/bucket.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "25682d8bf61ad9dbc186b4716198eedfb097f9bc",
+      "size": 90718,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/25682d8bf61ad9dbc186b4716198eedfb097f9bc"
+    },
+    {
+      "path": "crates/celld/cell_cli.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a816366de6f0f017b7625e67ee273e3bcd89fde6",
+      "size": 18746,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/a816366de6f0f017b7625e67ee273e3bcd89fde6"
+    },
+    {
+      "path": "crates/celld/cell_dispatch.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fc8abd3985c1f37469db60266666acf6bceaf5aa",
+      "size": 16517,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/fc8abd3985c1f37469db60266666acf6bceaf5aa"
+    },
+    {
+      "path": "crates/celld/cell_host.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "478b7b57a47bfdcd879268963821428c035c4e07",
+      "size": 8529,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/478b7b57a47bfdcd879268963821428c035c4e07"
+    },
+    {
+      "path": "crates/celld/cell_runtime.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6861034d4820f1e784879d19dfc90e6ca54670a6",
+      "size": 11389,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/6861034d4820f1e784879d19dfc90e6ca54670a6"
+    },
+    {
+      "path": "crates/celld/clean_reload.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3253d94920615ebd2365b6f59375ad33b2bfc5ee",
+      "size": 1584,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/3253d94920615ebd2365b6f59375ad33b2bfc5ee"
+    },
+    {
+      "path": "crates/celld/cli_options.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0e72bfec0e54e948148dab1f25bc35a994f16db1",
+      "size": 5046,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/0e72bfec0e54e948148dab1f25bc35a994f16db1"
+    },
+    {
+      "path": "crates/celld/cli_output.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fbb1bd6e55fc61dc5784022f1e064e1d1436d282",
+      "size": 18148,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/fbb1bd6e55fc61dc5784022f1e064e1d1436d282"
+    },
+    {
+      "path": "crates/celld/container.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "70583432bee8376c1a8ff11c48fb3bc17137674d",
+      "size": 60666,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/70583432bee8376c1a8ff11c48fb3bc17137674d"
+    },
+    {
+      "path": "crates/celld/control_plane.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "62a691127ecf8ad6ff8e029c86170eff6ebbd253",
+      "size": 105179,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/62a691127ecf8ad6ff8e029c86170eff6ebbd253"
+    },
+    {
+      "path": "crates/celld/d1_cli.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "97c1210ee97cd2b3f08d91534819804de370cf86",
+      "size": 22065,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/97c1210ee97cd2b3f08d91534819804de370cf86"
+    },
+    {
+      "path": "crates/celld/dead_node_gc.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "518ef62925c4c7c5ea4738c2f584fac7addda9c6",
+      "size": 15377,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/518ef62925c4c7c5ea4738c2f584fac7addda9c6"
+    },
+    {
+      "path": "crates/celld/deploy.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "dc2e783edca7b7aeb3a41ddeb925d5c790fde7fc",
+      "size": 122212,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/dc2e783edca7b7aeb3a41ddeb925d5c790fde7fc"
+    },
+    {
+      "path": "crates/celld/deploy",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "1b4339ca68329696ee8dfb497ca38c2ed129daf8",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/1b4339ca68329696ee8dfb497ca38c2ed129daf8"
+    },
+    {
+      "path": "crates/celld/deploy/python.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "27d8284d26c6a05370cc67ffd479bf4eb2a2eba3",
+      "size": 26216,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/27d8284d26c6a05370cc67ffd479bf4eb2a2eba3"
+    },
+    {
+      "path": "crates/celld/dev.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "39a6f7992ab1b75420c870f8684fa73322232792",
+      "size": 33127,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/39a6f7992ab1b75420c870f8684fa73322232792"
+    },
+    {
+      "path": "crates/celld/docker.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "70eae0a1433c4881c2dabc15e5d74d564263fc1d",
+      "size": 9407,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/70eae0a1433c4881c2dabc15e5d74d564263fc1d"
+    },
+    {
+      "path": "crates/celld/drain_token.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "345eca7b134fe513d37ce8ae989946527b90216e",
+      "size": 9599,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/345eca7b134fe513d37ce8ae989946527b90216e"
+    },
+    {
+      "path": "crates/celld/engine_api.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0870bde5e6ff654d81782f26ff5b532b227bbc35",
+      "size": 32431,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/0870bde5e6ff654d81782f26ff5b532b227bbc35"
+    },
+    {
+      "path": "crates/celld/env_vars.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "547a75bc8c3cde3874ccb9ebd97ca50c8f2a35f2",
+      "size": 15167,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/547a75bc8c3cde3874ccb9ebd97ca50c8f2a35f2"
+    },
+    {
+      "path": "crates/celld/facet_streams.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3d30ef704286c4e995a828e3bbb1c7cc7643317e",
+      "size": 12293,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/3d30ef704286c4e995a828e3bbb1c7cc7643317e"
+    },
+    {
+      "path": "crates/celld/fleet.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cc27ff1254b82516861243d9d32e77baccf76e1c",
+      "size": 36934,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/cc27ff1254b82516861243d9d32e77baccf76e1c"
+    },
+    {
+      "path": "crates/celld/generation.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e2bd8ff201038cd22ddb617a05b348902a35ffe0",
+      "size": 28141,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/e2bd8ff201038cd22ddb617a05b348902a35ffe0"
+    },
+    {
+      "path": "crates/celld/host_channels.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b4969b97efda2261a856dc8d4fd8c4645a4bd4c8",
+      "size": 14026,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/b4969b97efda2261a856dc8d4fd8c4645a4bd4c8"
+    },
+    {
+      "path": "crates/celld/host_services.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ab52632669828153de651d090859019eb2293ccd",
+      "size": 8871,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/ab52632669828153de651d090859019eb2293ccd"
+    },
+    {
+      "path": "crates/celld/http_streams.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "255cbc714c2dc78275b632ad8fa9eef899eb2232",
+      "size": 75886,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/255cbc714c2dc78275b632ad8fa9eef899eb2232"
+    },
+    {
+      "path": "crates/celld/js.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ec40b415338f0642e6e3fb83d35e0175a587accf",
+      "size": 506808,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/ec40b415338f0642e6e3fb83d35e0175a587accf"
+    },
+    {
+      "path": "crates/celld/js",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "b9be65934a6116ec2deef578ba63325aa165cab3",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/b9be65934a6116ec2deef578ba63325aa165cab3"
+    },
+    {
+      "path": "crates/celld/js/atob_btoa.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7342050e2a35a1d11560a978c0fa50e74719bfb2",
+      "size": 2742,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/7342050e2a35a1d11560a978c0fa50e74719bfb2"
+    },
+    {
+      "path": "crates/celld/js/bootstrap.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b00dc8fbe42972c5fc8aecb6485e55bb35122aa0",
+      "size": 45498,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/b00dc8fbe42972c5fc8aecb6485e55bb35122aa0"
+    },
+    {
+      "path": "crates/celld/js/byte_streams.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f29276123472c423e67bb44d28ad7aae62ff4266",
+      "size": 22348,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/f29276123472c423e67bb44d28ad7aae62ff4266"
+    },
+    {
+      "path": "crates/celld/js/cache.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9f70e6a1484afcfc1493b28da9b57bbfdf324571",
+      "size": 3669,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/9f70e6a1484afcfc1493b28da9b57bbfdf324571"
+    },
+    {
+      "path": "crates/celld/js/compression_streams.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7d04daa977b34cfdb7155b8219203725655b5463",
+      "size": 2443,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/7d04daa977b34cfdb7155b8219203725655b5463"
+    },
+    {
+      "path": "crates/celld/js/container.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bd3774bfabc17f4fda71cf738ec1409d70ab61fa",
+      "size": 10841,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/bd3774bfabc17f4fda71cf738ec1409d70ab61fa"
+    },
+    {
+      "path": "crates/celld/js/crypto.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "322658c2bf50e99468364362b8e0ccb3f31ce620",
+      "size": 35474,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/322658c2bf50e99468364362b8e0ccb3f31ce620"
+    },
+    {
+      "path": "crates/celld/js/crypto.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "28a1ea596131c3c77bfaede9de1ea2d1f61e2c4e",
+      "size": 89896,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/28a1ea596131c3c77bfaede9de1ea2d1f61e2c4e"
+    },
+    {
+      "path": "crates/celld/js/event_source.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "767a960134486a85cf64b956a3e6801cbef3e933",
+      "size": 9610,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/767a960134486a85cf64b956a3e6801cbef3e933"
+    },
+    {
+      "path": "crates/celld/js/harness.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "074ea11c4e34e04ad27110a5c63e4a193ee0f7b9",
+      "size": 461645,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/074ea11c4e34e04ad27110a5c63e4a193ee0f7b9"
+    },
+    {
+      "path": "crates/celld/js/headers.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a81b832b0269b6542e263f01787f5e96c347ce18",
+      "size": 12660,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/a81b832b0269b6542e263f01787f5e96c347ce18"
+    },
+    {
+      "path": "crates/celld/js/html_rewriter.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5981355176686d5828682274c3c0c78b0106a7cb",
+      "size": 15457,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/5981355176686d5828682274c3c0c78b0106a7cb"
+    },
+    {
+      "path": "crates/celld/js/html_rewriter.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2d56d36e5f7c29cdf23989e764f10410ea78aa49",
+      "size": 25367,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/2d56d36e5f7c29cdf23989e764f10410ea78aa49"
+    },
+    {
+      "path": "crates/celld/js/identity_transform_stream.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9ae1c3a7b2eab3effec4dc61e1abce260d01e1b3",
+      "size": 13693,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/9ae1c3a7b2eab3effec4dc61e1abce260d01e1b3"
+    },
+    {
+      "path": "crates/celld/js/input_gate_lifecycle.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9abb10d67f13723b3d4bb14744084a1416bb4373",
+      "size": 9686,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/9abb10d67f13723b3d4bb14744084a1416bb4373"
+    },
+    {
+      "path": "crates/celld/js/message_channel.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ebafd21ed789e392753fba576f271dfd6f6e69c1",
+      "size": 3674,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/ebafd21ed789e392753fba576f271dfd6f6e69c1"
+    },
+    {
+      "path": "crates/celld/js/modules.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c32d251fe178d31068a3d2fb8a15920926788243",
+      "size": 42357,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/c32d251fe178d31068a3d2fb8a15920926788243"
+    },
+    {
+      "path": "crates/celld/js/node_assert.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "aca4dcab164cd106cd6bde2eb4c78fb28819c1ff",
+      "size": 11050,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/aca4dcab164cd106cd6bde2eb4c78fb28819c1ff"
+    },
+    {
+      "path": "crates/celld/js/node_async_hooks.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "147c6462a6a2f2c0e04189a61bf30c08547d26ba",
+      "size": 5288,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/147c6462a6a2f2c0e04189a61bf30c08547d26ba"
+    },
+    {
+      "path": "crates/celld/js/node_buffer.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b8152614288895dc4a0c707cc47124de5da31c06",
+      "size": 32680,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/b8152614288895dc4a0c707cc47124de5da31c06"
+    },
+    {
+      "path": "crates/celld/js/node_crypto.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e7baf1fc1fa4d3601a48b30afb594a8d760d25b3",
+      "size": 63133,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/e7baf1fc1fa4d3601a48b30afb594a8d760d25b3"
+    },
+    {
+      "path": "crates/celld/js/node_diagnostics_channel.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5cccea404bb411dac722df97d09572bee8437464",
+      "size": 7171,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/5cccea404bb411dac722df97d09572bee8437464"
+    },
+    {
+      "path": "crates/celld/js/node_events.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d665b129747fd7e5558b1fce2dfc2e07fbf2b1c4",
+      "size": 21401,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/d665b129747fd7e5558b1fce2dfc2e07fbf2b1c4"
+    },
+    {
+      "path": "crates/celld/js/node_os.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "feb273f0575c2aa58755b602edc88ef47bbb3399",
+      "size": 5605,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/feb273f0575c2aa58755b602edc88ef47bbb3399"
+    },
+    {
+      "path": "crates/celld/js/node_path.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7fe579bcce03e64ff1eb23c97e8cec104ee3d228",
+      "size": 33796,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/7fe579bcce03e64ff1eb23c97e8cec104ee3d228"
+    },
+    {
+      "path": "crates/celld/js/node_stream.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d5559f9fbd07cddf034cd3712ce52359c4260cf5",
+      "size": 168348,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/d5559f9fbd07cddf034cd3712ce52359c4260cf5"
+    },
+    {
+      "path": "crates/celld/js/node_test.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2148346a2bd76b5cb00c5b2853da495d310be776",
+      "size": 2441,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/2148346a2bd76b5cb00c5b2853da495d310be776"
+    },
+    {
+      "path": "crates/celld/js/node_timers.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8f89c712d22902f69c0d4c015ae3eee109eb42be",
+      "size": 1480,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/8f89c712d22902f69c0d4c015ae3eee109eb42be"
+    },
+    {
+      "path": "crates/celld/js/node_util.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b5c00155d187ecf9c95edc3068761f9179d4f4af",
+      "size": 168970,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/b5c00155d187ecf9c95edc3068761f9179d4f4af"
+    },
+    {
+      "path": "crates/celld/js/r2_ops.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "57d3f9ae9a44b0380640d893753b6af890588241",
+      "size": 27078,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/57d3f9ae9a44b0380640d893753b6af890588241"
+    },
+    {
+      "path": "crates/celld/js/services",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "fcebc88bc49d3784ac7d66bd1b43d796eb2636ec",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/fcebc88bc49d3784ac7d66bd1b43d796eb2636ec"
+    },
+    {
+      "path": "crates/celld/js/services/kv.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3aa23e69604b9ffca2d7c7c21330614c5dd93852",
+      "size": 48004,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/3aa23e69604b9ffca2d7c7c21330614c5dd93852"
+    },
+    {
+      "path": "crates/celld/js/set_immediate.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4d488d9984e2260c3915fc01dbcb28e21e085dd6",
+      "size": 696,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/4d488d9984e2260c3915fc01dbcb28e21e085dd6"
+    },
+    {
+      "path": "crates/celld/js/sockets.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d30a23561d4a6ffdea2e5fd7130ba6bfa0305c7d",
+      "size": 7830,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/d30a23561d4a6ffdea2e5fd7130ba6bfa0305c7d"
+    },
+    {
+      "path": "crates/celld/js/storage_ops.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "666134a176101c6421a45c077739eba720a5bf87",
+      "size": 49537,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/666134a176101c6421a45c077739eba720a5bf87"
+    },
+    {
+      "path": "crates/celld/js/streams.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a54a554afccfbd6dabe6d74db75881ce4d9f3af2",
+      "size": 26221,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/a54a554afccfbd6dabe6d74db75881ce4d9f3af2"
+    },
+    {
+      "path": "crates/celld/js/tcp.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "de54a9b6e98477fde74f3f116721a41df7febb5f",
+      "size": 11531,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/de54a9b6e98477fde74f3f116721a41df7febb5f"
+    },
+    {
+      "path": "crates/celld/js/text_encoding.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "77c941d856436a030b28dbd027f1546b651a4096",
+      "size": 12075,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/77c941d856436a030b28dbd027f1546b651a4096"
+    },
+    {
+      "path": "crates/celld/js/text_encoding_streams.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2efcbdebea3995280c48f559059df32c92583e82",
+      "size": 1685,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/2efcbdebea3995280c48f559059df32c92583e82"
+    },
+    {
+      "path": "crates/celld/js/url.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d38a85a2df037e5346f8725e28e6601162560990",
+      "size": 10150,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/d38a85a2df037e5346f8725e28e6601162560990"
+    },
+    {
+      "path": "crates/celld/js/url_pattern.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e0c9126993fa6e7ddaf4fbcfcdb56e79e66a4d1b",
+      "size": 3885,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/e0c9126993fa6e7ddaf4fbcfcdb56e79e66a4d1b"
+    },
+    {
+      "path": "crates/celld/js/url_search_params.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "24706cf8d5b3e17cb09de4136fbc56308180b4f2",
+      "size": 6915,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/24706cf8d5b3e17cb09de4136fbc56308180b4f2"
+    },
+    {
+      "path": "crates/celld/js/v8_strings.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "aead4bb7bddb5172055c8480a9a8ac9156b4ddf3",
+      "size": 3468,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/aead4bb7bddb5172055c8480a9a8ac9156b4ddf3"
+    },
+    {
+      "path": "crates/celld/js/websocket.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8b64d1242597f8b8893b77732cd502fc4d5c55a9",
+      "size": 30771,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/8b64d1242597f8b8893b77732cd502fc4d5c55a9"
+    },
+    {
+      "path": "crates/celld/js/writable_stream.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "caaa21c5499961cd4a1961d91f017a59987783e4",
+      "size": 22385,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/caaa21c5499961cd4a1961d91f017a59987783e4"
+    },
+    {
+      "path": "crates/celld/js/zlib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8677669514e4e97280b4fb83d91daa80fa7bf458",
+      "size": 10012,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/8677669514e4e97280b4fb83d91daa80fa7bf458"
+    },
+    {
+      "path": "crates/celld/kv_blob.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a384e38051a71b90cb216ade3908b9f878375c6c",
+      "size": 7867,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/a384e38051a71b90cb216ade3908b9f878375c6c"
+    },
+    {
+      "path": "crates/celld/kv_cli.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4271accc35a25f9ec0b5b771556ee471f5f505e1",
+      "size": 34662,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/4271accc35a25f9ec0b5b771556ee471f5f505e1"
+    },
+    {
+      "path": "crates/celld/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c3ecb1e06457290f84eb1503bc15cf56968287f7",
+      "size": 9494,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/c3ecb1e06457290f84eb1503bc15cf56968287f7"
+    },
+    {
+      "path": "crates/celld/local_store.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8c512092d24d2b0ce4793f39864fc75bb44a8b73",
+      "size": 20210,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/8c512092d24d2b0ce4793f39864fc75bb44a8b73"
+    },
+    {
+      "path": "crates/celld/ltx_repl.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "02d2c78807185ec99705d96686baf19cca2ca841",
+      "size": 240194,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/02d2c78807185ec99705d96686baf19cca2ca841"
+    },
+    {
+      "path": "crates/celld/ltx_replication.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0cd14ca333ecac294a868e5454ebccd0e9a513d4",
+      "size": 5310,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/0cd14ca333ecac294a868e5454ebccd0e9a513d4"
+    },
+    {
+      "path": "crates/celld/machine.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9a1bc8b75d9bd8b0604512220339eed2d081d10c",
+      "size": 7382,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/9a1bc8b75d9bd8b0604512220339eed2d081d10c"
+    },
+    {
+      "path": "crates/celld/main.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7fcf81f9ab7c4bc15694991469cfd8f6d08a987b",
+      "size": 246684,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/7fcf81f9ab7c4bc15694991469cfd8f6d08a987b"
+    },
+    {
+      "path": "crates/celld/main",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "2afa3129cc6b3d1dd775fcbdb0ccf9eb1f4391b9",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/2afa3129cc6b3d1dd775fcbdb0ccf9eb1f4391b9"
+    },
+    {
+      "path": "crates/celld/main/cli.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a00624952872a8af9d91d90f0208388ea2ecb04f",
+      "size": 18572,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/a00624952872a8af9d91d90f0208388ea2ecb04f"
+    },
+    {
+      "path": "crates/celld/main/peer_tunnel.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b293707bd8583e8b1506f47e5400808518aee10c",
+      "size": 30543,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/b293707bd8583e8b1506f47e5400808518aee10c"
+    },
+    {
+      "path": "crates/celld/main/websocket.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d528f18bfed42a40c743b5d105cd575c21238727",
+      "size": 51373,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/d528f18bfed42a40c743b5d105cd575c21238727"
+    },
+    {
+      "path": "crates/celld/memory.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "549ee305ca012985fab0c400b6860499f923582f",
+      "size": 13148,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/549ee305ca012985fab0c400b6860499f923582f"
+    },
+    {
+      "path": "crates/celld/node_log.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f3c622277df0a51e02bf18a7ac9f31148f7aae94",
+      "size": 302135,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/f3c622277df0a51e02bf18a7ac9f31148f7aae94"
+    },
+    {
+      "path": "crates/celld/node_log",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "83d87d529fae82437dbf29ea1bc87da2c0dc5e92",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/83d87d529fae82437dbf29ea1bc87da2c0dc5e92"
+    },
+    {
+      "path": "crates/celld/node_log/recovery_progress.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a42174ab89c96c49e5839f955e4ee6be754eb549",
+      "size": 6201,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/a42174ab89c96c49e5839f955e4ee6be754eb549"
+    },
+    {
+      "path": "crates/celld/operator_cell.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7ce1341cc473ad726b1a46822efcfd04a5633f97",
+      "size": 10064,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/7ce1341cc473ad726b1a46822efcfd04a5633f97"
+    },
+    {
+      "path": "crates/celld/otlp.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a2a135a23fe6f7f4821547a0ef40dc90ec4274c7",
+      "size": 7220,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/a2a135a23fe6f7f4821547a0ef40dc90ec4274c7"
+    },
+    {
+      "path": "crates/celld/ownership_store.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3524cb5aa64639024d39a83a91b29897989c820f",
+      "size": 51658,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/3524cb5aa64639024d39a83a91b29897989c820f"
+    },
+    {
+      "path": "crates/celld/peer_auth.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f1edf638bd7d70debaf690ba801690b72d339623",
+      "size": 12894,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/f1edf638bd7d70debaf690ba801690b72d339623"
+    },
+    {
+      "path": "crates/celld/peer_probe.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "25dcb352739fc3c8511cd4e83442b82ecb5e8387",
+      "size": 7943,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/25dcb352739fc3c8511cd4e83442b82ecb5e8387"
+    },
+    {
+      "path": "crates/celld/pool.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "18a8f98a12d7fa5dc2f17e70a95e5c231c6e2ce7",
+      "size": 37178,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/18a8f98a12d7fa5dc2f17e70a95e5c231c6e2ce7"
+    },
+    {
+      "path": "crates/celld/protocol.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a2f79f56957aacef6bdf76f880363f953b6d9850",
+      "size": 20506,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/a2f79f56957aacef6bdf76f880363f953b6d9850"
+    },
+    {
+      "path": "crates/celld/python",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "6d75ee328e15cb53975f75a74186f28c6661d52d",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/6d75ee328e15cb53975f75a74186f28c6661d52d"
+    },
+    {
+      "path": "crates/celld/python/fatal.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "66e4e8895f79b2af8cbfb338173416c6d60ffd8f",
+      "size": 1235,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/66e4e8895f79b2af8cbfb338173416c6d60ffd8f"
+    },
+    {
+      "path": "crates/celld/python/shims.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a77d9544ff0e148a1761cc6c5a34b175e7f12ab6",
+      "size": 3735,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/a77d9544ff0e148a1761cc6c5a34b175e7f12ab6"
+    },
+    {
+      "path": "crates/celld/python/worker.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a123263b056bd44a4346662562c445e3c7175700",
+      "size": 7693,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/a123263b056bd44a4346662562c445e3c7175700"
+    },
+    {
+      "path": "crates/celld/python/worker.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "20741d06d3b448168822b5ff5d93e5a070ac463d",
+      "size": 2489,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/20741d06d3b448168822b5ff5d93e5a070ac463d"
+    },
+    {
+      "path": "crates/celld/queue_batching.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "24aebf1ae840d1a5bd7895f57959ce86b5505260",
+      "size": 1335,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/24aebf1ae840d1a5bd7895f57959ce86b5505260"
+    },
+    {
+      "path": "crates/celld/queue_cli.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b972357b973af978245837913408990c2ffce34c",
+      "size": 7891,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/b972357b973af978245837913408990c2ffce34c"
+    },
+    {
+      "path": "crates/celld/queue_policy.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "04662ee83e4c0e630fadb32c8b88aab83f26388e",
+      "size": 19263,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/04662ee83e4c0e630fadb32c8b88aab83f26388e"
+    },
+    {
+      "path": "crates/celld/r2_cli.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d7ecbe999073496c43e7e87a8fcc3bf53990b3ac",
+      "size": 23089,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/d7ecbe999073496c43e7e87a8fcc3bf53990b3ac"
+    },
+    {
+      "path": "crates/celld/r2_store.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fae7ab87e6b073300b3fc4a6dcb9a2f342b74523",
+      "size": 28406,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/fae7ab87e6b073300b3fc4a6dcb9a2f342b74523"
+    },
+    {
+      "path": "crates/celld/replication.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3b0cc5c64bbab361ecdb86df01d44a279dc562b3",
+      "size": 19054,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/3b0cc5c64bbab361ecdb86df01d44a279dc562b3"
+    },
+    {
+      "path": "crates/celld/runtime.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "74941d5e7fa94e2a3509327e6801f1103ca6b80f",
+      "size": 139873,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/74941d5e7fa94e2a3509327e6801f1103ca6b80f"
+    },
+    {
+      "path": "crates/celld/startup.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e47829e91ebaa16eb1a08d9496476ae21b51463d",
+      "size": 11528,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/e47829e91ebaa16eb1a08d9496476ae21b51463d"
+    },
+    {
+      "path": "crates/celld/storage.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4b7a7b86c028fd856f9504337457af7f8407306b",
+      "size": 174442,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/4b7a7b86c028fd856f9504337457af7f8407306b"
+    },
+    {
+      "path": "crates/celld/storage",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "f332bfed639776066372c5798141c7e64a12d4eb",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/f332bfed639776066372c5798141c7e64a12d4eb"
+    },
+    {
+      "path": "crates/celld/storage/wake_record.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8986bdf6a61d3db2479add28007f663b0534ef5b",
+      "size": 4702,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/8986bdf6a61d3db2479add28007f663b0534ef5b"
+    },
+    {
+      "path": "crates/celld/telemetry.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2047b594280f98d4d51ab09868c232419b3ac08e",
+      "size": 45657,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/2047b594280f98d4d51ab09868c232419b3ac08e"
+    },
+    {
+      "path": "crates/celld/tokio_select.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6067b8b6a8bba653be74b4194ac7fee7646efbfa",
+      "size": 12281,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/6067b8b6a8bba653be74b4194ac7fee7646efbfa"
+    },
+    {
+      "path": "crates/celld/wake.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "79af0e21c24f2bf237b2b085b91ac8eb19130461",
+      "size": 25311,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/79af0e21c24f2bf237b2b085b91ac8eb19130461"
+    },
+    {
+      "path": "crates/celld/wake_entry.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "33f4bb14e74c614ed0f23e871a986a0bd91296fa",
+      "size": 4358,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/33f4bb14e74c614ed0f23e871a986a0bd91296fa"
+    },
+    {
+      "path": "crates/celld/wake_format.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2abb99347f47e8a4e3029ad07eaec0903cac6285",
+      "size": 6782,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/2abb99347f47e8a4e3029ad07eaec0903cac6285"
+    },
+    {
+      "path": "crates/celld/ws_client.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f60fcef04a6a3e237f89039b97ced3c3c6256391",
+      "size": 7619,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/f60fcef04a6a3e237f89039b97ced3c3c6256391"
+    },
+    {
+      "path": "crates/celld/ws_registry.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c644ed1672207b139832e91cfb8da45fe56f64a2",
+      "size": 51417,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/c644ed1672207b139832e91cfb8da45fe56f64a2"
+    },
+    {
+      "path": "crates/logic",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "e073d719271a02bac733ec8a7ba63c3970b56ea2",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/e073d719271a02bac733ec8a7ba63c3970b56ea2"
+    },
+    {
+      "path": "crates/logic/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8b6e3c362bed9c75e92e3c917581fe92241749a1",
+      "size": 317,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/8b6e3c362bed9c75e92e3c917581fe92241749a1"
+    },
+    {
+      "path": "crates/logic/alarm.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ed16af89ac9855dfa2e5f0aef10d8afafda7c134",
+      "size": 1374,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/ed16af89ac9855dfa2e5f0aef10d8afafda7c134"
+    },
+    {
+      "path": "crates/logic/cache.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "93589e104463d5124b57cb1d0e8c6c426a97d624",
+      "size": 1979,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/93589e104463d5124b57cb1d0e8c6c426a97d624"
+    },
+    {
+      "path": "crates/logic/cell.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "010d0b2a7065674bc496c39a89d08cea4c9c7aa4",
+      "size": 2670,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/010d0b2a7065674bc496c39a89d08cea4c9c7aa4"
+    },
+    {
+      "path": "crates/logic/cron.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b06f0cf2ee4daa4ae4eb295cdb73d99da45b807f",
+      "size": 25755,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/b06f0cf2ee4daa4ae4eb295cdb73d99da45b807f"
+    },
+    {
+      "path": "crates/logic/dead_node_reconciliation.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6c7c53a2a804c1d84c89dabd065d88f21b176ede",
+      "size": 1794,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/6c7c53a2a804c1d84c89dabd065d88f21b176ede"
+    },
+    {
+      "path": "crates/logic/drain.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fe17afa2201477f3a3a882991c19622b0af798d7",
+      "size": 7357,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/fe17afa2201477f3a3a882991c19622b0af798d7"
+    },
+    {
+      "path": "crates/logic/durability.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "492ffd107fe1e5ccb2f84148cd56618749ef211e",
+      "size": 3740,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/492ffd107fe1e5ccb2f84148cd56618749ef211e"
+    },
+    {
+      "path": "crates/logic/epoch_gc.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2435f2104c02103ef018d9ddaaeff1f546d464a6",
+      "size": 4295,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/2435f2104c02103ef018d9ddaaeff1f546d464a6"
+    },
+    {
+      "path": "crates/logic/format.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "602c610418efb18d2087218766910606bec48ea0",
+      "size": 1879,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/602c610418efb18d2087218766910606bec48ea0"
+    },
+    {
+      "path": "crates/logic/gate.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0f88b6fdff1115cb427f55c7652488a58089d01c",
+      "size": 6097,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/0f88b6fdff1115cb427f55c7652488a58089d01c"
+    },
+    {
+      "path": "crates/logic/http.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "de1901a66de5de771ba821576ace0cd496c0b791",
+      "size": 10268,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/de1901a66de5de771ba821576ace0cd496c0b791"
+    },
+    {
+      "path": "crates/logic/isolate.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8ef0ee0dba0c78f34a9e661da22e0cab665e7843",
+      "size": 15664,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/8ef0ee0dba0c78f34a9e661da22e0cab665e7843"
+    },
+    {
+      "path": "crates/logic/kv.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "07ddc5c4f4ff4d0db142bb1165562acaa11fd7e2",
+      "size": 11273,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/07ddc5c4f4ff4d0db142bb1165562acaa11fd7e2"
+    },
+    {
+      "path": "crates/logic/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "45b1e57305b119824eaec5c94005e447e8de741f",
+      "size": 299128,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/45b1e57305b119824eaec5c94005e447e8de741f"
+    },
+    {
+      "path": "crates/logic/log_evict.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2a37445c6e0701159f7d0980006bc6979dfbb804",
+      "size": 17839,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/2a37445c6e0701159f7d0980006bc6979dfbb804"
+    },
+    {
+      "path": "crates/logic/log_tier.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1dc49af235f0fe1fc9de8dbee12f0558673eef37",
+      "size": 17992,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/1dc49af235f0fe1fc9de8dbee12f0558673eef37"
+    },
+    {
+      "path": "crates/logic/output_gate.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "22b4766971b1b63875443bb30e688142fb13982a",
+      "size": 17219,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/22b4766971b1b63875443bb30e688142fb13982a"
+    },
+    {
+      "path": "crates/logic/peer.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "aea875628ecacfe414d10680cbd1c3c8895de5ba",
+      "size": 1945,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/aea875628ecacfe414d10680cbd1c3c8895de5ba"
+    },
+    {
+      "path": "crates/logic/pressure.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "34cddd64324dc7c40b16fd34fbb060df26960505",
+      "size": 15038,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/34cddd64324dc7c40b16fd34fbb060df26960505"
+    },
+    {
+      "path": "crates/logic/queue.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c36b432ed38555c52359bfff32c3961b8892af36",
+      "size": 13008,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/c36b432ed38555c52359bfff32c3961b8892af36"
+    },
+    {
+      "path": "crates/logic/rebalance.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fec8729afba0399bbbc755ad7e2b2e2c7a1ef1e4",
+      "size": 6390,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/fec8729afba0399bbbc755ad7e2b2e2c7a1ef1e4"
+    },
+    {
+      "path": "crates/logic/restore.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0c5087f93ac6f70be87b926af47899997adcae31",
+      "size": 1603,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/0c5087f93ac6f70be87b926af47899997adcae31"
+    },
+    {
+      "path": "crates/logic/routing.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "741ea0f4806c337138fdf6de46cfb0d5abecff80",
+      "size": 2546,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/741ea0f4806c337138fdf6de46cfb0d5abecff80"
+    },
+    {
+      "path": "crates/logic/schedule.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f016243143333390741a4661ae2ac6a6ea454f13",
+      "size": 5528,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/f016243143333390741a4661ae2ac6a6ea454f13"
+    },
+    {
+      "path": "crates/logic/sqlite.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f38772d8bee9f9a40da5d7384475d6639647d2e1",
+      "size": 1448,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/f38772d8bee9f9a40da5d7384475d6639647d2e1"
+    },
+    {
+      "path": "crates/logic/sweep.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f4794acb4665260a1aa606a6f307fd0c48a07e0e",
+      "size": 542,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/f4794acb4665260a1aa606a6f307fd0c48a07e0e"
+    },
+    {
+      "path": "crates/logic/types.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "72e388a773e06497868ebd4ff8174768bab494d2",
+      "size": 53826,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/72e388a773e06497868ebd4ff8174768bab494d2"
+    },
+    {
+      "path": "crates/logic/wake.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "97b895ff70c81268e1c2fc67208fedf78c23a013",
+      "size": 10916,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/97b895ff70c81268e1c2fc67208fedf78c23a013"
+    },
+    {
+      "path": "crates/ltx",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "71c0f5f76933ad3d0da0efff7de6948f811fd853",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/71c0f5f76933ad3d0da0efff7de6948f811fd853"
+    },
+    {
+      "path": "crates/ltx/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "59c8683d2c31bd16d48fa2680d8f5401c082671b",
+      "size": 1599,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/59c8683d2c31bd16d48fa2680d8f5401c082671b"
+    },
+    {
+      "path": "crates/ltx/LICENSE",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+      "size": 11358,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/d645695673349e3947e8e5ae42332d0ac3164cd7"
+    },
+    {
+      "path": "crates/ltx/LICENSE.pierrec-lz4",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "438ff7f7d8089d6e54fd21ec5ee7738e95fd6bbc",
+      "size": 1476,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/438ff7f7d8089d6e54fd21ec5ee7738e95fd6bbc"
+    },
+    {
+      "path": "crates/ltx/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6130299cb020e4e52bfadc9ccac378bde99d0986",
+      "size": 3363,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/6130299cb020e4e52bfadc9ccac378bde99d0986"
+    },
+    {
+      "path": "crates/ltx/reference",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "b2015745d2e0752be54616fec8dcdb773b5f9ee7",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/b2015745d2e0752be54616fec8dcdb773b5f9ee7"
+    },
+    {
+      "path": "crates/ltx/reference/ltx-format.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e2c82167c1bdfa80852a6433b154b141d86dcc4a",
+      "size": 3753,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/e2c82167c1bdfa80852a6433b154b141d86dcc4a"
+    },
+    {
+      "path": "crates/ltx/src",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "766594d6a5994c7c8eece7cd83f14ae7fa469049",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/766594d6a5994c7c8eece7cd83f14ae7fa469049"
+    },
+    {
+      "path": "crates/ltx/src/bundle.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "469efbffa7f4a6668c31104ce5da532c2ba6be13",
+      "size": 4556,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/469efbffa7f4a6668c31104ce5da532c2ba6be13"
+    },
+    {
+      "path": "crates/ltx/src/client",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "9b59cc541de93f168fda98d1ff18fe12218fcb79",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/9b59cc541de93f168fda98d1ff18fe12218fcb79"
+    },
+    {
+      "path": "crates/ltx/src/client/bundle.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1ef61628107f826721e8f7f58ad116d1233fd107",
+      "size": 6876,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/1ef61628107f826721e8f7f58ad116d1233fd107"
+    },
+    {
+      "path": "crates/ltx/src/client/epochs.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7b856ad0763948889c05e15831079c9815be1176",
+      "size": 5847,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/7b856ad0763948889c05e15831079c9815be1176"
+    },
+    {
+      "path": "crates/ltx/src/client/file.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fb040a5c73db5e8a7e09178daee565c938f0ff4c",
+      "size": 7226,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/fb040a5c73db5e8a7e09178daee565c938f0ff4c"
+    },
+    {
+      "path": "crates/ltx/src/client/mod.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1001849a5e059a7b8b20cea65b0e8bcd433ab25b",
+      "size": 4401,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/1001849a5e059a7b8b20cea65b0e8bcd433ab25b"
+    },
+    {
+      "path": "crates/ltx/src/client/object_store.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e10329d44d0a7e57ea7d97f5a0c7fe7a56c4d48b",
+      "size": 54380,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/e10329d44d0a7e57ea7d97f5a0c7fe7a56c4d48b"
+    },
+    {
+      "path": "crates/ltx/src/codec.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d69775c711703fff874bc369d31f389af5ba5a4e",
+      "size": 15001,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/d69775c711703fff874bc369d31f389af5ba5a4e"
+    },
+    {
+      "path": "crates/ltx/src/compaction_level.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "dedd9ba84b137265b8c89f6bfe859fead542639a",
+      "size": 4630,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/dedd9ba84b137265b8c89f6bfe859fead542639a"
+    },
+    {
+      "path": "crates/ltx/src/compactor.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "76d6b401996362d8209b7a9219323998aa75fb36",
+      "size": 7139,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/76d6b401996362d8209b7a9219323998aa75fb36"
+    },
+    {
+      "path": "crates/ltx/src/db.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f4b26239848fd24ff9f3dfd12838f2878b59cd8c",
+      "size": 110531,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/f4b26239848fd24ff9f3dfd12838f2878b59cd8c"
+    },
+    {
+      "path": "crates/ltx/src/error.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f12a7482c7d00b7a69b1185a7731211b5e5d57bc",
+      "size": 13980,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/f12a7482c7d00b7a69b1185a7731211b5e5d57bc"
+    },
+    {
+      "path": "crates/ltx/src/host.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7056da0582f86a21c4fc735c231acdba95262d73",
+      "size": 13275,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/7056da0582f86a21c4fc735c231acdba95262d73"
+    },
+    {
+      "path": "crates/ltx/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "edcac5175495cd142f84495e21439c13a62c75b7",
+      "size": 21780,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/edcac5175495cd142f84495e21439c13a62c75b7"
+    },
+    {
+      "path": "crates/ltx/src/ltx.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "45758631ef99b393bc8345044e7fb28a3a60cfa7",
+      "size": 19619,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/45758631ef99b393bc8345044e7fb28a3a60cfa7"
+    },
+    {
+      "path": "crates/ltx/src/lz4_block.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b14870fe47619d5452616bcaad5e483b4b40a9de",
+      "size": 7320,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/b14870fe47619d5452616bcaad5e483b4b40a9de"
+    },
+    {
+      "path": "crates/ltx/src/paged.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1a97460f0744cd7f02a5fb60c903545f9a732cc7",
+      "size": 21760,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/1a97460f0744cd7f02a5fb60c903545f9a732cc7"
+    },
+    {
+      "path": "crates/ltx/src/paged_vfs.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3f9b7751911aee988c3f99763af2e1de5b8335d2",
+      "size": 28013,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/3f9b7751911aee988c3f99763af2e1de5b8335d2"
+    },
+    {
+      "path": "crates/ltx/src/replica.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f53fc2622ae39da6815a4299f7c678a506444e4a",
+      "size": 40897,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/f53fc2622ae39da6815a4299f7c678a506444e4a"
+    },
+    {
+      "path": "crates/ltx/src/replica_compactor.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "37cd75e07049607749786089a314bd6491f8b456",
+      "size": 16664,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/37cd75e07049607749786089a314bd6491f8b456"
+    },
+    {
+      "path": "crates/ltx/src/replica_url.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2ec680c071ba1518b7790a45589c4538c3fcb357",
+      "size": 15027,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/2ec680c071ba1518b7790a45589c4538c3fcb357"
+    },
+    {
+      "path": "crates/ltx/src/wal.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "57a60873200a324b32883e9da429103b433e2798",
+      "size": 24602,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/57a60873200a324b32883e9da429103b433e2798"
+    },
+    {
+      "path": "docs",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "2fc75d333ebf5a45dbfbf8439676c8bfe0b46913",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/2fc75d333ebf5a45dbfbf8439676c8bfe0b46913"
+    },
+    {
+      "path": "docs/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0cef9b3d5fdf64aebb120f89c19dd092062882ce",
+      "size": 36797,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/0cef9b3d5fdf64aebb120f89c19dd092062882ce"
+    },
+    {
+      "path": "docs/cloudflare-compat.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4f29ab08a5960c64963b4b6ac405364699c1fbf3",
+      "size": 10354,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/4f29ab08a5960c64963b4b6ac405364699c1fbf3"
+    },
+    {
+      "path": "docs/guarantees.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "db5f39a9f585c45e6fd05dcbfa26fc76c6e3dbb1",
+      "size": 17397,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/db5f39a9f585c45e6fd05dcbfa26fc76c6e3dbb1"
+    },
+    {
+      "path": "docs/limitations.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6ba35abad964c9264f0a723bef689cb2da2e8009",
+      "size": 1908,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/6ba35abad964c9264f0a723bef689cb2da2e8009"
+    },
+    {
+      "path": "docs/security.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4d958c97d93f9639e14e1e54e7731ea7ed965940",
+      "size": 8191,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/4d958c97d93f9639e14e1e54e7731ea7ed965940"
+    },
+    {
+      "path": "docs/services",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "96370fad0c2e6dc2b444e6d798f62bb390708a2b",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/96370fad0c2e6dc2b444e6d798f62bb390708a2b"
+    },
+    {
+      "path": "docs/services/containers.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ab26cb5221479c6419730fe9bc8c810d0abc0985",
+      "size": 8652,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/ab26cb5221479c6419730fe9bc8c810d0abc0985"
+    },
+    {
+      "path": "docs/services/cron-triggers.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c4a86dccca11b04add65f3ed67dbf77b0de847d5",
+      "size": 3700,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/c4a86dccca11b04add65f3ed67dbf77b0de847d5"
+    },
+    {
+      "path": "docs/services/d1.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bfd86338338a0f1c0e29ad95b77dcabcc93c7c42",
+      "size": 4251,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/bfd86338338a0f1c0e29ad95b77dcabcc93c7c42"
+    },
+    {
+      "path": "docs/services/durable-object-facets.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b7c8cc83508f8c092ed9fbad77cefd8b6c901dde",
+      "size": 5950,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/b7c8cc83508f8c092ed9fbad77cefd8b6c901dde"
+    },
+    {
+      "path": "docs/services/durable-objects.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "44464ff795c7de85fc522d424e1518abcc9b1ce9",
+      "size": 7129,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/44464ff795c7de85fc522d424e1518abcc9b1ce9"
+    },
+    {
+      "path": "docs/services/dynamic-workers.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "11e08193e0993aa7058dcceebd68711f322527ce",
+      "size": 6446,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/11e08193e0993aa7058dcceebd68711f322527ce"
+    },
+    {
+      "path": "docs/services/kv.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c01e911d01f7738654b632b9ac498f2331ea8a67",
+      "size": 2681,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/c01e911d01f7738654b632b9ac498f2331ea8a67"
+    },
+    {
+      "path": "docs/services/queues.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ce184f8eddbafe3cb2f68c21c27c341c6046ee62",
+      "size": 3658,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/ce184f8eddbafe3cb2f68c21c27c341c6046ee62"
+    },
+    {
+      "path": "docs/services/r2.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "34bb3c6ea18121edc572ba89badb925c133debe0",
+      "size": 4490,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/34bb3c6ea18121edc572ba89badb925c133debe0"
+    },
+    {
+      "path": "docs/services/static-assets-flow.svg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0b626d10fe95f0dec7f84214c1c15cc5c9fe7919",
+      "size": 12812,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/0b626d10fe95f0dec7f84214c1c15cc5c9fe7919"
+    },
+    {
+      "path": "docs/services/static-assets.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cfdca35bd0500fbc977034e92a154211d73e74aa",
+      "size": 5559,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/cfdca35bd0500fbc977034e92a154211d73e74aa"
+    },
+    {
+      "path": "docs/services/workers-flow.svg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e7aa4220539e74c765fae20d310f548f84d1bbf2",
+      "size": 8567,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/e7aa4220539e74c765fae20d310f548f84d1bbf2"
+    },
+    {
+      "path": "docs/services/workers.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a943a33a938095255dfcf2248fc6073e2af980ae",
+      "size": 6856,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/a943a33a938095255dfcf2248fc6073e2af980ae"
+    },
+    {
+      "path": "docs/services/workflows.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "38f3ca2a86eab17d64b841283bd0c3629c71eff1",
+      "size": 3596,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/38f3ca2a86eab17d64b841283bd0c3629c71eff1"
+    },
+    {
+      "path": "docs/telemetry.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9a97f21915855a912ccfe3bbf2b7720182774eb1",
+      "size": 6403,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/9a97f21915855a912ccfe3bbf2b7720182774eb1"
+    },
+    {
+      "path": "docs/testing.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "15dbe84661b8f8a04493559bab4d2c8b6766b452",
+      "size": 7557,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/15dbe84661b8f8a04493559bab4d2c8b6766b452"
+    },
+    {
+      "path": "docs/wasm.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c6822ec5a3cf964456dd94e61e8dd4acc4b81dbc",
+      "size": 3164,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/c6822ec5a3cf964456dd94e61e8dd4acc4b81dbc"
+    },
+    {
+      "path": "examples",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "68071734951afd5ab1e5162b3ce5ba7ef888450d",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/68071734951afd5ab1e5162b3ce5ba7ef888450d"
+    },
+    {
+      "path": "examples/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "effbc2a02b16813216919130edacf509d53cfebd",
+      "size": 2731,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/effbc2a02b16813216919130edacf509d53cfebd"
+    },
+    {
+      "path": "examples/alarm",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "b689e6ada0c48a8df0fb7b2c6571a692c0e5d1db",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/b689e6ada0c48a8df0fb7b2c6571a692c0e5d1db"
+    },
+    {
+      "path": "examples/alarm/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "53f0c49dce0d2a6c9e6301ea15efe3e04a636743",
+      "size": 876,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/53f0c49dce0d2a6c9e6301ea15efe3e04a636743"
+    },
+    {
+      "path": "examples/alarm/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2847ef1420fe04b64c8aef03c0981cf12046691e",
+      "size": 239,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/2847ef1420fe04b64c8aef03c0981cf12046691e"
+    },
+    {
+      "path": "examples/async",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "840c74cbf29b419dbf10452ad977dd7ae52ce8f7",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/840c74cbf29b419dbf10452ad977dd7ae52ce8f7"
+    },
+    {
+      "path": "examples/async/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8c64ea062859078dad8afca353f02939d0badda9",
+      "size": 446,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/8c64ea062859078dad8afca353f02939d0badda9"
+    },
+    {
+      "path": "examples/async/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f34691a3594c3eea7324e72fc5eac7e6460db4fe",
+      "size": 247,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/f34691a3594c3eea7324e72fc5eac7e6460db4fe"
+    },
+    {
+      "path": "examples/body",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "ca86a951c80ff69bce000543e86133d2c966d22b",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/ca86a951c80ff69bce000543e86133d2c966d22b"
+    },
+    {
+      "path": "examples/body/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8bfd5209d3d884cdef232c66a93d5e3b7ad47cae",
+      "size": 711,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/8bfd5209d3d884cdef232c66a93d5e3b7ad47cae"
+    },
+    {
+      "path": "examples/body/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8493b260186294b6b9d1f675ec86d1808b38d980",
+      "size": 229,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/8493b260186294b6b9d1f675ec86d1808b38d980"
+    },
+    {
+      "path": "examples/container",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "25af7642ede2426d33f0c8ff55e6ee42ab1d4bc4",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/25af7642ede2426d33f0c8ff55e6ee42ab1d4bc4"
+    },
+    {
+      "path": "examples/container/Dockerfile",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "06af37fa53fed8a99ccfea3c8b6092f0af368af7",
+      "size": 109,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/06af37fa53fed8a99ccfea3c8b6092f0af368af7"
+    },
+    {
+      "path": "examples/container/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0003b7ab566b6fa64eb9bfac20fec2dfe20c5b57",
+      "size": 1353,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/0003b7ab566b6fa64eb9bfac20fec2dfe20c5b57"
+    },
+    {
+      "path": "examples/container/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6ab5928cbe9f6cd3f7f78a2f23598fa412a87a34",
+      "size": 1149,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/6ab5928cbe9f6cd3f7f78a2f23598fa412a87a34"
+    },
+    {
+      "path": "examples/container/package.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5f2e3f4888d5e357e41dfb0af238a52a8e30e890",
+      "size": 143,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/5f2e3f4888d5e357e41dfb0af238a52a8e30e890"
+    },
+    {
+      "path": "examples/container/server.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fff382a31094ae56123d40f2d9885580daf0fb16",
+      "size": 1044,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/fff382a31094ae56123d40f2d9885580daf0fb16"
+    },
+    {
+      "path": "examples/container/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d54118417f28e5f4de2006c4d2d9fa5e94c0e316",
+      "size": 438,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/d54118417f28e5f4de2006c4d2d9fa5e94c0e316"
+    },
+    {
+      "path": "examples/counter",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "f2616c1412ab3c61a8df53490dbe779926ca3206",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/f2616c1412ab3c61a8df53490dbe779926ca3206"
+    },
+    {
+      "path": "examples/counter/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4dfd4bb7ea8cbbc423436479912b6b3c450c9791",
+      "size": 490,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/4dfd4bb7ea8cbbc423436479912b6b3c450c9791"
+    },
+    {
+      "path": "examples/counter/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "07c9668efe66ca7bc37a79e8149af314fd13760d",
+      "size": 247,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/07c9668efe66ca7bc37a79e8149af314fd13760d"
+    },
+    {
+      "path": "examples/cron",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "ce00e5b4207e02bb3519a257a5d37cabe9b39154",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/ce00e5b4207e02bb3519a257a5d37cabe9b39154"
+    },
+    {
+      "path": "examples/cron/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a3c924631f1111957f9a7524944fee1b1ed852e8",
+      "size": 212,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/a3c924631f1111957f9a7524944fee1b1ed852e8"
+    },
+    {
+      "path": "examples/cron/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "69d5ff9c6994c67445e7e4f9145d526cb83101fb",
+      "size": 123,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/69d5ff9c6994c67445e7e4f9145d526cb83101fb"
+    },
+    {
+      "path": "examples/d1",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "bd5cb284adee42a01f719602844ad9bca6a4a894",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/bd5cb284adee42a01f719602844ad9bca6a4a894"
+    },
+    {
+      "path": "examples/d1/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c178ce24c081a11c2e9da7629978f394fe4eab6b",
+      "size": 1150,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/c178ce24c081a11c2e9da7629978f394fe4eab6b"
+    },
+    {
+      "path": "examples/d1/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fa5988050744743ad5d05ff7c9012a5002a2f29b",
+      "size": 235,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/fa5988050744743ad5d05ff7c9012a5002a2f29b"
+    },
+    {
+      "path": "examples/dynamic-worker-tails",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "0ad1a07bb9ba20c5668359882accb9e88f99a58e",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/0ad1a07bb9ba20c5668359882accb9e88f99a58e"
+    },
+    {
+      "path": "examples/dynamic-worker-tails/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ab5f3550c533efd81778337db16df1181ccb2db0",
+      "size": 589,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/ab5f3550c533efd81778337db16df1181ccb2db0"
+    },
+    {
+      "path": "examples/dynamic-worker-tails/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "438fb2bd0e3ef0ce82bcb12719fb4962284eb1ea",
+      "size": 1026,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/438fb2bd0e3ef0ce82bcb12719fb4962284eb1ea"
+    },
+    {
+      "path": "examples/dynamic-worker-tails/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "34594660e24bb4a8d3cc98cbcfe36129ed1af0ab",
+      "size": 144,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/34594660e24bb4a8d3cc98cbcfe36129ed1af0ab"
+    },
+    {
+      "path": "examples/facets",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "73cd6187b1989ec4fa2c0b105eea6a9bbba6e334",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/73cd6187b1989ec4fa2c0b105eea6a9bbba6e334"
+    },
+    {
+      "path": "examples/facets/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "004dc5695de67e376bc3739aaa266058d0afd4b0",
+      "size": 870,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/004dc5695de67e376bc3739aaa266058d0afd4b0"
+    },
+    {
+      "path": "examples/facets/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7229e599d500cea09548f74e7e789eddafb5f5f6",
+      "size": 1316,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/7229e599d500cea09548f74e7e789eddafb5f5f6"
+    },
+    {
+      "path": "examples/facets/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "302368fb63fe01f6ac58e6da7abe3574342d40ea",
+      "size": 302,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/302368fb63fe01f6ac58e6da7abe3574342d40ea"
+    },
+    {
+      "path": "examples/hello",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "41ca2c9f424b2f7bcf2c03ceb7a711e6975c4c98",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/41ca2c9f424b2f7bcf2c03ceb7a711e6975c4c98"
+    },
+    {
+      "path": "examples/hello/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7289d3bbd4ea37ebf5576323393e3a3b8f4d856c",
+      "size": 148,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/7289d3bbd4ea37ebf5576323393e3a3b8f4d856c"
+    },
+    {
+      "path": "examples/hello/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8a5686ae0036ba0200247fbf4fb3f763ce3bb63f",
+      "size": 76,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/8a5686ae0036ba0200247fbf4fb3f763ce3bb63f"
+    },
+    {
+      "path": "examples/kv",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "285ee1dcbabf0895af18fd32fe35fe3ca1c792b4",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/285ee1dcbabf0895af18fd32fe35fe3ca1c792b4"
+    },
+    {
+      "path": "examples/kv/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "16b8622f42a93f83efb49a14c2bcf3122e6f3e38",
+      "size": 601,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/16b8622f42a93f83efb49a14c2bcf3122e6f3e38"
+    },
+    {
+      "path": "examples/kv/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "819383a67564beb55236da644613c2f84ec26ed8",
+      "size": 173,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/819383a67564beb55236da644613c2f84ec26ed8"
+    },
+    {
+      "path": "examples/opencode",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "32087f21563df237f85be04564289fbf3f6a9aac",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/32087f21563df237f85be04564289fbf3f6a9aac"
+    },
+    {
+      "path": "examples/opencode/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8cb12a849e6c8a600c0fb82734747c45914f616a",
+      "size": 1065,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/8cb12a849e6c8a600c0fb82734747c45914f616a"
+    },
+    {
+      "path": "examples/opencode/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "18069f23ccefe7f544b7b459a95f549ba0ecc430",
+      "size": 4120,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/18069f23ccefe7f544b7b459a95f549ba0ecc430"
+    },
+    {
+      "path": "examples/opencode/package.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "08b22e47e7d2eecd974df46ecf2bd767ab1f516f",
+      "size": 126,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/08b22e47e7d2eecd974df46ecf2bd767ab1f516f"
+    },
+    {
+      "path": "examples/opencode/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f6142d430e0c95e7de6e35947118f2ec986213bf",
+      "size": 313,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/f6142d430e0c95e7de6e35947118f2ec986213bf"
+    },
+    {
+      "path": "examples/pi",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "91a157b523fc2c2aadbe8fe05979837d7011f1ad",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/91a157b523fc2c2aadbe8fe05979837d7011f1ad"
+    },
+    {
+      "path": "examples/pi/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "eaabd99f62bf2235b62639a5d4f9dd2f0286376d",
+      "size": 1741,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/eaabd99f62bf2235b62639a5d4f9dd2f0286376d"
+    },
+    {
+      "path": "examples/pi/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1b34442875f7f7e82d5b2df1cf01e858cc5c112e",
+      "size": 2603,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/1b34442875f7f7e82d5b2df1cf01e858cc5c112e"
+    },
+    {
+      "path": "examples/pi/package.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5a292434686ab44ad5063d9d3285673bd8016194",
+      "size": 142,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/5a292434686ab44ad5063d9d3285673bd8016194"
+    },
+    {
+      "path": "examples/pi/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f7b43149c52385d1ea391876ec264318c00c1455",
+      "size": 552,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/f7b43149c52385d1ea391876ec264318c00c1455"
+    },
+    {
+      "path": "examples/python",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "57f064ccc200b6d7418a8ae64d2a4128414c65d4",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/57f064ccc200b6d7418a8ae64d2a4128414c65d4"
+    },
+    {
+      "path": "examples/python/.gitignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9cba782a5973289918d90a2dacacea8ca6b1b4f1",
+      "size": 43,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/9cba782a5973289918d90a2dacacea8ca6b1b4f1"
+    },
+    {
+      "path": "examples/python/pyproject.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "083a38eafd976f77cd33546af2be157734e543d3",
+      "size": 178,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/083a38eafd976f77cd33546af2be157734e543d3"
+    },
+    {
+      "path": "examples/python/src",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "1cc35666a5f6ac609189dbfb8f3d61c20f2a214e",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/1cc35666a5f6ac609189dbfb8f3d61c20f2a214e"
+    },
+    {
+      "path": "examples/python/src/entry.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "68201f9d6c2b5826ab9bae0e4362eb2a6810ac30",
+      "size": 1425,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/68201f9d6c2b5826ab9bae0e4362eb2a6810ac30"
+    },
+    {
+      "path": "examples/python/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6541500fc25e42d6bbdee346e2d03bce036f6a37",
+      "size": 224,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/6541500fc25e42d6bbdee346e2d03bce036f6a37"
+    },
+    {
+      "path": "examples/queues",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "f3fcb7a0b058f4c3af4fee64e43012a92338076c",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/f3fcb7a0b058f4c3af4fee64e43012a92338076c"
+    },
+    {
+      "path": "examples/queues/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c9a8aa0c86b7d513fd3e659025964d438ff71825",
+      "size": 732,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/c9a8aa0c86b7d513fd3e659025964d438ff71825"
+    },
+    {
+      "path": "examples/queues/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b780e04bf5bc6b8f6844241e23c30d69c6e5f1f5",
+      "size": 434,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/b780e04bf5bc6b8f6844241e23c30d69c6e5f1f5"
+    },
+    {
+      "path": "examples/r2",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "d1ee27f2a08d61de28dba6f4d74534db0cc89265",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/d1ee27f2a08d61de28dba6f4d74534db0cc89265"
+    },
+    {
+      "path": "examples/r2/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "25ef0c8b6a2a6acc1734649ae03f697f1082afa6",
+      "size": 1005,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/25ef0c8b6a2a6acc1734649ae03f697f1082afa6"
+    },
+    {
+      "path": "examples/r2/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e6a4b5dcb3e67fb88965f3893f209b22cfa36c9c",
+      "size": 161,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/e6a4b5dcb3e67fb88965f3893f209b22cfa36c9c"
+    },
+    {
+      "path": "examples/router",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "f3814864f49a6ecfe27ff073f06a8965531878e9",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/f3814864f49a6ecfe27ff073f06a8965531878e9"
+    },
+    {
+      "path": "examples/router/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "159a02610e4d223c00110858899602385f4a7f2d",
+      "size": 541,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/159a02610e4d223c00110858899602385f4a7f2d"
+    },
+    {
+      "path": "examples/router/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "dc78a2eab7f3a380e5bd154b260b2d007da2ec2a",
+      "size": 246,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/dc78a2eab7f3a380e5bd154b260b2d007da2ec2a"
+    },
+    {
+      "path": "examples/rpc",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "5abdbaa11aaa5a2e4069ea8d017430fc30e39a1a",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/5abdbaa11aaa5a2e4069ea8d017430fc30e39a1a"
+    },
+    {
+      "path": "examples/rpc/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cf26fe9b18119b332040b18c0cfc7d90f0bc4461",
+      "size": 634,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/cf26fe9b18119b332040b18c0cfc7d90f0bc4461"
+    },
+    {
+      "path": "examples/rpc/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "037c490513f1e0ea9731810146edce801de8b854",
+      "size": 243,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/037c490513f1e0ea9731810146edce801de8b854"
+    },
+    {
+      "path": "examples/sandbox",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "87ec6d811c578add77c20760efc62d91b7d802de",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/87ec6d811c578add77c20760efc62d91b7d802de"
+    },
+    {
+      "path": "examples/sandbox/Dockerfile",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "338be2cf31c47f359c17fbbb5a3ee68ae5f6f5c2",
+      "size": 233,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/338be2cf31c47f359c17fbbb5a3ee68ae5f6f5c2"
+    },
+    {
+      "path": "examples/sandbox/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8b71aaa08bd07e0b2b24ce4f015d64a89a5ab661",
+      "size": 1176,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/8b71aaa08bd07e0b2b24ce4f015d64a89a5ab661"
+    },
+    {
+      "path": "examples/sandbox/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c66c16dabd2b0614b883ca4096e7d676fb4402e6",
+      "size": 1851,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/c66c16dabd2b0614b883ca4096e7d676fb4402e6"
+    },
+    {
+      "path": "examples/sandbox/package.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a8f163f75a118afdbc637ab814ed4e95b64a1ca2",
+      "size": 138,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/a8f163f75a118afdbc637ab814ed4e95b64a1ca2"
+    },
+    {
+      "path": "examples/sandbox/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2afcced1b39cd3540fce540524991e11689c3461",
+      "size": 445,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/2afcced1b39cd3540fce540524991e11689c3461"
+    },
+    {
+      "path": "examples/static-assets",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "dc0301f75a8e528799ff43e69f7bf06608a3ae0b",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/dc0301f75a8e528799ff43e69f7bf06608a3ae0b"
+    },
+    {
+      "path": "examples/static-assets/public",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "049b9ac7f6ac591982d20588d5333ca031debec7",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/049b9ac7f6ac591982d20588d5333ca031debec7"
+    },
+    {
+      "path": "examples/static-assets/public/_headers",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b3ce8e9d73efcc6e2c9d6076830a6615d3c233be",
+      "size": 24,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/b3ce8e9d73efcc6e2c9d6076830a6615d3c233be"
+    },
+    {
+      "path": "examples/static-assets/public/_redirects",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5a2e1775e0817b6809d2b0cae9e646b1c9dadc07",
+      "size": 12,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/5a2e1775e0817b6809d2b0cae9e646b1c9dadc07"
+    },
+    {
+      "path": "examples/static-assets/public/index.html",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1b9e00a442a04f0133f47bdeacf745890c7007fb",
+      "size": 261,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/1b9e00a442a04f0133f47bdeacf745890c7007fb"
+    },
+    {
+      "path": "examples/static-assets/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3fafcaf4b08ff07240448cfae526380da394aed4",
+      "size": 109,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/3fafcaf4b08ff07240448cfae526380da394aed4"
+    },
+    {
+      "path": "examples/vectordb",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "50aa72b84e16dfd4d57bdf501abc613b76c521b2",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/50aa72b84e16dfd4d57bdf501abc613b76c521b2"
+    },
+    {
+      "path": "examples/vectordb/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5550b3048be0be226e1d94634d9a34da0cfe2e9b",
+      "size": 1355,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/5550b3048be0be226e1d94634d9a34da0cfe2e9b"
+    },
+    {
+      "path": "examples/vectordb/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "73fe1329d0a7b192015eea1c08be84a6cc8b11b7",
+      "size": 351,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/73fe1329d0a7b192015eea1c08be84a6cc8b11b7"
+    },
+    {
+      "path": "examples/wasm",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "c3d45e6fc960a84865197477cc342446d96703f6",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/c3d45e6fc960a84865197477cc342446d96703f6"
+    },
+    {
+      "path": "examples/wasm/.gitignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6b2532e87edefddef19588ead364f99c856dc501",
+      "size": 26,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/6b2532e87edefddef19588ead364f99c856dc501"
+    },
+    {
+      "path": "examples/wasm/Cargo.toml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7df37cb2e3ffd6d39becf2eb23df956c2559f020",
+      "size": 225,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/7df37cb2e3ffd6d39becf2eb23df956c2559f020"
+    },
+    {
+      "path": "examples/wasm/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4ddfd8b587a8e0d1672405a83b18031cdb13021b",
+      "size": 858,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/4ddfd8b587a8e0d1672405a83b18031cdb13021b"
+    },
+    {
+      "path": "examples/wasm/src",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "bea7fed2995930a64e04d07dd7133057d18161ca",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/bea7fed2995930a64e04d07dd7133057d18161ca"
+    },
+    {
+      "path": "examples/wasm/src/lib.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ce3b5728874c3e21e92689d7e3b5c090c5c011ed",
+      "size": 1167,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/ce3b5728874c3e21e92689d7e3b5c090c5c011ed"
+    },
+    {
+      "path": "examples/wasm/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "61cfa46d7987b49097441c286451fa79f152c0cb",
+      "size": 268,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/61cfa46d7987b49097441c286451fa79f152c0cb"
+    },
+    {
+      "path": "examples/webapi",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "571a14a9c9b77f6ef46e108a693054fbdd3bb8d4",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/571a14a9c9b77f6ef46e108a693054fbdd3bb8d4"
+    },
+    {
+      "path": "examples/webapi/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6f986b952f44726cc057af3145a63d3cefa02bfd",
+      "size": 523,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/6f986b952f44726cc057af3145a63d3cefa02bfd"
+    },
+    {
+      "path": "examples/webapi/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cf10acd765773e17e75268cf0d64a0c3e1bac3b8",
+      "size": 77,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/cf10acd765773e17e75268cf0d64a0c3e1bac3b8"
+    },
+    {
+      "path": "examples/workflow",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "154bdc4429b98db3b14e2472ea5344061e8acaad",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/154bdc4429b98db3b14e2472ea5344061e8acaad"
+    },
+    {
+      "path": "examples/workflow/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "600d41d1c094e1fed510c588ccf7008cdd97ceb6",
+      "size": 1151,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/600d41d1c094e1fed510c588ccf7008cdd97ceb6"
+    },
+    {
+      "path": "examples/workflow/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ac952689068f9516244a2814b38d63cf8054bd53",
+      "size": 215,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/ac952689068f9516244a2814b38d63cf8054bd53"
+    },
+    {
+      "path": "examples/wsclient",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "517d98db6a1173568914d13bd611dc84bed84965",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/517d98db6a1173568914d13bd611dc84bed84965"
+    },
+    {
+      "path": "examples/wsclient/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ecd06758efc844995f72ca0fef57439aa743c710",
+      "size": 892,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/ecd06758efc844995f72ca0fef57439aa743c710"
+    },
+    {
+      "path": "examples/wsclient/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "00f9df0b5c2543cd43c3b9cfcf507b8545af7cca",
+      "size": 265,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/00f9df0b5c2543cd43c3b9cfcf507b8545af7cca"
+    },
+    {
+      "path": "examples/wsecho",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "5da2736f6c504bf63d69166065cbf6b6f990b9c8",
+      "url": "https://api.github.com/repos/denoland/celld/git/trees/5da2736f6c504bf63d69166065cbf6b6f990b9c8"
+    },
+    {
+      "path": "examples/wsecho/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8ff1528ba911e7136b97bc09054d2f4386be7192",
+      "size": 762,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/8ff1528ba911e7136b97bc09054d2f4386be7192"
+    },
+    {
+      "path": "examples/wsecho/wrangler.jsonc",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f1652d32dc0a60a0758f0cacad0dff5fa548b595",
+      "size": 222,
+      "url": "https://api.github.com/repos/denoland/celld/git/blobs/f1652d32dc0a60a0758f0cacad0dff5fa548b595"
+    }
+  ],
+  "truncated": false
+}

@@ -1,3 +1,4 @@
+import { decodeFileUpload, decodeFileUploads } from './uploads';
 import type { Bridge } from './contract';
 import {
   isTerminalCommandError,
@@ -43,6 +44,9 @@ export const vaultCommands = (
   | 'restoreTrashItem'
   | 'removeItem'
   | 'emptyTrash'
+  | 'listFileUploads'
+  | 'resumeFileUpload'
+  | 'cancelFileUpload'
   | 'importDroppedFile'
   | 'pickImportFile'
   | 'releaseImportFile'
@@ -53,6 +57,24 @@ export const vaultCommands = (
   | 'discardPasswordImport'
   | 'exportLogins'
 > => ({
+  listFileUploads: (storeId, after = null) =>
+    transport.checked(
+      'list_file_uploads',
+      { storeId, after },
+      decodeFileUploads,
+    ),
+  resumeFileUpload: (storeId, uploadId) =>
+    transport.checkedMutation(
+      'resume_file_upload',
+      { storeId, uploadId },
+      decodeFileUpload,
+    ),
+  cancelFileUpload: (storeId, uploadId) =>
+    transport.checkedMutation(
+      'cancel_file_upload',
+      { storeId, uploadId },
+      decodeFileUpload,
+    ),
   listCatalog: async (onPartial, fresh = false) => {
     if (!onPartial)
       return transport.checked('list_catalog', { fresh }, decodeCatalog);

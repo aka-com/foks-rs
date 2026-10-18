@@ -1,5 +1,6 @@
 use super::*;
 use sha2::{Digest as _, Sha256};
+pub(crate) mod private;
 
 #[cfg(test)]
 pub(super) static TEST_FAIL_AFTER_CHECKPOINT_PUBLICATION: std::sync::atomic::AtomicBool =
@@ -278,7 +279,8 @@ fn session_import_verification_required(state_id: &str, profile: &Path) -> Optio
 pub enum CredentialBackend {
     /// Native macOS Keychain or Linux Secret Service storage.
     Native,
-    /// Explicit development/test backend with no external rollback boundary.
+    /// Private-file credentials and a root-level profile rollback checkpoint.
+    /// Rolling back the entire root and its checkpoint is not detectable.
     PrivateFile,
 }
 
@@ -368,7 +370,10 @@ pub(crate) fn inspect_state_file(root: &Path) -> Result<Option<ClientStateFile>>
         return Ok(None);
     };
     let state: ClientStateFile = toml::from_slice(&bytes)?;
-    if state.version != STATE_CONFIG_VERSION {
+    if state.version != STATE_CONFIG_VERSION
+        && !(state.credential_backend == CredentialBackend::PrivateFile
+            && state.version == private::VERSION)
+    {
         return Err(Error::InvalidConfig(
             if state.version == 2 && state.credential_backend == CredentialBackend::Native {
                 "native client state uses unsupported per-record credential storage"
@@ -430,11 +435,16 @@ impl ClientCredentials {
             }
             CredentialBackend::PrivateFile => {
                 foks_keystore::create_master_key_file(root.join("master.key"))?;
+                private::initialize(&root, &state_id)?;
             }
         }
 
         let bytes = toml::to_string_pretty(&ClientStateFile {
-            version: STATE_CONFIG_VERSION,
+            version: if backend == CredentialBackend::PrivateFile {
+                private::VERSION
+            } else {
+                STATE_CONFIG_VERSION
+            },
             state_id: state_id.clone(),
             credential_backend: backend,
         })?;
@@ -447,6 +457,7 @@ impl ClientCredentials {
                 }
                 CredentialBackend::PrivateFile => {
                     let _ = fs::remove_file(root.join("master.key"));
+                    let _ = fs::remove_dir_all(root.join("checkpoint-authority"));
                 }
             }
             return Err(error);
@@ -468,7 +479,10 @@ impl ClientCredentials {
         let bytes = read_private_file_optional(&root.join(STATE_CONFIG_FILE), MAX_CONFIG_BYTES)?
             .ok_or(Error::InvalidConfig("client state is not initialized"))?;
         let state: ClientStateFile = toml::from_slice(&bytes)?;
-        if state.version != STATE_CONFIG_VERSION {
+        if state.version != STATE_CONFIG_VERSION
+            && !(state.credential_backend == CredentialBackend::PrivateFile
+                && state.version == private::VERSION)
+        {
             return Err(Error::InvalidConfig(
                 if state.version == 2 && state.credential_backend == CredentialBackend::Native {
                     "native client state uses unsupported per-record credential storage"
@@ -482,7 +496,9 @@ impl ClientCredentials {
         // state: it refused a pending maintenance intent and a manifest bound
         // to another root path, which is what a second read here would check
         // again on the same record. Every later manifest access verifies the
-        // binding once more under its own lock.
+        // binding once more under its own lock. PrivateFile handles remain
+        // available to explicit recovery tooling when the authority is unreadable;
+        // every checked admission/publication validates it under with_authority.
         Ok(Self {
             lease,
             root,
@@ -537,6 +553,9 @@ impl ClientCredentials {
         &self,
         operation: impl FnOnce(&mut NativeManifestStore) -> Result<T>,
     ) -> Result<T> {
+        if self.backend == CredentialBackend::PrivateFile {
+            return private::with_authority(self, false, operation)?.ok_or(Error::StateBusy);
+        }
         self.lease.validate()?;
         let lock = runtime::NativeManifestLock::acquire(&self.state_id)?;
         let (mut native, mut manifest) = self.open_native_manifest()?;
@@ -554,6 +573,9 @@ impl ClientCredentials {
         &self,
         operation: impl FnOnce(&mut NativeManifestStore) -> Result<T>,
     ) -> Result<Option<T>> {
+        if self.backend == CredentialBackend::PrivateFile {
+            return private::with_authority(self, true, operation);
+        }
         self.lease.validate()?;
         let Some(lock) = runtime::NativeManifestLock::try_acquire(&self.state_id)? else {
             return Ok(None);
@@ -597,12 +619,9 @@ impl ClientCredentials {
 
     pub(super) fn begin_profile_publication(&self, profile: &str) -> Result<[u8; 32]> {
         validate_name(profile)?;
-        if self.backend == CredentialBackend::Native {
-            return self.with_native_manifest(|manifest| {
-                begin_profile_publication_with_store(profile, manifest)
-            });
-        }
-        random_array()
+        self.with_native_manifest(|manifest| {
+            begin_profile_publication_with_store(profile, manifest)
+        })
     }
 
     pub(super) fn profile_publication_is_authorized(
@@ -611,9 +630,6 @@ impl ClientCredentials {
         authorization: &[u8; 32],
         marker_digest: &[u8; 32],
     ) -> Result<bool> {
-        if self.backend != CredentialBackend::Native {
-            return Ok(true);
-        }
         self.with_native_manifest(|manifest| {
             profile_publication_is_authorized_with_store(
                 profile,
@@ -630,9 +646,6 @@ impl ClientCredentials {
         authorization: &[u8; 32],
         marker_digest: &[u8; 32],
     ) -> Result<()> {
-        if self.backend != CredentialBackend::Native {
-            return Ok(());
-        }
         self.with_native_manifest(|manifest| {
             bind_profile_publication_with_store(profile, authorization, marker_digest, manifest)
         })
@@ -643,9 +656,6 @@ impl ClientCredentials {
         profile: &str,
         authorization: &[u8; 32],
     ) -> Result<()> {
-        if self.backend != CredentialBackend::Native {
-            return Ok(());
-        }
         self.with_native_manifest(|manifest| {
             cancel_profile_publication_with_store(profile, authorization, manifest)
         })
@@ -686,12 +696,13 @@ impl ClientCredentials {
     // Only the portability module exposes narrow proof and reauthentication APIs.
     pub fn requires_import_verification(&self, session: &ProfileSession) -> Result<bool> {
         self.ensure_session_root(session)?;
-        let native = self.backend == CredentialBackend::Native
-            && self.with_native_manifest(|m| {
-                Ok(m.records
-                    .contains_key(&crate::portability::readiness::key(&session.profile.name)?))
-            })?;
-        Ok(native
+        let external = self.with_native_manifest(|m| {
+            Ok(m.records
+                .contains_key(&crate::portability::readiness::key(&session.profile.name)?))
+        })?;
+        // The non-creating read reports no gate for an absent database, so a
+        // read outside the profile lock never creates hard state.
+        Ok(external
             || crate::portability::readiness::hard_state_requires_verification(
                 &session.paths.hard_database,
             )?)
@@ -714,6 +725,8 @@ impl ClientCredentials {
     where
         E: From<Error>,
     {
+        let _operation_control = session.operation_scope().map_err(E::from)?;
+        session.check_operation().map_err(E::from)?;
         self.ensure_session_root(session).map_err(E::from)?;
         let key = held_profile_key(&session.paths.directory);
         if HeldCheckedProfile::is_held(&key) {
@@ -725,6 +738,7 @@ impl ClientCredentials {
             } else {
                 checked_profile_for_use(self, session).map_err(E::from)?
             };
+            session.check_operation().map_err(E::from)?;
             return operation(&checked);
         }
         let lock = runtime::ProfileLock::operation(session.paths()).map_err(E::from)?;
@@ -743,7 +757,10 @@ impl ClientCredentials {
         let _ = self.compact_session_merkle_roots(&checked);
         let _ = crate::soft_maintenance::compact_soft_large_file_stages(&checked);
         let held = HeldCheckedProfile::enter(key);
-        let result = operation(&checked);
+        let result = session
+            .check_operation()
+            .map_err(E::from)
+            .and_then(|()| operation(&checked));
         drop(held);
         drop(material);
         let checkpoint = self.advance_checkpoint(session);
@@ -808,6 +825,8 @@ impl ClientCredentials {
     where
         E: From<Error>,
     {
+        let _left_control = left.operation_scope().map_err(E::from)?;
+        let _right_control = right.operation_scope().map_err(E::from)?;
         self.ensure_session_root(left).map_err(E::from)?;
         self.ensure_session_root(right).map_err(E::from)?;
         if left.paths.directory == right.paths.directory {
@@ -849,12 +868,22 @@ impl ClientCredentials {
         let Some(second_lock) = acquire(second).map_err(E::from)? else {
             return Ok(None);
         };
+        // Bootstrap before either identity probe: probes open SQLite and must
+        // not manufacture an unanchored database before a fallible try-lock.
+        if !self
+            .initialize_empty_profile(first, nonblocking)
+            .map_err(E::from)?
+            || !self
+                .initialize_empty_profile(second, nonblocking)
+                .map_err(E::from)?
+        {
+            return Ok(None);
+        }
         let (database_locks, material) = if nonblocking {
             // Try both database/checkpoint locks without waiting while holding
             // either. A shared database identity remains an integrity error.
-            if self.backend == CredentialBackend::Native
-                && first.rollback_checkpoint().map_err(E::from)?.database_id
-                    == second.rollback_checkpoint().map_err(E::from)?.database_id
+            if first.rollback_checkpoint().map_err(E::from)?.database_id
+                == second.rollback_checkpoint().map_err(E::from)?.database_id
             {
                 return Err(E::from(self.checkpoint_reset_error(
                     second,
@@ -887,7 +916,11 @@ impl ClientCredentials {
         let right_checked = checked_profile_for_use(self, right).map_err(E::from)?;
         let left_held = HeldCheckedProfile::enter(left_key);
         let right_held = HeldCheckedProfile::enter(right_key);
-        let result = operation(&left_checked, &right_checked);
+        let result = left
+            .check_operation()
+            .and_then(|()| right.check_operation())
+            .map_err(E::from)
+            .and_then(|()| operation(&left_checked, &right_checked));
         drop(right_held);
         drop(left_held);
         drop(material);
@@ -918,10 +951,13 @@ impl ClientCredentials {
     where
         E: From<Error>,
     {
+        let _operation_control = session.operation_scope().map_err(E::from)?;
+        session.check_operation().map_err(E::from)?;
         self.ensure_session_root(session).map_err(E::from)?;
         let key = held_profile_key(&session.paths.directory);
         if HeldCheckedProfile::is_held(&key) {
             let checked = checked_profile_for_use(self, session).map_err(E::from)?;
+            session.check_operation().map_err(E::from)?;
             return operation(&checked).map(Some);
         }
         let Some(lock) = runtime::ProfileLock::try_operation(session.paths()).map_err(E::from)?
@@ -943,7 +979,10 @@ impl ClientCredentials {
         let _ = self.compact_session_merkle_roots(&checked);
         let _ = crate::soft_maintenance::compact_soft_large_file_stages(&checked);
         let held = HeldCheckedProfile::enter(key);
-        let result = operation(&checked);
+        let result = session
+            .check_operation()
+            .map_err(E::from)
+            .and_then(|()| operation(&checked));
         drop(held);
         drop(material);
         let checkpoint = self.advance_checkpoint(session);
@@ -978,10 +1017,13 @@ impl ClientCredentials {
     where
         E: From<Error>,
     {
+        let _operation_control = session.operation_scope().map_err(E::from)?;
+        session.check_operation().map_err(E::from)?;
         self.ensure_session_root(session).map_err(E::from)?;
         let key = held_profile_key(&session.paths.directory);
         if HeldCheckedProfile::is_held(&key) {
             let checked = checked_profile_for_use(self, session).map_err(E::from)?;
+            session.check_operation().map_err(E::from)?;
             return operation(&checked).map(SharedSessionOutcome::Ran);
         }
         let Some(lock) =
@@ -1000,7 +1042,10 @@ impl ClientCredentials {
         let material = HeldSessionMaterial::enter(material);
         let checked = checked_profile_for_use(self, session).map_err(E::from)?;
         let held = HeldCheckedProfile::enter(key);
-        let result = operation(&checked);
+        let result = session
+            .check_operation()
+            .map_err(E::from)
+            .and_then(|()| operation(&checked));
         drop(held);
         drop(material);
         let checkpoint = self.advance_checkpoint(session);
@@ -1027,9 +1072,6 @@ impl ClientCredentials {
     ) -> Result<SharedVerification> {
         if registry::profile_publication_is_pending(session)? {
             return Ok(SharedVerification::NeedsExclusive);
-        }
-        if self.backend != CredentialBackend::Native {
-            return Ok(SharedVerification::Verified(None, None));
         }
         if !hard_state_artifacts_exist(&session.paths.hard_database)? {
             return Ok(SharedVerification::NeedsExclusive);
@@ -1066,6 +1108,7 @@ impl ClientCredentials {
         current: &RollbackCheckpoint,
         store: &mut impl CheckpointStore,
     ) -> Result<SharedCheck> {
+        self.verify_no_reset_required(session, store)?;
         let key = rollback_record_key(&session.profile.name)?;
         let publish = match store.get(&key) {
             Ok(bytes) => {
@@ -1098,18 +1141,79 @@ impl ClientCredentials {
         Ok(SharedCheck::Verified)
     }
 
+    /// Fresh-only exception to database -> authority ordering. The caller owns
+    /// the exclusive profile lock. No database identity exists yet, and the
+    /// authority lock prevents another profile from claiming the new identity.
+    /// Persist before releasing authority; a crash before publication leaves an
+    /// existing, unanchored database that ordinary admission refuses to adopt.
+    fn initialize_empty_profile(
+        &self,
+        session: &ProfileSession,
+        nonblocking: bool,
+    ) -> Result<bool> {
+        if hard_state_artifacts_exist(&session.paths.hard_database)? {
+            return Ok(true);
+        }
+        let initialize = |manifest: &mut NativeManifestStore| {
+            // Check again under authority; never replace a retained identity.
+            let profile = &session.profile.name;
+            let retained = [
+                rollback_record_key(profile)?,
+                reset_required_key(profile)?,
+                crate::portability::readiness::key(profile)?,
+                profile_publication_authorization_key(profile)?,
+            ]
+            .iter()
+            .any(|key| manifest.records.contains_key(key))
+                || manifest.records.iter().any(|(key, value)| {
+                    key.starts_with("database.")
+                        && key.ends_with(".profile-v1")
+                        && value.as_slice() == profile.as_bytes()
+                });
+            if retained
+                || registry::profile_publication_is_pending(session)?
+                || hard_state_artifacts_exist(&session.paths.hard_database)?
+            {
+                return Err(self.checkpoint_reset_error(
+                    session,
+                    "absent hard state has retained recovery authority",
+                ));
+            }
+            let hard = foks_client_db::HardStateStore::open(&session.paths.hard_database)?;
+            let current = registry::checkpoint_for_store(&session.profile, &hard)?;
+            #[cfg(test)]
+            if FAIL_EMPTY_PROFILE_PUBLICATION.with(|fail| fail.replace(false)) {
+                return Err(Error::InvalidConfig(
+                    "injected fresh authority publication failure",
+                ));
+            }
+            self.verify_native_checkpoint_with_store(session, &current, true, manifest)
+        };
+        let initialized = if nonblocking {
+            self.try_with_native_manifest(initialize)?.is_some()
+        } else {
+            self.with_native_manifest(initialize)?;
+            true
+        };
+        #[cfg(test)]
+        if initialized {
+            AFTER_EMPTY_PROFILE_PUBLICATION.with(|hook| {
+                if let Some(hook) = hook.borrow_mut().as_mut() {
+                    hook(&session.profile.name);
+                }
+            });
+        }
+        Ok(initialized)
+    }
+
     /// Verifies the checkpoint under the database lock and answers that lock
     /// with the material the same manifest read carried (see
-    /// [`SessionMaterial`]); neither exists for the private-file backend.
+    /// [`SessionMaterial`]). Both credential backends use these bindings.
     fn lock_and_verify_checkpoint(
         &self,
         session: &ProfileSession,
     ) -> Result<(Option<runtime::DatabaseLock>, Option<SessionMaterial>)> {
-        if self.backend != CredentialBackend::Native {
-            self.complete_private_profile_publication(session)?;
-            return Ok((None, None));
-        }
-        let pristine = !hard_state_artifacts_exist(&session.paths.hard_database)?;
+        self.initialize_empty_profile(session, false)?;
         let current = session.rollback_checkpoint()?;
         let publication = self.profile_publication_authorization(session, &current)?;
         let authorized = publication
@@ -1119,7 +1223,7 @@ impl ClientCredentials {
         let material = self.verify_native_checkpoint_for_use(
             session,
             &current,
-            pristine || authorized,
+            authorized,
             publication.as_ref(),
         )?;
         Ok((Some(lock), Some(material)))
@@ -1129,11 +1233,9 @@ impl ClientCredentials {
         &self,
         session: &ProfileSession,
     ) -> Result<Option<(Option<runtime::DatabaseLock>, Option<SessionMaterial>)>> {
-        if self.backend != CredentialBackend::Native {
-            self.complete_private_profile_publication(session)?;
-            return Ok(Some((None, None)));
+        if !self.initialize_empty_profile(session, true)? {
+            return Ok(None);
         }
-        let pristine = !hard_state_artifacts_exist(&session.paths.hard_database)?;
         let current = session.rollback_checkpoint()?;
         let Some(publication) = self.try_profile_publication_authorization(session, &current)?
         else {
@@ -1150,7 +1252,7 @@ impl ClientCredentials {
             self.verify_native_checkpoint_for_use_with_store(
                 session,
                 &current,
-                pristine || authorized,
+                authorized,
                 publication.as_ref(),
                 manifest,
             )?;
@@ -1167,13 +1269,8 @@ impl ClientCredentials {
         first: &ProfileSession,
         second: &ProfileSession,
     ) -> Result<(Vec<runtime::DatabaseLock>, Vec<SessionMaterial>)> {
-        if self.backend != CredentialBackend::Native {
-            self.complete_private_profile_publication(first)?;
-            self.complete_private_profile_publication(second)?;
-            return Ok((Vec::new(), Vec::new()));
-        }
-        let first_pristine = !hard_state_artifacts_exist(&first.paths.hard_database)?;
-        let second_pristine = !hard_state_artifacts_exist(&second.paths.hard_database)?;
+        self.initialize_empty_profile(first, false)?;
+        self.initialize_empty_profile(second, false)?;
         let first_current = first.rollback_checkpoint()?;
         let second_current = second.rollback_checkpoint()?;
         let first_publication = self.profile_publication_authorization(first, &first_current)?;
@@ -1194,19 +1291,17 @@ impl ClientCredentials {
             self.verify_native_checkpoint_with_store(
                 first,
                 &first_current,
-                first_pristine
-                    || first_publication
-                        .as_ref()
-                        .is_some_and(|publication| publication.authorized),
+                first_publication
+                    .as_ref()
+                    .is_some_and(|publication| publication.authorized),
                 manifest,
             )?;
             self.verify_native_checkpoint_with_store(
                 second,
                 &second_current,
-                second_pristine
-                    || second_publication
-                        .as_ref()
-                        .is_some_and(|publication| publication.authorized),
+                second_publication
+                    .as_ref()
+                    .is_some_and(|publication| publication.authorized),
                 manifest,
             )?;
             self.finish_profile_publication_with_store(
@@ -1225,19 +1320,6 @@ impl ClientCredentials {
             ])
         })?;
         Ok((locks, material))
-    }
-
-    fn complete_private_profile_publication(&self, session: &ProfileSession) -> Result<()> {
-        if !registry::profile_publication_is_pending(session)? {
-            return Ok(());
-        }
-        let current = session.rollback_checkpoint()?;
-        let publication = self
-            .profile_publication_authorization(session, &current)?
-            .ok_or(Error::InvalidConfig(
-                "profile publication marker disappeared",
-            ))?;
-        self.finish_profile_publication(session, Some(&publication))
     }
 
     fn profile_publication_authorization(
@@ -1354,24 +1436,6 @@ impl ClientCredentials {
         self.finish_profile_publication_with_store(session, publication, store)
     }
 
-    fn finish_profile_publication(
-        &self,
-        session: &ProfileSession,
-        publication: Option<&ProfilePublicationAuthorization>,
-    ) -> Result<()> {
-        let Some(publication) = publication else {
-            return Ok(());
-        };
-        #[cfg(test)]
-        if TEST_FAIL_AFTER_CHECKPOINT_PUBLICATION.swap(false, std::sync::atomic::Ordering::SeqCst) {
-            return Err(Error::InvalidConfig(
-                "test interrupted after external checkpoint publication",
-            ));
-        }
-        self.cancel_profile_publication(&session.profile.name, &publication.nonce)?;
-        registry::complete_profile_publication(session)
-    }
-
     fn finish_profile_publication_with_store(
         &self,
         session: &ProfileSession,
@@ -1391,6 +1455,21 @@ impl ClientCredentials {
         registry::complete_profile_publication(session)
     }
 
+    fn verify_no_reset_required(
+        &self,
+        session: &ProfileSession,
+        store: &mut impl CheckpointStore,
+    ) -> Result<()> {
+        match store.get(&reset_required_key(&session.profile.name)?) {
+            Ok(_) => Err(self.checkpoint_reset_error(
+                session,
+                "an interrupted profile publication requires an explicit reset",
+            )),
+            Err(foks_keystore::Error::Missing) => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     pub(super) fn verify_native_checkpoint_with_store(
         &self,
         session: &ProfileSession,
@@ -1398,6 +1477,7 @@ impl ClientCredentials {
         allow_checkpoint_enrollment: bool,
         store: &mut impl CheckpointStore,
     ) -> Result<()> {
+        self.verify_no_reset_required(session, store)?;
         let key = rollback_record_key(&session.profile.name)?;
         let publish = self.reconcile_checkpoint_with_store(
             session,
@@ -1504,14 +1584,37 @@ impl ClientCredentials {
         &self,
         session: &CheckedProfileSession<'_>,
     ) -> Result<()> {
+        self.checkpoint_before_effect(session)
+    }
+
+    /// Publish source claims or other local intents before an effect escapes a
+    /// checked closure. The caller retains profile/database ownership throughout.
+    pub(crate) fn checkpoint_before_effect(
+        &self,
+        session: &CheckedProfileSession<'_>,
+    ) -> Result<()> {
+        #[cfg(test)]
+        if FAIL_EFFECT_CHECKPOINT.with(|counter| {
+            let next = counter.get().saturating_sub(1);
+            let fail = counter.get() == 1;
+            counter.set(next);
+            fail
+        }) {
+            return Err(Error::InvalidConfig("injected effect checkpoint failure"));
+        }
         self.ensure_session_root(session)?;
-        self.advance_checkpoint(session)
+        if !HeldCheckedProfile::is_held(&held_profile_key(&session.paths.directory)) {
+            return Err(Error::InvalidConfig(
+                "checkpoint barrier requires an exclusive checked session",
+            ));
+        }
+        self.advance_checkpoint(session)?;
+        session.check_operation()
     }
 
     pub(crate) fn advance_checkpoint(&self, session: &ProfileSession) -> Result<()> {
-        if self.backend != CredentialBackend::Native {
-            return Ok(());
-        }
+        // This obligation survives expiry once local evidence has changed.
+        let _completion = runtime::OperationScope::suspend();
         // Read under the manifest lock. A session sharing the profile lock
         // can write and publish between a read taken outside it and this
         // reconciliation, and a checkpoint read before that publication would
@@ -1666,7 +1769,7 @@ impl ClientCredentials {
                 ids.push(current.database_id);
             }
         }
-        if self.backend == CredentialBackend::Native {
+        {
             let key = rollback_record_key(&session.profile.name)?;
             let external = self.with_native_manifest(|manifest| match manifest.get(&key) {
                 Ok(bytes) => {
@@ -1697,18 +1800,14 @@ impl ClientCredentials {
 
     fn reset_state_preview_locked(&self, session: &ProfileSession) -> Result<ResetStatePreview> {
         let master = self.master_key()?;
-        if self.backend == CredentialBackend::Native {
-            self.with_native_manifest(|manifest| {
-                reset_state_preview(
-                    session,
-                    Some(&master),
-                    Some((&session.profile.name, manifest)),
-                    None,
-                )
-            })
-        } else {
-            reset_state_preview(session, Some(&master), None, None)
-        }
+        self.with_native_manifest(|manifest| {
+            reset_state_preview(
+                session,
+                Some(&master),
+                Some((&session.profile.name, manifest)),
+                None,
+            )
+        })
     }
 
     /// The exact preview, or, best-effort, the on-disk preview when this
@@ -1758,7 +1857,7 @@ impl ClientCredentials {
             return Err(Error::InvalidConfig("injected reset interruption"));
         }
         let mut outcome = ResetOutcome::default();
-        if self.backend == CredentialBackend::Native {
+        {
             let removed = self.with_native_manifest(|manifest| {
                 remove_external_reset_records(manifest, &session.profile.name, database_ids)
             });
@@ -1999,6 +2098,19 @@ fn hash_external_reset_state(
         ResetArtifactKind::ExternalImportReadiness,
         &readiness_key,
         readiness.as_ref().map(|v| v.as_slice()),
+        digest,
+        artifacts,
+    );
+    let quarantine_key = reset_required_key(profile)?;
+    let quarantine = match store.get(&quarantine_key) {
+        Ok(value) => Some(value),
+        Err(foks_keystore::Error::Missing) => None,
+        Err(error) => return Err(error.into()),
+    };
+    hash_external_reset_record(
+        ResetArtifactKind::ExternalPublicationAuthorization,
+        &quarantine_key,
+        quarantine.as_ref().map(|value| value.as_slice()),
         digest,
         artifacts,
     );
@@ -2324,7 +2436,13 @@ fn remove_external_reset_records(
     store.remove(&crate::portability::readiness::key(profile)?)?;
     store.remove(&rollback_record_key(profile)?)?;
     store.remove(&profile_publication_authorization_key(profile)?)?;
+    store.remove(&reset_required_key(profile)?)?;
     Ok(())
+}
+
+fn reset_required_key(profile: &str) -> Result<String> {
+    validate_name(profile)?;
+    Ok(format!("publication-reset.{profile}"))
 }
 
 #[cfg(test)]
@@ -2869,11 +2987,214 @@ mod admission_tests {
     }
 
     #[test]
+    fn cancellation_after_a_write_still_publishes_the_external_checkpoint() {
+        let (_temporary, root) = one_profile_state();
+        let credentials = ClientCredentials::open(&root).unwrap();
+        let registry = ProfileRegistry::open(&root).unwrap();
+        let cancellation = foks_client::CancellationToken::new();
+        let deadline = foks_local_deadline::Deadline::capture(
+            std::time::Instant::now() + std::time::Duration::from_secs(10),
+        )
+        .unwrap();
+        let session =
+            ProfileSession::open_with_deadline(&registry, "a", deadline, cancellation.clone())
+                .unwrap();
+        credentials
+            .with_checked_session(&session, |checked| {
+                let mut hard =
+                    foks_client_db::HardStateStore::open(&checked.paths().hard_database)?;
+                let mut limits = hard.upload_limits()?;
+                limits.max_pending = 12;
+                hard.set_upload_limits(limits)?;
+                cancellation.cancel();
+                Ok::<_, Error>(())
+            })
+            .unwrap();
+        assert!(session.check_operation().is_err());
+        let fresh = ProfileSession::open(&registry, "a").unwrap();
+        credentials
+            .with_checked_session(&fresh, |checked| {
+                assert_eq!(
+                    foks_client_db::HardStateStore::open(&checked.paths().hard_database)?
+                        .upload_limits()?
+                        .max_pending,
+                    12
+                );
+                Ok::<_, Error>(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn cancelled_session_cannot_create_a_database_or_enter_callback() {
+        let (_temporary, root) = one_profile_state();
+        let credentials = ClientCredentials::open(&root).unwrap();
+        let registry = ProfileRegistry::open(&root).unwrap();
+        let cancellation = foks_client::CancellationToken::new();
+        let deadline = foks_local_deadline::Deadline::capture(
+            std::time::Instant::now() + std::time::Duration::from_secs(10),
+        )
+        .unwrap();
+        let session =
+            ProfileSession::open_with_deadline(&registry, "a", deadline, cancellation.clone())
+                .unwrap();
+        cancellation.cancel();
+        let result = credentials.with_checked_session(&session, |_| {
+            panic!("cancelled operation entered callback");
+            #[allow(unreachable_code)]
+            Ok::<_, Error>(())
+        });
+        assert!(result.is_err());
+        assert!(!hard_state_artifacts_exist(&session.paths.hard_database).unwrap());
+    }
+
+    #[test]
+    fn fresh_profile_admission_waits_for_authority_before_creating_database() {
+        let (_temporary, root) = one_profile_state();
+        let credentials = ClientCredentials::open(&root).unwrap();
+        let registry = ProfileRegistry::open(&root).unwrap();
+        let session = ProfileSession::open(&registry, "a").unwrap();
+        assert!(!credentials.requires_import_verification(&session).unwrap());
+        assert!(!hard_state_artifacts_exist(&session.paths.hard_database).unwrap());
+        let lock = runtime::NativeManifestLock::acquire(&credentials.state_id).unwrap();
+        assert!(credentials
+            .try_with_checked_session(&session, |_| {
+                panic!("contended authority must not enter user code");
+                #[allow(unreachable_code)]
+                Ok::<_, Error>(())
+            })
+            .unwrap()
+            .is_none());
+        assert!(!hard_state_artifacts_exist(&session.paths.hard_database).unwrap());
+        drop(lock);
+        assert!(credentials
+            .try_with_checked_session(&session, |_| Ok::<_, Error>(()))
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn fresh_pair_keeps_first_enrollment_when_second_authority_is_contended() {
+        let (_temporary, root) = one_profile_state();
+        let credentials = ClientCredentials::open(&root).unwrap();
+        let mut registry = ProfileRegistry::open(&root).unwrap();
+        registry
+            .add(Profile {
+                name: "b".into(),
+                label: None,
+                probe: "example.test".into(),
+                protocol: ProtocolPolicy::V019,
+                trust: TrustRoot::WebPki,
+            })
+            .unwrap();
+        let first = ProfileSession::open(&registry, "a").unwrap();
+        let second = ProfileSession::open(&registry, "b").unwrap();
+        let held = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let hook_held = held.clone();
+        let state_id = credentials.state_id.clone();
+        AFTER_EMPTY_PROFILE_PUBLICATION.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |name| {
+                assert_eq!(name, "a");
+                *hook_held.borrow_mut() =
+                    Some(runtime::NativeManifestLock::acquire(&state_id).unwrap());
+            }))
+        });
+        let result = credentials.try_with_checked_sessions(&first, &second, |_, _| {
+            panic!("second authority contention must prevent paired callback");
+            #[allow(unreachable_code)]
+            Ok::<_, Error>(())
+        });
+        AFTER_EMPTY_PROFILE_PUBLICATION.with(|hook| *hook.borrow_mut() = None);
+        assert!(result.unwrap().is_none());
+        assert!(hard_state_artifacts_exist(&first.paths.hard_database).unwrap());
+        assert!(!hard_state_artifacts_exist(&second.paths.hard_database).unwrap());
+        held.borrow_mut().take();
+        assert!(credentials
+            .try_with_checked_session(&first, |_| Ok::<_, Error>(()))
+            .unwrap()
+            .is_some());
+        assert!(credentials
+            .try_with_checked_sessions(&first, &second, |_, _| Ok::<_, Error>(()))
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn interrupted_fresh_authority_publication_is_not_adopted_on_reopen() {
+        let (_temporary, root) = one_profile_state();
+        let credentials = ClientCredentials::open(&root).unwrap();
+        let registry = ProfileRegistry::open(&root).unwrap();
+        let session = ProfileSession::open(&registry, "a").unwrap();
+        FAIL_EMPTY_PROFILE_PUBLICATION.with(|fail| fail.set(true));
+        assert!(credentials
+            .try_with_checked_session(&session, |_| {
+                panic!("failed initial publication must not enter callback");
+                #[allow(unreachable_code)]
+                Ok::<_, Error>(())
+            })
+            .is_err());
+        assert!(hard_state_artifacts_exist(&session.paths.hard_database).unwrap());
+        drop(credentials);
+        let reopened = ClientCredentials::open(&root).unwrap();
+        assert!(matches!(
+            reopened.try_with_checked_session(&session, |_| {
+                panic!("unanchored existing database must not be adopted");
+                #[allow(unreachable_code)]
+                Ok::<_, Error>(())
+            }),
+            Err(Error::CheckpointResetRequired { .. })
+        ));
+    }
+
+    #[test]
+    fn fresh_profile_refuses_retained_owner_claim_and_readiness_without_database_creation() {
+        for readiness in [false, true] {
+            let (_temporary, root) = one_profile_state();
+            let credentials = ClientCredentials::open(&root).unwrap();
+            let registry = ProfileRegistry::open(&root).unwrap();
+            let session = ProfileSession::open(&registry, "a").unwrap();
+            credentials
+                .with_native_manifest(|manifest| {
+                    if readiness {
+                        manifest.put(&crate::portability::readiness::key("a")?, b"pending")?;
+                    } else {
+                        manifest.put(&database_claim_record_key(&[77; 16]), b"a")?;
+                    }
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(
+                credentials.requires_import_verification(&session).unwrap(),
+                readiness
+            );
+            assert!(!hard_state_artifacts_exist(&session.paths.hard_database).unwrap());
+            assert!(matches!(
+                credentials.try_with_checked_session(&session, |_| {
+                    panic!("retained authority must not authorize a replacement database");
+                    #[allow(unreachable_code)]
+                    Ok::<_, Error>(())
+                }),
+                Err(Error::CheckpointResetRequired { .. })
+            ));
+            assert!(!hard_state_artifacts_exist(&session.paths.hard_database).unwrap());
+        }
+    }
+
+    #[test]
     fn shared_sessions_on_one_profile_run_together_and_keep_an_exclusive_one_out() {
         let (_temporary, root) = one_profile_state();
         let credentials = ClientCredentials::open(&root).unwrap();
         let registry = ProfileRegistry::open(&root).unwrap();
         let session = ProfileSession::open(&registry, "a").unwrap();
+        assert!(matches!(
+            credentials
+                .try_with_shared_checked_session(&session, |_| Ok::<_, Error>(()))
+                .unwrap(),
+            SharedSessionOutcome::NeedsExclusive
+        ));
+        credentials
+            .with_checked_session(&session, |_| Ok::<_, Error>(()))
+            .unwrap();
         let holder_credentials = ClientCredentials::open(&root).unwrap();
         let holder_session = ProfileSession::open(&registry, "a").unwrap();
         let (entered, observe_entered) = std::sync::mpsc::channel();
@@ -2970,6 +3291,12 @@ mod admission_tests {
         }
         let first = ProfileSession::open(&registry, "a").unwrap();
         let second = ProfileSession::open(&registry, "b").unwrap();
+        credentials
+            .with_checked_session(&first, |_| Ok::<_, Error>(()))
+            .unwrap();
+        credentials
+            .with_checked_session(&second, |_| Ok::<_, Error>(()))
+            .unwrap();
         let external = runtime::ProfileLock::operation(second.paths()).unwrap();
         assert_eq!(
             credentials
@@ -3005,4 +3332,17 @@ mod admission_tests {
             .unwrap()
             .is_some());
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static FAIL_EFFECT_CHECKPOINT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+type EmptyProfilePublicationHook = Box<dyn FnMut(&str)>;
+#[cfg(test)]
+thread_local! {
+    static FAIL_EMPTY_PROFILE_PUBLICATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static AFTER_EMPTY_PROFILE_PUBLICATION: std::cell::RefCell<Option<EmptyProfilePublicationHook>> = const { std::cell::RefCell::new(None) };
 }

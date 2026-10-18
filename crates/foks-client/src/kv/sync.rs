@@ -604,6 +604,10 @@ impl FoksClient {
         )?;
         Ok(KvWriteSession {
             client: self,
+            actor_uid: credential.uid.as_bytes().to_vec(),
+            upload_identity: None,
+            upload_admission_time: None,
+            upload_parent: None,
             host: host.clone(),
             party: KvParty {
                 party: credential.uid.clone(),
@@ -650,6 +654,10 @@ impl FoksClient {
         )?;
         Ok(KvWriteSession {
             client: self,
+            actor_uid: credential.uid.as_bytes().to_vec(),
+            upload_identity: None,
+            upload_admission_time: None,
+            upload_parent: None,
             host: host.clone(),
             party: KvParty {
                 party: credential.uid.clone(),
@@ -676,6 +684,7 @@ impl FoksClient {
     ) -> Result<KvWriteSession<'a>> {
         self.team_kv_write_session_with_material(
             host,
+            credential.uid.as_bytes(),
             &credential.seed,
             &credential.certificate_chain,
             team,
@@ -694,6 +703,7 @@ impl FoksClient {
     ) -> Result<KvWriteSession<'a>> {
         self.team_kv_write_session_with_material(
             host,
+            credential.uid.as_bytes(),
             &credential.subkey_seed,
             &credential.certificate_chain,
             team,
@@ -702,9 +712,11 @@ impl FoksClient {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn team_kv_write_session_with_material<'a>(
         &'a self,
         host: &PinnedHost,
+        actor_uid: &[u8],
         device_seed: &SecretSeed,
         certificate_chain: &[Vec<u8>],
         team: &'a AuthenticatedTeamOutcome,
@@ -717,6 +729,10 @@ impl FoksClient {
         let connection = self.kv_connection_with_material(host, device_seed, certificate_chain)?;
         Ok(KvWriteSession {
             client: self,
+            actor_uid: actor_uid.to_vec(),
+            upload_identity: None,
+            upload_admission_time: None,
+            upload_parent: None,
             host: host.clone(),
             party: KvParty {
                 party: team.verified.team().clone(),

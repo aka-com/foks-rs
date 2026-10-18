@@ -1,0 +1,57 @@
+[workspace]
+resolver = "2"
+exclude = [
+    "runtime/source",
+    "runtime/source/crates/celld",
+    "runtime/source/crates/logic",
+    "runtime/source/crates/ltx",
+]
+
+[package]
+name = "foks-celld-guarded"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.95"
+publish = false
+
+[features]
+node-qualification = ["celld/foks-guarded-node-qualification"]
+lifecycle = ["dep:tokio", "celld/foks-guarded-qualification"]
+
+[dependencies]
+celld = { path = "runtime/source/crates/celld" }
+foks-hosted-transport = { path = "../../crates/foks-hosted-transport", default-features = false, features = ["qualification"] }
+foks-metadata-core = { path = "../../crates/foks-metadata-core", default-features = false, features = ["owned-list"] }
+# Exact: these versions must equal the pinned celld 0.6.2 runtime build inputs
+# that prepare-runtime.py verifies (runtime.lock.json and upstream-tree.json);
+# a change needs a new runtime qualification.
+rusqlite = "=0.31.0"
+v8 = "=152.1.0" # celld runtime build input
+tikv-jemallocator = { version = "=0.6.1", features = ["background_threads", "stats"] } # celld runtime build input
+serde_json = "=1.0.151" # celld runtime build input
+sha2 = "=0.10.9" # celld runtime build input
+tokio = { version = "=1.53.1", optional = true, features = ["rt-multi-thread", "sync", "time"] } # celld runtime build input
+
+[[test]]
+name = "lifecycle"
+required-features = ["lifecycle"]
+
+[profile.dev]
+debug = 0
+incremental = false
+
+[profile.dev.package.v8]
+opt-level = 1
+
+[profile.dev.package."sha2:0.10.9"]
+opt-level = 3
+
+[profile.dev.package.rsa]
+opt-level = 3
+
+[profile.test]
+debug = 0
+incremental = false
+
+[profile.test.package.v8]
+opt-level = 1

@@ -40,6 +40,16 @@ const INJECTED: [&str; 8] = [
     "GlobalScope",
 ];
 
+/// Crate-defined parameter types that Tauri builds from the invocation through
+/// their `CommandArg` implementation instead of reading a payload key.
+/// Commands name them by a crate path such as `super::deadline::CommandState`,
+/// so they are matched by the last path segment from any path; a crate item
+/// of the same name is the extractor itself.
+const CRATE_INJECTED: [&str; 1] = ["CommandState"];
+
+/// The extractor whose construction applies `commands::deadline::command_class`.
+const DEADLINE_EXTRACTOR: &str = "CommandState";
+
 const REQUIRED: &str = "required";
 const OPTIONAL: &str = "optional";
 
@@ -52,6 +62,9 @@ struct Command {
     /// The path of every function the body calls, segments joined with `::`,
     /// for [`every_command_checks_the_main_window`].
     calls: BTreeSet<String>,
+    /// Whether a parameter is [`DEADLINE_EXTRACTOR`], so that invoking the
+    /// command consults its deadline policy.
+    deadline_policy: bool,
 }
 
 fn source_root() -> PathBuf {
@@ -97,10 +110,11 @@ fn type_path(ty: &syn::Type) -> Option<&syn::Path> {
 fn is_injected(path: &syn::Path) -> bool {
     let segments = &path.segments;
     let from_tauri = segments.len() == 1 || segments[0].ident == "tauri";
-    from_tauri
-        && segments
-            .last()
-            .is_some_and(|segment| INJECTED.iter().any(|kind| segment.ident == kind))
+    let Some(last) = segments.last() else {
+        return false;
+    };
+    (from_tauri && INJECTED.iter().any(|kind| last.ident == kind))
+        || CRATE_INJECTED.iter().any(|kind| last.ident == kind)
 }
 
 /// Tauri's default argument rename: `store_id` is sent as `storeId`.
@@ -119,12 +133,16 @@ fn camel_case(name: &str) -> String {
 fn signature(function: &syn::ItemFn, module: &str) -> Command {
     let name = &function.sig.ident;
     let mut arguments = BTreeMap::new();
+    let mut deadline_policy = false;
     for input in &function.sig.inputs {
         let syn::FnArg::Typed(argument) = input else {
             panic!("{module}::{name} takes self; commands are free functions");
         };
         let path = type_path(&argument.ty);
         if path.is_some_and(is_injected) {
+            deadline_policy |= path
+                .and_then(|path| path.segments.last())
+                .is_some_and(|segment| segment.ident == DEADLINE_EXTRACTOR);
             continue;
         }
         let syn::Pat::Ident(binding) = &*argument.pat else {
@@ -150,7 +168,42 @@ fn signature(function: &syn::ItemFn, module: &str) -> Command {
         module: module.to_owned(),
         arguments,
         calls: calls.0,
+        deadline_policy,
     }
+}
+
+/// String literals in the patterns visited.
+#[derive(Default)]
+struct PatternStrings(BTreeSet<String>);
+
+impl<'ast> Visit<'ast> for PatternStrings {
+    fn visit_lit_str(&mut self, literal: &'ast syn::LitStr) {
+        self.0.insert(literal.value());
+    }
+}
+
+/// The command names that `commands::deadline::command_class` gives a policy:
+/// the string patterns of its match arms.
+fn deadline_policy_names() -> BTreeSet<String> {
+    let file = parse(&source_root().join("commands").join("deadline.rs"));
+    let function = file
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Fn(function) if function.sig.ident == "command_class" => Some(function),
+            _ => None,
+        })
+        .expect("commands/deadline.rs defines command_class");
+    struct Arms(PatternStrings);
+    impl<'ast> Visit<'ast> for Arms {
+        fn visit_arm(&mut self, arm: &'ast syn::Arm) {
+            self.0.visit_pat(&arm.pat);
+            syn::visit::visit_arm(self, arm);
+        }
+    }
+    let mut arms = Arms(PatternStrings::default());
+    arms.visit_item_fn(function);
+    arms.0 .0
 }
 
 /// The functions a body calls by path, segments joined with `::`.
@@ -463,6 +516,29 @@ fn every_command_checks_the_main_window() {
     );
 }
 
+/// `CommandState` fails closed for a command without a deadline policy, so
+/// every command that takes it needs one; a policy for a command that does
+/// not take it is never consulted.
+#[test]
+fn deadline_policies_name_exactly_the_commands_that_take_command_state() {
+    let admitted: BTreeSet<String> = read_commands()
+        .into_iter()
+        .filter(|(_, command)| command.deadline_policy)
+        .map(|(name, _)| name)
+        .collect();
+    let policies = deadline_policy_names();
+    assert_eq!(
+        admitted.difference(&policies).collect::<Vec<_>>(),
+        Vec::<&String>::new(),
+        "commands taking CommandState with no command_class policy"
+    );
+    assert_eq!(
+        policies.difference(&admitted).collect::<Vec<_>>(),
+        Vec::<&String>::new(),
+        "command_class policies for commands that do not take CommandState"
+    );
+}
+
 #[test]
 fn command_signatures_match_the_manifest() {
     let expected = manifest(&read_commands());
@@ -539,6 +615,7 @@ fn signatures_skip_injected_parameters_and_mark_options() {
             app: tauri::AppHandle,
             webview: tauri::Webview,
             state: State<'_, AppState>,
+            command: super::deadline::CommandState,
             window: tauri::window::Window,
             store_id: String,
             on_partial: tauri::ipc::Channel<CatalogDto>,
@@ -558,6 +635,7 @@ fn signatures_skip_injected_parameters_and_mark_options() {
             ("storeId".to_owned(), REQUIRED),
         ])
     );
+    assert!(signature(&function, "commands::vault").deadline_policy);
 }
 
 #[test]

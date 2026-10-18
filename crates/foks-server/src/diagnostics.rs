@@ -49,7 +49,8 @@ pub(crate) fn classify(error: &Error) -> SessionErrorClass {
         | Error::Merkle(_)
         | Error::WriterQueue
         | Error::DeadlineExceeded
-        | Error::ReaderPool => SessionErrorClass::Storage,
+        | Error::ReaderPool
+        | Error::Chunk(_) => SessionErrorClass::Storage,
         Error::Certificate(_)
         | Error::TomlDecode(_)
         | Error::TomlEncode(_)

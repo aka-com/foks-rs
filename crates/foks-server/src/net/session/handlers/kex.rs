@@ -25,14 +25,14 @@ pub(super) fn response(data: &ServerData, call: RoutedCall) -> Result<Vec<u8>, R
 pub(super) async fn receive_response(
     data: &ServerData,
     call: RoutedCall,
-) -> Result<Vec<u8>, RpcStatus> {
+) -> Result<Vec<u8>, super::super::kex::ReceiveError> {
     if call.route.id != RouteId::KexReceive {
-        return Err(RpcStatus::Unsupported);
+        return Err(RpcStatus::Unsupported.into());
     }
     let sequence = call.call.sequence();
     let message = data.kex_relay.receive(call.call.argument()).await?;
     encode_bare_success_response_at(&message.encoded().map_err(bad_arguments)?, sequence)
-        .map_err(|_| RpcStatus::Unsupported)
+        .map_err(|_| RpcStatus::Unsupported.into())
 }
 
 fn bad_arguments(error: impl std::fmt::Display) -> RpcStatus {

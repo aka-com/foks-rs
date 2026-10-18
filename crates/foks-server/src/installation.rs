@@ -16,6 +16,10 @@ const MAXIMUM_CONFIG_BYTES: u64 = 64 * 1024;
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct InstallationConfig {
+    #[serde(default)]
+    pub chunk_capacity: crate::ChunkCapacityConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_store: Option<crate::chunks::ChunkStoreConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_admin: Option<crate::web_admin::WebAdminConfig>,
     #[serde(default)]
@@ -52,6 +56,10 @@ impl InstallationConfig {
             return Err(crate::Error::Config(
                 "unsupported installation configuration version",
             ));
+        }
+        self.chunk_capacity.validate()?;
+        if let Some(store) = &self.chunk_store {
+            store.validate()?;
         }
         validate_hostname(&self.canonical_name)?;
         self.waitlist.validate()?;
@@ -137,14 +145,14 @@ impl InstallationConfig {
         Ok(())
     }
 
-    /// Database limits from the `[storage]` and `[waitlist]` tables. Every
-    /// command that opens the installation database uses them, so offline
-    /// commands enforce the same database ceiling as the server.
+    /// Database limits from the `[storage]`, `[waitlist]` and
+    /// `[chunk_capacity]` tables. Every command that opens the installation
+    /// database uses them, so offline commands enforce the same database
+    /// ceiling and physical chunk capacity as the server.
     pub fn database_config(&self) -> foks_server_db::Config {
-        self.waitlist.database_config(
-            self.storage
-                .database_config(foks_server_db::Config::default()),
-        )
+        let database = self.chunk_capacity.apply(foks_server_db::Config::default());
+        self.waitlist
+            .database_config(self.storage.database_config(database))
     }
 }
 
@@ -159,6 +167,9 @@ pub struct LimitsConfig {
     pub maximum_read_connections: usize,
     pub maximum_active_connections: usize,
     pub maximum_pending_connections: usize,
+    /// Outstanding anonymous KEX receives, capped at half the active
+    /// connections. Zero disables KEX receives.
+    pub maximum_kex_receive_polls: usize,
     pub maximum_in_flight_requests: usize,
     pub maximum_realtime_polls_per_account: usize,
     pub request_timeout_seconds: u64,
@@ -174,6 +185,7 @@ impl Default for LimitsConfig {
             maximum_read_connections: session.maximum_read_connections,
             maximum_active_connections: session.maximum_active_connections,
             maximum_pending_connections: session.maximum_pending_connections,
+            maximum_kex_receive_polls: session.maximum_kex_receive_polls,
             maximum_in_flight_requests: session.maximum_in_flight_requests,
             maximum_realtime_polls_per_account: session.maximum_realtime_polls_per_account,
             request_timeout_seconds: session.request_timeout.as_secs(),
@@ -189,6 +201,7 @@ impl LimitsConfig {
             maximum_read_connections: self.maximum_read_connections,
             maximum_active_connections: self.maximum_active_connections,
             maximum_pending_connections: self.maximum_pending_connections,
+            maximum_kex_receive_polls: self.maximum_kex_receive_polls,
             maximum_in_flight_requests: self.maximum_in_flight_requests,
             maximum_realtime_polls_per_account: self.maximum_realtime_polls_per_account,
             request_timeout: Duration::from_secs(self.request_timeout_seconds),
@@ -333,6 +346,8 @@ pub fn initialize(
     write_new_file(&probe_certificate_der, certificate.der(), 0o644)?;
 
     let config = InstallationConfig {
+        chunk_capacity: Default::default(),
+        chunk_store: None,
         vhost_management_host: String::new(),
         oidc: None,
         web_admin: None,
@@ -759,6 +774,7 @@ mod tests {
             maximum_read_connections = 5\n\
             maximum_active_connections = 7\n\
             maximum_pending_connections = 11\n\
+            maximum_kex_receive_polls = 2\n\
             maximum_in_flight_requests = 13\n\
             maximum_realtime_polls_per_account = 3\n\
             request_timeout_seconds = 17\n\
@@ -786,6 +802,7 @@ mod tests {
                 maximum_read_connections: 5,
                 maximum_active_connections: 7,
                 maximum_pending_connections: 11,
+                maximum_kex_receive_polls: 2,
                 maximum_in_flight_requests: 13,
                 maximum_realtime_polls_per_account: 3,
                 request_timeout_seconds: 17,
@@ -822,11 +839,12 @@ mod tests {
                 session.maximum_read_connections,
                 session.maximum_active_connections,
                 session.maximum_pending_connections,
+                session.maximum_kex_receive_polls,
                 session.maximum_in_flight_requests,
                 session.maximum_realtime_polls_per_account,
                 session.request_timeout,
             ),
-            (3, 5, 7, 11, 13, 3, Duration::from_secs(17))
+            (3, 5, 7, 11, 2, 13, 3, Duration::from_secs(17))
         );
         let database = config.database_config();
         assert_eq!(

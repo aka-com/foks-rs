@@ -47,6 +47,10 @@ pub struct Config {
     pub maximum_waitlist_entries: u64,
     /// Age after which maintenance deletes a waitlist entry.
     pub waitlist_retention: Duration,
+    pub maximum_chunk_physical_bytes: u64,
+    pub maximum_chunk_objects: u64,
+    pub maximum_chunk_unresolved_attempts: u64,
+    pub maximum_chunk_uncertain_bytes: u64,
 }
 
 impl Default for Config {
@@ -92,6 +96,10 @@ impl Default for Config {
             maximum_database_bytes: 64 * 1024 * 1024 * 1024,
             maximum_waitlist_entries: 10_000,
             waitlist_retention: Duration::from_secs(180 * 24 * 60 * 60),
+            maximum_chunk_physical_bytes: 64 * 1024 * 1024 * 1024,
+            maximum_chunk_objects: 1_000_000,
+            maximum_chunk_unresolved_attempts: 128,
+            maximum_chunk_uncertain_bytes: 256 * 1024 * 1024,
         }
     }
 }

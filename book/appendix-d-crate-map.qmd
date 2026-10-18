@@ -1,7 +1,7 @@
 # Crate Map
 
-The `foks-rs` workspace contains twenty-four library and binary crates plus the
-Tauri desktop package. Line counts are rough, from `wc -l` over Rust sources
+The `foks-rs` workspace contains twenty-eight library and binary crates plus
+the Tauri desktop package. Line counts are rough, from `wc -l` over Rust sources
 in September 2026, and are given only to convey relative size.
 
 ## Foundations
@@ -16,6 +16,8 @@ in September 2026, and are given only to convey relative size.
 | `foks-rpc` | 8.6k | Snowpack RPC framing, client calls, mutual TLS | 17 |
 | `foks-protocol-metadata` | 1.5k | Validation and generation of pinned protocol IDs | 23 |
 | `foks-compat-artifact` | 0.6k | Signed hosted-compatibility lease format | 23 |
+| `foks-schema-contract` | 3.4k | Streaming equality and hashing of SQLite schema contracts, hosted storage descriptors | 18 |
+| `foks-local-deadline` | 0.7k | Same-host monotonic deadline coordinates for local IPC | 19 |
 
 ## Client side
 
@@ -46,6 +48,8 @@ in September 2026, and are given only to convey relative size.
 | Crate | Size | Purpose | Chapters |
 |---|---|---|---|
 | `foks-server-db` | 24.1k | Authoritative SQLite storage, schema, maintenance | 18 |
+| `foks-metadata-core` | 25.6k | Bounded native and Wasm metadata kernel for hosted runtimes | 18 |
+| `foks-hosted-transport` | 1.6k | Request allocation ownership and request deadline framing shared with hosted runtimes | 18 |
 | `foks-server` | 32.1k | Standalone single-host server, writer actor, services | 15, 16, 18, 22 |
 | `foks-server-testkit` | 21.3k | Spawns real server and agent processes for tests | 23, 24 |
 
@@ -74,7 +78,7 @@ client and server gates (`tools/foks-client/check.sh`,
 
 | Layer | Crates | May depend on |
 |---|---|---|
-| core | `snowpack`, `proto`, `crypto`, `verify`, `merkle-store`, `protocol-metadata`, `compat-artifact` | core |
+| core | `snowpack`, `proto`, `crypto`, `verify`, `merkle-store`, `protocol-metadata`, `compat-artifact`, `schema-contract`, `local-deadline` | core |
 | network | `rpc`, `oidc` | core |
 | device | `keystore`, `yubi` | core |
 | agent-protocol | `agent-proto` | core |
@@ -82,7 +86,7 @@ client and server gates (`tools/foks-client/check.sh`,
 | agent | `agent` | core, network, device, agent-protocol, client |
 | agent-client | `agent-client` | core, agent-protocol |
 | front-end | `cli`, `mcp`, `desktop`, `desktop-app` | core, agent-protocol, agent-client |
-| server | `server-db`, `server` | core, network |
+| server | `server-db`, `server`, `metadata-core`, `hosted-transport` | core, network |
 | test-support | `server-testkit` (test-only) | all of the above |
 
 Server crates therefore never depend on client, device or agent crates. Front

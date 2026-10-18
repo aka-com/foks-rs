@@ -1,7 +1,15 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 41;
+pub(crate) const VERSION: u32 = 43;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
+    "kv_upload_receipt_limits",
+    "kv_upload_handles",
+    "kv_upload_clocks",
+    "kv_upload_cleanup",
+    "kv_upload_children",
+    "kv_uploads",
+    "kv_upload_chunks",
+    "kv_upload_limits",
     "import_readiness",
     "import_accounts",
     "hosts",
@@ -398,7 +406,7 @@ CREATE TABLE mutation_operations (
 ) STRICT, WITHOUT ROWID;
 
 -- boot_id identifies the boot whose suspend-inclusive clock produced
--- anchor_monotonic; NULL when the platform provides none. Version 41 added it
+-- anchor_monotonic; NULL when the platform provides none. Version 43 added it
 -- with ALTER TABLE ADD COLUMN, so the column sits where SQLite inserts it and
 -- migrated and new databases store the same schema text.
 CREATE TABLE kv_adapter_clocks (

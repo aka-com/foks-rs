@@ -2,6 +2,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("encrypted chunk storage failed: {0}")]
+    Chunk(&'static str),
     #[error("SSO flow failed: {0}")]
     Sso(&'static str),
     #[error(transparent)]
@@ -34,7 +36,7 @@ pub enum Error {
     Thread,
     #[error("SQLite writer queue is full or closed")]
     WriterQueue,
-    #[error("request deadline passed before the queued write started")]
+    #[error("request deadline passed before the work started")]
     DeadlineExceeded,
     #[error("SQLite reader pool is exhausted")]
     ReaderPool,
@@ -51,3 +53,47 @@ pub enum Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+impl From<foks_hosted_transport::Error> for Error {
+    fn from(error: foks_hosted_transport::Error) -> Self {
+        match error {
+            foks_hosted_transport::Error::Config(message) => Self::Config(message),
+            foks_hosted_transport::Error::Io(error) => Self::Io(error),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn shared_transport_conversion_keeps_existing_variants_and_io_details() {
+        let config: super::Error =
+            foks_hosted_transport::Error::Config("request deadline overflows monotonic clock")
+                .into();
+        assert!(matches!(
+            config,
+            super::Error::Config("request deadline overflows monotonic clock")
+        ));
+        assert_eq!(
+            config.to_string(),
+            "invalid server configuration: request deadline overflows monotonic clock"
+        );
+        let io: super::Error = foks_hosted_transport::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "original socket failure",
+        ))
+        .into();
+        assert_eq!(io.to_string(), "server I/O failed: original socket failure");
+        assert!(
+            matches!(io, super::Error::Io(error) if error.kind() == std::io::ErrorKind::BrokenPipe && error.to_string() == "original socket failure")
+        );
+        let deadline = crate::deadline::Deadline::after(std::time::Duration::ZERO).unwrap();
+        crate::deadline::scope(Some(deadline), || {
+            assert!(matches!(
+                crate::deadline::check(),
+                Err(super::Error::DeadlineExceeded)
+            ));
+        });
+        assert!(crate::deadline::check().is_ok());
+    }
+}

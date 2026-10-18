@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, Connection, OptionalExtension as _, Transaction};
 
 use crate::{error::sql_integer, Database, Error, ReadDatabase, ReadSnapshot, Result};
@@ -173,7 +174,7 @@ pub(crate) fn consume(
                    AND (max_uses IS NULL OR use_count < max_uses)
                  RETURNING invite_id",
                     params![code_hash, kind as i64, sql_integer(now)?],
-                    |row| row.get::<_, Vec<u8>>(0),
+                    |row| row.budgeted_get::<_, Vec<u8>>(0),
                 )
                 .optional()?
                 .ok_or(Error::BadInvite)?;
@@ -207,7 +208,7 @@ pub(crate) fn invite_policy(connection: &Connection) -> Result<InvitePolicy> {
     let (regime, revision) = connection.query_row(
         "SELECT invite_regime,revision FROM signup_policy WHERE singleton = 1",
         [],
-        |row| Ok((row.get(0)?, row.get::<_, i64>(1)?)),
+        |row| Ok((row.budgeted_get(0)?, row.budgeted_get::<_, i64>(1)?)),
     )?;
     Ok(InvitePolicy {
         revision: crate::error::unsigned(revision)?,
@@ -241,15 +242,15 @@ fn invites(connection: &Connection) -> Result<Vec<InviteSnapshot>> {
     )?;
     let rows = statement.query_map([], |row| {
         Ok((
-            row.get::<_, Vec<u8>>(0)?,
-            row.get::<_, i64>(1)?,
-            row.get::<_, i64>(2)?,
-            row.get::<_, Option<i64>>(3)?,
-            row.get::<_, i64>(4)?,
-            row.get::<_, Option<i64>>(5)?,
-            row.get::<_, i64>(6)?,
-            row.get::<_, Option<i64>>(7)?,
-            row.get::<_, i64>(8)?,
+            row.budgeted_get::<_, Vec<u8>>(0)?,
+            row.budgeted_get::<_, i64>(1)?,
+            row.budgeted_get::<_, i64>(2)?,
+            row.budgeted_get::<_, Option<i64>>(3)?,
+            row.budgeted_get::<_, i64>(4)?,
+            row.budgeted_get::<_, Option<i64>>(5)?,
+            row.budgeted_get::<_, i64>(6)?,
+            row.budgeted_get::<_, Option<i64>>(7)?,
+            row.budgeted_get::<_, i64>(8)?,
         ))
     })?;
     rows.map(|row| {
@@ -329,19 +330,19 @@ pub(crate) fn page(c: &Connection, after: &[u8], limit: usize) -> Result<Vec<Inv
     let mut q=c.prepare("SELECT invite_id,kind,state,max_uses,use_count,expires_at,created_at,disabled_at,configuration_revision FROM signup_invites WHERE invite_id>?1 ORDER BY invite_id LIMIT ?2")?;
     let rows = q.query_map(params![after, limit as i64], |r| {
         Ok(InviteSnapshot {
-            invite_id: r.get(0)?,
-            kind: match r.get::<_, u8>(1)? {
+            invite_id: r.budgeted_get(0)?,
+            kind: match r.budgeted_get::<_, u8>(1)? {
                 1 => InviteKind::Standard,
                 2 => InviteKind::MultiUse,
                 _ => return Err(rusqlite::Error::InvalidQuery),
             },
-            active: r.get::<_, u8>(2)? == 1,
-            max_uses: r.get::<_, Option<i64>>(3)?.map(|v| v as u64),
-            use_count: r.get::<_, i64>(4)? as u64,
-            expires_at: r.get::<_, Option<i64>>(5)?.map(|v| v as u64),
-            created_at: r.get::<_, i64>(6)? as u64,
-            disabled_at: r.get::<_, Option<i64>>(7)?.map(|v| v as u64),
-            configuration_revision: r.get::<_, i64>(8)? as u64,
+            active: r.budgeted_get::<_, u8>(2)? == 1,
+            max_uses: r.budgeted_get::<_, Option<i64>>(3)?.map(|v| v as u64),
+            use_count: r.budgeted_get::<_, i64>(4)? as u64,
+            expires_at: r.budgeted_get::<_, Option<i64>>(5)?.map(|v| v as u64),
+            created_at: r.budgeted_get::<_, i64>(6)? as u64,
+            disabled_at: r.budgeted_get::<_, Option<i64>>(7)?.map(|v| v as u64),
+            configuration_revision: r.budgeted_get::<_, i64>(8)? as u64,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)

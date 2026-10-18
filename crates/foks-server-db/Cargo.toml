@@ -6,10 +6,14 @@ license.workspace = true
 description = "Authoritative standalone SQLite storage for the FOKS v0.1.9 server"
 
 [dependencies]
+getrandom = { workspace = true }
+sha2 = { workspace = true }
 subtle = "2.6"
 foks-crypto = { workspace = true }
 foks-merkle-store = { workspace = true }
 foks-proto = { workspace = true }
+foks-snowpack = { workspace = true }
+foks-schema-contract = { workspace = true }
 libc = { workspace = true }
 rusqlite = { workspace = true }
 thiserror = { workspace = true }

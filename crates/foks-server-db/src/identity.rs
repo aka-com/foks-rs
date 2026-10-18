@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, OptionalExtension as _, TransactionBehavior};
 
 use crate::{error::sql_integer, idempotency, transaction::inject, Database, Error, Result};
@@ -111,7 +112,13 @@ impl Database {
                 "SELECT reservation_token, reservation_sequence, expires_at
                  FROM names WHERE normalized_name = ?1 AND uid IS NULL",
                 [mutation.normalized_name],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| {
+                    Ok((
+                        row.budgeted_get(0)?,
+                        row.budgeted_get(1)?,
+                        row.budgeted_get(2)?,
+                    ))
+                },
             )
             .optional()?;
         let Some((token, sequence, expires_at)) = reservation else {
@@ -243,7 +250,7 @@ impl Database {
             .query_row(
                 "SELECT epoch, root_hash FROM merkle_root_heads WHERE singleton = 1",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
             )
             .optional()?;
         match (current, mutation.expected_root_hash) {
@@ -258,7 +265,7 @@ impl Database {
                 .query_row(
                     "SELECT exact_node FROM merkle_nodes WHERE node_hash = ?1",
                     [hash],
-                    |row| row.get(0),
+                    |row| row.budgeted_get(0),
                 )
                 .optional()?;
             match existing {

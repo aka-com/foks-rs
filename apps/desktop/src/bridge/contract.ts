@@ -1,3 +1,4 @@
+import type { FileUpload, FileUploads } from './uploads';
 import type {
   AgentSnapshot,
   AgentStatus,
@@ -268,6 +269,18 @@ export interface Bridge {
    * host mutation, with their `.origin` files and any left without an entry.
    */
   emptyTrash(request: EmptyTrashRequest): Promise<MutationResponse>;
+  /**
+   * Lists the durable uploads the agent holds for a store, with its upload
+   * capacity. `after` is the `next` cursor of the previous page.
+   */
+  listFileUploads(
+    storeId: StoreRef,
+    after?: number[] | null,
+  ): Promise<FileUploads>;
+  /** Asks the agent to continue the durable upload `uploadId`. */
+  resumeFileUpload(storeId: StoreRef, uploadId: string): Promise<FileUpload>;
+  /** Asks the agent to cancel the durable upload `uploadId`. */
+  cancelFileUpload(storeId: StoreRef, uploadId: string): Promise<FileUpload>;
   importDroppedFile(
     request: ImportDroppedFileRequest,
   ): Promise<MutationResponse>;

@@ -1,12 +1,13 @@
 //! Channel discovery and creation. Creation owns its writer transaction.
 use super::*;
+use crate::allocation::RowAllocationExt as _;
 
 pub(super) fn channel(c: &Connection, id: &[u8; 16]) -> Result<RtChannelMetadata> {
     let (bytes, activity): (Vec<u8>, Option<Vec<u8>>) = c
         .query_row(
             "SELECT metadata, last_message FROM rt_channels WHERE channel_id=?1",
             params![id.as_slice()],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.budgeted_get(0)?, r.budgeted_get(1)?)),
         )
         .optional()?
         .ok_or(Error::NotFound("realtime channel"))?;
@@ -94,7 +95,7 @@ impl Database {
             .query_row(
                 "SELECT version FROM rt_channel_sets WHERE team_id=?1 AND app_id=1",
                 params![md.team.entity().as_bytes()],
-                |r| r.get(0),
+                |r| r.budgeted_get(0),
             )
             .optional()?
             .unwrap_or(0);
@@ -105,7 +106,7 @@ impl Database {
         let count: i64 = tx.query_row(
             "SELECT COUNT(*) FROM rt_channels WHERE team_id=?1 AND app_id=1",
             params![md.team.entity().as_bytes()],
-            |r| r.get(0),
+            |r| r.budgeted_get(0),
         )?;
         // An admission refusal before commit: QuotaExceeded maps to 1060,
         // which clients record as a definite rejection.
@@ -137,7 +138,7 @@ impl ReadSnapshot<'_> {
             .query_row(
                 "SELECT version,mtime FROM rt_channel_sets WHERE team_id=?1 AND app_id=1",
                 params![arg.team.entity().as_bytes()],
-                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+                |r| Ok((r.budgeted_get::<_, i64>(0)?, r.budgeted_get::<_, i64>(1)?)),
             )
             .optional()?
             .unwrap_or((0, 0));
@@ -154,7 +155,12 @@ impl ReadSnapshot<'_> {
                     arg.team.entity().as_bytes(),
                     (Limits::CHANNELS_PER_TEAM + 1) as i64
                 ],
-                |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Option<Vec<u8>>>(1)?)),
+                |r| {
+                    Ok((
+                        r.budgeted_get::<_, Vec<u8>>(0)?,
+                        r.budgeted_get::<_, Option<Vec<u8>>>(1)?,
+                    ))
+                },
             )?;
             for (i, row) in rows.enumerate() {
                 if i >= Limits::CHANNELS_PER_TEAM {

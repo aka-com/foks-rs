@@ -27,6 +27,10 @@ impl HardStateStore {
                 "SELECT count(*) FROM team_mutation_operations WHERE state NOT IN (5,6,7)",
             ),
             (
+                "file upload",
+                "SELECT count(*) FROM kv_uploads WHERE state NOT IN (6,9,11)",
+            ),
+            (
                 "mutation",
                 "SELECT count(*) FROM mutation_operations WHERE state NOT IN (5,6)",
             ),

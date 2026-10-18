@@ -1,0 +1,2971 @@
+--- a/crates/celld/actor.rs
++++ b/crates/celld/actor.rs
+@@ -1110,6 +1110,40 @@
+     timing: Option<EffectTiming>,
+ }
+ 
++#[cfg(feature = "foks-guarded-node-qualification")]
++#[derive(Clone, Copy)]
++pub(crate) enum GuardedProofObservation {
++    Durable {
++        op: celld_logic::OpId,
++        result: Result<u64, celld_logic::Failure>,
++        source: celld_logic::ProofSource,
++    },
++    Ownership {
++        op: celld_logic::OpId,
++        result: Result<(), celld_logic::Failure>,
++    },
++}
++#[cfg(feature = "foks-guarded-node-qualification")]
++impl CompletedEffect {
++    // Copy the actual semantic result, without exposing or replacing its Event.
++    pub(crate) fn guarded_proof_observation(&self) -> Option<GuardedProofObservation> {
++        match &self.event {
++            Event::DurableReached { op, result, source } => {
++                Some(GuardedProofObservation::Durable {
++                    op: *op,
++                    result: *result,
++                    source: *source,
++                })
++            }
++            Event::OwnershipVerified { op, result } => Some(GuardedProofObservation::Ownership {
++                op: *op,
++                result: *result,
++            }),
++            _ => None,
++        }
++    }
++}
++
+ impl CompletedEffect {
+     fn plain(event: Event) -> Self {
+         Self {
+--- a/crates/celld/guarded_execution.rs
++++ b/crates/celld/guarded_execution.rs
+@@ -1142,3 +1142,69 @@
+         Ok(())
+     }
+ }
++
++#[cfg(feature = "foks-guarded-node-qualification")]
++#[derive(Clone, Copy, Serialize)]
++pub struct NodeEventChunk {
++    start: usize,
++    count: usize,
++    cutoff: usize,
++    observation_failed: bool,
++    #[serde(serialize_with = "serialize_node_events")]
++    events: [Option<Event>; 64],
++}
++#[cfg(feature = "foks-guarded-node-qualification")]
++fn serialize_node_events<S: serde::Serializer>(
++    events: &[Option<Event>; 64],
++    serializer: S,
++) -> Result<S::Ok, S::Error> {
++    events.as_slice().serialize(serializer)
++}
++#[cfg(feature = "foks-guarded-node-qualification")]
++fn node_event_storage_bytes() -> usize {
++    EVENT_LIMIT * std::mem::size_of::<Event>()
++}
++#[cfg(feature = "foks-guarded-node-qualification")]
++impl Capacity {
++    fn node_event_count(&self) -> Result<usize, node::Refusal> {
++        Ok(self
++            .ledger
++            .try_lock()
++            .map_err(|_| node::Refusal::Contended)?
++            .events
++            .len())
++    }
++    fn node_event_chunk(
++        &self,
++        start: usize,
++        cutoff: usize,
++    ) -> Result<NodeEventChunk, node::Refusal> {
++        if cutoff > EVENT_LIMIT || start > cutoff || start % 64 != 0 {
++            return Err(node::Refusal::Invalid);
++        }
++        let ledger = self
++            .ledger
++            .try_lock()
++            .map_err(|_| node::Refusal::Contended)?;
++        if cutoff > ledger.events.len() {
++            return Err(node::Refusal::Invalid);
++        }
++        let count = (cutoff - start).min(64);
++        let mut chunk = NodeEventChunk {
++            start,
++            count,
++            cutoff,
++            observation_failed: ledger.observation_failed,
++            events: [None; 64],
++        };
++        for (destination, event) in chunk
++            .events
++            .iter_mut()
++            .zip(&ledger.events[start..start + count])
++        {
++            *destination = Some(*event);
++        }
++        // This Copy chunk is returned only after releasing the physical ledger.
++        Ok(chunk)
++    }
++}
+--- a/crates/celld/guarded_node.rs
++++ b/crates/celld/guarded_node.rs
+@@ -630,7 +630,321 @@
+     generation: u64,
+     alarm: celld_logic::wake::AlarmSnapshot,
+ }
++// Fixed, process-charged diagnostic storage. These scalars grant no authority.
++const OBSERVATION_LIMIT: usize = 64;
++const OBSERVATION_BYTES: usize = 512;
++const OBSERVATION_EVENTS: usize = 40;
++const NATIVE_OBSERVATIONS: usize = 11;
++const OBSERVATION_STREAM_BYTES: usize = 264_192;
++
++#[repr(u8)]
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(crate) enum ObservationEvent {
++    Admitted,
++    PrimaryLocal,
++    AuxLocal,
++    PrimaryOutputSubmitted,
++    AuxOutputSubmitted,
++    PrimaryDurableSuccess,
++    AuxDurableSuccess,
++    PrimaryOwnershipSuccess,
++    AuxOwnershipSuccess,
++    PrimaryOutputReleased,
++    AuxOutputReleased,
++    DriverJoined,
++    DriverDelivered,
++    C1Required,
++    C1Succeeded,
++    C1NotRequired,
++    ZeroWritePending,
++    PositiveWritePending,
++    SocketClosed,
++    FrameDropped,
++    AnswerDropped,
++    PrimaryFinishProcessed,
++    AuxFinishProcessed,
++    PrimaryInactive,
++    AuxInactive,
++    PrimaryFinishDisposed,
++    AuxFinishDisposed,
++    AuxSyncDisposed,
++    DispatcherDisposed,
++    WorkerDestroyed,
++    C6Succeeded,
++    TerminalConjunction,
++    PayloadsDropped,
++    OriginalRequestDropped,
++    A2Free,
++    PublicGuardDropped,
++    BankFree,
++    Quarantined,
++    CancelProcessed,
++    Retiring,
++}
++#[repr(u8)]
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++enum ObservationPhase {
++    NeverAdmitted,
++    Active,
++    Retiring,
++    PendingOwner,
++    Quarantined,
++    Free,
++}
++
++// The serialized field order is fixed; only numeric arrays/scalars are emitted.
++// first/tail form forty first-occurrence ordinals, not fabricated clock samples.
++#[derive(Clone, Copy, Debug, serde::Serialize)]
++pub struct InvocationObservation {
++    sequence: u64,
++    a2_generation: u64,
++    epoch: u64,
++    generation: u64,
++    requests: [u64; 2],
++    durable_ops: [u64; 2],
++    ownership_ops: [u64; 2],
++    positions: [u64; 2],
++    durable_positions: [u64; 2],
++    seen: u64,
++    first: [u32; 32],
++    tail: [u32; 8],
++    ordinal: u32,
++    native_joined: [u16; NATIVE_OBSERVATIONS],
++    native_disposed: [u16; NATIVE_OBSERVATIONS],
++    roots_joined: u16,
++    roots_disposed: u16,
++    frame_bytes: u32,
++    accepted_bytes: u32,
++    positive_pending_bytes: u32,
++    write_polls: u32,
++    pending_polls: u32,
++    tenant: u8,
++    bank_slot: u8,
++    a2_slot: u8,
++    phase: u8,
++    summary: u8,
++    request_dead: bool,
++    // Immutable admission provenance; only PublicGuardDropped records destruction.
++    public_guard: bool,
++    durable_verdicts: [u8; 2],
++    ownership_verdicts: [u8; 2],
++    proof_sources: [u8; 2],
++    release_verdicts: [u8; 2],
++    c1: u8,
++    outcome: u8,
++    refusal: u8,
++}
++impl InvocationObservation {
++    const fn empty() -> Self {
++        Self {
++            sequence: 0,
++            a2_generation: 0,
++            epoch: 0,
++            generation: 0,
++            requests: [0; 2],
++            durable_ops: [0; 2],
++            ownership_ops: [0; 2],
++            positions: [0; 2],
++            durable_positions: [0; 2],
++            seen: 0,
++            first: [0; 32],
++            tail: [0; 8],
++            ordinal: 0,
++            native_joined: [0; NATIVE_OBSERVATIONS],
++            native_disposed: [0; NATIVE_OBSERVATIONS],
++            roots_joined: 0,
++            roots_disposed: 0,
++            frame_bytes: 0,
++            accepted_bytes: 0,
++            positive_pending_bytes: 0,
++            write_polls: 0,
++            pending_polls: 0,
++            tenant: 255,
++            bank_slot: 255,
++            a2_slot: 255,
++            phase: ObservationPhase::NeverAdmitted as u8,
++            summary: 255,
++            request_dead: false,
++            public_guard: false,
++            durable_verdicts: [0; 2],
++            ownership_verdicts: [0; 2],
++            proof_sources: [0; 2],
++            release_verdicts: [0; 2],
++            c1: 0,
++            outcome: 0,
++            refusal: 0,
++        }
++    }
++    fn mark(&mut self, event: ObservationEvent) -> Result<(), Refusal> {
++        let index = event as usize;
++        if index >= OBSERVATION_EVENTS {
++            return Err(Refusal::Invalid);
++        }
++        let bit = 1u64 << index;
++        if self.seen & bit == 0 {
++            let next = self.ordinal.checked_add(1).ok_or(Refusal::Bounds)?;
++            self.ordinal = next;
++            self.seen |= bit;
++            if index < 32 {
++                self.first[index] = next;
++            } else {
++                self.tail[index - 32] = next;
++            }
++        }
++        Ok(())
++    }
++    fn has(&self, event: ObservationEvent) -> bool {
++        self.seen & (1u64 << event as usize) != 0
++    }
++    fn refused(&mut self, error: Refusal) {
++        self.refusal = error as u8 + 1;
++    }
++    fn quarantine(&mut self) {
++        self.phase = ObservationPhase::Quarantined as u8;
++        self.refused(Refusal::Failed);
++        // Exhaustion cannot turn a quarantined record into a successful one.
++        let _ = self.mark(ObservationEvent::Quarantined);
++    }
++    fn progress(&mut self, progress: output::WriteProgress) -> Result<(), Refusal> {
++        if progress.frame_bytes == 0
++            || progress.frame_bytes > 4 * 1024 * 1024
++            || progress.accepted_bytes > progress.frame_bytes
++            || progress.accepted_bytes < self.accepted_bytes
++            || self.frame_bytes != 0 && self.frame_bytes != progress.frame_bytes
++            || progress.positive_pending_bytes > progress.accepted_bytes
++            || progress.positive_pending_bytes >= progress.frame_bytes
++            || progress.write_polls < self.write_polls
++            || progress.pending_polls < self.pending_polls
++            || progress.pending_polls > progress.write_polls
++            || (progress.zero_pending || progress.positive_pending_bytes != 0)
++                && progress.pending_polls == 0
++            || self.positive_pending_bytes != 0
++                && progress.positive_pending_bytes != self.positive_pending_bytes
++            || self.has(ObservationEvent::ZeroWritePending) && !progress.zero_pending
++        {
++            return Err(Refusal::Bounds);
++        }
++        self.frame_bytes = progress.frame_bytes;
++        self.accepted_bytes = progress.accepted_bytes;
++        self.positive_pending_bytes = progress.positive_pending_bytes;
++        self.write_polls = progress.write_polls;
++        self.pending_polls = progress.pending_polls;
++        if progress.zero_pending {
++            self.mark(ObservationEvent::ZeroWritePending)?;
++        }
++        if progress.positive_pending_bytes != 0 {
++            self.mark(ObservationEvent::PositiveWritePending)?;
++        }
++        Ok(())
++    }
++    fn replace_auxiliary(&mut self, request: u64) {
++        self.requests[1] = request;
++        self.durable_ops[1] = 0;
++        self.ownership_ops[1] = 0;
++        self.positions[1] = 0;
++        self.durable_positions[1] = 0;
++        self.durable_verdicts[1] = 0;
++        self.ownership_verdicts[1] = 0;
++        self.proof_sources[1] = 0;
++        self.release_verdicts[1] = 0;
++        // Auxiliary evidence describes the current request, never a previous
++        // sync. Reuse clears its first-occurrence slots; the global ordinal
++        // remains monotonic so new events cannot look earlier than old ones.
++        for event in [
++            ObservationEvent::AuxLocal,
++            ObservationEvent::AuxOutputSubmitted,
++            ObservationEvent::AuxDurableSuccess,
++            ObservationEvent::AuxOwnershipSuccess,
++            ObservationEvent::AuxOutputReleased,
++            ObservationEvent::AuxFinishProcessed,
++            ObservationEvent::AuxInactive,
++            ObservationEvent::AuxFinishDisposed,
++            ObservationEvent::AuxSyncDisposed,
++        ] {
++            let index = event as usize;
++            self.seen &= !(1u64 << index);
++            if index < 32 {
++                self.first[index] = 0;
++            } else {
++                self.tail[index - 32] = 0;
++            }
++        }
++    }
++    fn observe_bytes(&self, tenant: usize, selector: bool) -> [u8; 32] {
++        let mut bytes = [0; 32];
++        bytes[..8].copy_from_slice(b"FOKSGS01");
++        bytes[8] = 2;
++        bytes[9] = tenant as u8;
++        bytes[10] = u8::from(selector);
++        bytes[11] = self.phase;
++        bytes[12..20].copy_from_slice(&self.sequence.to_le_bytes());
++        bytes[20..24].copy_from_slice(&self.positive_pending_bytes.to_le_bytes());
++        bytes[24..28].copy_from_slice(&self.frame_bytes.to_le_bytes());
++        // Projection bit0..31 corresponds to the following fixed event roster.
++        const PROJECT: [ObservationEvent; 32] = [
++            ObservationEvent::Admitted,
++            ObservationEvent::PrimaryLocal,
++            ObservationEvent::AuxLocal,
++            ObservationEvent::PrimaryDurableSuccess,
++            ObservationEvent::AuxDurableSuccess,
++            ObservationEvent::PrimaryOwnershipSuccess,
++            ObservationEvent::AuxOwnershipSuccess,
++            ObservationEvent::PrimaryOutputReleased,
++            ObservationEvent::AuxOutputReleased,
++            ObservationEvent::DriverJoined,
++            ObservationEvent::DriverDelivered,
++            ObservationEvent::C1Required,
++            ObservationEvent::C1Succeeded,
++            ObservationEvent::C1NotRequired,
++            ObservationEvent::ZeroWritePending,
++            ObservationEvent::PositiveWritePending,
++            ObservationEvent::SocketClosed,
++            ObservationEvent::FrameDropped,
++            ObservationEvent::AnswerDropped,
++            ObservationEvent::PrimaryFinishProcessed,
++            ObservationEvent::AuxFinishProcessed,
++            ObservationEvent::PrimaryInactive,
++            ObservationEvent::AuxInactive,
++            ObservationEvent::PrimaryFinishDisposed,
++            ObservationEvent::AuxFinishDisposed,
++            ObservationEvent::WorkerDestroyed,
++            ObservationEvent::C6Succeeded,
++            ObservationEvent::OriginalRequestDropped,
++            ObservationEvent::A2Free,
++            ObservationEvent::PublicGuardDropped,
++            ObservationEvent::BankFree,
++            ObservationEvent::Quarantined,
++        ];
++        let mut mask = 0u32;
++        for (index, event) in PROJECT.into_iter().enumerate() {
++            if self.has(event) {
++                mask |= 1u32 << index;
++            }
++        }
++        bytes[28..32].copy_from_slice(&mask.to_le_bytes());
++        bytes
++    }
++}
++impl NativeKind {
++    fn observation_index(self) -> usize {
++        match self {
++            Self::DbOpen => 0,
++            Self::RestoredAlarm => 1,
++            Self::HydratorOpen => 2,
++            Self::HydratorStep => 3,
++            Self::SyncCapture => 4,
++            Self::Snapshot => 5,
++            Self::WorkerBuild => 6,
++            Self::WorkerDestroy => 7,
++            Self::LocalClose => 8,
++            Self::ReadFile => 9,
++            Self::OpaqueLowerJob => 10,
++        }
++    }
++}
++
+ struct InvocationState {
++    observation: InvocationObservation,
+     roots: [RootCell; ROOT_COUNT],
+     activities: [ActivityCompletion; 2],
+     controls: [ControlCell; 4],
+@@ -671,6 +985,7 @@
+             return Err(Refusal::Busy);
+         }
+         state.frame_reserved = true;
++        state.observation.frame_bytes = u32::try_from(kind.bytes()).map_err(|_| Refusal::Bounds)?;
+         drop(state);
+         // One original aggregate/pool reservation, never the root-owned cap.
+         self.control.reserve_output(kind.bytes())
+@@ -681,6 +996,7 @@
+     records: [Option<Arc<InvocationRecord>>; 2],
+     held: [Option<HeldRetirement>; 2],
+     next: u64,
++    archive: [InvocationObservation; OBSERVATION_LIMIT],
+     retired: [u64; 2],
+     retirement_wakers: [Option<Waker>; 2],
+     actor_waker: Option<Waker>,
+@@ -704,6 +1020,7 @@
+ }
+ impl OwnedEffectRegistry {
+     fn new(process: NodeControl) -> Result<Arc<Self>, Refusal> {
++        observation_layouts()?;
+         process.charge(control::arc_bytes::<Self>()?)?;
+         let capacity = super::Capacity::for_node(&process)?;
+         Ok(Arc::new_cyclic(|own| Self {
+@@ -712,6 +1029,7 @@
+                 records: [None, None],
+                 held: [None, None],
+                 next: 0,
++                archive: [InvocationObservation::empty(); OBSERVATION_LIMIT],
+                 retired: [0; 2],
+                 retirement_wakers: [None, None],
+                 actor_waker: None,
+@@ -745,6 +1063,7 @@
+             record.control.fail();
+             if let Ok(mut state) = lock_owned(&record.state) {
+                 state.tainted = true;
++                state.observation.quarantine();
+                 if let Some(lease) = &state.lease {
+                     lease.capacity.quarantine(lease.token);
+                 }
+@@ -854,31 +1173,60 @@
+     }
+     fn finish_root(&self, context: &JobContext) -> Result<(), Refusal> {
+         let record = self.record(context.token)?;
+-        let mut state = lock_owned(&record.state)?;
+-        let root = Self::root(&mut state, context.token)?;
+-        if root.state != RootState::Delivered
+-            || root.handle.is_some()
+-            || root.receiver.is_some()
+-            || root.result.is_some()
+-            || !root.child.clear()
+-        {
+-            state.tainted = true;
+-            record.control.fail();
+-            return Err(Refusal::Failed);
+-        }
+-        root.state = if matches!(context.role, JobRole::Forward(_)) {
+-            RootState::Empty
+-        } else {
+-            RootState::Spent
++        let (consumer, wake, abandon) = {
++            let mut state = lock_owned(&record.state)?;
++            let root = Self::root(&mut state, context.token)?;
++            if root.state != RootState::Delivered
++                || root.handle.is_some()
++                || root.receiver.is_some()
++                || root.result.is_some()
++                || !root.child.clear()
++            {
++                state.tainted = true;
++                drop(state);
++                record.control.fail();
++                return Err(Refusal::Failed);
++            }
++            root.wake = None; // Copy-only alarm metadata.
++            (root.consumer, root.waker.take(), root.abandon.take())
+         };
+-        root.consumer = false;
+-        let wake = root.waker.take();
+-        let abandon = root.abandon.take();
+-        root.wake = None;
+-        drop(state);
++        // Delivered excludes reuse while concrete result/task/channel/abandon
++        // payloads finish disposal. Notification wakers are not native-work
++        // ownership: their remaining context aliases are covered by the final
++        // OriginalRequestDropped witness. Wake only after Empty/Spent is
++        // published, including any C7 waiter registered during this cut.
++        drop(abandon);
++        let later_wake = {
++            let mut state = lock_owned(&record.state)?;
++            let root = Self::root(&mut state, context.token)?;
++            if root.state != RootState::Delivered
++                || root.consumer != consumer
++                || root.handle.is_some()
++                || root.receiver.is_some()
++                || root.result.is_some()
++                || !root.child.clear()
++                || root.abandon.is_some()
++            {
++                state.tainted = true;
++                drop(state);
++                record.control.fail();
++                return Err(Refusal::Failed);
++            }
++            root.state = if matches!(context.role, JobRole::Forward(_)) {
++                RootState::Empty
++            } else {
++                RootState::Spent
++            };
++            root.consumer = false;
++            let later_wake = root.waker.take();
++            state.observation.roots_disposed |= 1u16 << context.role.index();
++            later_wake
++        };
+         drop(record);
+-        drop(abandon);
+         if let Some(wake) = wake {
++            wake.wake();
++        }
++        if let Some(wake) = later_wake {
+             wake.wake();
+         }
+         self.wake_actor();
+@@ -977,8 +1325,25 @@
+                 }
+             }
+         }
++        if context.role == JobRole::Forward(ForwardLane::Driver) {
++            if let Err(error) = state
++                .observation
++                .mark(ObservationEvent::DriverJoined)
++                .and_then(|()| state.observation.mark(ObservationEvent::DriverDelivered))
++            {
++                state.tainted = true;
++                drop(state);
++                drop(record);
++                context.fail();
++                drop(consumed_handle);
++                drop(consumed_receiver);
++                return Poll::Ready(Err(error));
++            }
++        }
++        let root = Self::root(&mut state, context.token)?;
+         let result = root.result.take().ok_or(Refusal::Failed);
+         root.state = RootState::Delivered;
++        state.observation.roots_joined |= 1u16 << context.role.index();
+         drop(state);
+         drop(record);
+         drop(consumed_handle);
+@@ -1316,7 +1681,12 @@
+         let registry = self.context.registry()?;
+         let result = self.result.take().ok_or(Refusal::Invalid)?;
+         match result {
+-            ActorJobResult::Transition(completed) => apply_one(Some(completed)),
++            ActorJobResult::Transition(completed) => {
++                if let Some(view) = completed.guarded_proof_observation() {
++                    registry.observe_proof(&self.context, view)?;
++                }
++                apply_one(Some(completed));
++            }
+             ActorJobResult::StopHeld { op, failure } => {
+                 if self.context.role != JobRole::Cleanup(CleanupLane::Stop) {
+                     self.context.fail();
+@@ -2347,8 +2717,29 @@
+                 }
+             }
+         }
++        let Some(kind) = child.kind else {
++            state.tainted = true;
++            drop(state);
++            drop(record);
++            context.fail();
++            drop(consumed_handle);
++            drop(consumed_receiver);
++            return Poll::Ready(Err(Refusal::Invalid));
++        };
++        let index = kind.observation_index();
++        let Some(count) = state.observation.native_joined[index].checked_add(1) else {
++            state.tainted = true;
++            drop(state);
++            drop(record);
++            context.fail();
++            drop(consumed_handle);
++            drop(consumed_receiver);
++            return Poll::Ready(Err(Refusal::Bounds));
++        };
++        let child = &mut Self::root(&mut state, context.token)?.child;
+         child.delivered = true;
+         let result = child.result.take().ok_or(Refusal::Failed);
++        state.observation.native_joined[index] = count;
+         drop(state);
+         drop(record);
+         drop(consumed_handle);
+@@ -2357,30 +2748,50 @@
+     }
+     fn finish_child(&self, context: &JobContext, token: ChildToken) -> Result<(), Refusal> {
+         let record = self.record(token.root)?;
+-        let mut state = lock_owned(&record.state)?;
+-        let root = Self::root(&mut state, context.token)?;
+-        let child = &mut root.child;
+-        if token.root != context.token
+-            || child.sequence != token.sequence
+-            || !child.delivered
+-            || !child.joined
+-            || child.handle.is_some()
+-            || child.receiver.is_some()
+-            || child.result.is_some()
++        let (kind, wake) = {
++            let mut state = lock_owned(&record.state)?;
++            let child = &mut Self::root(&mut state, context.token)?.child;
++            if token.root != context.token
++                || child.sequence != token.sequence
++                || !child.consumer
++                || !child.delivered
++                || !child.joined
++                || child.handle.is_some()
++                || child.receiver.is_some()
++                || child.result.is_some()
++            {
++                return Err(Refusal::Invalid);
++            }
++            (child.kind.ok_or(Refusal::Invalid)?, child.waker.take())
++        };
++        // The child stays delivered and consuming while its last owning waker
++        // is dropped. A reentrant observer still sees the occupied child.
++        drop(wake);
+         {
+-            return Err(Refusal::Invalid);
+-        }
+-        let sequence = child.sequence;
+-        let old = std::mem::replace(
+-            child,
+-            NativeChildCell {
+-                sequence,
++            let mut state = lock_owned(&record.state)?;
++            let count = state.observation.native_disposed[kind.observation_index()]
++                .checked_add(1)
++                .ok_or(Refusal::Bounds)?;
++            let child = &mut Self::root(&mut state, context.token)?.child;
++            if child.sequence != token.sequence
++                || child.kind != Some(kind)
++                || !child.consumer
++                || !child.delivered
++                || !child.joined
++                || child.handle.is_some()
++                || child.receiver.is_some()
++                || child.result.is_some()
++                || child.waker.is_some()
++            {
++                return Err(Refusal::Invalid);
++            }
++            // Only Copy scalars and empty Options remain in the old cell.
++            *child = NativeChildCell {
++                sequence: token.sequence,
+                 ..NativeChildCell::new()
+-            },
+-        );
+-        drop(state);
+-        drop(record);
+-        drop(old);
++            };
++            state.observation.native_disposed[kind.observation_index()] = count;
++        }
+         Ok(())
+     }
+ }
+@@ -2853,13 +3264,27 @@
+                 }
+             };
+             let mut wakes = [None, None];
++            let mut inactive = 0u8;
+             for (index, activity) in state.activities.iter_mut().enumerate() {
+                 if activity.finish_processed && core.request_inactive(activity.request) {
+                     activity.inactive = true;
++                    inactive |= 1u8 << index;
+                     wakes[index] = activity.finish_waker.take();
+                 }
+             }
++            let observed = (|| {
++                if inactive & 1 != 0 {
++                    state.observation.mark(ObservationEvent::PrimaryInactive)?;
++                }
++                if inactive & 2 != 0 {
++                    state.observation.mark(ObservationEvent::AuxInactive)?;
++                }
++                Ok::<(), Refusal>(())
++            })();
+             drop(state);
++            if observed.is_err() {
++                record.control.fail();
++            }
+             drop(record);
+             for wake in wakes.into_iter().flatten() {
+                 wake.wake();
+@@ -2940,8 +3365,8 @@
+         let result = (|| {
+             let registry = self.context.registry()?;
+             let record = registry.record(self.context.token)?;
++            let mut wake = None;
+             let mut state = lock_owned(&record.state)?;
+-            let mut wake = None;
+             let control = &mut state.controls[self.kind.index()];
+             if !control.delivered || control.processed || control.request != self.request {
+                 return Err(Refusal::Invalid);
+@@ -2961,6 +3386,19 @@
+                 if core.request_inactive(activity.request) {
+                     activity.inactive = true;
+                     wake = activity.finish_waker.take();
++                }
++                let inactive = activity.inactive;
++                state.observation.mark(if index == 0 {
++                    ObservationEvent::PrimaryFinishProcessed
++                } else {
++                    ObservationEvent::AuxFinishProcessed
++                })?;
++                if inactive {
++                    state.observation.mark(if index == 0 {
++                        ObservationEvent::PrimaryInactive
++                    } else {
++                        ObservationEvent::AuxInactive
++                    })?;
+                 }
+             }
+             drop(state);
+@@ -3139,6 +3577,13 @@
+                 return Err(Refusal::Invalid);
+             }
+             activity.proof_op = operation;
++            state.observation.positions[self.activity] =
++                ticket.position.or(ticket.observed).unwrap_or(0);
++            state.observation.mark(if self.activity == 0 {
++                ObservationEvent::PrimaryOutputSubmitted
++            } else {
++                ObservationEvent::AuxOutputSubmitted
++            })?;
+         }
+         self.context.check_forward()?;
+         self.consumed = true;
+@@ -3384,6 +3829,19 @@
+             activity.route_delivered = true;
+             activity.route_consumer = false;
+             self.active = false;
++            if matches!(&result, Ok(celld_logic::Route::Local)) {
++                if state
++                    .observation
++                    .mark(if self.index == 0 {
++                        ObservationEvent::PrimaryLocal
++                    } else {
++                        ObservationEvent::AuxLocal
++                    })
++                    .is_err()
++                {
++                    state.tainted = true;
++                }
++            }
+             drop(state);
+             drop(record);
+             if self.context.check_forward().is_err() {
+@@ -3495,9 +3953,9 @@
+         self.context.check_identity()?;
+         let registry = self.context.registry()?;
+         let record = registry.record(self.context.token)?;
+-        let mut state = lock_owned(&record.state)?;
+         let mut wake = None;
+         let mut abandon = None;
++        let mut state = lock_owned(&record.state)?;
+         match (self.operation, effect) {
+             (InlineKind::Complete, Effect::Complete { request, result }) => {
+                 let activity = state
+@@ -3543,8 +4001,16 @@
+                 {
+                     return Err(Refusal::Invalid);
+                 }
++                let verdict = if result.is_ok() { 1 } else { 2 };
+                 output.result = Some(result);
+                 wake = output.waker.take();
++                let index = usize::from(request != state.activities[0].request);
++                state.observation.release_verdicts[index] = verdict;
++                state.observation.mark(if index == 0 {
++                    ObservationEvent::PrimaryOutputReleased
++                } else {
++                    ObservationEvent::AuxOutputReleased
++                })?;
+             }
+             (InlineKind::Admission, Effect::EvictionAdmission { request, result }) => {
+                 if state.eviction_request != request
+@@ -3598,6 +4064,7 @@
+                     return Err(Refusal::Invalid);
+                 }
+                 state.cancel_requested = true;
++                state.observation.mark(ObservationEvent::CancelProcessed)?;
+                 state.roots[ForwardLane::Driver as usize].cancel = true;
+                 if let Some(runtime) = &state.runtime {
+                     runtime.cancel();
+@@ -3998,6 +4465,7 @@
+         )?;
+         watch_derived_bytes()?;
+         owner.charge(WATCH_ALLOCATION_BOUND)?;
++        let summary = owner.summary_index()?;
+         let mut bank = self.bank.try_lock().map_err(|_| Refusal::Contended)?;
+         if bank
+             .records
+@@ -4029,19 +4497,37 @@
+         if request == 0 || auxiliary <= request || eviction_request <= auxiliary {
+             return Err(Refusal::Exhausted);
+         }
+-        bank.next = bank.next.checked_add(1).ok_or(Refusal::Exhausted)?;
+-        let sequence = bank.next;
++        let mut observation = InvocationObservation::empty();
++        observation.tenant = tenant as u8;
++        observation.bank_slot = slot as u8;
++        observation.summary = summary;
++        observation.public_guard = admission.public_guard.is_some();
++        observation.requests = [request, auxiliary];
++        let sequence = bank.reserve_observation(observation)?;
++        observation.sequence = sequence;
+         control.check()?;
+         // All fallible scalar preparation precedes physical A2 admission.
+         // From here the concrete record retains its lease and Public guard.
+-        let lease = self
++        let lease = match self
+             .capacity
+             .try_admit(program::TENANT_IDS[tenant], a2_control)
+-            .map_err(|_| Refusal::Capacity)?;
++        {
++            Ok(lease) => lease,
++            Err(_) => {
++                bank.archive[sequence as usize - 1].refused(Refusal::Capacity);
++                return Err(Refusal::Capacity);
++            }
++        };
++        observation.a2_slot = lease.token.index as u8;
++        observation.a2_generation = lease.token.generation;
++        observation.phase = ObservationPhase::Active as u8;
++        observation.mark(ObservationEvent::Admitted)?;
++        bank.archive[sequence as usize - 1] = observation;
+         let (cancellation, initial_receiver) = tokio::sync::watch::channel(false);
+         drop(initial_receiver);
+         let record = Arc::new(InvocationRecord {
+             state: Mutex::new(InvocationState {
++                observation,
+                 roots: std::array::from_fn(|_| RootCell::new()),
+                 activities: [
+                     ActivityCompletion::new(request),
+@@ -4437,6 +4923,8 @@
+             alarm: runtime.alarm_snapshot()?,
+         });
+         state.retiring = true;
++        state.observation.phase = ObservationPhase::Retiring as u8;
++        state.observation.mark(ObservationEvent::Retiring)?;
+         state.runtime.take().ok_or(Refusal::NotReady)
+     }
+     pub(crate) fn store_proof(&self, proof: crate::ltx_repl::GuardedProof) -> Result<(), Refusal> {
+@@ -5058,20 +5546,38 @@
+         let disposed = (|| {
+             let registry = self.context.registry()?;
+             let record = registry.record(self.context.token)?;
++            let wake = {
++                let mut state = lock_owned(&record.state)?;
++                let activity = &mut state.activities[self.index];
++                if activity.request != self.request
++                    || !self.completed
++                    || !activity.finish_processed
++                    || !activity.inactive
++                {
++                    return Err(Refusal::Invalid);
++                }
++                activity.finish_waker.take()
++            };
++            // No live waiter can re-register: this unique completed consumer
++            // is in Drop. Dispose its notification outside the lock before the
++            // checked consumer marker. The remaining non-issuing context is
++            // covered by the later OriginalRequestDropped witness.
++            drop(wake);
+             let mut state = lock_owned(&record.state)?;
+             let activity = &mut state.activities[self.index];
+             if activity.request != self.request
+-                || !self.completed
+                 || !activity.finish_processed
+                 || !activity.inactive
++                || activity.finish_waker.is_some()
+             {
+                 return Err(Refusal::Invalid);
+             }
+             activity.finish_disposed = true;
+-            let wake = activity.finish_waker.take();
+-            drop(state);
+-            drop(record);
+-            drop(wake);
++            state.observation.mark(if self.index == 0 {
++                ObservationEvent::PrimaryFinishDisposed
++            } else {
++                ObservationEvent::AuxFinishDisposed
++            })?;
+             Ok(())
+         })();
+         if disposed.is_err() {
+@@ -5079,6 +5585,7 @@
+         }
+     }
+ }
++
+ impl OwnedGateOrigin {
+     pub(crate) fn cell(&self) -> &'static str {
+         self.context.cell
+@@ -5227,6 +5734,7 @@
+                 ),
+                 _proof: state.auxiliary_proof.take(),
+             });
++            state.observation.replace_auxiliary(request);
+         }
+         state.activities[1].issued = true;
+         let sequence = state.activities[1].sequence;
+@@ -5423,6 +5931,7 @@
+                 return Err(Refusal::Invalid);
+             }
+             activity.sync_disposed = true;
++            state.observation.mark(ObservationEvent::AuxSyncDisposed)?;
+             Ok(())
+         })();
+         if result.is_err() {
+@@ -5479,6 +5988,7 @@
+     }
+ }
+ struct HeldRetirement {
++    observation: InvocationObservation,
+     phase: HeldPhase,
+     cell: Option<&'static str>,
+     sequence: u64,
+@@ -5488,14 +5998,20 @@
+     lease: Option<super::Lease>,
+ }
+ impl HeldRetirement {
+-    fn marker_for(cell: Option<&'static str>, sequence: u64) -> Self {
++    fn marker_for(
++        cell: Option<&'static str>,
++        sequence: u64,
++        observation: InvocationObservation,
++    ) -> Self {
+         let mut marker = Self::marker();
+         marker.cell = cell;
+         marker.sequence = sequence;
++        marker.observation = observation;
+         marker
+     }
+     fn marker() -> Self {
+         Self {
++            observation: InvocationObservation::empty(),
+             phase: HeldPhase::Disposing,
+             cell: None,
+             sequence: 0,
+@@ -5507,6 +6023,7 @@
+     }
+     fn fail(&mut self) {
+         self.phase = HeldPhase::Failed;
++        self.observation.quarantine();
+         if let Some(lease) = &self.lease {
+             lease.capacity.quarantine(lease.token);
+         }
+@@ -5534,6 +6051,7 @@
+             Err(error) => (error.into_inner(), true),
+         };
+         let mut held = Self {
++            observation: state.observation(),
+             phase: HeldPhase::Disposing,
+             cell: Some(cell),
+             sequence,
+@@ -5556,12 +6074,14 @@
+             let pin = pin.ok_or(Refusal::Invalid)?;
+             let lease = held.lease.as_ref().ok_or(Refusal::Invalid)?;
+             lease.capacity.node_payloads_disposed(lease.token)?;
++            held.observation.mark(ObservationEvent::PayloadsDropped)?;
+             lease.capacity.node_detach(lease.token)?;
+             pin.release_retired(&GenerationRetirementProof { _complete: () })?;
+             Ok::<(), Refusal>(())
+         })();
+         if result.is_ok() {
+             held.phase = HeldPhase::PendingOwner;
++            held.observation.phase = ObservationPhase::PendingOwner as u8;
+         } else {
+             held.fail();
+         }
+@@ -5570,6 +6090,9 @@
+     fn advance_owner(&mut self) -> Result<bool, Refusal> {
+         if self.phase != HeldPhase::PendingOwner {
+             return Ok(false);
++        }
++        if self.observation.public_guard != self.public_guard.is_some() {
++            return Err(Refusal::Invalid);
+         }
+         let owner = self.owner.as_ref().ok_or(Refusal::Invalid)?;
+         if !owner.ready_to_retire_started() {
+@@ -5584,11 +6107,15 @@
+             self.fail();
+             return Err(Refusal::Failed);
+         }
++        self.observation
++            .mark(ObservationEvent::OriginalRequestDropped)?;
++        self.observation.request_dead = true;
+         let lease = self.lease.as_ref().ok_or(Refusal::Invalid)?;
+         if let Err(error) = lease.capacity.node_publish_free(lease.token) {
+             self.fail();
+             return Err(error);
+         }
++        self.observation.mark(ObservationEvent::A2Free)?;
+         let mut lease = self.lease.take().ok_or(Refusal::Invalid)?;
+         lease.finished = true;
+         drop(lease);
+@@ -5691,7 +6218,8 @@
+                     if held.phase != HeldPhase::PendingOwner {
+                         continue;
+                     }
+-                    let marker = HeldRetirement::marker_for(held.cell, held.sequence);
++                    let marker =
++                        HeldRetirement::marker_for(held.cell, held.sequence, held.observation);
+                     Some(Err(bank.held[slot]
+                         .replace(marker)
+                         .expect("present pending owner")))
+@@ -5708,7 +6236,7 @@
+                     }
+                     // Do not call poll_owned here: its explicit waker must
+                     // never run while the enclosing bank guard is held.
+-                    let state = match record.state.try_lock() {
++                    let mut state = match record.state.try_lock() {
+                         Ok(state) => state,
+                         Err(std::sync::TryLockError::WouldBlock) => {
+                             retry = true;
+@@ -5725,6 +6253,15 @@
+                     if !terminal_conjuncts(&state) {
+                         continue;
+                     }
++                    if state
++                        .observation
++                        .mark(ObservationEvent::TerminalConjunction)
++                        .is_err()
++                    {
++                        state_poisoned = true;
++                        break;
++                    }
++                    let observation = state.observation();
+                     drop(state);
+                     let record = bank.records[slot].take().expect("present terminal record");
+                     match Arc::try_unwrap(record) {
+@@ -5732,6 +6269,7 @@
+                             bank.held[slot] = Some(HeldRetirement::marker_for(
+                                 Some(record.cell),
+                                 record.sequence,
++                                observation,
+                             ));
+                             Some(Ok(record))
+                         }
+@@ -5759,6 +6297,29 @@
+             };
+             retry |= !complete && held.phase == HeldPhase::PendingOwner;
+             let retired_sequence = held.sequence;
++            // A2 internal Free is fallible and already completed. Keep the bank
++            // tombstone until this real guard Drop; failure above retains it.
++            if complete {
++                if let Some(guard) = held.public_guard.take() {
++                    drop(guard);
++                    if held
++                        .observation
++                        .mark(ObservationEvent::PublicGuardDropped)
++                        .is_err()
++                    {
++                        self.process.fail();
++                        return;
++                    }
++                }
++            }
++            let mut observation = held.observation;
++            if complete {
++                if observation.mark(ObservationEvent::BankFree).is_err() {
++                    self.process.fail();
++                    return;
++                }
++                observation.phase = ObservationPhase::Free as u8;
++            }
+             let replacement = if complete { None } else { Some(held) };
+             let (previous, wake) = {
+                 let mut bank = match lock_owned(&self.bank) {
+@@ -5780,6 +6341,12 @@
+                     self.process.fail();
+                     return;
+                 }
++                if retired_sequence == 0 || retired_sequence > OBSERVATION_LIMIT as u64 {
++                    drop(bank);
++                    self.process.fail();
++                    return;
++                }
++                bank.archive[retired_sequence as usize - 1] = observation;
+                 if complete {
+                     bank.retired[slot] = retired_sequence;
+                 }
+@@ -5909,6 +6476,9 @@
+             return Err(Refusal::Invalid);
+         }
+         state.dispatcher_sequence = None;
++        state
++            .observation
++            .mark(ObservationEvent::DispatcherDisposed)?;
+         self.disposed = true;
+         drop(state);
+         drop(record);
+@@ -5971,17 +6541,33 @@
+ enum FrontendCommand {
+     Begin { tenant: usize },
+     Observe { tenant: usize, pending: bool },
++    ObserveV2 { tenant: usize, pending: bool },
+ }
+ fn parse_header(bytes: &[u8], scenario: GuardedNodeScenario) -> Result<FrontendCommand, Refusal> {
+     if bytes.len() != 16
+         || &bytes[..8] != b"FOKSGN01"
+-        || bytes[8] != 1
++        || !matches!(bytes[8], 1 | 2)
+         || bytes[10] >= 3
+         || bytes[12..] != [0; 4]
+     {
+         return Err(Refusal::Invalid);
+     }
+     let tenant = usize::from(bytes[10]);
++    if bytes[8] == 2 {
++        return match (bytes[9], bytes[11]) {
++            (2, 0) => Ok(FrontendCommand::ObserveV2 {
++                tenant,
++                pending: false,
++            }),
++            (2, 1) if scenario.frame() == output::FrameKind::Backpressure => {
++                Ok(FrontendCommand::ObserveV2 {
++                    tenant,
++                    pending: true,
++                })
++            }
++            _ => Err(Refusal::Invalid),
++        };
++    }
+     match (bytes[9], bytes[11]) {
+         (1, 0) => Ok(FrontendCommand::Begin { tenant }),
+         (2, 0) => Ok(FrontendCommand::Observe {
+@@ -6059,7 +6645,14 @@
+         if bytes != 65_536 || self.diagnostics_reserved.swap(true, Ordering::AcqRel) {
+             return Err(Refusal::Invalid);
+         }
+-        self.owner.charge(bytes)
++        let scratch = std::mem::size_of::<super::NodeEventChunk>()
++            .checked_add(6 * std::mem::size_of::<InvocationObservation>())
++            .and_then(|value| value.checked_add(std::mem::size_of::<GuardedNodeReport>() + 1024))
++            .and_then(|value| value.checked_add(bytes))
++            .ok_or(Refusal::Bounds)?;
++        // Archive and existing A2 event storage were charged by their actual
++        // registry/capacity constructors; charge the simultaneous report scratch.
++        self.owner.charge(scratch)
+     }
+     pub async fn require_bucket(
+         &self,
+@@ -6403,9 +6996,16 @@
+                 return Err(error);
+             }
+         };
+-        if let FrontendCommand::Observe { tenant, pending } = command {
+-            let bytes = self.node.effects.scalar_observation(tenant, pending)?;
+-            return self.scalar_reply(stamp, bytes).await;
++        match command {
++            FrontendCommand::Observe { tenant, pending } => {
++                let bytes = self.node.effects.scalar_observation(tenant, pending)?;
++                return self.scalar_reply(stamp, bytes).await;
++            }
++            FrontendCommand::ObserveV2 { tenant, pending } => {
++                let bytes = self.node.effects.scalar_observation_v2(tenant, pending)?;
++                return self.scalar_reply(stamp, bytes).await;
++            }
++            FrontendCommand::Begin { .. } => {}
+         }
+         if !self.node.accepting.load(Ordering::Acquire) {
+             return Err(Refusal::Cancelled);
+@@ -6559,6 +7159,11 @@
+         }
+         Ok(bytes)
+     }
++    fn scalar_observation_v2(&self, tenant: usize, pending: bool) -> Result<[u8; 32], Refusal> {
++        Ok(self
++            .latest_observation(tenant)?
++            .observe_bytes(tenant, pending))
++    }
+ }
+ fn measured_frontend_constructors() -> Result<(), Refusal> {
+     let connection = [
+@@ -6597,3 +7202,312 @@
+ ) -> bool {
+     core_drained && shell_drained && healthy && occupied == [0; 5]
+ }
++
++impl JobContext {
++    pub(crate) fn observe_event(&self, event: ObservationEvent) -> Result<(), Refusal> {
++        let registry = self.registry()?;
++        let record = registry.record(self.token)?;
++        let result = lock_owned(&record.state)?.observation.mark(event);
++        if result.is_err() {
++            self.fail();
++        }
++        result
++    }
++    pub(crate) fn observe_c1(&self, required: bool, succeeded: bool) -> Result<(), Refusal> {
++        let registry = self.registry()?;
++        let record = registry.record(self.token)?;
++        let mut state = lock_owned(&record.state)?;
++        if !required && state.observation.c1 != 0
++            || required && !succeeded && state.observation.c1 != 0
++            || required && succeeded && state.observation.c1 != 2
++        {
++            return Err(Refusal::Invalid);
++        }
++        let event = if !required {
++            ObservationEvent::C1NotRequired
++        } else if succeeded {
++            ObservationEvent::C1Succeeded
++        } else {
++            ObservationEvent::C1Required
++        };
++        state.observation.c1 = if !required {
++            1
++        } else if succeeded {
++            3
++        } else {
++            2
++        };
++        state.observation.mark(event)
++    }
++}
++impl JobContext {
++    pub(crate) fn observe_c1_failure(&self, error: Refusal) -> Result<(), Refusal> {
++        let registry = self.registry()?;
++        let record = registry.record(self.token)?;
++        let mut state = lock_owned(&record.state)?;
++        if state.observation.c1 != 2 {
++            return Err(Refusal::Invalid);
++        }
++        state.observation.c1 = 4;
++        state.observation.refused(error);
++        Ok(())
++    }
++}
++impl OwnedNodeDriverCompletion {
++    pub(crate) fn observe_event(&self, event: ObservationEvent) -> Result<(), Refusal> {
++        self.context.observe_event(event)
++    }
++    pub(crate) fn observe_write_progress(
++        &self,
++        progress: output::WriteProgress,
++    ) -> Result<(), Refusal> {
++        let registry = self.context.registry()?;
++        let record = registry.record(self.context.token)?;
++        let result = lock_owned(&record.state)?.observation.progress(progress);
++        if result.is_err() {
++            self.context.fail();
++        }
++        result
++    }
++    pub(crate) fn observe_transport(&self, result: Result<(), Refusal>) -> Result<(), Refusal> {
++        let registry = self.context.registry()?;
++        let record = registry.record(self.context.token)?;
++        let mut state = lock_owned(&record.state)?;
++        state.observation.outcome = if result.is_ok() { 1 } else { 2 };
++        if let Err(error) = result {
++            state.observation.refused(error);
++        }
++        Ok(())
++    }
++}
++impl InvocationState {
++    fn observation(&self) -> InvocationObservation {
++        let mut value = self.observation;
++        value.epoch = self.epoch.unwrap_or(0);
++        value.generation = self.generation.unwrap_or(0);
++        value.requests = [self.activities[0].request, self.activities[1].request];
++        // A read never invents a first-occurrence ordinal. If a caller only
++        // latched tainted, derive phase/refusal without synthesizing an event.
++        if self.tainted {
++            value.phase = ObservationPhase::Quarantined as u8;
++            value.refused(Refusal::Failed);
++        } else if self.retiring {
++            value.phase = ObservationPhase::Retiring as u8;
++        }
++        value
++    }
++}
++impl OwnedEffectRegistry {
++    fn observation_by_index(&self, index: usize) -> Result<InvocationObservation, Refusal> {
++        let (record, stored) = {
++            let bank = self.bank.try_lock().map_err(|_| Refusal::Contended)?;
++            if index >= OBSERVATION_LIMIT || index >= bank.next as usize {
++                return Err(Refusal::Invalid);
++            }
++            let sequence = index as u64 + 1;
++            let stored = bank
++                .held
++                .iter()
++                .flatten()
++                .find(|held| held.sequence == sequence)
++                .map(|held| held.observation)
++                .unwrap_or(bank.archive[index]);
++            let record = bank
++                .records
++                .iter()
++                .flatten()
++                .find(|record| record.sequence == sequence)
++                .cloned();
++            (record, stored)
++        };
++        let mut value = if let Some(record) = record {
++            let value = record
++                .state
++                .try_lock()
++                .map_err(|_| Refusal::Contended)?
++                .observation();
++            drop(record);
++            value
++        } else {
++            stored
++        };
++        if value.summary != 255 {
++            value.request_dead = self.process.summary_dead(value.summary)?;
++        }
++        if value.phase == ObservationPhase::Free as u8 && !value.request_dead {
++            return Err(Refusal::Invalid);
++        }
++        Ok(value)
++    }
++    fn latest_observation(&self, tenant: usize) -> Result<InvocationObservation, Refusal> {
++        if tenant >= CELL_SCOPES.len() {
++            return Err(Refusal::Invalid);
++        }
++        let index = {
++            let bank = self.bank.try_lock().map_err(|_| Refusal::Contended)?;
++            bank.archive[..bank.next as usize]
++                .iter()
++                .rposition(|entry| entry.tenant as usize == tenant)
++        };
++        match index {
++            Some(index) => self.observation_by_index(index),
++            None => {
++                let mut value = InvocationObservation::empty();
++                value.tenant = tenant as u8;
++                Ok(value)
++            }
++        }
++    }
++}
++// Small public return values are inferred by main's adapter. No giant report
++// type, heap snapshot, or new lib.rs export is required.
++impl GuardedFrontend {
++    pub fn observation_counts(&self) -> Result<(usize, usize), Refusal> {
++        let invocations = self
++            .node
++            .effects
++            .bank
++            .try_lock()
++            .map_err(|_| Refusal::Contended)?
++            .next as usize;
++        let events = self.node.effects.capacity.node_event_count()?;
++        Ok((invocations, events))
++    }
++    pub fn observation_record(&self, index: usize) -> Result<InvocationObservation, Refusal> {
++        self.node.effects.observation_by_index(index)
++    }
++    pub fn observation_events(
++        &self,
++        start: usize,
++        end: usize,
++    ) -> Result<super::NodeEventChunk, Refusal> {
++        self.node.effects.capacity.node_event_chunk(start, end)
++    }
++}
++#[derive(Clone, Copy, Debug, serde::Serialize)]
++pub struct ObservationLayouts {
++    record: [usize; 2],
++    archive: [usize; 2],
++    held: [usize; 2],
++    a2_chunk: [usize; 2],
++    report: [usize; 2],
++    retained_bytes: usize,
++}
++fn observation_layouts() -> Result<ObservationLayouts, Refusal> {
++    fn row<T>() -> [usize; 2] {
++        let value = std::alloc::Layout::new::<T>();
++        [value.size(), value.align()]
++    }
++    let value = ObservationLayouts {
++        record: row::<InvocationObservation>(),
++        archive: row::<[InvocationObservation; OBSERVATION_LIMIT]>(),
++        held: row::<HeldRetirement>(),
++        a2_chunk: row::<super::NodeEventChunk>(),
++        report: row::<GuardedNodeReport>(),
++        retained_bytes: 0,
++    };
++    // Archive is physically inside the charged registry Arc. Active/held copies
++    // use existing actual record/registry charges. One encoding Vec and one
++    // chunk/record scratch overlap are included; no second full event Vec.
++    let registry_bytes = control::arc_bytes::<OwnedEffectRegistry>()?;
++    let progress = std::alloc::Layout::new::<output::WriteProgress>();
++    if registry_bytes > 65_536 || progress.size() > 64 || progress.align() > 16 {
++        return Err(Refusal::Bounds);
++    }
++    let retained = value.archive[0]
++        .checked_add(65_536)
++        .and_then(|v| v.checked_add(value.a2_chunk[0]))
++        .and_then(|v| v.checked_add(6 * value.record[0]))
++        .and_then(|v| v.checked_add(value.report[0] + 1024))
++        .and_then(|v| v.checked_add(super::node_event_storage_bytes()))
++        .ok_or(Refusal::Bounds)?;
++    if value.record[0] > OBSERVATION_BYTES
++        || value.record[1] > 8
++        || value.archive[0] > 32_768
++        || value.a2_chunk[0] > 4096
++        || value.report[0] > 4096
++        || value.held[0] > 1024
++        || value.held[1] > 16
++        || value.archive[1] > 8
++        || value.a2_chunk[1] > 16
++        || value.report[1] > 16
++        || OBSERVATION_STREAM_BYTES != OBSERVATION_LIMIT * 2048 + 8 * 16_384 + 2048
++        || retained > 131_072
++    {
++        return Err(Refusal::Bounds);
++    }
++    Ok(ObservationLayouts {
++        retained_bytes: retained,
++        ..value
++    })
++}
++
++impl OwnedEffectRegistry {
++    fn observe_proof(
++        &self,
++        context: &JobContext,
++        view: crate::actor::GuardedProofObservation,
++    ) -> Result<(), Refusal> {
++        use crate::actor::GuardedProofObservation;
++        let record = self.record(context.token)?;
++        let mut state = lock_owned(&record.state)?;
++        let op = match view {
++            GuardedProofObservation::Durable { op, .. }
++            | GuardedProofObservation::Ownership { op, .. } => op,
++        };
++        // C0's terminal handoff is not a primary/aux publication proof.
++        if context.role == JobRole::Cleanup(CleanupLane::EnsureDurable) {
++            return Ok(());
++        }
++        let index = state
++            .activities
++            .iter()
++            .position(|activity| activity.proof_op == Some(op))
++            .ok_or(Refusal::Invalid)?;
++        match view {
++            GuardedProofObservation::Durable { result, source, .. } => {
++                state.observation.durable_ops[index] = op;
++                state.observation.durable_verdicts[index] = if result.is_ok() { 1 } else { 2 };
++                state.observation.proof_sources[index] = match source {
++                    celld_logic::ProofSource::Fleet => 1,
++                    celld_logic::ProofSource::Bucket => 2,
++                };
++                if let Ok(position) = result {
++                    state.observation.durable_positions[index] = position;
++                    if position >= state.observation.positions[index] {
++                        state.observation.mark(if index == 0 {
++                            ObservationEvent::PrimaryDurableSuccess
++                        } else {
++                            ObservationEvent::AuxDurableSuccess
++                        })?;
++                    }
++                }
++            }
++            GuardedProofObservation::Ownership { result, .. } => {
++                state.observation.ownership_ops[index] = op;
++                state.observation.ownership_verdicts[index] = if result.is_ok() { 1 } else { 2 };
++                if result.is_ok() {
++                    state.observation.mark(if index == 0 {
++                        ObservationEvent::PrimaryOwnershipSuccess
++                    } else {
++                        ObservationEvent::AuxOwnershipSuccess
++                    })?;
++                }
++            }
++        }
++        Ok(())
++    }
++}
++
++impl BankState {
++    fn reserve_observation(&mut self, mut value: InvocationObservation) -> Result<u64, Refusal> {
++        if self.next >= OBSERVATION_LIMIT as u64 {
++            return Err(Refusal::Exhausted);
++        }
++        let next = self.next.checked_add(1).ok_or(Refusal::Exhausted)?;
++        value.sequence = next;
++        self.archive[self.next as usize] = value;
++        self.next = next;
++        Ok(next)
++    }
++}
+--- a/crates/celld/guarded_node/control.rs
++++ b/crates/celld/guarded_node/control.rs
+@@ -1074,3 +1074,37 @@
+         }
+     }
+ }
++
++// Read the existing prepaid Weak summaries without creating a diagnostic alias.
++impl OriginalOwner {
++    pub(super) fn summary_index(&self) -> Result<u8, Refusal> {
++        let state = self
++            .registry
++            .state
++            .try_lock()
++            .map_err(|_| Refusal::Contended)?;
++        state
++            .summaries
++            .iter()
++            .take(state.summary_count)
++            .position(|entry| {
++                entry.as_ref().is_some_and(|weak| {
++                    std::ptr::eq(weak.as_ptr(), Arc::as_ptr(&self.control.request))
++                })
++            })
++            .and_then(|index| u8::try_from(index).ok())
++            .ok_or(Refusal::Invalid)
++    }
++}
++impl NodeControl {
++    pub(super) fn summary_dead(&self, index: u8) -> Result<bool, Refusal> {
++        let registry = self.registry.upgrade().ok_or(Refusal::Invalid)?;
++        let state = registry.state.try_lock().map_err(|_| Refusal::Contended)?;
++        state
++            .summaries
++            .get(index as usize)
++            .and_then(Option::as_ref)
++            .map(|weak| weak.strong_count() == 0)
++            .ok_or(Refusal::Invalid)
++    }
++}
+--- a/crates/celld/guarded_node/output.rs
++++ b/crates/celld/guarded_node/output.rs
+@@ -3,7 +3,7 @@
+ //! A local flush says nothing about peer receipt. The full socket and frame
+ //! are destroyed before the driver may mark output disposed or finish activity.
+ 
+-use super::{OwnedNodeDriverCompletion, Refusal, RetirementObservation};
++use super::{ObservationEvent, OwnedNodeDriverCompletion, Refusal, RetirementObservation};
+ use crate::runtime::DriverOutput;
+ use foks_hosted_transport::{deadline::Deadline, framing::write_response_until};
+ use std::future::Future;
+@@ -133,6 +133,8 @@
+         // Closing the full owned stream is the physical abandonment witness on
+         // every error branch, and ends local socket ownership on success too.
+         drop(self.socket.take());
++        frame.owner.observe_event(ObservationEvent::SocketClosed)?;
++        frame.owner.observe_transport(outcome)?;
+         drop(cancel);
+         let GatedFrame {
+             bytes,
+@@ -141,6 +143,7 @@
+             preparation: _,
+         } = self.frame.take().ok_or(Refusal::Invalid)?;
+         drop(bytes);
++        owner.observe_event(ObservationEvent::FrameDropped)?;
+         let retirement = owner.finish_output(output).await?;
+         Ok(SendDisposition {
+             outcome,
+@@ -155,6 +158,7 @@
+     fn check(&self) -> Result<(), Refusal>;
+     fn deadline(&self) -> Instant;
+     fn write_pending(&self) -> Result<(), Refusal>;
++    fn write_progress(&self, progress: WriteProgress) -> Result<(), Refusal>;
+ }
+ impl Authority for OwnedNodeDriverCompletion {
+     fn check(&self) -> Result<(), Refusal> {
+@@ -165,6 +169,55 @@
+     }
+     fn write_pending(&self) -> Result<(), Refusal> {
+         self.observe_write_pending()
++    }
++    fn write_progress(&self, progress: WriteProgress) -> Result<(), Refusal> {
++        self.observe_write_progress(progress)
++    }
++}
++
++#[derive(Clone, Copy, Debug)]
++pub(crate) struct WriteProgress {
++    pub(crate) frame_bytes: u32,
++    pub(crate) accepted_bytes: u32,
++    pub(crate) positive_pending_bytes: u32,
++    pub(crate) write_polls: u32,
++    pub(crate) pending_polls: u32,
++    pub(crate) zero_pending: bool,
++}
++impl WriteProgress {
++    fn new(bytes: usize) -> Result<Self, Refusal> {
++        if bytes == 0 || bytes > FrameKind::Backpressure.bytes() {
++            return Err(Refusal::Bounds);
++        }
++        Ok(Self {
++            frame_bytes: u32::try_from(bytes).map_err(|_| Refusal::Bounds)?,
++            accepted_bytes: 0,
++            positive_pending_bytes: 0,
++            write_polls: 0,
++            pending_polls: 0,
++            zero_pending: false,
++        })
++    }
++    fn written(&mut self, bytes: usize, offered: usize) -> Result<(), Refusal> {
++        if bytes > offered {
++            return Err(Refusal::Bounds);
++        }
++        let next = self
++            .accepted_bytes
++            .checked_add(u32::try_from(bytes).map_err(|_| Refusal::Bounds)?)
++            .filter(|next| *next <= self.frame_bytes)
++            .ok_or(Refusal::Bounds)?;
++        self.accepted_bytes = next;
++        Ok(())
++    }
++    fn pending(&mut self) -> Result<(), Refusal> {
++        self.pending_polls = self.pending_polls.checked_add(1).ok_or(Refusal::Bounds)?;
++        if self.accepted_bytes == 0 {
++            self.zero_pending = true;
++        } else if self.accepted_bytes < self.frame_bytes && self.positive_pending_bytes == 0 {
++            self.positive_pending_bytes = self.accepted_bytes;
++        }
++        Ok(())
+     }
+ }
+ 
+@@ -172,6 +225,7 @@
+     writer: &'a mut W,
+     authority: &'a mut A,
+     pending: bool,
++    progress: WriteProgress,
+     refusal: Option<Refusal>,
+ }
+ impl<W: AsyncWrite + Unpin, A: Authority> ObservedWriter<'_, W, A> {
+@@ -193,7 +247,22 @@
+         if let Err(error) = this.check() {
+             return Poll::Ready(Err(error));
+         }
++        let Some(next) = this.progress.write_polls.checked_add(1) else {
++            this.refusal = Some(Refusal::Bounds);
++            return Poll::Ready(Err(io::ErrorKind::Other.into()));
++        };
++        this.progress.write_polls = next;
+         let result = Pin::new(&mut *this.writer).poll_write(cx, bytes);
++        let observed = match &result {
++            Poll::Ready(Ok(count)) => this.progress.written(*count, bytes.len()),
++            Poll::Pending => this.progress.pending(),
++            Poll::Ready(Err(_)) => Ok(()),
++        }
++        .and_then(|()| this.authority.write_progress(this.progress));
++        if let Err(error) = observed {
++            this.refusal = Some(error);
++            return Poll::Ready(Err(io::ErrorKind::Other.into()));
++        }
+         if result.is_pending() && !this.pending {
+             this.pending = true;
+             if let Err(error) = this.authority.write_pending() {
+@@ -249,6 +318,7 @@
+             writer,
+             authority: &mut *authority,
+             pending: false,
++            progress: WriteProgress::new(bytes.len())?,
+             refusal: None,
+         };
+         let result = crate::asyncrt::select_biased! {
+@@ -306,6 +376,9 @@
+             self.fixture.observe_write_pending()?;
+             self.pending.signal();
+             Ok(())
++        }
++        fn write_progress(&self, progress: WriteProgress) -> Result<(), Refusal> {
++            self.fixture.observe_write_progress(progress)
+         }
+     }
+ 
+@@ -925,4 +998,101 @@
+             channel_payload: None,
+         });
+     }
+-}
++    pub(crate) fn observation_progress_cases() -> Result<(), Refusal> {
++        // The same production poll adapter sees a real zero-progress Pending,
++        // then actual Ready(8), then Pending, then the final Ready(24).
++        struct SequenceWriter(u8);
++        impl AsyncWrite for SequenceWriter {
++            fn poll_write(
++                mut self: Pin<&mut Self>,
++                _cx: &mut Context<'_>,
++                bytes: &[u8],
++            ) -> Poll<io::Result<usize>> {
++                let step = self.0;
++                self.0 += 1;
++                match step {
++                    0 | 2 => Poll::Pending,
++                    1 => Poll::Ready(Ok(8.min(bytes.len()))),
++                    3 => Poll::Ready(Ok(bytes.len())),
++                    _ => Poll::Ready(Err(io::ErrorKind::InvalidInput.into())),
++                }
++            }
++            fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
++                Poll::Ready(Ok(()))
++            }
++            fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
++                Poll::Ready(Ok(()))
++            }
++        }
++        let fixture = OutputFixture::new()?;
++        fixture.reserve_frame(FrameKind::Ordinary)?;
++        let pending = Notice::default();
++        let mut authority = TestAuthority {
++            fixture: &fixture,
++            pending: &pending,
++        };
++        let mut writer = SequenceWriter(0);
++        let mut observed = ObservedWriter {
++            writer: &mut writer,
++            authority: &mut authority,
++            pending: false,
++            progress: WriteProgress::new(32)?,
++            refusal: None,
++        };
++        let mut cx = Context::from_waker(futures_util::task::noop_waker_ref());
++        assert!(Pin::new(&mut observed)
++            .poll_write(&mut cx, &[0; 32])
++            .is_pending());
++        let zero = fixture.observation()?;
++        assert_eq!(zero.accepted_bytes, 0);
++        assert!(zero.has(ObservationEvent::ZeroWritePending));
++        assert!(!zero.has(ObservationEvent::PositiveWritePending));
++        assert!(matches!(
++            Pin::new(&mut observed).poll_write(&mut cx, &[0; 32]),
++            Poll::Ready(Ok(8))
++        ));
++        assert!(Pin::new(&mut observed)
++            .poll_write(&mut cx, &[0; 24])
++            .is_pending());
++        let partial = fixture.observation()?;
++        assert_eq!(
++            (partial.accepted_bytes, partial.positive_pending_bytes),
++            (8, 8)
++        );
++        assert!(partial.has(ObservationEvent::PositiveWritePending));
++        assert!(matches!(
++            Pin::new(&mut observed).poll_write(&mut cx, &[0; 24]),
++            Poll::Ready(Ok(24))
++        ));
++        assert!(matches!(
++            Pin::new(&mut observed).poll_flush(&mut cx),
++            Poll::Ready(Ok(()))
++        ));
++        drop(observed);
++        let final_progress = fixture.observation()?;
++        assert_eq!(
++            (
++                final_progress.accepted_bytes,
++                final_progress.positive_pending_bytes
++            ),
++            (32, 8)
++        );
++        assert_eq!(
++            (final_progress.write_polls, final_progress.pending_polls),
++            (4, 2)
++        );
++        assert!(fixture.finish_after_disposal()?.retired);
++        Ok(())
++    }
++    pub(crate) fn observation_overflow_cases() {
++        let mut progress = WriteProgress::new(32).unwrap();
++        assert_eq!(progress.written(33, 32), Err(Refusal::Bounds));
++        assert_eq!(progress.accepted_bytes, 0);
++        progress.written(32, 32).unwrap();
++        assert_eq!(progress.written(1, 1), Err(Refusal::Bounds));
++        progress.pending_polls = u32::MAX;
++        assert_eq!(progress.pending(), Err(Refusal::Bounds));
++        assert!(WriteProgress::new(0).is_err());
++        assert!(WriteProgress::new(FrameKind::Backpressure.bytes() + 1).is_err());
++    }
++}
+--- a/crates/celld/guarded_node/tests.rs
++++ b/crates/celld/guarded_node/tests.rs
+@@ -3652,6 +3652,18 @@
+         lock_owned(&record.state)?.write_pending = true;
+         Ok(())
+     }
++    pub(crate) fn observe_write_progress(
++        &self,
++        progress: output::WriteProgress,
++    ) -> Result<(), Refusal> {
++        let record = self.registry.record(self.origin()?.token)?;
++        let result = lock_owned(&record.state)?.observation.progress(progress);
++        result
++    }
++    pub(crate) fn observation(&self) -> Result<InvocationObservation, Refusal> {
++        let sequence = self.origin()?.token.invocation;
++        self.registry.observation_by_index(sequence as usize - 1)
++    }
+     pub(crate) fn write_pending(&self) -> Result<bool, Refusal> {
+         let record = self.registry.record(self.origin()?.token)?;
+         let pending = lock_owned(&record.state)?.write_pending;
+@@ -3718,6 +3730,7 @@
+             bank.held[0] = Some(HeldRetirement::marker_for(
+                 Some(record.cell),
+                 record.sequence,
++                record.state.lock().unwrap().observation(),
+             ));
+             record
+         };
+@@ -3928,6 +3941,7 @@
+         bank.held[context.token.slot as usize] = Some(HeldRetirement::marker_for(
+             Some(record.cell),
+             record.sequence,
++            record.state.lock().unwrap().observation(),
+         ));
+         record
+     };
+@@ -4565,3 +4579,874 @@
+     stderr.write_all(&bytes).unwrap();
+     stderr.flush().unwrap();
+ }
++
++// P1 qualifies the scalar observations at their real component boundaries.
++// These leaves do not establish a successful full-process invocation or Ready.
++fn b4_observation(context: &JobContext) -> InvocationObservation {
++    context
++        .registry()
++        .unwrap()
++        .observation_by_index(context.token.invocation as usize - 1)
++        .unwrap()
++}
++fn b4_ordinal(value: InvocationObservation, event: ObservationEvent) -> u32 {
++    assert!(value.has(event));
++    let index = event as usize;
++    if index < 32 {
++        value.first[index]
++    } else {
++        value.tail[index - 32]
++    }
++}
++#[test]
++fn b4_observation_progress_requires_positive_partial_pending() {
++    output::component::observation_progress_cases().unwrap();
++}
++#[test]
++fn b4_observation_checked_progress_rejects_overflow() {
++    output::component::observation_overflow_cases();
++    let first = output::WriteProgress {
++        frame_bytes: 32,
++        accepted_bytes: 8,
++        positive_pending_bytes: 8,
++        write_polls: 3,
++        pending_polls: 2,
++        zero_pending: true,
++    };
++    let mut value = InvocationObservation::empty();
++    value.progress(first).unwrap();
++    let before = serde_json::to_vec(&value).unwrap();
++    for field in 0..10 {
++        let mut invalid = first;
++        match field {
++            0 => invalid.frame_bytes = 0,
++            1 => invalid.frame_bytes += 1,
++            2 => invalid.accepted_bytes = 7,
++            3 => invalid.accepted_bytes = 33,
++            4 => invalid.positive_pending_bytes = 0,
++            5 => invalid.positive_pending_bytes = 7,
++            6 => invalid.write_polls = 2,
++            7 => invalid.pending_polls = 1,
++            8 => invalid.pending_polls = 4,
++            9 => invalid.zero_pending = false,
++            _ => unreachable!(),
++        }
++        assert_eq!(value.progress(invalid), Err(Refusal::Bounds));
++        assert_eq!(serde_json::to_vec(&value).unwrap(), before);
++    }
++    for positive in [false, true] {
++        let mut empty = InvocationObservation::empty();
++        let invalid = output::WriteProgress {
++            frame_bytes: 32,
++            accepted_bytes: 8,
++            positive_pending_bytes: if positive { 8 } else { 0 },
++            write_polls: 1,
++            pending_polls: 0,
++            zero_pending: !positive,
++        };
++        assert_eq!(empty.progress(invalid), Err(Refusal::Bounds));
++        assert_eq!(empty.seen, 0);
++    }
++    let mut overflow = InvocationObservation::empty();
++    overflow.ordinal = u32::MAX;
++    assert_eq!(
++        overflow.mark(ObservationEvent::Admitted),
++        Err(Refusal::Bounds)
++    );
++    assert_eq!(overflow.seen, 0);
++    assert_eq!(overflow.first, [0; 32]);
++    assert_eq!(overflow.tail, [0; 8]);
++}
++#[test]
++fn b4_observation_phase_identity_and_stale_slot() {
++    let node = b3_local_node();
++    assert_eq!(
++        node.effects.latest_observation(1).unwrap().phase,
++        ObservationPhase::NeverAdmitted as u8
++    );
++    let first = b3_begin_context(
++        node.effects
++            .register_owned(
++                child(&node.factory, OwnerRole::Invocation),
++                1,
++                Some(1),
++                None,
++            )
++            .unwrap(),
++        &node.effects,
++    );
++    let token = first.token;
++    let initial = b4_observation(&first);
++    assert_eq!(
++        (initial.tenant, initial.bank_slot, initial.a2_slot),
++        (1, 1, 0)
++    );
++    assert_eq!(initial.phase, ObservationPhase::Active as u8);
++    let v1 = node.effects.scalar_observation(1, false).unwrap();
++    assert_eq!(&v1[..8], b"FOKSGS01");
++    assert_eq!(&v1[8..12], &[1, 1, 0, 1]);
++    assert_eq!(&v1[12..20], &token.invocation.to_le_bytes());
++    assert_eq!(&v1[20..], &[0; 12]);
++    let v2 = node.effects.scalar_observation_v2(1, false).unwrap();
++    assert_eq!(&v2[8..12], &[2, 1, 0, ObservationPhase::Active as u8]);
++    assert_eq!(u32::from_le_bytes(v2[28..32].try_into().unwrap()), 1);
++    for selector in [0, 1] {
++        let mut header = b3_header(2, 1, selector);
++        header[8] = 2;
++        assert_eq!(
++            parse_header(&header, GuardedNodeScenario::TcpWriteHeld),
++            Ok(FrontendCommand::ObserveV2 {
++                tenant: 1,
++                pending: selector != 0
++            })
++        );
++        if selector != 0 {
++            assert!(parse_header(&header, GuardedNodeScenario::ColdSyncRetire).is_err());
++        }
++        header[9] = 1;
++        assert_eq!(
++            parse_header(&header, GuardedNodeScenario::TcpWriteHeld),
++            Err(Refusal::Invalid)
++        );
++        header[9] = 2;
++        header[12] = 1;
++        assert_eq!(
++            parse_header(&header, GuardedNodeScenario::TcpWriteHeld),
++            Err(Refusal::Invalid)
++        );
++    }
++    b3_empty_pending(&node.effects, &first);
++    assert_eq!(
++        b4_observation(&first).phase,
++        ObservationPhase::PendingOwner as u8
++    );
++    drop(first);
++    node.effects.retire_completed_records();
++    let retired = node
++        .effects
++        .observation_by_index(token.invocation as usize - 1)
++        .unwrap();
++    assert_eq!(retired.phase, ObservationPhase::Free as u8);
++    assert!(retired.request_dead && retired.has(ObservationEvent::BankFree));
++    let second = b3_begin_context(
++        node.effects
++            .register_owned(
++                child(&node.factory, OwnerRole::Invocation),
++                1,
++                Some(1),
++                None,
++            )
++            .unwrap(),
++        &node.effects,
++    );
++    let current = b4_observation(&second);
++    assert!(current.sequence > retired.sequence && current.a2_generation > retired.a2_generation);
++    assert_eq!(current.bank_slot, retired.bank_slot);
++    assert!(!current.has(ObservationEvent::BankFree) && !current.request_dead);
++    assert!(node.effects.record(token).is_err());
++    assert_eq!(
++        node.effects
++            .observation_by_index(token.invocation as usize - 1)
++            .unwrap()
++            .sequence,
++        retired.sequence
++    );
++    b3_empty_pending(&node.effects, &second);
++    drop(second);
++    node.effects.retire_completed_records();
++}
++#[test]
++fn b4_observation_archive_is_finite() {
++    let node = b3_local_node();
++    // Exercise the exact reservation helper with never-admitted scalar rows;
++    // this does not pretend to have completed 64 native invocations.
++    {
++        let mut bank = node.effects.bank.lock().unwrap();
++        for index in 0..64 {
++            let mut value = InvocationObservation::empty();
++            value.tenant = (index % 3) as u8;
++            assert_eq!(bank.reserve_observation(value).unwrap(), index as u64 + 1);
++        }
++    }
++    let before = node.effects.capacity.node_event_count().unwrap();
++    let result =
++        node.effects
++            .register_owned(child(&node.factory, OwnerRole::Invocation), 0, None, None);
++    assert!(matches!(result, Err(Refusal::Exhausted)));
++    assert_eq!(node.effects.capacity.node_event_count().unwrap(), before);
++    let bank = node.effects.bank.lock().unwrap();
++    assert_eq!(bank.next, 64);
++    assert!(bank.records.iter().all(Option::is_none));
++    for (index, value) in bank.archive.iter().enumerate() {
++        assert_eq!(value.sequence, index as u64 + 1);
++        assert_eq!(value.phase, ObservationPhase::NeverAdmitted as u8);
++        assert!(!value.has(ObservationEvent::Admitted));
++    }
++}
++#[test]
++fn b4_observation_proof_verdict_is_not_disposal() {
++    use crate::actor::GuardedProofObservation as View;
++    use celld_logic::{Failure, ProofSource};
++    let mut fixture = b2_fixture();
++    let (mut core, _activation, driver) = b2_core(&mut fixture);
++    let activity = GuardedActivity {
++        context: driver.clone(),
++        index: 0,
++        request: fixture.primary_request(0),
++        finished: false,
++    };
++    let wait = activity
++        .output(crate::actor::GateTicket::response(Some(11), None))
++        .unwrap();
++    let effects = b2_request_transition(&fixture, &mut core);
++    let op = operation(&effects, |effect| match effect {
++        Effect::AwaitDurable { op, .. } => Some(*op),
++        _ => None,
++    });
++    // The real OutputAt operation is bound above. Semantic views here are
++    // explicit diagnostic inputs, not host proof or fabricated completion.
++    let registry = fixture.registry();
++    assert_eq!(
++        registry.observe_proof(
++            &driver,
++            View::Durable {
++                op: op + 1,
++                result: Ok(11),
++                source: ProofSource::Bucket
++            }
++        ),
++        Err(Refusal::Invalid)
++    );
++    registry
++        .observe_proof(
++            &driver,
++            View::Durable {
++                op,
++                result: Err(Failure::Ambiguous),
++                source: ProofSource::Bucket,
++            },
++        )
++        .unwrap();
++    let failed = b4_observation(&driver);
++    assert_eq!((failed.durable_ops[0], failed.durable_verdicts[0]), (op, 2));
++    assert!(!failed.has(ObservationEvent::PrimaryDurableSuccess));
++    registry
++        .observe_proof(
++            &driver,
++            View::Durable {
++                op,
++                result: Ok(10),
++                source: ProofSource::Bucket,
++            },
++        )
++        .unwrap();
++    assert!(!b4_observation(&driver).has(ObservationEvent::PrimaryDurableSuccess));
++    registry
++        .observe_proof(
++            &driver,
++            View::Durable {
++                op,
++                result: Ok(11),
++                source: ProofSource::Bucket,
++            },
++        )
++        .unwrap();
++    registry
++        .observe_proof(
++            &driver,
++            View::Ownership {
++                op,
++                result: Err(Failure::Definite),
++            },
++        )
++        .unwrap();
++    let partial = b4_observation(&driver);
++    assert!(partial.has(ObservationEvent::PrimaryDurableSuccess));
++    assert!(!partial.has(ObservationEvent::PrimaryOwnershipSuccess));
++    assert_eq!(
++        (
++            partial.proof_sources[0],
++            partial.durable_positions[0],
++            partial.ownership_verdicts[0]
++        ),
++        (2, 11, 2)
++    );
++    assert!(!partial.has(ObservationEvent::PrimaryOutputReleased));
++    assert_eq!(partial.roots_disposed, 0);
++    drop((wait, activity)); // Lost component consumers are held, not Free.
++
++    // A separate actual canonical host task proves payload disposition and
++    // that a reentrant C7 notification sees the published disposed state.
++    // Final Request destruction remains authoritative for notification aliases.
++    crate::actor::guarded_test_runtime().block_on(async {
++        let fixture = b2_fixture();
++        // Real F3 kind reaches the legitimate C7 consumer branch. The generic
++        // Control body is a task-cell fixture, not a NodeDriverWork result.
++        let context = fixture
++            .registry()
++            .reserve(
++                0,
++                JobRole::Forward(ForwardLane::Driver),
++                RootKind::Driver,
++                None,
++            )
++            .unwrap();
++        let cancel = b2_root(&fixture, JobRole::Cleanup(CleanupLane::Cancel));
++        b2_consumer(&fixture, &context);
++        fixture
++            .registry()
++            .spawn_root(
++                &context,
++                0,
++                async { Ok::<_, Refusal>(()) },
++                RootResult::Control,
++            )
++            .unwrap();
++        let mut join = std::pin::pin!(std::future::poll_fn(|cx| fixture
++            .registry()
++            .poll_root(&context, cx, false)));
++        let (bounded, result) = match tokio::time::timeout(Duration::from_secs(5), &mut join).await
++        {
++            Ok(value) => (true, value),
++            Err(_) => (false, join.await),
++        };
++        assert!(matches!(result, Ok(RootResult::Control(Ok(())))));
++        struct Reentrant {
++            cancel: JobContext,
++            saw: Arc<AtomicBool>,
++        }
++        impl futures_util::task::ArcWake for Reentrant {
++            fn wake_by_ref(value: &Arc<Self>) {
++                use futures_util::FutureExt as _;
++                // The real C7 waiter must observe the published disposed F3,
++                // not re-register under Delivered and lose its only wake.
++                value.saw.store(
++                    matches!(
++                        value.cancel.take_driver_for_cancel().now_or_never(),
++                        Some(Err(Refusal::NotReady))
++                    ),
++                    Ordering::Release,
++                );
++            }
++        }
++        let record = b2_record(&fixture, 0);
++        let saw = Arc::new(AtomicBool::new(false));
++        let wake = futures_util::task::waker(Arc::new(Reentrant {
++            cancel,
++            saw: saw.clone(),
++        }));
++        record.state.lock().unwrap().roots[context.role.index()].waker = Some(wake);
++        drop(record);
++        fixture.registry().finish_root(&context).unwrap();
++        assert!(bounded && saw.load(Ordering::Acquire));
++        assert_ne!(
++            b4_observation(&context).roots_disposed & (1u16 << context.role.index()),
++            0
++        );
++    });
++    b4_sequential_auxiliary_observations();
++}
++// The actual auxiliary producer/control cycle below is deliberately a
++// component core/JS fixture; the semantic views do not certify storage.
++fn b4_sequential_auxiliary_observations() {
++    use crate::actor::GuardedProofObservation as View;
++    use futures_util::FutureExt as _;
++    crate::actor::guarded_test_runtime().block_on(async {
++        let mut fixture = b2_fixture();
++        let (mut core, _activation, driver) = b2_core(&mut fixture);
++        let sample = b2_ticket(driver.epoch().unwrap(), 7);
++        let origin = b2_sync_origin(&driver, sample).unwrap();
++        let (mut future, origin, scalar) =
++            crate::js::guarded_sync_component_for_test(origin).unwrap();
++        let route = origin.submit().unwrap();
++        b2_deliver(&fixture, b2_request_transition(&fixture, &mut core));
++        let (_, activity) = route.now_or_never().unwrap().unwrap().into_parts();
++        let output = activity.output(sample).unwrap();
++        let effects = b2_request_transition(&fixture, &mut core);
++        let op = operation(&effects, |effect| match effect {
++            Effect::AwaitDurable { op, .. } => Some(*op),
++            _ => None,
++        });
++        fixture
++            .registry()
++            .observe_proof(
++                &driver,
++                View::Durable {
++                    op,
++                    result: Ok(7),
++                    source: celld_logic::ProofSource::Bucket,
++                },
++            )
++            .unwrap();
++        fixture
++            .registry()
++            .observe_proof(&driver, View::Ownership { op, result: Ok(()) })
++            .unwrap();
++        b2_deliver(&fixture, b2_prove(&mut core, op, 7));
++        assert_eq!(output.now_or_never(), Some(Ok(())));
++        b2_finish_component(&fixture, &mut core, activity).await;
++        scalar.send(Ok(())).unwrap();
++        assert!(future.as_mut().now_or_never().unwrap().is_ok());
++        drop(future);
++        let previous = b4_observation(&driver);
++        assert!(
++            previous.has(ObservationEvent::AuxLocal)
++                && previous.has(ObservationEvent::AuxDurableSuccess)
++                && previous.has(ObservationEvent::AuxOwnershipSuccess)
++                && previous.has(ObservationEvent::AuxOutputReleased)
++                && previous.has(ObservationEvent::AuxFinishDisposed)
++                && previous.has(ObservationEvent::AuxSyncDisposed)
++        );
++        let successor = b2_sync_origin(&driver, sample).unwrap();
++        let current = b4_observation(&driver);
++        assert!(current.requests[1] > previous.requests[1]);
++        assert_eq!(current.ordinal, previous.ordinal);
++        assert_eq!(
++            (
++                current.durable_ops[1],
++                current.ownership_ops[1],
++                current.positions[1],
++                current.durable_positions[1]
++            ),
++            (0, 0, 0, 0)
++        );
++        assert_eq!(
++            (
++                current.durable_verdicts[1],
++                current.ownership_verdicts[1],
++                current.proof_sources[1],
++                current.release_verdicts[1]
++            ),
++            (0, 0, 0, 0)
++        );
++        for event in [
++            ObservationEvent::AuxLocal,
++            ObservationEvent::AuxOutputSubmitted,
++            ObservationEvent::AuxDurableSuccess,
++            ObservationEvent::AuxOwnershipSuccess,
++            ObservationEvent::AuxOutputReleased,
++            ObservationEvent::AuxFinishProcessed,
++            ObservationEvent::AuxInactive,
++            ObservationEvent::AuxFinishDisposed,
++            ObservationEvent::AuxSyncDisposed,
++        ] {
++            assert!(!current.has(event));
++            assert_eq!(current.first[event as usize], 0);
++        }
++        drop(successor); // Unsubmitted successor is held, not fake-completed.
++    });
++}
++#[test]
++fn b4_observation_c1_required_and_not_required() {
++    for failure in [false, true] {
++        let fixture = OutputFixture::new().unwrap();
++        let context = fixture.origin().unwrap();
++        assert_eq!(context.observe_c1(true, true), Err(Refusal::Invalid));
++        context.observe_c1(true, false).unwrap();
++        assert_eq!(context.observe_c1(false, false), Err(Refusal::Invalid));
++        if failure {
++            context.observe_c1_failure(Refusal::Failed).unwrap();
++            assert_eq!(context.observe_c1(true, true), Err(Refusal::Invalid));
++        } else {
++            context.observe_c1(true, true).unwrap();
++        }
++        let value = fixture.observation().unwrap();
++        assert!(value.has(ObservationEvent::C1Required));
++        assert_eq!(value.has(ObservationEvent::C1Succeeded), !failure);
++        assert!(!value.has(ObservationEvent::C1NotRequired));
++        assert_eq!(value.c1, if failure { 4 } else { 3 });
++        assert_eq!(value.roots_joined, 0); // Scalar adapter is not actual proof.
++        fixture.finish_after_disposal().unwrap();
++    }
++    let fixture = OutputFixture::new().unwrap();
++    fixture.origin().unwrap().observe_c1(false, false).unwrap();
++    assert_eq!(
++        fixture.origin().unwrap().observe_c1(true, false),
++        Err(Refusal::Invalid)
++    );
++    let value = fixture.observation().unwrap();
++    assert_eq!(value.c1, 1);
++    assert!(value.has(ObservationEvent::C1NotRequired));
++    assert!(!value.has(ObservationEvent::C1Required) && !value.has(ObservationEvent::C1Succeeded));
++    fixture.finish_after_disposal().unwrap();
++}
++#[test]
++fn b4_observation_processed_inactive_and_disposed_are_distinct() {
++    use futures_util::FutureExt as _;
++    let mut fixture = b2_fixture();
++    let (mut core, _activation, driver) = b2_core(&mut fixture);
++    let activity = GuardedActivity {
++        context: driver.clone(),
++        index: 0,
++        request: fixture.primary_request(0),
++        finished: false,
++    };
++    let output = activity
++        .output(crate::actor::GateTicket::response(Some(11), None))
++        .unwrap();
++    let effects = b2_request_transition(&fixture, &mut core);
++    let op = operation(&effects, |effect| match effect {
++        Effect::AwaitDurable { op, .. } => Some(*op),
++        _ => None,
++    });
++    let mut finish =
++        Box::pin(activity.finish(celld_logic::wake::AlarmSnapshot::without_wake(None), false));
++    let record = b2_record(&fixture, 0);
++    let control = match fixture.registry().poll_inputs(0, &record).unwrap() {
++        GuardedActorInput::Control(value) => value,
++        _ => panic!("real finish input"),
++    };
++    on_event(
++        &mut core,
++        Event::ActivityFinished {
++            request: control.request(),
++        },
++    );
++    control.processed(&core);
++    let processed = b4_observation(&driver);
++    assert!(processed.has(ObservationEvent::PrimaryFinishProcessed));
++    assert!(!processed.has(ObservationEvent::PrimaryInactive));
++    assert!(!processed.has(ObservationEvent::PrimaryFinishDisposed));
++    assert!(finish.as_mut().now_or_never().is_none());
++    b2_deliver(&fixture, b2_prove(&mut core, op, 11));
++    fixture.registry().observe_inactive(&core);
++    assert_eq!(output.now_or_never(), Some(Ok(())));
++    assert_eq!(finish.as_mut().now_or_never(), Some(Ok(())));
++    let inactive = b4_observation(&driver);
++    assert!(inactive.has(ObservationEvent::PrimaryInactive));
++    assert!(!inactive.has(ObservationEvent::PrimaryFinishDisposed));
++    drop(finish);
++    let disposed = b4_observation(&driver);
++    assert!(disposed.has(ObservationEvent::PrimaryFinishDisposed));
++    assert!(
++        b4_ordinal(disposed, ObservationEvent::PrimaryFinishProcessed)
++            < b4_ordinal(disposed, ObservationEvent::PrimaryInactive)
++    );
++    assert!(
++        b4_ordinal(disposed, ObservationEvent::PrimaryInactive)
++            < b4_ordinal(disposed, ObservationEvent::PrimaryFinishDisposed)
++    );
++    drop(record);
++}
++#[test]
++fn b4_observation_public_guard_precedes_bank_free() {
++    let node = b3_local_node();
++    let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
++    let guard =
++        crate::actor::PublicRequestGuard::acquire_for_test(&AtomicBool::new(false), &counter)
++            .unwrap();
++    let owner = child(&node.factory, OwnerRole::Invocation);
++    let weak = Arc::downgrade(&component::request(&owner));
++    let context = b3_begin_context(
++        node.effects
++            .register_owned(owner, 0, None, Some(guard))
++            .unwrap(),
++        &node.effects,
++    );
++    let sequence = context.token.invocation;
++    b3_empty_pending(&node.effects, &context);
++    struct WakeAfterGuard {
++        counter: Arc<std::sync::atomic::AtomicUsize>,
++        observed: Arc<AtomicBool>,
++    }
++    impl futures_util::task::ArcWake for WakeAfterGuard {
++        fn wake_by_ref(value: &Arc<Self>) {
++            value
++                .observed
++                .store(value.counter.load(Ordering::SeqCst) == 0, Ordering::Release);
++        }
++    }
++    let observed = Arc::new(AtomicBool::new(false));
++    let wake = futures_util::task::waker(Arc::new(WakeAfterGuard {
++        counter: counter.clone(),
++        observed: observed.clone(),
++    }));
++    let mut cx = Context::from_waker(&wake);
++    let mut retirement = RetirementObservation {
++        registry: node.effects.clone(),
++        slot: 0,
++        sequence,
++    };
++    node.effects.retire_completed_records();
++    assert_eq!(counter.load(Ordering::SeqCst), 1);
++    assert!(Pin::new(&mut retirement).poll(&mut cx).is_pending());
++    drop(context);
++    node.effects.retire_completed_records();
++    assert_eq!(counter.load(Ordering::SeqCst), 0);
++    assert!(weak.upgrade().is_none());
++    assert!(observed.load(Ordering::Acquire));
++    assert_eq!(Pin::new(&mut retirement).poll(&mut cx), Poll::Ready(Ok(())));
++    let value = node
++        .effects
++        .observation_by_index(sequence as usize - 1)
++        .unwrap();
++    assert!(value.public_guard && value.request_dead); // provenance, not a live guard
++    let events = [
++        ObservationEvent::OriginalRequestDropped,
++        ObservationEvent::A2Free,
++        ObservationEvent::PublicGuardDropped,
++        ObservationEvent::BankFree,
++    ];
++    for pair in events.windows(2) {
++        assert!(b4_ordinal(value, pair[0]) < b4_ordinal(value, pair[1]));
++    }
++}
++#[test]
++fn b4_observation_failed_retirement_retains_public_guard() {
++    let node = b3_local_node();
++    let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
++    let guard =
++        crate::actor::PublicRequestGuard::acquire_for_test(&AtomicBool::new(false), &counter)
++            .unwrap();
++    let owner = child(&node.factory, OwnerRole::Invocation);
++    let weak = Arc::downgrade(&component::request(&owner));
++    let context = b3_begin_context(
++        node.effects
++            .register_owned(owner, 0, None, Some(guard))
++            .unwrap(),
++        &node.effects,
++    );
++    let sequence = context.token.invocation;
++    b3_empty_pending(&node.effects, &context);
++    // Fail the actual remaining A2 publication after payload detach, not a
++    // fabricated terminal result. The public guard must survive this error.
++    node.effects
++        .capacity
++        .ledger
++        .lock()
++        .unwrap()
++        .observation_failed = true;
++    drop(context);
++    node.effects.retire_completed_records();
++    let value = node
++        .effects
++        .observation_by_index(sequence as usize - 1)
++        .unwrap();
++    assert!(weak.upgrade().is_none() && value.request_dead);
++    assert_eq!(counter.load(Ordering::SeqCst), 1);
++    assert_eq!(value.phase, ObservationPhase::Quarantined as u8);
++    assert!(value.has(ObservationEvent::OriginalRequestDropped));
++    assert!(!value.has(ObservationEvent::A2Free));
++    assert!(
++        !value.has(ObservationEvent::PublicGuardDropped) && !value.has(ObservationEvent::BankFree)
++    );
++    let bank = node.effects.bank.lock().unwrap();
++    assert!(bank.held[0]
++        .as_ref()
++        .is_some_and(|held| held.phase == HeldPhase::Failed && held.public_guard.is_some()));
++    assert_eq!(bank.retired[0], 0);
++}
++#[test]
++fn b4_observation_scalar_copy_does_not_pin_owner() {
++    let fixture = OutputFixture::new().unwrap();
++    let weak = fixture.weak_owner();
++    let scalar = fixture.observation().unwrap();
++    assert!(!std::mem::needs_drop::<InvocationObservation>());
++    let retained = scalar;
++    let disposition = fixture.finish_after_disposal().unwrap();
++    assert!(disposition.retired && !disposition.retained && weak.upgrade().is_none());
++    assert_eq!(retained.sequence, scalar.sequence);
++    assert_eq!(retained.phase, ObservationPhase::Active as u8); // historical Copy
++}
++#[test]
++fn b4_observation_contention_refuses_without_false_free() {
++    let fixture = OutputFixture::new().unwrap();
++    let record = fixture
++        .registry
++        .record(fixture.origin().unwrap().token)
++        .unwrap();
++    let baseline = Arc::strong_count(&record);
++    let bank = fixture.registry.bank.lock().unwrap();
++    let bank_result = fixture.registry.scalar_observation_v2(0, false);
++    drop(bank);
++    assert_eq!(bank_result, Err(Refusal::Contended));
++    let state = record.state.lock().unwrap();
++    let state_result = fixture.registry.scalar_observation_v2(0, false);
++    drop(state);
++    assert_eq!(state_result, Err(Refusal::Contended));
++    assert_eq!(Arc::strong_count(&record), baseline);
++    let value = fixture.observation().unwrap();
++    assert_eq!(value.phase, ObservationPhase::Active as u8);
++    assert!(!value.has(ObservationEvent::BankFree));
++    assert!(fixture.check_output().is_ok());
++    drop(record);
++    assert!(fixture.finish_after_disposal().unwrap().retired);
++
++    let fixture = OutputFixture::new().unwrap();
++    let record = fixture
++        .registry
++        .record(fixture.origin().unwrap().token)
++        .unwrap();
++    {
++        record.state.lock().unwrap().tainted = true;
++    }
++    let first = fixture.observation().unwrap();
++    assert_eq!(first.phase, ObservationPhase::Quarantined as u8);
++    assert!(!first.has(ObservationEvent::Quarantined));
++    {
++        record
++            .state
++            .lock()
++            .unwrap()
++            .observation
++            .mark(ObservationEvent::Retiring)
++            .unwrap();
++    }
++    let second = fixture.observation().unwrap();
++    assert_eq!(second.ordinal, first.ordinal + 1);
++    assert!(!second.has(ObservationEvent::Quarantined));
++    drop(record);
++    fixture.origin().unwrap().fail(); // Explicitly retain the tainted component.
++}
++#[test]
++fn b4_observation_stream_bounds_and_layouts() {
++    use std::alloc::Layout;
++    use std::io::Write as _;
++    let actual = observation_layouts().unwrap();
++    let mut layouts = serde_json::Map::new();
++    for (name, layout, ceiling, alignment) in [
++        ("invocation", Layout::new::<InvocationObservation>(), 512, 8),
++        (
++            "archive",
++            Layout::new::<[InvocationObservation; 64]>(),
++            32768,
++            8,
++        ),
++        ("held", Layout::new::<HeldRetirement>(), 1024, 16),
++        (
++            "a2_chunk",
++            Layout::new::<super::super::NodeEventChunk>(),
++            4096,
++            16,
++        ),
++        ("report", Layout::new::<GuardedNodeReport>(), 4096, 16),
++        (
++            "write_progress",
++            Layout::new::<output::WriteProgress>(),
++            64,
++            16,
++        ),
++    ] {
++        assert!(layout.size() > 0 && layout.size() <= ceiling && layout.align() <= alignment);
++        layouts.insert(
++            name.into(),
++            serde_json::json!({"bytes":layout.size(),"alignment":layout.align()}),
++        );
++    }
++    let (bytes, alignment) = component::arc_layout::<OwnedEffectRegistry>();
++    assert!(bytes > 0 && bytes <= 65536 && alignment <= 16);
++    layouts.insert(
++        "registry_arc".into(),
++        serde_json::json!({"bytes":bytes,"alignment":alignment}),
++    );
++    assert_eq!(actual.archive[0], 64 * actual.record[0]);
++    assert_eq!(actual.archive[1], actual.record[1]);
++    let a2_event_bytes = super::super::node_event_storage_bytes();
++    assert_eq!(
++        actual.retained_bytes,
++        actual.archive[0]
++            + 65536
++            + actual.a2_chunk[0]
++            + 6 * actual.record[0]
++            + actual.report[0]
++            + 1024
++            + a2_event_bytes
++    );
++    let mut worst = InvocationObservation::empty();
++    worst.sequence = u64::MAX;
++    worst.a2_generation = u64::MAX;
++    worst.epoch = u64::MAX;
++    worst.generation = u64::MAX;
++    worst.requests = [u64::MAX; 2];
++    worst.durable_ops = [u64::MAX; 2];
++    worst.ownership_ops = [u64::MAX; 2];
++    worst.positions = [u64::MAX; 2];
++    worst.durable_positions = [u64::MAX; 2];
++    worst.seen = u64::MAX;
++    worst.first = [u32::MAX; 32];
++    worst.tail = [u32::MAX; 8];
++    worst.ordinal = u32::MAX;
++    worst.native_joined = [u16::MAX; 11];
++    worst.native_disposed = [u16::MAX; 11];
++    worst.roots_joined = u16::MAX;
++    worst.roots_disposed = u16::MAX;
++    worst.frame_bytes = u32::MAX;
++    worst.accepted_bytes = u32::MAX;
++    worst.positive_pending_bytes = u32::MAX;
++    worst.write_polls = u32::MAX;
++    worst.pending_polls = u32::MAX;
++    worst.tenant = u8::MAX;
++    worst.bank_slot = u8::MAX;
++    worst.a2_slot = u8::MAX;
++    worst.phase = u8::MAX;
++    worst.summary = u8::MAX;
++    worst.durable_verdicts = [u8::MAX; 2];
++    worst.ownership_verdicts = [u8::MAX; 2];
++    worst.proof_sources = [u8::MAX; 2];
++    worst.release_verdicts = [u8::MAX; 2];
++    worst.c1 = u8::MAX;
++    worst.outcome = u8::MAX;
++    worst.refusal = u8::MAX;
++    let encoded = serde_json::to_vec(
++        &serde_json::json!({"kind":"guarded-invocation","index":63,"value":worst}),
++    )
++    .unwrap();
++    assert!(encoded.len() + 1 <= 2048);
++    let event = super::super::Event(
++        u32::MAX,
++        u8::MAX,
++        u64::MAX,
++        super::super::EventKind::PayloadsDropped,
++        u8::MAX,
++        u64::MAX,
++    );
++    let chunk = super::super::NodeEventChunk {
++        start: 448,
++        count: 64,
++        cutoff: 512,
++        observation_failed: true,
++        events: [Some(event); 64],
++    };
++    assert!(
++        serde_json::to_vec(
++            &serde_json::json!({"kind":"guarded-a2-events","index":7,"value":chunk})
++        )
++        .unwrap()
++        .len()
++            + 1
++            <= 16384
++    );
++    let report = GuardedNodeReport {
++        claim: "b3-frontend-components-only",
++        scenario: "shutdown-complete",
++        accepting: false,
++        failed: false,
++        connections: usize::MAX,
++        dispatchers: usize::MAX,
++        invocations: usize::MAX,
++        held: usize::MAX,
++        public_in_flight: usize::MAX,
++        completed: u64::MAX,
++        refused: u64::MAX,
++    };
++    assert!(serde_json::to_vec(&serde_json::json!({"kind":"guarded-observation-header","version":1,
++        "event":"shutdown","ordinary_drained":false,"guarded":report,"invocations":64,"a2_events":512,
++        "atomic_snapshot":false})).unwrap().len()+1<=1024);
++    assert!(
++        serde_json::to_vec(
++            &serde_json::json!({"kind":"guarded-observation-end","invocations":64,
++        "a2_events":512,"a2_chunks":8})
++        )
++        .unwrap()
++        .len()
++            + 1
++            <= 1024
++    );
++    assert_eq!(64 * 2048 + 8 * 16384 + 2 * 1024, OBSERVATION_STREAM_BYTES);
++    let record = serde_json::json!({"format":1,"layouts":layouts,"retained_bytes":actual.retained_bytes,"a2_event_bytes":a2_event_bytes});
++    let bytes = format!("FOKS_B4_OBSERVATION_LAYOUT={record}\n").into_bytes();
++    assert!(bytes.len() <= 4096);
++    let mut stderr = std::io::stderr().lock();
++    stderr.write_all(&bytes).unwrap();
++    stderr.flush().unwrap();
++}
+--- a/crates/celld/main/guarded.rs
++++ b/crates/celld/main/guarded.rs
+@@ -317,42 +317,154 @@
+         if let Some(enabled) = &mut self.enabled {
+             use std::io::Write;
+             #[derive(serde::Serialize)]
+-            struct Record {
++            struct Header {
++                kind: &'static str,
++                version: u8,
+                 event: &'static str,
+                 ordinary_drained: bool,
+                 guarded: celld::GuardedNodeReport,
+-            }
+-            struct Bounded<'a>(&'a mut Vec<u8>);
+-            impl Write for Bounded<'_> {
+-                fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+-                    if bytes.len() > 65_535 - self.0.len() {
+-                        return Err(std::io::Error::other("guarded record overflow"));
+-                    }
+-                    self.0.extend_from_slice(bytes);
+-                    Ok(bytes.len())
+-                }
+-                fn flush(&mut self) -> std::io::Result<()> {
+-                    Ok(())
+-                }
++                invocations: usize,
++                a2_events: usize,
++                atomic_snapshot: bool,
++            }
++            #[derive(serde::Serialize)]
++            struct Item<T: serde::Serialize> {
++                kind: &'static str,
++                index: usize,
++                value: T,
++            }
++            #[derive(serde::Serialize)]
++            struct End {
++                kind: &'static str,
++                invocations: usize,
++                a2_events: usize,
++                a2_chunks: usize,
+             }
+             let frontend = enabled
+                 .frontend
+                 .as_ref()
+                 .ok_or_else(|| anyhow::anyhow!("guarded report before readiness"))?;
+-            enabled.encoded.clear();
+-            serde_json::to_writer(
+-                Bounded(&mut enabled.encoded),
+-                &Record {
++            let (invocations, a2_events) = frontend.observation_counts().map_err(refused)?;
++            anyhow::ensure!(
++                invocations <= 64 && a2_events <= 512,
++                "guarded observation count overflow"
++            );
++            let mut stdout = std::io::stdout().lock();
++            let mut total = 0usize;
++            observation_line(
++                &mut enabled.encoded,
++                &mut stdout,
++                &mut total,
++                1024,
++                &Header {
++                    kind: "guarded-observation-header",
++                    version: 1,
+                     event: _event,
+                     ordinary_drained: _ordinary_drained,
+                     guarded: frontend.report(),
++                    invocations,
++                    a2_events,
++                    atomic_snapshot: false,
+                 },
+             )?;
+-            enabled.encoded.push(b'\n');
+-            let mut stdout = std::io::stdout().lock();
+-            stdout.write_all(&enabled.encoded)?;
++            for index in 0..invocations {
++                // All temporary owning observation aliases have died before
++                // encoding or I/O. The returned value contains scalars only.
++                let value = frontend.observation_record(index).map_err(refused)?;
++                observation_line(
++                    &mut enabled.encoded,
++                    &mut stdout,
++                    &mut total,
++                    2048,
++                    &Item {
++                        kind: "guarded-invocation",
++                        index,
++                        value,
++                    },
++                )?;
++            }
++            let mut chunks = 0;
++            for start in (0..a2_events).step_by(64) {
++                let value = frontend
++                    .observation_events(start, a2_events)
++                    .map_err(refused)?;
++                observation_line(
++                    &mut enabled.encoded,
++                    &mut stdout,
++                    &mut total,
++                    16384,
++                    &Item {
++                        kind: "guarded-a2-events",
++                        index: chunks,
++                        value,
++                    },
++                )?;
++                chunks += 1;
++            }
++            observation_line(
++                &mut enabled.encoded,
++                &mut stdout,
++                &mut total,
++                1024,
++                &End {
++                    kind: "guarded-observation-end",
++                    invocations,
++                    a2_events,
++                    a2_chunks: chunks,
++                },
++            )?;
+             stdout.flush()?;
+         }
+         Ok(())
+     }
+ }
++
++#[cfg(feature = "foks-guarded-node-qualification")]
++fn observation_line<T: serde::Serialize>(
++    encoded: &mut Vec<u8>,
++    writer: &mut impl std::io::Write,
++    total: &mut usize,
++    limit: usize,
++    value: &T,
++) -> anyhow::Result<()> {
++    struct Bounded<'a> {
++        bytes: &'a mut Vec<u8>,
++        limit: usize,
++    }
++    impl std::io::Write for Bounded<'_> {
++        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
++            if self
++                .bytes
++                .len()
++                .checked_add(bytes.len())
++                .is_none_or(|next| next >= self.limit || next >= 65_536)
++            {
++                return Err(std::io::Error::other("guarded observation record overflow"));
++            }
++            self.bytes.extend_from_slice(bytes);
++            Ok(bytes.len())
++        }
++        fn flush(&mut self) -> std::io::Result<()> {
++            Ok(())
++        }
++    }
++    anyhow::ensure!(
++        limit <= 65_536 && encoded.capacity() == 65_536,
++        "guarded observation buffer changed"
++    );
++    encoded.clear();
++    serde_json::to_writer(
++        Bounded {
++            bytes: encoded,
++            limit,
++        },
++        value,
++    )?;
++    encoded.push(b'\n');
++    *total = total
++        .checked_add(encoded.len())
++        .filter(|value| *value <= 264_192)
++        .ok_or_else(|| anyhow::anyhow!("guarded observation stream overflow"))?;
++    writer.write_all(encoded)?;
++    Ok(())
++}
+--- a/crates/celld/runtime.rs
++++ b/crates/celld/runtime.rs
+@@ -4194,6 +4194,7 @@
+             self.witness.driver_joined()?;
+             let proofs = context.proofs()?;
+             if proofs.iter().any(Option::is_some) {
++                context.observe_c1(true, false)?;
+                 // C1 is admitted from this exact delivered F3 result, before
+                 // ActivityFinished/Inactive and the later final eviction.
+                 let permit = context.claim_control(CleanupLane::TerminalProof)?;
+@@ -4202,9 +4203,14 @@
+                     attachment: self.attachment.clone(),
+                     proofs,
+                 };
+-                permit
+-                    .submit_node(move |cleanup| work.run(cleanup))?
+-                    .await?;
++                let result = permit.submit_node(move |cleanup| work.run(cleanup))?.await;
++                if let Err(error) = result {
++                    context.observe_c1_failure(error)?;
++                    return Err(error);
++                }
++                context.observe_c1(true, true)?;
++            } else {
++                context.observe_c1(false, true)?;
+             }
+             self.terminal_proved = true;
+             Ok(())
+@@ -4258,6 +4264,8 @@
+             // future, socket and full frame before entering this method.
+             // The discard branch publishes no bytes at all.
+             drop(answer.result);
++            context
++                .observe_event(crate::guarded_execution::node::ObservationEvent::AnswerDropped)?;
+             self.witness.output_disposed()?;
+             let alarm = self
+                 .alarm
+@@ -5120,7 +5128,11 @@
+             )
+             .await?
+             {
+-                NativeOutput::Destroyed => {}
++                NativeOutput::Destroyed => {
++                    context.observe_event(
++                        crate::guarded_execution::node::ObservationEvent::WorkerDestroyed,
++                    )?;
++                }
+                 _ => return Err(refused(context, Refusal::Invalid).into()),
+             }
+             // C6 owns storage background joins, final capture/publication,
+@@ -5141,6 +5153,7 @@
+                 result = completion.retirement_result(&cleanup, &attachment);
+             })?;
+             result?;
++            context.observe_event(crate::guarded_execution::node::ObservationEvent::C6Succeeded)?;
+             context.check_job()?;
+             Ok(())
+         }

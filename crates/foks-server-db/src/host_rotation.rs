@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, Connection, OptionalExtension as _, Transaction, TransactionBehavior};
 
 use crate::{error::sql_integer, error::unsigned, Database, Error, ReadDatabase, Result};
@@ -112,7 +113,7 @@ impl Database {
             "SELECT generation_id FROM host_key_generations
              WHERE purpose = 1 AND state = 2",
             [],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         transaction.execute(
             "INSERT INTO host_key_generations
@@ -177,7 +178,7 @@ impl Database {
         let head: (i64, Vec<u8>) = transaction.query_row(
             "SELECT epoch, root_hash FROM merkle_root_heads WHERE singleton = 1",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
         )?;
         if head
             != (
@@ -191,7 +192,7 @@ impl Database {
         let next_link: i64 = transaction.query_row(
             "SELECT COALESCE(MAX(seqno), 0) + 1 FROM hostchain_links",
             [],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         if next_link != sql_integer(publication.hostchain_seqno)? {
             return Err(Error::Invalid("hostchain sequence"));
@@ -210,7 +211,7 @@ impl Database {
             let found: Vec<u8> = transaction.query_row(
                 "SELECT root_hash FROM merkle_roots WHERE epoch = ?1",
                 [sql_integer(*epoch)?],
-                |row| row.get(0),
+                |row| row.budgeted_get(0),
             )?;
             if found != *hash {
                 return Err(Error::Invalid("Merkle back-pointer hash"));
@@ -330,9 +331,9 @@ fn hostchain_links(connection: &Connection) -> Result<Vec<StoredHostchainLink>> 
         .prepare("SELECT seqno, link_hash, exact_link FROM hostchain_links ORDER BY seqno")?
         .query_map([], |row| {
             Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, Vec<u8>>(1)?,
-                row.get::<_, Vec<u8>>(2)?,
+                row.budgeted_get::<_, i64>(0)?,
+                row.budgeted_get::<_, Vec<u8>>(1)?,
+                row.budgeted_get::<_, Vec<u8>>(2)?,
             ))
         })?
         .map(|row| {
@@ -357,12 +358,12 @@ fn generations(connection: &Connection) -> Result<Vec<HostKeyGeneration>> {
     let generations = statement
         .query_map([], |row| {
             Ok((
-                row.get::<_, Vec<u8>>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Vec<u8>>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, i64>(4)?,
-                row.get::<_, Option<i64>>(5)?,
+                row.budgeted_get::<_, Vec<u8>>(0)?,
+                row.budgeted_get::<_, String>(1)?,
+                row.budgeted_get::<_, Vec<u8>>(2)?,
+                row.budgeted_get::<_, i64>(3)?,
+                row.budgeted_get::<_, i64>(4)?,
+                row.budgeted_get::<_, Option<i64>>(5)?,
             ))
         })?
         .map(|row| {
@@ -438,15 +439,15 @@ fn operation_query<P: rusqlite::Params>(
     let row = connection
         .query_row(sql, params, |row| {
             Ok((
-                row.get::<_, Vec<u8>>(0)?,
-                row.get::<_, Vec<u8>>(1)?,
-                row.get::<_, Vec<u8>>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, Option<i64>>(4)?,
-                row.get::<_, Option<i64>>(5)?,
-                row.get::<_, Option<i64>>(6)?,
-                row.get::<_, i64>(7)?,
-                row.get::<_, i64>(8)?,
+                row.budgeted_get::<_, Vec<u8>>(0)?,
+                row.budgeted_get::<_, Vec<u8>>(1)?,
+                row.budgeted_get::<_, Vec<u8>>(2)?,
+                row.budgeted_get::<_, i64>(3)?,
+                row.budgeted_get::<_, Option<i64>>(4)?,
+                row.budgeted_get::<_, Option<i64>>(5)?,
+                row.budgeted_get::<_, Option<i64>>(6)?,
+                row.budgeted_get::<_, i64>(7)?,
+                row.budgeted_get::<_, i64>(8)?,
             ))
         })
         .optional()?;

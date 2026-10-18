@@ -220,6 +220,13 @@ watermark, so such a write returns `expired`, not `clock-untrusted`; status
 and the expired write result both report this case separately, with the
 time writes resume.
 
+File uploads have a receipt clock of their own with the same discipline. Both
+clocks sample one process clock, so they share the suspend-inclusive monotonic
+reading and the boot identifier, but each keeps its own anchor and rejection
+watermark (`kv_adapter_clocks` and `kv_upload_clocks`), and a repair of one
+leaves the other unchanged. The status and repair requests name the clock:
+`--domain adapter` (the default) or `--domain upload` on the CLI commands.
+
 Cancellation is honored but does not undo remote work; a cancelled request
 answers "check mutation status before retrying." An interrupted upload may
 leave an unreferenced encrypted object on the server, which the server's
@@ -234,7 +241,7 @@ The server advertises MCP revision 2025-11-25 and negotiates 2025-06-18,
 exact version. Advertising the newest and accepting older revisions lets
 an assistant host that has not yet updated continue to work.
 
-The local agent IPC is separate: its current version is 37. Upgrade the CLI
+The local agent IPC is separate: its current version is 38. Upgrade the CLI
 and resident agent together and restart the agent to avoid a version mismatch.
 Before it starts the MCP server, the CLI exchanges the version-independent
 Hello ([Chapter 17](17-wire.qmd)). If a resident agent of another version
@@ -246,8 +253,8 @@ Hello or the status request, or drops the connection, is probed again until
 two seconds have passed and then reported as busy, again without starting a
 second agent. A tool call that an agent of another version refuses is
 reported as not run.
-The hard-state database uses schema 41 and migrates supported schemas 38
-through 40; other development schemas are refused. These upgrades do not turn an
+The hard-state database uses schema 43 and migrates supported schemas 38
+through 42 one version at a time; other development schemas are refused. These upgrades do not turn an
 unknown mutation outcome into permission to replay it.
 
 ## Where to look
@@ -260,7 +267,8 @@ unknown mutation outcome into permission to replay it.
 - `foks-cli`: `mcp.rs` (entry point, `ensure_agent`).
 - `foks-proto`: `submission.rs` (`SubmissionHandle`).
 - `foks-client-db`: the `kv_adapter_submissions` and `kv_adapter_clocks`
-  tables in `schema.rs`, `repositories/adapter/`.
+  tables in `schema.rs`, `repositories/adapter/`, `repositories/receipt_clock.rs`.
+- `foks-client`: `receipt_clock.rs` (the shared process clock).
 - `tools/foks-v019-oracle/run-mcp-compat.sh`.
 
 ## Further reading

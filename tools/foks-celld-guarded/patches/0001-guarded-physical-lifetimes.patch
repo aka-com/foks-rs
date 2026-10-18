@@ -1,0 +1,2372 @@
+--- a/crates/celld/Cargo.toml
++++ b/crates/celld/Cargo.toml
+@@ -5,6 +5,9 @@
+ rust-version = "1.94.1"
+ license = "Apache-2.0"
+ 
++
++[features]
++foks-guarded-qualification = []
+ 
+ [lib]
+ path = "lib.rs"
+--- a/crates/celld/lib.rs
++++ b/crates/celld/lib.rs
+@@ -311,3 +311,12 @@
+         queue_json_messages: switch("queue_json_messages", "queue_v8_messages", "2024-03-18"),
+     }
+ }
++
++// Closed diagnostics only: no guarded serving capability crosses this boundary.
++#[cfg(feature = "foks-guarded-qualification")]
++mod guarded_execution;
++#[cfg(feature = "foks-guarded-qualification")]
++pub use guarded_execution::qualification::{
++    lifecycle_layouts, qualify_lifecycle, LifecycleFailure, LifecycleInput, LifecycleLayouts,
++    LifecycleProcessOwner, LifecycleProgram, LifecycleReport, LifecycleScenario,
++};
+--- a/crates/celld/pool.rs
++++ b/crates/celld/pool.rs
+@@ -263,7 +263,18 @@
+             TurnLane::Cell(scope) => scope,
+         });
+         let previous = CURRENT_SLOT.replace(Some(self.me.clone()));
++        #[cfg(feature = "foks-guarded-qualification")]
++        struct Restore(Option<std::sync::Weak<Slot>>);
++        #[cfg(feature = "foks-guarded-qualification")]
++        impl Drop for Restore {
++            fn drop(&mut self) {
++                CURRENT_SLOT.set(self.0.take());
++            }
++        }
++        #[cfg(feature = "foks-guarded-qualification")]
++        let _restore = Restore(previous);
+         let result = f(worker);
++        #[cfg(not(feature = "foks-guarded-qualification"))]
+         CURRENT_SLOT.set(previous);
+         result
+     }
+@@ -307,6 +318,38 @@
+     pub fn affiliate(self: &Arc<Self>) -> Affiliation {
+         self.requests.fetch_add(1, Ordering::Relaxed);
+         Affiliation(self.clone())
++    }
++
++    /// Sealed one-cell fixture ownership; bypasses the ordinary placement pool.
++    #[cfg(feature = "foks-guarded-qualification")]
++    pub(crate) fn guarded(worker: js::Worker) -> (Arc<Self>, Residency) {
++        let slot = Self::outside_pool(worker, false);
++        slot.cells.store(1, Ordering::Relaxed);
++        let residency = Residency {
++            slot: slot.clone(),
++            max_cells: 1,
++            adopted: false,
++        };
++        (slot, residency)
++    }
++
++    /// Only the guarded supervisor calls this after joining all users and closing storage.
++    /// Failure returns the actual owner, never a synthetic disposal acknowledgment.
++    #[cfg(feature = "foks-guarded-qualification")]
++    pub(crate) fn guarded_consume(self: Arc<Self>) -> std::result::Result<js::Worker, Arc<Self>> {
++        if self.turns.load(Ordering::Acquire) != 0
++            || self.requests.load(Ordering::Acquire) != 0
++            || self.cells.load(Ordering::Acquire) != 0
++            || self.adopted_cells.load(Ordering::Acquire) != 0
++            || self.reclaim.is_some()
++            || self.loaded_worker
++        {
++            return Err(self);
++        }
++        let slot = Arc::try_unwrap(self)?;
++        // No live alias can enter the mutex. Remaining Slot fields are physically
++        // destroyed on return before the caller can drop the extracted Worker.
++        Ok(slot.worker.into_inner().expect("dedicated live worker"))
+     }
+ 
+     /// A slot holding a Worker Loader's Worker.
+--- a/crates/celld/runtime.rs
++++ b/crates/celld/runtime.rs
+@@ -3301,6 +3301,26 @@
+     }
+ }
+ 
++/// Qualification owns and joins this actual driver, including InFlight cleanup.
++#[cfg(feature = "foks-guarded-qualification")]
++pub(crate) async fn drive_guarded_cell(
++    affiliation: crate::pool::Affiliation,
++    job: CellJob,
++    budget: Duration,
++) -> anyhow::Result<Option<u64>> {
++    drive_cell_inner(
++        affiliation,
++        job,
++        None,
++        None,
++        budget,
++        None,
++        #[cfg(celld_internal_tests)]
++        DriveCellTestObservers::default(),
++    )
++    .await
++}
++
+ async fn drive_cell_inner(
+     affiliation: crate::pool::Affiliation,
+     mut job: CellJob,
+--- a/crates/celld/js.rs
++++ b/crates/celld/js.rs
+@@ -5812,6 +5812,8 @@
+         let compat = config.compat;
+         let params = v8::CreateParams::default().heap_limits(0, v8_heap_limit_bytes());
+         let mut isolate = v8::Isolate::new(params);
++        #[cfg(feature = "foks-guarded-qualification")]
++        guarded::after_isolate()?;
+         // Dynamic `import()` of builtin specifiers; per-import()-call only.
+         isolate.set_host_import_module_dynamically_callback(host_import_module_dynamically);
+         let original_heap_limit = isolate.get_heap_statistics().heap_size_limit();
+@@ -12680,3 +12682,6 @@
+ 
+ #[cfg(celld_internal_tests)]
+ include!(env!("CELLD_INTERNAL_JS_OBSERVERS"));
++
++#[cfg(feature = "foks-guarded-qualification")]
++pub(crate) mod guarded;
+--- /dev/null
++++ b/crates/celld/js/guarded.rs
+@@ -0,0 +1,234 @@
++//! Immutable A2 program and scoped V8 inspection. No caller program/config enters.
++use super::*;
++use crate::guarded_execution::Gate;
++use sha2::{Digest, Sha256};
++use std::cell::RefCell;
++
++pub(crate) const CAPACITY: usize = 64 * 1024 * 1024;
++pub(crate) const CLASS: &str = "FoksGuardedFixture";
++// Sections: type(3), function(4), memory(1, memory32, nonshared,
++// initial=max=1024), export(exactly5), code(4). No imports/start/data/table.
++// write_page/read_page guard unsigned page<1024, shift by16, and store/load i32.
++// grow_zero/grow_one use the Wasm memory.grow instruction (0 or1).
++pub(crate) const WASM: &[u8] = &[
++    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0f, 0x03, 0x60, 0x02, 0x7f, 0x7f, 0x00,
++    0x60, 0x01, 0x7f, 0x01, 0x7f, 0x60, 0x00, 0x01, 0x7f, 0x03, 0x05, 0x04, 0x00, 0x01, 0x02, 0x02,
++    0x05, 0x06, 0x01, 0x01, 0x80, 0x08, 0x80, 0x08, 0x07, 0x3a, 0x05, 0x06, 0x6d, 0x65, 0x6d, 0x6f,
++    0x72, 0x79, 0x02, 0x00, 0x0a, 0x77, 0x72, 0x69, 0x74, 0x65, 0x5f, 0x70, 0x61, 0x67, 0x65, 0x00,
++    0x00, 0x09, 0x72, 0x65, 0x61, 0x64, 0x5f, 0x70, 0x61, 0x67, 0x65, 0x00, 0x01, 0x09, 0x67, 0x72,
++    0x6f, 0x77, 0x5f, 0x7a, 0x65, 0x72, 0x6f, 0x00, 0x02, 0x08, 0x67, 0x72, 0x6f, 0x77, 0x5f, 0x6f,
++    0x6e, 0x65, 0x00, 0x03, 0x0a, 0x3b, 0x04, 0x16, 0x00, 0x20, 0x00, 0x41, 0x80, 0x08, 0x4f, 0x04,
++    0x40, 0x00, 0x0b, 0x20, 0x00, 0x41, 0x10, 0x74, 0x20, 0x01, 0x36, 0x02, 0x00, 0x0b, 0x14, 0x00,
++    0x20, 0x00, 0x41, 0x80, 0x08, 0x4f, 0x04, 0x40, 0x00, 0x0b, 0x20, 0x00, 0x41, 0x10, 0x74, 0x28,
++    0x02, 0x00, 0x0b, 0x06, 0x00, 0x41, 0x00, 0x40, 0x00, 0x0b, 0x06, 0x00, 0x41, 0x01, 0x40, 0x00,
++    0x0b,
++];
++pub(crate) const JS: &str = r#"const moduleBytes = new Uint8Array([0,97,115,109,1,0,0,0,1,15,3,96,2,127,127,0,96,1,127,1,127,96,0,1,127,3,5,4,0,1,2,2,5,6,1,1,128,8,128,8,7,58,5,6,109,101,109,111,114,121,2,0,10,119,114,105,116,101,95,112,97,103,101,0,0,9,114,101,97,100,95,112,97,103,101,0,1,9,103,114,111,119,95,122,101,114,111,0,2,8,103,114,111,119,95,111,110,101,0,3,10,59,4,22,0,32,0,65,128,8,79,4,64,0,11,32,0,65,16,116,32,1,54,2,0,11,20,0,32,0,65,128,8,79,4,64,0,11,32,0,65,16,116,40,2,0,11,6,0,65,0,64,0,11,6,0,65,1,64,0,11]);
++export class FoksGuardedFixture {
++  constructor(ctx) { this.ctx = ctx; }
++  fetch() {
++    const instance = new WebAssembly.Instance(new WebAssembly.Module(moduleBytes));
++    const memory = instance.exports.memory;
++    const view = new Uint8Array(memory.buffer);
++    let fresh = view[view.length - 1] === 0;
++    for (let page = 0; page < 1024; page++) fresh = fresh && instance.exports.read_page(page) === 0;
++    view.fill(90);
++    globalThis.__foksGuarded = { memory, exports: instance.exports };
++    const sql = this.ctx.storage.sql;
++    sql.exec('CREATE TABLE IF NOT EXISTS foks_guarded_counter (id INTEGER PRIMARY KEY CHECK(id=1), value INTEGER NOT NULL)');
++    sql.exec('INSERT OR IGNORE INTO foks_guarded_counter VALUES (1,0)');
++    sql.exec('UPDATE foks_guarded_counter SET value=value+1 WHERE id=1');
++    const counter = sql.exec('SELECT value FROM foks_guarded_counter WHERE id=1').one().value;
++    const bytes = new Uint8Array(12);
++    const result = new DataView(bytes.buffer);
++    result.setUint32(0, counter, true);
++    result.setUint32(4, fresh ? 1 : 0, true);
++    result.setUint32(8, view.length, true);
++    return new Response(bytes);
++  }
++}
++export default { fetch() { throw new Error('closed cell fixture only'); } };
++"#;
++
++pub(crate) fn program() -> crate::guarded_execution::qualification::LifecycleProgram {
++    crate::guarded_execution::qualification::LifecycleProgram {
++        js_sha256: Sha256::digest(JS.as_bytes()).into(),
++        js_bytes: JS.len(),
++        wasm_sha256: Sha256::digest(WASM).into(),
++        wasm_bytes: WASM.len(),
++    }
++}
++
++pub(crate) fn validate_fixture(js: &[u8], wasm: &[u8]) -> bool {
++    // Closed exact-byte policy, not a permissive general Wasm parser. Every
++    // altered artifact is refused before constructing a Worker or isolate.
++    js == JS.as_bytes() && wasm == WASM
++}
++
++#[derive(Clone)]
++pub(crate) enum BuildMode {
++    Normal,
++    ErrorBefore,
++    ErrorAfter,
++    PanicAfter,
++    HoldAfter(Arc<Gate>),
++}
++thread_local! {
++    static BUILD: RefCell<Option<BuildMode>> = const { RefCell::new(None) };
++}
++
++#[derive(Debug)]
++struct InjectedAfterIsolate;
++impl std::fmt::Display for InjectedAfterIsolate {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.write_str("guarded injected post-isolate error")
++    }
++}
++impl std::error::Error for InjectedAfterIsolate {}
++pub(crate) enum LoadFailure {
++    CleanBefore,
++    CleanAfter,
++    Uncertain,
++}
++
++pub(crate) fn after_isolate() -> Result<()> {
++    let mode = BUILD.with_borrow(Clone::clone);
++    match mode {
++        Some(BuildMode::ErrorAfter) => return Err(anyhow::Error::new(InjectedAfterIsolate)),
++        Some(BuildMode::PanicAfter) => panic!("guarded build unwind"),
++        Some(BuildMode::HoldAfter(gate)) => gate.block(),
++        _ => {}
++    }
++    Ok(())
++}
++
++pub(crate) fn load(mode: BuildMode) -> std::result::Result<Worker, LoadFailure> {
++    if !validate_fixture(JS.as_bytes(), WASM) {
++        return Err(LoadFailure::Uncertain);
++    }
++    let expected_after = matches!(mode, BuildMode::ErrorAfter);
++    if matches!(mode, BuildMode::ErrorBefore) {
++        return Err(LoadFailure::CleanBefore);
++    }
++    struct Reset;
++    impl Drop for Reset {
++        fn drop(&mut self) {
++            BUILD.set(None);
++        }
++    }
++    BUILD.with_borrow_mut(|active| {
++        assert!(active.is_none(), "nested guarded construction");
++        *active = Some(mode);
++    });
++    let _reset = Reset;
++    let mut config = WorkerConfig::new(WorkerConfigOptions {
++        src: JS.into(),
++        script_name: "foks-guarded-fixture".into(),
++        do_classes: vec![CLASS.into()],
++        bindings: vec![],
++        r2_bindings: vec![],
++        d1_bindings: vec![],
++        kv_bindings: vec![],
++        queue_bindings: vec![],
++        queue_consumers: vec![],
++        workflow_bindings: vec![],
++        vars: vec![],
++        node: "foks-guarded-local".into(),
++        modules: vec![],
++        compat: Compat::default(),
++    });
++    config.egress = EgressPolicy::Deny;
++    match Worker::load_config(Arc::new(config)) {
++        Ok(worker) => Ok(worker),
++        // Only this unique marker can prove the deliberately audited immediate
++        // post-Isolate::new return. All local isolate destruction has completed.
++        Err(error) if expected_after && error.is::<InjectedAfterIsolate>() => {
++            Err(LoadFailure::CleanAfter)
++        }
++        Err(_) => Err(LoadFailure::Uncertain),
++    }
++}
++
++pub(crate) struct Probe {
++    backing: v8::SharedRef<v8::BackingStore>,
++}
++impl Probe {
++    pub(crate) fn finish(self) {
++        // Diagnostic only, after actual Worker/full isolate teardown. This API's
++        // bounded retry is not a production lifetime or synchronization protocol.
++        self.backing.assert_use_count_eq(1);
++        drop(self);
++    }
++}
++
++impl Worker {
++    pub(crate) fn guarded_probe(&mut self, growth: bool) -> Result<Probe> {
++        let (mut locker, _cells) = self.lock();
++        v8::scope!(let hs, &mut *locker);
++        let realm = self.realm(hs);
++        let scope = &mut v8::ContextScope::new(hs, realm.context);
++        let key = v8::String::new(scope, "__foksGuarded").unwrap();
++        let state = realm
++            .context
++            .global(scope)
++            .get(scope, key.into())
++            .and_then(|v| v.to_object(scope))
++            .ok_or_else(|| anyhow!("missing fixture state"))?;
++        let key = v8::String::new(scope, "memory").unwrap();
++        let memory = state
++            .get(scope, key.into())
++            .and_then(|v| v.try_cast::<v8::WasmMemoryObject>().ok())
++            .ok_or_else(|| anyhow!("missing fixture memory"))?;
++        let old_buffer = memory.buffer();
++        let backing = old_buffer.get_backing_store();
++        anyhow::ensure!(
++            backing.byte_length() == CAPACITY
++                && !backing.is_shared()
++                && !backing.is_resizable_by_user_javascript(),
++            "unexpected backing geometry"
++        );
++        anyhow::ensure!(
++            backing[0].get() == 90 && backing[CAPACITY - 1].get() == 90,
++            "fixture did not touch backing"
++        );
++        if growth {
++            let key = v8::String::new(scope, "exports").unwrap();
++            let exports = state
++                .get(scope, key.into())
++                .and_then(|v| v.to_object(scope))
++                .ok_or_else(|| anyhow!("missing exports"))?;
++            for (name, expected) in [("grow_zero", 1024), ("grow_one", -1)] {
++                let key = v8::String::new(scope, name).unwrap();
++                let function = exports
++                    .get(scope, key.into())
++                    .and_then(|v| v.try_cast::<v8::Function>().ok())
++                    .ok_or_else(|| anyhow!("missing growth function"))?;
++                let recv = v8::undefined(scope).into();
++                let result = function
++                    .call(scope, recv, &[])
++                    .and_then(|v| v.int32_value(scope));
++                anyhow::ensure!(result == Some(expected), "unexpected grow result");
++                // grow(0) detached old_buffer. Reacquire from the memory object.
++                let current = memory.buffer().get_backing_store();
++                anyhow::ensure!(
++                    std::ptr::eq(&*backing, &*current)
++                        && backing.data() == current.data()
++                        && current.byte_length() == CAPACITY
++                        && !current.is_shared()
++                        && !current.is_resizable_by_user_javascript(),
++                    "replacement backing"
++                );
++                anyhow::ensure!(
++                    current[0].get() == 90 && current[CAPACITY - 1].get() == 90,
++                    "growth changed contents"
++                );
++                drop(current);
++            }
++            anyhow::ensure!(
++                old_buffer.byte_length() == 0,
++                "zero growth did not detach old buffer"
++            );
++        }
++        Ok(Probe { backing })
++    }
++}
+--- /dev/null
++++ b/crates/celld/guarded_execution.rs
+@@ -0,0 +1,971 @@
++//! Closed A2 process ledger. Logical lease Drop never returns physical credit.
++use crate::{js, pool};
++use qualification::{LifecycleFailure as Failure, LifecycleInput, LifecycleProcessOwner};
++use serde::Serialize;
++use std::{
++    any::Any,
++    sync::{
++        atomic::{AtomicBool, Ordering},
++        Arc, Condvar, Mutex, OnceLock, TryLockError,
++    },
++    time::{Duration, Instant},
++};
++
++pub(crate) mod qualification;
++const SLOTS: usize = 2;
++const EVENT_LIMIT: usize = 512;
++const WASM_BYTES: usize = js::guarded::CAPACITY;
++const DIRECTORY_BYTES: usize = 64;
++const STORAGE_PATH_BYTES: usize = DIRECTORY_BYTES + 1 + 64 + 7;
++type Owner = Arc<dyn Any + Send + Sync>;
++static CAPACITY: OnceLock<Arc<Capacity>> = OnceLock::new();
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
++#[serde(rename_all = "kebab-case")]
++enum State {
++    Free,
++    Building,
++    Running,
++    Retiring,
++    Quarantined,
++}
++#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
++#[serde(rename_all = "kebab-case")]
++enum Refusal {
++    Busy,
++    Capacity,
++    Contended,
++    Poisoned,
++    Invalid,
++    Exhausted,
++    Expired,
++    Cancelled,
++}
++#[derive(Clone, Copy, Debug, Serialize)]
++#[serde(rename_all = "kebab-case")]
++enum EventKind {
++    Admitted,
++    WorkerBuilt,
++    Adopted,
++    DriverStarted,
++    ReplyReceived,
++    DriverJoined,
++    BackingObserved,
++    Retiring,
++    CellClosed,
++    SlotConsumed,
++    WorkerDropped,
++    ProbeDropped,
++    MemoryReleased,
++    OutputDropped,
++    PayloadsDropped,
++    OwnerDropped,
++    Freed,
++    Quarantined,
++    Refused,
++}
++#[derive(Clone, Copy, Serialize)]
++// Compact bounded tuple: sequence, record, generation, kind, occupied, reserved.
++struct Event(u32, u8, u64, EventKind, u8, u64);
++#[derive(Clone, Copy, Serialize)]
++struct Snapshot {
++    state: State,
++    generation: u64,
++    memory_reserved: bool,
++    output_done: bool,
++    runtime_done: bool,
++    tainted: bool,
++    owner: Option<u8>,
++}
++#[derive(Clone, Copy, Eq, PartialEq)]
++struct Key([u8; 32]);
++impl Key {
++    fn parse(value: &str) -> Result<Self, Refusal> {
++        if value.len() != 64 {
++            return Err(Refusal::Invalid);
++        }
++        let mut key = [0; 32];
++        for (to, pair) in key.iter_mut().zip(value.as_bytes().chunks_exact(2)) {
++            let nibble = |v| match v {
++                b'0'..=b'9' => Some(v - b'0'),
++                b'a'..=b'f' => Some(v - b'a' + 10),
++                _ => None,
++            };
++            *to = nibble(pair[0]).ok_or(Refusal::Invalid)? * 16
++                + nibble(pair[1]).ok_or(Refusal::Invalid)?;
++        }
++        Ok(Self(key))
++    }
++}
++struct Control {
++    deadline: Instant,
++    cancelled: Arc<AtomicBool>,
++    owner: Owner,
++    ordinal: u8,
++}
++impl Control {
++    fn from_input(value: LifecycleInput, ordinal: u8) -> Arc<Self> {
++        Arc::new(Self {
++            deadline: value.deadline,
++            cancelled: value.cancelled,
++            owner: value.owner,
++            ordinal,
++        })
++    }
++    fn check(&self) -> Result<(), Refusal> {
++        if self.cancelled.load(Ordering::Acquire) {
++            return Err(Refusal::Cancelled);
++        }
++        if Instant::now() >= self.deadline {
++            return Err(Refusal::Expired);
++        }
++        Ok(())
++    }
++    fn remaining(&self) -> Result<Duration, Failure> {
++        self.check().map_err(|_| Failure::Admission)?;
++        Ok(self.deadline.saturating_duration_since(Instant::now()))
++    }
++}
++struct Record {
++    state: State,
++    generation: u64,
++    key: Option<Key>,
++    memory: bool,
++    output_done: bool,
++    runtime_done: bool,
++    payloads_done: bool,
++    tainted: bool,
++    worker_live: bool,
++    store_live: bool,
++    control: Option<Arc<Control>>,
++    uncertain_slot: Option<Arc<pool::Slot>>,
++    task: Option<Arc<TaskCell>>,
++}
++impl Default for Record {
++    fn default() -> Self {
++        Self {
++            state: State::Free,
++            generation: 0,
++            key: None,
++            memory: false,
++            output_done: false,
++            runtime_done: false,
++            payloads_done: false,
++            tainted: false,
++            worker_live: false,
++            store_live: false,
++            control: None,
++            uncertain_slot: None,
++            task: None,
++        }
++    }
++}
++impl Record {
++    fn snapshot(&self) -> Snapshot {
++        Snapshot {
++            state: self.state,
++            generation: self.generation,
++            memory_reserved: self.memory,
++            output_done: self.output_done,
++            runtime_done: self.runtime_done,
++            tainted: self.tainted,
++            owner: self.control.as_ref().map(|c| c.ordinal),
++        }
++    }
++}
++struct Ledger {
++    records: [Record; SLOTS],
++    next: u64,
++    events: Vec<Event>,
++    observation_failed: bool,
++    peak_workers: u8,
++    peak_stores: u8,
++    peak_occupied: u8,
++    peak_reserved: u64,
++    refused: u32,
++    event_counts: [u32; 19],
++    detailed: bool,
++}
++impl Ledger {
++    fn event(&mut self, token: Token, kind: EventKind) {
++        let occupied = self
++            .records
++            .iter()
++            .filter(|r| r.state != State::Free)
++            .count() as u8;
++        let reserved = self.records.iter().filter(|r| r.memory).count() as u64 * WASM_BYTES as u64;
++        let workers = self.records.iter().filter(|r| r.worker_live).count() as u8;
++        let stores = self.records.iter().filter(|r| r.store_live).count() as u8;
++        self.peak_workers = self.peak_workers.max(workers);
++        self.peak_stores = self.peak_stores.max(stores);
++        self.peak_occupied = self.peak_occupied.max(occupied);
++        self.peak_reserved = self.peak_reserved.max(reserved);
++        let count = &mut self.event_counts[kind as usize];
++        if let Some(next) = count.checked_add(1) {
++            *count = next;
++        } else {
++            self.observation_failed = true;
++        }
++        if !self.detailed {
++            return;
++        } // Explicit cold-cycle aggregate mode, reported as such.
++        if self.events.len() == EVENT_LIMIT {
++            self.observation_failed = true;
++            return;
++        }
++        self.events.push(Event(
++            self.events.len() as u32,
++            token.index as u8,
++            token.generation,
++            kind,
++            occupied,
++            reserved,
++        ));
++    }
++}
++struct Capacity {
++    ledger: Mutex<Ledger>,
++    directory: Mutex<Option<tempfile::TempDir>>,
++    // Process Request is separate from every invocation owner. The OnceLock
++    // deliberately retains it and its report/serialization charge until exit.
++    _process_owner: Owner,
++}
++#[derive(Clone, Copy)]
++struct Token {
++    index: usize,
++    generation: u64,
++}
++impl Capacity {
++    fn install(owner: LifecycleProcessOwner) -> Result<Arc<Self>, Failure> {
++        if CAPACITY.get().is_some() {
++            return Err(Failure::Setup);
++        }
++        let capacity = Arc::new(Self {
++            ledger: Mutex::new(Ledger {
++                records: std::array::from_fn(|_| Record::default()),
++                next: 0,
++                events: Vec::with_capacity(EVENT_LIMIT),
++                observation_failed: false,
++                peak_workers: 0,
++                peak_stores: 0,
++                peak_occupied: 0,
++                peak_reserved: 0,
++                refused: 0,
++                event_counts: [0; 19],
++                detailed: true,
++            }),
++            directory: Mutex::new(None),
++            _process_owner: owner.owner,
++        });
++        CAPACITY.set(capacity.clone()).map_err(|_| Failure::Setup)?;
++        Ok(capacity)
++    }
++    fn try_admit(self: &Arc<Self>, id: &str, control: Arc<Control>) -> Result<Lease, Refusal> {
++        let key = Key::parse(id)?;
++        control.check()?;
++        let mut ledger = match self.ledger.try_lock() {
++            Ok(ledger) => ledger,
++            Err(TryLockError::WouldBlock) => return Err(Refusal::Contended),
++            Err(TryLockError::Poisoned(_)) => return Err(Refusal::Poisoned),
++        };
++        if ledger
++            .records
++            .iter()
++            .any(|r| r.state != State::Free && r.key == Some(key))
++        {
++            return Err(Refusal::Busy);
++        }
++        let Some(index) = ledger.records.iter().position(|r| r.state == State::Free) else {
++            return Err(Refusal::Capacity);
++        };
++        let generation = ledger.next.checked_add(1).ok_or(Refusal::Exhausted)?;
++        ledger.next = generation;
++        ledger.records[index] = Record {
++            state: State::Building,
++            generation,
++            key: Some(key),
++            memory: true,
++            control: Some(control),
++            ..Record::default()
++        };
++        let token = Token { index, generation };
++        ledger.event(token, EventKind::Admitted);
++        Ok(Lease {
++            capacity: self.clone(),
++            token,
++            finished: false,
++        })
++    }
++    fn change(
++        &self,
++        token: Token,
++        kind: EventKind,
++        f: impl FnOnce(&mut Record) -> Result<(), Failure>,
++    ) -> Result<(), Failure> {
++        let mut ledger = self.ledger.lock().map_err(|_| Failure::Observation)?;
++        let record = &mut ledger.records[token.index];
++        if record.generation != token.generation || record.state == State::Free || record.tainted {
++            return Err(Failure::Observation);
++        }
++        f(record)?;
++        ledger.event(token, kind);
++        if ledger.observation_failed {
++            return Err(Failure::ReportBound);
++        }
++        Ok(())
++    }
++    fn quarantine(&self, token: Token) {
++        let mut ledger = self
++            .ledger
++            .lock()
++            .unwrap_or_else(|poison| poison.into_inner());
++        let record = &mut ledger.records[token.index];
++        if record.generation == token.generation && record.state != State::Free {
++            record.tainted = true;
++            record.state = State::Quarantined;
++            ledger.event(token, EventKind::Quarantined);
++        }
++    }
++    fn check_control(&self, token: Token, control: &Arc<Control>) -> Result<(), Failure> {
++        let ledger = self.ledger.lock().map_err(|_| Failure::Observation)?;
++        let record = &ledger.records[token.index];
++        let original = record.control.as_ref().ok_or(Failure::Observation)?;
++        if record.generation != token.generation
++            || !Arc::ptr_eq(original, control)
++            || !Arc::ptr_eq(&original.owner, &control.owner)
++            || original.deadline != control.deadline
++            || !Arc::ptr_eq(&original.cancelled, &control.cancelled)
++        {
++            return Err(Failure::Observation);
++        }
++        Ok(())
++    }
++    fn event(&self, token: Token, kind: EventKind) -> Result<(), Failure> {
++        self.change(token, kind, |_| Ok(()))
++    }
++    fn refused(&self) -> Result<(), Failure> {
++        let mut ledger = self.ledger.lock().map_err(|_| Failure::Observation)?;
++        ledger.refused = ledger.refused.checked_add(1).ok_or(Failure::Observation)?;
++        ledger.event(
++            Token {
++                index: 0,
++                generation: 0,
++            },
++            EventKind::Refused,
++        );
++        Ok(())
++    }
++    fn finish(&self, token: Token) -> Result<(), Failure> {
++        let control = {
++            let mut ledger = self.ledger.lock().map_err(|_| Failure::Observation)?;
++            let r = &mut ledger.records[token.index];
++            if r.generation != token.generation
++                || r.tainted
++                || r.state != State::Retiring
++                || r.memory
++                || !r.runtime_done
++                || !r.output_done
++                || !r.payloads_done
++                || r.worker_live
++                || r.store_live
++                || r.uncertain_slot.is_some()
++                || r.task.is_some()
++            {
++                return Err(Failure::Retirement);
++            }
++            r.control.take().ok_or(Failure::Retirement)?
++        };
++        // No bookkeeping lock is held across arbitrary native owner destruction.
++        let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(control)));
++        if dropped.is_err() {
++            self.quarantine(token);
++            return Err(Failure::Retirement);
++        }
++        self.change(token, EventKind::OwnerDropped, |_| Ok(()))?;
++        self.change(token, EventKind::Freed, |r| {
++            *r = Record {
++                generation: token.generation,
++                ..Record::default()
++            };
++            Ok(())
++        })
++    }
++    fn snapshots(&self) -> [Snapshot; SLOTS] {
++        let ledger = self
++            .ledger
++            .lock()
++            .unwrap_or_else(|poison| poison.into_inner());
++        std::array::from_fn(|i| ledger.records[i].snapshot())
++    }
++    fn storage_path(&self, id: &str) -> Result<String, Failure> {
++        Key::parse(id).map_err(|_| Failure::Setup)?;
++        let mut owner = self.directory.lock().map_err(|_| Failure::Setup)?;
++        if owner.is_none() {
++            // Closed local qualification directory, independent of TMPDIR.
++            // tempfile atomically creates a new private directory; no existing
++            // path is opened or deleted by this fixture.
++            let directory = tempfile::Builder::new()
++                .prefix("foks-a2-")
++                .tempdir_in("/tmp")
++                .map_err(|_| Failure::Setup)?;
++            if directory.path().as_os_str().len() > DIRECTORY_BYTES {
++                return Err(Failure::OwnerBound);
++            }
++            *owner = Some(directory);
++        }
++        let root = owner.as_ref().ok_or(Failure::Setup)?.path();
++        let mut path = String::with_capacity(STORAGE_PATH_BYTES);
++        path.push_str(root.to_str().ok_or(Failure::Setup)?);
++        path.push('/');
++        path.push_str(id);
++        path.push_str(".sqlite");
++        if path.len() > STORAGE_PATH_BYTES {
++            return Err(Failure::OwnerBound);
++        }
++        Ok(path)
++    }
++}
++struct Lease {
++    capacity: Arc<Capacity>,
++    token: Token,
++    finished: bool,
++}
++impl Lease {
++    fn finish(mut self) -> Result<(), Failure> {
++        self.capacity.finish(self.token)?;
++        self.finished = true;
++        Ok(())
++    }
++}
++impl Drop for Lease {
++    fn drop(&mut self) {
++        if !self.finished {
++            self.capacity.quarantine(self.token);
++        }
++    }
++}
++struct Taint {
++    capacity: Arc<Capacity>,
++    token: Token,
++    armed: bool,
++}
++impl Taint {
++    fn new(capacity: &Arc<Capacity>, token: Token) -> Self {
++        Self {
++            capacity: capacity.clone(),
++            token,
++            armed: true,
++        }
++    }
++    fn normal(mut self) {
++        self.armed = false;
++    }
++}
++impl Drop for Taint {
++    fn drop(&mut self) {
++        if self.armed {
++            self.capacity.quarantine(self.token);
++        }
++    }
++}
++
++/// A fixed native handshake. No timer or sleep supplies readiness/completion.
++pub(crate) struct Gate {
++    entered: AtomicBool,
++    released: AtomicBool,
++    notification: tokio::sync::Notify,
++    mutex: Mutex<()>,
++    condition: Condvar,
++}
++impl Gate {
++    fn new() -> Arc<Self> {
++        Arc::new(Self {
++            entered: AtomicBool::new(false),
++            released: AtomicBool::new(false),
++            notification: tokio::sync::Notify::new(),
++            mutex: Mutex::new(()),
++            condition: Condvar::new(),
++        })
++    }
++    fn enter(&self) {
++        self.entered.store(true, Ordering::Release);
++        self.notification.notify_waiters();
++    }
++    async fn entered(&self) {
++        loop {
++            let notified = self.notification.notified();
++            tokio::pin!(notified);
++            notified.as_mut().enable();
++            if self.entered.load(Ordering::Acquire) {
++                return;
++            }
++            notified.await;
++        }
++    }
++    async fn wait(&self) {
++        self.enter();
++        loop {
++            let notified = self.notification.notified();
++            tokio::pin!(notified);
++            notified.as_mut().enable();
++            if self.released.load(Ordering::Acquire) {
++                return;
++            }
++            notified.await;
++        }
++    }
++    pub(crate) fn block(&self) {
++        let mut guard = self.mutex.lock().expect("guarded gate mutex");
++        self.enter();
++        while !self.released.load(Ordering::Acquire) {
++            guard = self.condition.wait(guard).expect("guarded gate condition");
++        }
++    }
++    fn release(&self) {
++        let _guard = self.mutex.lock().expect("guarded gate mutex");
++        self.released.store(true, Ordering::Release);
++        self.condition.notify_all();
++        self.notification.notify_waiters();
++    }
++}
++
++struct Storage {
++    path: String,
++    scope: String,
++}
++struct Runtime {
++    slot: Arc<pool::Slot>,
++    residency: Option<pool::Residency>,
++    probe: Option<js::guarded::Probe>,
++    storage: Storage,
++    adopted: bool,
++    control: Arc<Control>,
++    capacity: Arc<Capacity>,
++    token: Token,
++}
++struct BuildWork {
++    storage: Storage,
++    mode: js::guarded::BuildMode,
++    completion: Option<tokio::sync::oneshot::Sender<()>>,
++    control: Arc<Control>,
++    capacity: Arc<Capacity>,
++    token: Token,
++}
++enum Built {
++    Runtime(Runtime),
++    CleanError,
++}
++impl BuildWork {
++    fn run(mut self) -> Result<Built, Failure> {
++        let completion = self.completion.take();
++        let result = self.run_inner();
++        if let Some(completion) = completion {
++            let _ = completion.send(());
++        }
++        result
++    }
++    fn run_inner(self) -> Result<Built, Failure> {
++        let guard = Taint::new(&self.capacity, self.token);
++        self.capacity.check_control(self.token, &self.control)?;
++        // Entry cancellation is a clean pre-allocation refusal; no Worker exists.
++        if self.control.check().is_err() {
++            guard.normal();
++            return Ok(Built::CleanError);
++        }
++        let loaded = js::guarded::load(self.mode);
++        let worker = match loaded {
++            Ok(worker) => worker,
++            Err(js::guarded::LoadFailure::CleanBefore | js::guarded::LoadFailure::CleanAfter) => {
++                guard.normal();
++                return Ok(Built::CleanError);
++            }
++            Err(js::guarded::LoadFailure::Uncertain) => return Err(Failure::Driver),
++        };
++        let (slot, residency) = pool::Slot::guarded(worker);
++        self.capacity
++            .change(self.token, EventKind::WorkerBuilt, |r| {
++                r.worker_live = true;
++                Ok(())
++            })?;
++        let runtime = Runtime {
++            slot,
++            residency: Some(residency),
++            probe: None,
++            storage: self.storage,
++            adopted: false,
++            control: self.control,
++            capacity: self.capacity,
++            token: self.token,
++        };
++        guard.normal();
++        Ok(Built::Runtime(runtime))
++    }
++}
++fn checked_payload<T>(value: &T) -> Result<(), Failure> {
++    if std::mem::size_of_val(value) > 16 * 1024 || std::mem::align_of_val(value) > 16 {
++        return Err(Failure::OwnerBound);
++    }
++    Ok(())
++}
++fn build_closure(work: BuildWork) -> impl FnOnce() -> Result<Built, Failure> {
++    move || work.run()
++}
++fn spawn_build(work: BuildWork) -> Result<Job, Failure> {
++    let mut job = Job::new(work.capacity.clone(), work.token)?;
++    if let js::guarded::BuildMode::HoldAfter(gate) = &work.mode {
++        job.release = Some(gate.clone());
++    }
++    let closure = build_closure(work);
++    checked_payload(&closure)?;
++    job.set(Task::Build(tokio::task::spawn_blocking(closure)));
++    Ok(job)
++}
++impl Runtime {
++    async fn adopt(&mut self) -> Result<(), Failure> {
++        let guard = Taint::new(&self.capacity, self.token);
++        self.capacity.check_control(self.token, &self.control)?;
++        self.control.check().map_err(|_| Failure::Admission)?;
++        let residency = self.residency.take().ok_or(Failure::Observation)?;
++        let (residency, _) = residency
++            .adopt(
++                &self.storage.scope,
++                js::CellStorage {
++                    path: &self.storage.path,
++                    epoch: 1,
++                    replicated_wake: false,
++                    vfs: None,
++                },
++            )
++            .await
++            .map_err(|_| Failure::Driver)?;
++        self.residency = Some(residency);
++        self.adopted = true;
++        self.capacity.change(self.token, EventKind::Adopted, |r| {
++            r.state = State::Running;
++            Ok(())
++        })?;
++        guard.normal();
++        Ok(())
++    }
++    async fn probe(&mut self, growth: bool) -> Result<(), Failure> {
++        let guard = Taint::new(&self.capacity, self.token);
++        self.capacity.check_control(self.token, &self.control)?;
++        self.control.check().map_err(|_| Failure::Admission)?;
++        self.probe = Some(
++            self.slot
++                .turn(|worker| worker.guarded_probe(growth))
++                .await
++                .map_err(|_| Failure::Observation)?,
++        );
++        self.capacity
++            .change(self.token, EventKind::BackingObserved, |r| {
++                r.store_live = true;
++                Ok(())
++            })?;
++        guard.normal();
++        Ok(())
++    }
++    async fn close(&mut self) -> Result<(), Failure> {
++        let guard = Taint::new(&self.capacity, self.token);
++        self.capacity.check_control(self.token, &self.control)?;
++        self.capacity.change(self.token, EventKind::Retiring, |r| {
++            r.state = State::Retiring;
++            Ok(())
++        })?;
++        // Cleanup is allowed after the original deadline, while still charged;
++        // it does not gain permission to publish or start new fixture work.
++        if self.adopted {
++            self.slot
++                .turn(|worker| worker.own_cell(&self.storage.scope, None))
++                .await
++                .map_err(|_| Failure::Retirement)?;
++            self.adopted = false;
++            self.capacity.event(self.token, EventKind::CellClosed)?;
++        }
++        drop(self.residency.take());
++        guard.normal();
++        Ok(())
++    }
++    fn destroy(self, hold_probe: Option<Arc<Gate>>, panic_teardown: bool) -> Result<(), Failure> {
++        let guard = Taint::new(&self.capacity, self.token);
++        self.capacity.check_control(self.token, &self.control)?;
++        if panic_teardown {
++            panic!("guarded teardown unwind");
++        }
++        let Runtime {
++            slot,
++            residency,
++            probe,
++            storage,
++            adopted,
++            control,
++            capacity,
++            token,
++        } = self;
++        if residency.is_some() || adopted {
++            return Err(Failure::Retirement);
++        }
++        let worker = match slot.guarded_consume() {
++            Ok(worker) => worker,
++            Err(slot) => {
++                capacity.change(token, EventKind::Quarantined, |r| {
++                    r.uncertain_slot = Some(slot);
++                    Ok(())
++                })?;
++                return Err(Failure::Retirement);
++            }
++        };
++        capacity.event(token, EventKind::SlotConsumed)?;
++        drop(worker);
++        capacity.change(token, EventKind::WorkerDropped, |r| {
++            r.worker_live = false;
++            Ok(())
++        })?;
++        if let Some(gate) = hold_probe {
++            gate.block();
++        }
++        if let Some(probe) = probe {
++            probe.finish();
++            capacity.event(token, EventKind::ProbeDropped)?;
++        }
++        capacity.change(token, EventKind::MemoryReleased, |r| {
++            r.store_live = false;
++            r.memory = false;
++            r.runtime_done = true;
++            Ok(())
++        })?;
++        drop(storage);
++        drop(control);
++        guard.normal();
++        Ok(())
++    }
++}
++struct DriverWork {
++    slot: Arc<pool::Slot>,
++    job: js::CellJob,
++    affiliation: pool::Affiliation,
++    hold: Option<Arc<Gate>>,
++    panic_after: bool,
++    panic_payload: bool,
++    control: Arc<Control>,
++    capacity: Arc<Capacity>,
++    token: Token,
++}
++impl DriverWork {
++    async fn run(self) -> Result<(), Failure> {
++        let guard = Taint::new(&self.capacity, self.token);
++        self.capacity.check_control(self.token, &self.control)?;
++        let budget = self.control.remaining()?;
++        self.capacity.event(self.token, EventKind::DriverStarted)?;
++        crate::runtime::drive_guarded_cell(self.affiliation, self.job, budget)
++            .await
++            .map_err(|_| Failure::Driver)?;
++        if let Some(gate) = &self.hold {
++            gate.wait().await;
++        }
++        if self.panic_after {
++            panic!("guarded driver task unwind");
++        }
++        if self.panic_payload {
++            drop(PanicPayload);
++        }
++        drop(self.slot);
++        drop(self.hold);
++        drop(self.control);
++        guard.normal();
++        Ok(())
++    }
++}
++struct Output {
++    bytes: Vec<u8>,
++    control: Arc<Control>,
++    capacity: Arc<Capacity>,
++    token: Token,
++}
++impl Output {
++    /// The A2 diagnostic consumer can observe bytes only through this path.
++    /// A3 replaces this borrowed native edge with actual owned socket framing.
++    fn publish(&self) -> Result<&[u8], Refusal> {
++        self.control.check()?;
++        Ok(&self.bytes)
++    }
++    fn dispose(self) -> Result<(), Failure> {
++        let guard = Taint::new(&self.capacity, self.token);
++        self.capacity.check_control(self.token, &self.control)?;
++        let Self {
++            bytes,
++            control,
++            capacity,
++            token,
++        } = self;
++        drop(bytes);
++        drop(control);
++        capacity.change(token, EventKind::OutputDropped, |r| {
++            r.output_done = true;
++            Ok(())
++        })?;
++        guard.normal();
++        Ok(())
++    }
++}
++
++struct PanicPayload;
++impl Drop for PanicPayload {
++    fn drop(&mut self) {
++        if !std::thread::panicking() {
++            panic!("guarded native payload drop");
++        }
++    }
++}
++
++// The ledger retains the actual handle cell before a task is spawned. Losing
++// the supervisor/waiter leaves both that handle and original owner quarantined,
++// never a detached task accompanied by refunded capacity.
++struct TaskCell {
++    task: tokio::sync::Mutex<Option<Task>>,
++}
++enum Task {
++    Build(tokio::task::JoinHandle<Result<Built, Failure>>),
++    Driver(tokio::task::JoinHandle<Result<(), Failure>>),
++    Retire(tokio::task::JoinHandle<Result<(), Failure>>),
++    Turn(tokio::task::JoinHandle<()>),
++}
++enum Joined {
++    Build(Result<Built, Failure>),
++    Unit(Result<(), Failure>),
++}
++struct Job {
++    cell: Arc<TaskCell>,
++    capacity: Arc<Capacity>,
++    token: Token,
++    release: Option<Arc<Gate>>,
++    joined: bool,
++}
++impl Job {
++    fn new(capacity: Arc<Capacity>, token: Token) -> Result<Self, Failure> {
++        let cell = Arc::new(TaskCell {
++            task: tokio::sync::Mutex::new(None),
++        });
++        {
++            let mut ledger = capacity.ledger.lock().map_err(|_| Failure::Observation)?;
++            let r = &mut ledger.records[token.index];
++            if r.generation != token.generation
++                || r.state == State::Free
++                || r.tainted
++                || r.task.is_some()
++            {
++                return Err(Failure::Observation);
++            }
++            r.task = Some(cell.clone());
++        }
++        Ok(Self {
++            cell,
++            capacity,
++            token,
++            release: None,
++            joined: false,
++        })
++    }
++    fn set(&self, task: Task) {
++        let mut held = self.cell.task.try_lock().expect("new owned task cell");
++        assert!(held.is_none(), "task installed twice");
++        *held = Some(task);
++    }
++    fn is_finished(&self) -> bool {
++        let Ok(held) = self.cell.task.try_lock() else {
++            return false;
++        };
++        match held.as_ref() {
++            Some(Task::Build(h)) => h.is_finished(),
++            Some(Task::Driver(h) | Task::Retire(h)) => h.is_finished(),
++            Some(Task::Turn(h)) => h.is_finished(),
++            None => false,
++        }
++    }
++    async fn join(mut self) -> Result<Joined, Failure> {
++        let result = {
++            let mut held = self.cell.task.lock().await;
++            let result = match held.as_mut().ok_or(Failure::Observation)? {
++                Task::Build(h) => h.await.map(Joined::Build),
++                Task::Driver(h) | Task::Retire(h) => h.await.map(Joined::Unit),
++                Task::Turn(h) => h.await.map(|()| Joined::Unit(Ok(()))),
++            };
++            drop(held.take()); // Completed real handle/result payload is no longer retained.
++            result
++        };
++        // A failed task may already have tainted the record; removal is only a
++        // diagnostic cleanup update and cannot clear taint or grant credit.
++        {
++            let mut ledger = self
++                .capacity
++                .ledger
++                .lock()
++                .unwrap_or_else(|p| p.into_inner());
++            let record = &mut ledger.records[self.token.index];
++            if record.generation != self.token.generation
++                || !record
++                    .task
++                    .as_ref()
++                    .is_some_and(|c| Arc::ptr_eq(c, &self.cell))
++            {
++                return Err(Failure::Observation);
++            }
++            drop(record.task.take());
++        }
++        self.joined = true;
++        match result {
++            Ok(result) => Ok(result),
++            Err(_) => {
++                self.capacity.quarantine(self.token);
++                Err(Failure::Driver)
++            }
++        }
++    }
++}
++impl Drop for Job {
++    fn drop(&mut self) {
++        if !self.joined {
++            if let Some(gate) = &self.release {
++                gate.release();
++            }
++            self.capacity.quarantine(self.token);
++        }
++    }
++}
++struct RetireWork {
++    runtime: Runtime,
++    hold: Option<Arc<Gate>>,
++    panic_teardown: bool,
++}
++impl RetireWork {
++    fn run(self) -> Result<(), Failure> {
++        self.runtime.destroy(self.hold, self.panic_teardown)
++    }
++}
++fn retire_closure(work: RetireWork) -> impl FnOnce() -> Result<(), Failure> {
++    move || work.run()
++}
++fn spawn_retire(
++    runtime: Runtime,
++    hold: Option<Arc<Gate>>,
++    panic_teardown: bool,
++) -> Result<Job, Failure> {
++    let mut job = Job::new(runtime.capacity.clone(), runtime.token)?;
++    job.release = hold.clone();
++    let closure = retire_closure(RetireWork {
++        runtime,
++        hold,
++        panic_teardown,
++    });
++    checked_payload(&closure)?;
++    job.set(Task::Retire(tokio::task::spawn_blocking(closure)));
++    Ok(job)
++}
++fn spawn_driver(work: DriverWork) -> Result<Job, Failure> {
++    let mut job = Job::new(work.capacity.clone(), work.token)?;
++    job.release = work.hold.clone();
++    let future = work.run();
++    checked_payload(&future)?;
++    job.set(Task::Driver(tokio::spawn(future)));
++    Ok(job)
++}
+--- /dev/null
++++ b/crates/celld/guarded_execution/qualification.rs
+@@ -0,0 +1,1024 @@
++//! Finite scenarios for the private lifecycle. This module grants no serving API.
++use super::*;
++use std::fmt;
++
++macro_rules! scenarios {
++    ($($variant:ident => $name:literal),+ $(,)?) => {
++        #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
++        pub enum LifecycleScenario { $(#[serde(rename=$name)] $variant),+ }
++        impl LifecycleScenario {
++            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
++            pub fn from_name(name: &str) -> Option<Self> { match name { $($name => Some(Self::$variant),)+ _ => None } }
++            pub const fn name(self) -> &'static str { match self { $(Self::$variant => $name),+ } }
++        }
++    }
++}
++scenarios! {
++    Normal => "normal", Admission => "admission", AdmissionRefusals => "admission-refusals",
++    TenantBusy => "tenant-busy", CancelBeforePoll => "cancel-before-poll", CancelDuringBuild => "cancel-during-build",
++    CancelAfterReply => "cancel-after-reply", DeadlinePreAdmit => "deadline-pre-admit", DeadlineBuild => "deadline-build",
++    DeadlineRun => "deadline-run", DeadlineRetire => "deadline-retire", DeadlineOutput => "deadline-output",
++    LoadErrorBeforeIsolate => "load-error-before-isolate", LoadErrorAfterIsolate => "load-error-after-isolate",
++    PanicBuild => "panic-build", PanicTurn => "panic-turn", PanicPayloadDrop => "panic-payload-drop",
++    PanicTeardown => "panic-teardown", PanicTask => "panic-task", DelayedDriver => "delayed-driver",
++    HeldBacking => "held-backing", RuntimeBeforeOutput => "runtime-before-output", OutputBeforeRuntime => "output-before-runtime",
++    FixtureRejections => "fixture-rejections", MemoryGrowth => "memory-growth", ColdCycles => "cold-cycles",
++    SaturationDrain => "saturation-drain", Shutdown => "shutdown",
++}
++
++pub struct LifecycleProcessOwner {
++    pub(super) owner: Owner,
++}
++impl LifecycleProcessOwner {
++    pub fn new(owner: Owner) -> Self {
++        Self { owner }
++    }
++}
++pub struct LifecycleInput {
++    pub(super) owner: Owner,
++    pub(super) deadline: Instant,
++    pub(super) cancelled: Arc<AtomicBool>,
++}
++impl LifecycleInput {
++    pub fn new(owner: Owner, deadline: Instant, cancelled: Arc<AtomicBool>) -> Self {
++        Self {
++            owner,
++            deadline,
++            cancelled,
++        }
++    }
++}
++#[derive(Clone, Copy, Serialize)]
++pub struct LifecycleLayouts {
++    pub process_control_bytes: usize,
++    pub report_retained_bytes: usize,
++    pub serialization_bytes: usize,
++    pub invocation_control_bytes: usize,
++    pub largest_task_payload_bytes: usize,
++    pub diagnostic_output_bytes: usize,
++    pub maximum_alignment: usize,
++}
++#[repr(C)]
++struct ArcLayout<T> {
++    strong: std::sync::atomic::AtomicUsize,
++    weak: std::sync::atomic::AtomicUsize,
++    value: T,
++}
++const NATIVE_SCRATCH_BYTES: usize = 8192;
++fn channel_bound<T>() -> usize {
++    // Tokio 1.53.1 oneshot::Inner<T> is one AtomicUsize, one
++    // UnsafeCell<Option<T>>, and two UnsafeCell<MaybeUninit<Waker>> fields;
++    // its Arc adds two counters. Six full maximum-alignment padding terms
++    // conservatively cover every field boundary and the outer allocation.
++    std::mem::size_of::<Option<T>>()
++        + 3 * std::mem::size_of::<usize>()
++        + 2 * std::mem::size_of::<std::task::Waker>()
++        + 6 * 16
++}
++fn scratch_bound() -> usize {
++    let channels = channel_bound::<()>()
++        + channel_bound::<Result<crate::engine_api::HttpResponse, anyhow::Error>>();
++    // Native strings explicitly owned by this adapter: bounded path copies,
++    // fixed scope/id/URL/method/config strings. Fixture mutation scratch runs
++    // without a Worker or channels; Vec growth may retain old+new allocations.
++    // This is not an accounting proof for unchanged celld engine internals.
++    let strings_and_channels =
++        4 * STORAGE_PATH_BYTES + 8 * 128 + 2 * js::guarded::JS.len() + channels;
++    let fixture_mutations = 3 * js::guarded::JS.len() + 8 * js::guarded::WASM.len() + 64;
++    strings_and_channels.max(fixture_mutations)
++}
++fn produced_layout<A, B>(_: fn(A) -> B) -> (usize, usize) {
++    (std::mem::size_of::<B>(), std::mem::align_of::<B>())
++}
++fn named_layouts() -> [(&'static str, usize, usize); 13] {
++    let build = produced_layout(build_closure);
++    let driver = produced_layout(DriverWork::run);
++    let retire = produced_layout(retire_closure);
++    let turn = produced_layout(TurnFaultWork::run);
++    [
++        (
++            "build-payload",
++            std::mem::size_of::<BuildWork>(),
++            std::mem::align_of::<BuildWork>(),
++        ),
++        ("build-closure", build.0, build.1),
++        (
++            "build-result",
++            std::mem::size_of::<Result<Built, Failure>>(),
++            std::mem::align_of::<Result<Built, Failure>>(),
++        ),
++        (
++            "runtime",
++            std::mem::size_of::<Runtime>(),
++            std::mem::align_of::<Runtime>(),
++        ),
++        (
++            "driver-payload",
++            std::mem::size_of::<DriverWork>(),
++            std::mem::align_of::<DriverWork>(),
++        ),
++        ("driver-future", driver.0, driver.1),
++        (
++            "retire-payload",
++            std::mem::size_of::<RetireWork>(),
++            std::mem::align_of::<RetireWork>(),
++        ),
++        ("retire-closure", retire.0, retire.1),
++        ("turn-future", turn.0, turn.1),
++        (
++            "task-cell",
++            std::mem::size_of::<ArcLayout<TaskCell>>(),
++            std::mem::align_of::<ArcLayout<TaskCell>>(),
++        ),
++        (
++            "control-arc",
++            std::mem::size_of::<ArcLayout<Control>>(),
++            std::mem::align_of::<ArcLayout<Control>>(),
++        ),
++        (
++            "gate-arc",
++            std::mem::size_of::<ArcLayout<Gate>>(),
++            std::mem::align_of::<ArcLayout<Gate>>(),
++        ),
++        (
++            "output",
++            std::mem::size_of::<Output>(),
++            std::mem::align_of::<Output>(),
++        ),
++    ]
++}
++pub fn lifecycle_layouts() -> LifecycleLayouts {
++    // Every spawned concrete payload/future is checked against the 16KiB typed
++    // bound before spawn. Two allowances conservatively cover capture/result
++    // overlap; runtime task headers/allocator overhead are separately excluded.
++    let task = 16 * 1024;
++    LifecycleLayouts {
++        process_control_bytes: std::mem::size_of::<ArcLayout<Capacity>>() + 2 * DIRECTORY_BYTES,
++        report_retained_bytes: std::mem::size_of::<LifecycleReport>()
++            + EVENT_LIMIT * std::mem::size_of::<Event>()
++            + 32 * std::mem::size_of::<Cycle>(),
++        serialization_bytes: 65_536,
++        invocation_control_bytes: std::mem::size_of::<ArcLayout<Control>>()
++            + 4 * std::mem::size_of::<ArcLayout<Gate>>()
++            + 2 * std::mem::size_of::<ArcLayout<AtomicBool>>() // cancellation and optional turn-restoration witness
++            + std::mem::size_of::<ArcLayout<TaskCell>>()
++            + 2 * task + NATIVE_SCRATCH_BYTES
++            + std::mem::size_of::<Runtime>() + std::mem::size_of::<BuildWork>()
++            + std::mem::size_of::<DriverWork>() + std::mem::size_of::<Lease>(),
++        largest_task_payload_bytes: named_layouts()
++            .iter()
++            .map(|(_, bytes, _)| *bytes)
++            .max()
++            .unwrap_or(0),
++        diagnostic_output_bytes: 12 + std::mem::size_of::<Output>(),
++        maximum_alignment: 16,
++    }
++}
++#[derive(Clone, Copy, Serialize)]
++pub struct LifecycleProgram {
++    pub js_sha256: [u8; 32],
++    pub js_bytes: usize,
++    pub wasm_sha256: [u8; 32],
++    pub wasm_bytes: usize,
++}
++#[derive(Debug)]
++pub enum LifecycleFailure {
++    Setup,
++    Admission,
++    Fixture,
++    Driver,
++    Retirement,
++    Observation,
++    ReportBound,
++    OwnerBound,
++}
++impl fmt::Display for LifecycleFailure {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.write_str(match self {
++            Self::Setup => "lifecycle setup failed",
++            Self::Admission => "lifecycle admission failed",
++            Self::Fixture => "closed fixture refused",
++            Self::Driver => "owned driver failed",
++            Self::Retirement => "physical retirement failed",
++            Self::Observation => "lifecycle observation failed",
++            Self::ReportBound => "bounded report exceeded",
++            Self::OwnerBound => "native control bound exceeded",
++        })
++    }
++}
++impl std::error::Error for LifecycleFailure {}
++#[derive(Default, Serialize)]
++struct Cycle {
++    tenant: u16,
++    counter: u32,
++    fresh_wasm: bool,
++    normal_completion: bool,
++    diagnostic_bytes_observed: usize,
++    publication_denied: bool,
++    create_us: u64,
++    adopt_us: u64,
++    instantiate_us: Option<u64>,
++    execute_us: u64,
++    close_us: u64,
++    drop_us: u64,
++}
++#[derive(Serialize)]
++pub struct LifecycleReport {
++    format: u32,
++    claim: &'static str,
++    scenario: LifecycleScenario,
++    program: LifecycleProgram,
++    slots: usize,
++    accessible_bytes_per_slot: usize,
++    layouts: LifecycleLayouts,
++    typed_layouts: [(&'static str, usize, usize); 13],
++    typed_task_charge_bound: usize,
++    native_scratch_charge_bound: usize,
++    native_scratch_observed_bound: usize,
++    original_owner_identity_preserved: bool,
++    original_deadlines_preserved: bool,
++    trace_mode: &'static str,
++    detailed_trace_cycles: usize,
++    events: Vec<Event>,
++    event_totals: [(&'static str, u32); 19],
++    cycles: Vec<Cycle>,
++    final_records: [Snapshot; SLOTS],
++    peak_observed_live_workers: u8,
++    peak_observed_live_stores: u8,
++    peak_occupied: u8,
++    peak_reserved_bytes: u64,
++    refused: u32,
++    sampled_rss_before: Option<u64>,
++    sampled_rss_peak: Option<u64>,
++    sampled_rss_after: Option<u64>,
++    timing_policy: &'static str,
++    virtual_mapping: &'static str,
++    limitations: &'static str,
++}
++impl LifecycleReport {
++    pub fn program(&self) -> LifecycleProgram {
++        self.program
++    }
++}
++fn ensure(value: bool) -> Result<(), Failure> {
++    if value {
++        Ok(())
++    } else {
++        Err(Failure::Observation)
++    }
++}
++fn micros(start: Instant) -> Result<u64, Failure> {
++    u64::try_from(start.elapsed().as_micros()).map_err(|_| Failure::Observation)
++}
++fn rss() -> Option<u64> {
++    let n = crate::memory::resident_bytes();
++    (n != 0).then_some(n)
++}
++fn tenant(n: u16) -> String {
++    format!("{n:064x}")
++}
++fn storage(capacity: &Capacity, id: &str) -> Result<Storage, Failure> {
++    let path = capacity.storage_path(id)?;
++    let mut scope = String::with_capacity(128);
++    scope.push_str(js::guarded::CLASS);
++    scope.push(':');
++    scope.push_str(id);
++    ensure(scope.len() <= 128)?;
++    Ok(Storage { path, scope })
++}
++fn refuse(
++    capacity: &Arc<Capacity>,
++    id: &str,
++    control: &Arc<Control>,
++    expected: Refusal,
++) -> Result<(), Failure> {
++    match capacity.try_admit(id, control.clone()) {
++        Err(actual) if actual == expected => {
++            capacity.refused()?;
++            Ok(())
++        }
++        _ => Err(Failure::Observation),
++    }
++}
++fn occupied(capacity: &Capacity, count: usize, reserved: usize) -> Result<(), Failure> {
++    let snapshots = capacity.snapshots();
++    ensure(snapshots.iter().filter(|r| r.state != State::Free).count() == count)?;
++    ensure(snapshots.iter().filter(|r| r.memory_reserved).count() * WASM_BYTES == reserved)
++}
++async fn at_gate(gate: &Gate, control: &Control) -> Result<(), Failure> {
++    tokio::time::timeout_at(
++        tokio::time::Instant::from_std(control.deadline),
++        gate.entered(),
++    )
++    .await
++    .map_err(|_| Failure::Observation)
++}
++async fn expire(control: &Control) -> Result<(), Failure> {
++    // The original Instant is the only timer. Readiness was acknowledged first.
++    tokio::time::sleep_until(tokio::time::Instant::from_std(control.deadline)).await;
++    ensure(control.check() == Err(Refusal::Expired))
++}
++fn clean_build(lease: Lease) -> Result<(), Failure> {
++    let capacity = lease.capacity.clone();
++    let token = lease.token;
++    capacity.change(token, EventKind::Retiring, |r| {
++        r.state = State::Retiring;
++        Ok(())
++    })?;
++    capacity.change(token, EventKind::MemoryReleased, |r| {
++        r.memory = false;
++        r.runtime_done = true;
++        Ok(())
++    })?;
++    capacity.change(token, EventKind::OutputDropped, |r| {
++        r.output_done = true;
++        Ok(())
++    })?;
++    capacity.change(token, EventKind::PayloadsDropped, |r| {
++        r.payloads_done = true;
++        Ok(())
++    })?;
++    lease.finish()
++}
++fn payloads_complete(lease: Lease) -> Result<(), Failure> {
++    lease
++        .capacity
++        .change(lease.token, EventKind::PayloadsDropped, |r| {
++            r.payloads_done = true;
++            Ok(())
++        })?;
++    lease.finish()
++}
++async fn join_build(job: Job) -> Result<Built, Failure> {
++    match job.join().await? {
++        Joined::Build(result) => result,
++        _ => Err(Failure::Observation),
++    }
++}
++async fn join_unit(job: Job) -> Result<(), Failure> {
++    match job.join().await? {
++        Joined::Unit(result) => result,
++        _ => Err(Failure::Observation),
++    }
++}
++
++struct TurnFaultWork {
++    slot: Arc<pool::Slot>,
++    observed_restore: Arc<AtomicBool>,
++    control: Arc<Control>,
++    capacity: Arc<Capacity>,
++    token: Token,
++}
++impl TurnFaultWork {
++    async fn run(self) {
++        let _guard = Taint::new(&self.capacity, self.token);
++        struct Observe(Arc<AtomicBool>);
++        impl Drop for Observe {
++            fn drop(&mut self) {
++                self.0
++                    .store(pool::current_slot().is_none(), Ordering::Release);
++            }
++        }
++        let _observation = Observe(self.observed_restore);
++        self.slot.turn(|_| panic!("guarded turn unwind")).await;
++        drop(self.control);
++    }
++}
++
++async fn one(
++    lease: Lease,
++    control: Arc<Control>,
++    other: &Arc<Control>,
++    scenario: LifecycleScenario,
++    tenant_number: u16,
++    expected_counter: u32,
++    peak_rss: &mut Option<u64>,
++) -> Result<Cycle, Failure> {
++    use LifecycleScenario as S;
++    let capacity = lease.capacity.clone();
++    let token = lease.token;
++    let id = tenant(tenant_number);
++    let mut cycle = Cycle {
++        tenant: tenant_number,
++        ..Cycle::default()
++    };
++    if scenario == S::TenantBusy {
++        refuse(&capacity, &id, other, Refusal::Busy)?;
++    }
++    let build_gate = matches!(scenario, S::CancelDuringBuild | S::DeadlineBuild).then(Gate::new);
++    let mode = match scenario {
++        S::LoadErrorBeforeIsolate => js::guarded::BuildMode::ErrorBefore,
++        S::LoadErrorAfterIsolate => js::guarded::BuildMode::ErrorAfter,
++        S::PanicBuild => js::guarded::BuildMode::PanicAfter,
++        _ => build_gate
++            .as_ref()
++            .map(|g| js::guarded::BuildMode::HoldAfter(g.clone()))
++            .unwrap_or(js::guarded::BuildMode::Normal),
++    };
++    let (completion, waiter) = tokio::sync::oneshot::channel::<()>();
++    let mut waiter = Some(waiter);
++    let work = BuildWork {
++        storage: storage(&capacity, &id)?,
++        mode,
++        completion: Some(completion),
++        control: control.clone(),
++        capacity: capacity.clone(),
++        token,
++    };
++    // This is the actual build-completion notification. The blocking job owns
++    // its sender; losing the receiver never owns or aborts the job handle.
++    if scenario == S::CancelBeforePoll {
++        drop(waiter.take());
++        control.cancelled.store(true, Ordering::Release);
++    }
++    let start = Instant::now();
++    let build = spawn_build(work)?;
++    let build_observation = if let Some(gate) = &build_gate {
++        let observed = async {
++            at_gate(gate, &control).await?;
++            occupied(&capacity, 1, WASM_BYTES)?;
++            ensure(!build.is_finished())?;
++            if scenario == S::DeadlineBuild {
++                expire(&control).await?;
++            } else {
++                drop(waiter.take());
++                control.cancelled.store(true, Ordering::Release);
++            }
++            Ok::<(), Failure>(())
++        }
++        .await;
++        gate.release();
++        observed
++    } else {
++        Ok(())
++    };
++    if build_observation.is_err() {
++        let _ = build.join().await; // Retain quarantine on failed observation or join.
++        return Err(Failure::Observation);
++    }
++    if scenario == S::PanicBuild {
++        let result = build.join().await;
++        ensure(result.is_err())?;
++        ensure(capacity.snapshots()[token.index].state == State::Quarantined)?;
++        drop(lease);
++        return Ok(cycle);
++    }
++    let built = join_build(build).await?;
++    if let Some(waiter) = waiter {
++        waiter.await.map_err(|_| Failure::Observation)?;
++    }
++    cycle.create_us = micros(start)?;
++    let mut runtime = match built {
++        Built::CleanError => {
++            ensure(matches!(
++                scenario,
++                S::LoadErrorBeforeIsolate | S::LoadErrorAfterIsolate | S::CancelBeforePoll
++            ))?;
++            drop(id);
++            drop(build_gate);
++            drop(control);
++            clean_build(lease)?;
++            cycle.normal_completion = true;
++            return Ok(cycle);
++        }
++        Built::Runtime(runtime) => runtime,
++    };
++    if matches!(scenario, S::CancelDuringBuild | S::DeadlineBuild) {
++        ensure(control.check().is_err())?;
++        runtime.close().await?;
++        join_unit(spawn_retire(runtime, None, false)?).await?;
++        capacity.change(token, EventKind::OutputDropped, |r| {
++            r.output_done = true;
++            Ok(())
++        })?;
++        drop(id);
++        drop(build_gate);
++        drop(control);
++        payloads_complete(lease)?;
++        cycle.normal_completion = true;
++        return Ok(cycle);
++    }
++    let start = Instant::now();
++    runtime.adopt().await?;
++    cycle.adopt_us = micros(start)?;
++    if scenario == S::TenantBusy {
++        refuse(&capacity, &id, other, Refusal::Busy)?;
++    }
++    if scenario == S::PanicTurn {
++        let observed = Arc::new(AtomicBool::new(false));
++        let work = TurnFaultWork {
++            slot: runtime.slot.clone(),
++            observed_restore: observed.clone(),
++            control: control.clone(),
++            capacity: capacity.clone(),
++            token,
++        };
++        let job = Job::new(capacity.clone(), token)?;
++        let future = work.run();
++        checked_payload(&future)?;
++        job.set(Task::Turn(tokio::spawn(future)));
++        let result = job.join().await;
++        ensure(result.is_err() && observed.load(Ordering::Acquire))?;
++        drop(runtime);
++        drop(control);
++        drop(lease);
++        return Ok(cycle);
++    }
++    let held_driver = matches!(
++        scenario,
++        S::CancelAfterReply | S::DeadlineRun | S::DelayedDriver | S::Shutdown
++    )
++    .then(Gate::new);
++    let (reply, mut response) = tokio::sync::oneshot::channel();
++    let work = DriverWork {
++        slot: runtime.slot.clone(),
++        affiliation: runtime.slot.affiliate(),
++        job: js::CellJob::Fetch {
++            request_id: None,
++            scope: runtime.storage.scope.clone(),
++            name: None,
++            url: "https://foks.invalid/closed".into(),
++            method: "GET".into(),
++            body: Vec::new().into(),
++            headers: vec![],
++            reply,
++            order: None,
++        },
++        hold: held_driver.clone(),
++        panic_after: scenario == S::PanicTask,
++        panic_payload: scenario == S::PanicPayloadDrop,
++        control: control.clone(),
++        capacity: capacity.clone(),
++        token,
++    };
++    let start = Instant::now();
++    let driver = spawn_driver(work)?;
++    let mut output = None;
++    let driver_observation = async {
++        let received = tokio::time::timeout_at(
++            tokio::time::Instant::from_std(control.deadline),
++            &mut response,
++        )
++        .await
++        .map_err(|_| Failure::Driver)?
++        .map_err(|_| Failure::Driver)?
++        .map_err(|_| Failure::Driver)?;
++        if !matches!(scenario, S::PanicTask | S::PanicPayloadDrop) {
++            capacity.event(token, EventKind::ReplyReceived)?;
++        }
++        ensure(
++            received.status == 200
++                && received.body.len() == 12
++                && received.body.capacity() == 12
++                && received.stream.is_none()
++                && received.websocket.is_none(),
++        )?;
++        let counter = u32::from_le_bytes(
++            received.body[0..4]
++                .try_into()
++                .map_err(|_| Failure::Observation)?,
++        );
++        let fresh = u32::from_le_bytes(
++            received.body[4..8]
++                .try_into()
++                .map_err(|_| Failure::Observation)?,
++        ) == 1;
++        let bytes = u32::from_le_bytes(
++            received.body[8..12]
++                .try_into()
++                .map_err(|_| Failure::Observation)?,
++        ) as usize;
++        ensure(
++            counter == expected_counter
++                && fresh
++                && bytes == WASM_BYTES
++                && received.write_position.is_some(),
++        )?;
++        output = Some(Output {
++            bytes: received.body,
++            control: control.clone(),
++            capacity: capacity.clone(),
++            token,
++        });
++        drop(received.headers);
++        drop(received.stream);
++        drop(received.websocket);
++        cycle.counter = counter;
++        cycle.fresh_wasm = fresh;
++        // Capture the actual store while the original deadline is still live.
++        if !matches!(scenario, S::PanicTask | S::PanicPayloadDrop) {
++            runtime.probe(scenario == S::MemoryGrowth).await?;
++            *peak_rss = (*peak_rss).max(rss());
++        }
++        if let Some(gate) = &held_driver {
++            at_gate(gate, &control).await?;
++            ensure(!driver.is_finished())?;
++            ensure(Arc::strong_count(&runtime.slot) > 1)?; // Diagnostic only, no retry/extraction protocol.
++            if scenario == S::DeadlineRun {
++                expire(&control).await?;
++            }
++            if matches!(scenario, S::CancelAfterReply | S::Shutdown) {
++                // Finite shutdown initiation while the real driver is pending.
++                control.cancelled.store(true, Ordering::Release);
++            }
++        }
++        Ok::<(), Failure>(())
++    }
++    .await;
++    drop(response);
++    // Observation errors never discard supervision. Release the real gate,
++    // await the actual driver, and drop its handle before propagating either.
++    if let Some(gate) = &held_driver {
++        gate.release();
++    }
++    let driven = join_unit(driver).await;
++    driver_observation?;
++    if matches!(scenario, S::PanicTask | S::PanicPayloadDrop) {
++        ensure(driven.is_err())?;
++        ensure(capacity.snapshots()[token.index].state == State::Quarantined)?;
++        drop(output);
++        drop(runtime);
++        drop(control);
++        drop(lease);
++        return Ok(cycle);
++    }
++    driven?;
++    capacity.event(token, EventKind::DriverJoined)?;
++    cycle.execute_us = micros(start)?;
++    if matches!(scenario, S::DeadlineRun | S::CancelAfterReply | S::Shutdown) {
++        ensure(control.check().is_err())?;
++    }
++    if scenario == S::OutputBeforeRuntime {
++        cycle.diagnostic_bytes_observed = output
++            .as_ref()
++            .ok_or(Failure::Observation)?
++            .publish()
++            .map_err(|_| Failure::Observation)?
++            .len();
++        output.take().ok_or(Failure::Observation)?.dispose()?;
++        occupied(&capacity, 1, WASM_BYTES)?;
++    }
++    let start = Instant::now();
++    runtime.close().await?;
++    cycle.close_us = micros(start)?;
++    if scenario == S::TenantBusy {
++        refuse(&capacity, &id, other, Refusal::Busy)?;
++    }
++    let probe_gate = matches!(scenario, S::HeldBacking | S::DeadlineRetire).then(Gate::new);
++    let start = Instant::now();
++    let destruction = spawn_retire(runtime, probe_gate.clone(), scenario == S::PanicTeardown)?;
++    let retire_observation = if let Some(gate) = &probe_gate {
++        let observed = async {
++            at_gate(gate, &control).await?;
++            let snapshots = capacity.snapshots();
++            ensure(snapshots[token.index].memory_reserved && !snapshots[token.index].runtime_done)?;
++            ensure(!destruction.is_finished())?;
++            if scenario == S::DeadlineRetire {
++                expire(&control).await?;
++            }
++            Ok::<(), Failure>(())
++        }
++        .await;
++        gate.release();
++        observed
++    } else {
++        Ok(())
++    };
++    let destroyed = join_unit(destruction).await;
++    retire_observation?;
++    if scenario == S::PanicTeardown {
++        ensure(destroyed.is_err())?;
++        drop(output);
++        drop(control);
++        drop(lease);
++        return Ok(cycle);
++    }
++    destroyed?;
++    cycle.drop_us = micros(start)?;
++    let snapshot = capacity.snapshots()[token.index];
++    ensure(
++        !snapshot.memory_reserved && snapshot.runtime_done && snapshot.state == State::Retiring,
++    )?;
++    if scenario == S::TenantBusy {
++        refuse(&capacity, &id, other, Refusal::Busy)?;
++    }
++    if matches!(scenario, S::RuntimeBeforeOutput | S::DeadlineOutput) {
++        ensure(!snapshot.output_done)?;
++        occupied(&capacity, 1, 0)?;
++    }
++    if scenario == S::DeadlineOutput {
++        expire(&control).await?;
++        ensure(control.check().is_err())?;
++    }
++    if let Some(output) = output {
++        let publication = output.publish();
++        if matches!(
++            scenario,
++            S::DeadlineRun | S::DeadlineRetire | S::DeadlineOutput
++        ) {
++            ensure(publication == Err(Refusal::Expired))?;
++            cycle.publication_denied = true;
++        } else if matches!(scenario, S::CancelAfterReply | S::Shutdown) {
++            ensure(publication == Err(Refusal::Cancelled))?;
++            cycle.publication_denied = true;
++        } else {
++            cycle.diagnostic_bytes_observed = publication.map_err(|_| Failure::Observation)?.len();
++        }
++        output.dispose()?;
++    }
++    drop(build_gate);
++    drop(held_driver);
++    drop(probe_gate);
++    drop(id);
++    drop(control);
++    payloads_complete(lease)?;
++    cycle.normal_completion = true;
++    Ok(cycle)
++}
++
++fn fixture_rejections() -> Result<(), Failure> {
++    let js = js::guarded::JS.as_bytes();
++    let wasm = js::guarded::WASM;
++    ensure(js::guarded::validate_fixture(js, wasm))?;
++    let memory = wasm
++        .windows(8)
++        .position(|v| v == [5, 6, 1, 1, 128, 8, 128, 8])
++        .ok_or(Failure::Fixture)?;
++    // All supplied bytes are private finite variants of the approved artifact;
++    // exact byte policy refuses before invoking V8. No generic decoder exists.
++    for (offset, value) in [
++        (0, 1),            // magic/hash
++        (memory + 3, 3),   // shared
++        (memory + 3, 5),   // memory64
++        (memory + 2, 2),   // multiple memories
++        (memory + 3, 0),   // absent max
++        (memory + 6, 129), // larger max
++    ] {
++        let mut altered = wasm.to_vec();
++        altered[offset] = value;
++        ensure(!js::guarded::validate_fixture(js, &altered))?;
++    }
++    let mut imported = wasm.to_vec();
++    imported.splice(8..8, [2, 1, 0]);
++    ensure(!js::guarded::validate_fixture(js, &imported))?;
++    let mut extra_export = wasm.to_vec();
++    extra_export.extend_from_slice(&[7, 1, 0]);
++    ensure(!js::guarded::validate_fixture(js, &extra_export))?;
++    let mut altered_js = js.to_vec();
++    altered_js.push(b' ');
++    ensure(!js::guarded::validate_fixture(&altered_js, wasm))
++}
++
++pub async fn qualify_lifecycle(
++    scenario: LifecycleScenario,
++    process_owner: LifecycleProcessOwner,
++    inputs: [LifecycleInput; 3],
++) -> Result<LifecycleReport, LifecycleFailure> {
++    use LifecycleScenario as S;
++    // No input owner may masquerade as the separate process charge or another
++    // invocation. Actual FOKS type/admission is verified by the closed caller.
++    for i in 0..3 {
++        ensure(!Arc::ptr_eq(&process_owner.owner, &inputs[i].owner))?;
++        for j in 0..i {
++            ensure(!Arc::ptr_eq(&inputs[i].owner, &inputs[j].owner))?;
++        }
++    }
++    ensure(
++        named_layouts()
++            .iter()
++            .all(|(_, bytes, alignment)| *bytes <= 16 * 1024 && *alignment <= 16),
++    )?;
++    ensure(scratch_bound() <= NATIVE_SCRATCH_BYTES)?;
++    ensure(
++        std::mem::align_of::<Option<Result<crate::engine_api::HttpResponse, anyhow::Error>>>()
++            <= 16,
++    )?;
++    let capacity = Capacity::install(process_owner)?;
++    let [input0, input1, input2] = inputs;
++    let controls = [
++        Control::from_input(input0, 0),
++        Control::from_input(input1, 1),
++        Control::from_input(input2, 2),
++    ];
++    let mut cycles = Vec::with_capacity(32);
++    let before = rss();
++    let mut peak = before;
++    match scenario {
++        S::FixtureRejections => {
++            fixture_rejections()?;
++            occupied(&capacity, 0, 0)?;
++        }
++        S::DeadlinePreAdmit => {
++            refuse(&capacity, &tenant(1), &controls[0], Refusal::Expired)?;
++            occupied(&capacity, 0, 0)?;
++        }
++        S::AdmissionRefusals => {
++            refuse(&capacity, "INVALID", &controls[0], Refusal::Invalid)?;
++            {
++                let guard = capacity.ledger.lock().map_err(|_| Failure::Observation)?;
++                ensure(matches!(
++                    capacity.try_admit(&tenant(1), controls[0].clone()),
++                    Err(Refusal::Contended)
++                ))?;
++                drop(guard);
++            }
++            capacity.refused()?;
++            capacity
++                .ledger
++                .lock()
++                .map_err(|_| Failure::Observation)?
++                .next = u64::MAX;
++            refuse(&capacity, &tenant(1), &controls[0], Refusal::Exhausted)?;
++            // The poison diagnostic needs only this mutex. Capturing the
++            // whole Capacity would also capture the unrelated opaque owner.
++            let ledger_to_poison = &capacity.ledger;
++            let poison = std::panic::catch_unwind(move || {
++                let _held = ledger_to_poison.lock().expect("diagnostic poison lock");
++                panic!("guarded ledger poison");
++            });
++            ensure(poison.is_err())?;
++            ensure(matches!(
++                capacity.try_admit(&tenant(1), controls[0].clone()),
++                Err(Refusal::Poisoned)
++            ))?;
++            let mut ledger = capacity.ledger.lock().unwrap_or_else(|p| p.into_inner());
++            ledger.refused = ledger.refused.checked_add(1).ok_or(Failure::Observation)?;
++            ledger.event(
++                Token {
++                    index: 0,
++                    generation: 0,
++                },
++                EventKind::Refused,
++            );
++        }
++        S::Admission | S::SaturationDrain => {
++            if scenario == S::Admission {
++                ensure(
++                    Capacity::install(LifecycleProcessOwner::new(capacity._process_owner.clone()))
++                        .is_err(),
++                )?;
++            }
++            let rounds = if scenario == S::Admission { 1 } else { 4 };
++            for round in 0..rounds {
++                let first = capacity
++                    .try_admit(&tenant(1), controls[0].clone())
++                    .map_err(|_| Failure::Admission)?;
++                let second = capacity
++                    .try_admit(&tenant(2), controls[1].clone())
++                    .map_err(|_| Failure::Admission)?;
++                occupied(&capacity, 2, 2 * WASM_BYTES)?;
++                refuse(&capacity, &tenant(3), &controls[2], Refusal::Capacity)?;
++                let mut peak1 = peak;
++                let mut peak2 = peak;
++                let (a, b) = futures_util::future::join(
++                    one(
++                        first,
++                        controls[0].clone(),
++                        &controls[2],
++                        S::Normal,
++                        1,
++                        round + 1,
++                        &mut peak1,
++                    ),
++                    one(
++                        second,
++                        controls[1].clone(),
++                        &controls[2],
++                        S::Normal,
++                        2,
++                        round + 1,
++                        &mut peak2,
++                    ),
++                )
++                .await;
++                cycles.push(a?);
++                cycles.push(b?);
++                peak = peak1.max(peak2);
++                occupied(&capacity, 0, 0)?;
++            }
++        }
++        S::ColdCycles => {
++            for i in 0..32u16 {
++                let id = if i < 16 { 1 } else { i };
++                let expected = if i < 16 { u32::from(i) + 1 } else { 1 };
++                let lease = capacity
++                    .try_admit(&tenant(id), controls[0].clone())
++                    .map_err(|_| Failure::Admission)?;
++                let cycle = one(
++                    lease,
++                    controls[0].clone(),
++                    &controls[2],
++                    S::Normal,
++                    id,
++                    expected,
++                    &mut peak,
++                )
++                .await?;
++                ensure(cycle.normal_completion && cycle.fresh_wasm && cycle.counter == expected)?;
++                cycles.push(cycle);
++                occupied(&capacity, 0, 0)?;
++                if i == 0 {
++                    capacity
++                        .ledger
++                        .lock()
++                        .map_err(|_| Failure::Observation)?
++                        .detailed = false;
++                }
++            }
++        }
++        _ => {
++            let lease = capacity
++                .try_admit(&tenant(1), controls[0].clone())
++                .map_err(|_| Failure::Admission)?;
++            cycles.push(
++                one(
++                    lease,
++                    controls[0].clone(),
++                    &controls[2],
++                    scenario,
++                    1,
++                    1,
++                    &mut peak,
++                )
++                .await?,
++            );
++        }
++    }
++    let quarantine = matches!(
++        scenario,
++        S::PanicBuild | S::PanicTurn | S::PanicPayloadDrop | S::PanicTeardown | S::PanicTask
++    );
++    let snapshots = capacity.snapshots();
++    if quarantine {
++        ensure(
++            snapshots[0].state == State::Quarantined
++                && snapshots[0].memory_reserved
++                && snapshots[0].owner == Some(0),
++        )?;
++        ensure(snapshots[1].state == State::Free)?;
++    } else {
++        occupied(&capacity, 0, 0)?;
++    }
++    {
++        let ledger = capacity.ledger.lock().unwrap_or_else(|p| p.into_inner());
++        ensure(ledger.records.iter().all(|r| r.task.is_none()))?;
++        ensure(!ledger.observation_failed && ledger.peak_reserved <= 2 * WASM_BYTES as u64)?;
++    }
++    // Quarantined file ownership remains in the static inventory. Never unlink
++    // a possibly live SQLite file merely because a task returned a report.
++    if !quarantine {
++        drop(
++            capacity
++                .directory
++                .lock()
++                .map_err(|_| Failure::Setup)?
++                .take(),
++        );
++    }
++    drop(controls);
++    let after = rss();
++    peak = peak.max(after);
++    let mut ledger = capacity.ledger.lock().unwrap_or_else(|p| p.into_inner());
++    const KINDS: [&str; 19] = [
++        "admitted",
++        "worker-built",
++        "adopted",
++        "driver-started",
++        "reply-received",
++        "driver-joined",
++        "backing-observed",
++        "retiring",
++        "cell-closed",
++        "slot-consumed",
++        "worker-dropped",
++        "probe-dropped",
++        "memory-released",
++        "output-dropped",
++        "payloads-dropped",
++        "owner-dropped",
++        "freed",
++        "quarantined",
++        "refused",
++    ];
++    let event_totals = std::array::from_fn(|i| (KINDS[i], ledger.event_counts[i]));
++    let detailed_trace_cycles = if scenario == S::ColdCycles {
++        1
++    } else {
++        cycles.len()
++    };
++    Ok(LifecycleReport {
++        format: 1, claim: "a2-physical-lifetimes-local-fixture", scenario, program: js::guarded::program(),
++        slots: SLOTS, accessible_bytes_per_slot: WASM_BYTES, layouts: lifecycle_layouts(),
++        typed_layouts: named_layouts(), typed_task_charge_bound: 16 * 1024,
++        native_scratch_charge_bound: NATIVE_SCRATCH_BYTES, native_scratch_observed_bound: scratch_bound(),
++        original_owner_identity_preserved: true, original_deadlines_preserved: true,
++        trace_mode: if scenario == S::ColdCycles { "first-cycle-plus-exact-aggregates" } else { "complete" },
++        detailed_trace_cycles, events: std::mem::take(&mut ledger.events), event_totals, cycles,
++        final_records: snapshots, peak_observed_live_workers: ledger.peak_workers, peak_observed_live_stores: ledger.peak_stores,
++        peak_occupied: ledger.peak_occupied, peak_reserved_bytes: ledger.peak_reserved, refused: ledger.refused,
++        sampled_rss_before: before, sampled_rss_peak: peak, sampled_rss_after: after,
++        timing_policy: "instantiate_us is unmeasured/null: compile and instantiate are included in execute_us (native fetch dispatch through driver join, including probe/barrier time); JS performance.now is fixed per I/O turn",
++        virtual_mapping: "unmeasured; unchanged initializer does not enable Wasm trap-handler guard regions",
++        limitations: "accessible capacity excludes V8/native/RSS overhead; typed control charges exclude unchanged engine/config internals, Tokio scheduling, stacks and allocator overhead; local SQL and diagnostic disposal only; no S3 acknowledgment, serving, whole-node shutdown, density or 15-second recovery claim",
++    })
++}

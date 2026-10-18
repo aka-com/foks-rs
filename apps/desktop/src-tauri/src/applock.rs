@@ -6,7 +6,7 @@
 //! account passwords.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager as _, State};
@@ -27,6 +27,7 @@ pub struct LockStateDto {
 }
 
 pub struct AppLock {
+    publication: Mutex<()>,
     locked: AtomicBool,
     generation: AtomicU64,
     authenticating: AtomicBool,
@@ -40,6 +41,7 @@ impl AppLock {
 
     fn for_capability(capability: Capability) -> Self {
         Self {
+            publication: Mutex::new(()),
             // Platforms supporting OS authentication start locked. On unsupported
             // platforms, start unlocked to avoid blocking access.
             locked: AtomicBool::new(capability.available),
@@ -63,6 +65,40 @@ impl AppLock {
         }
     }
 
+    fn begin_unlock(&self) -> Result<Option<u64>, AgentError> {
+        let _publication = self
+            .publication
+            .lock()
+            .map_err(|_| publication_unavailable())?;
+        if !self.locked.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        if self.authenticating.swap(true, Ordering::AcqRel) {
+            return Err(AgentError::new(
+                "authentication-in-progress",
+                "An unlock prompt is already open.",
+                false,
+            ));
+        }
+        Ok(Some(self.generation.load(Ordering::Acquire)))
+    }
+
+    fn complete_unlock(&self, generation: u64) -> Result<(), AgentError> {
+        let _publication = self
+            .publication
+            .lock()
+            .map_err(|_| publication_unavailable())?;
+        if self.generation.load(Ordering::Acquire) != generation {
+            return Err(AgentError::new(
+                "authentication-interrupted",
+                "FOKS locked again while authentication was in progress. Unlock it again.",
+                false,
+            ));
+        }
+        self.locked.store(false, Ordering::Release);
+        Ok(())
+    }
+
     fn lock(&self) -> Result<(), AgentError> {
         if !self.capability.available {
             return Err(AgentError::new(
@@ -73,9 +109,133 @@ impl AppLock {
                 false,
             ));
         }
+        // A panicking publisher must not prevent the user from locking.
+        let _publication = self
+            .publication
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.locked.store(true, Ordering::Release);
         self.generation.fetch_add(1, Ordering::AcqRel);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+type PublicationCheckpoint = Arc<dyn Fn(&str) + Send + Sync>;
+
+/// Owns one unlocked interval, never a later unlock. Slow work runs without the
+/// publication mutex; only the final value handoff or external effect holds it.
+#[derive(Clone)]
+pub(crate) struct UnlockedInterval {
+    lock: Arc<AppLock>,
+    generation: u64,
+    #[cfg(test)]
+    checkpoint: Option<PublicationCheckpoint>,
+}
+
+fn publication_unavailable() -> AgentError {
+    AgentError::new(
+        "app-lock-unavailable",
+        "Unable to verify application lock state.",
+        false,
+    )
+}
+
+impl UnlockedInterval {
+    fn capture(lock: Arc<AppLock>) -> Result<Self, AgentError> {
+        let publication = lock
+            .publication
+            .lock()
+            .map_err(|_| publication_unavailable())?;
+        let generation = lock.generation.load(Ordering::Acquire);
+        if !lock.permits_generation(generation) {
+            return Err(AgentError::new(
+                "app-locked",
+                "FOKS is locked. Unlock it to continue.",
+                false,
+            ));
+        }
+        drop(publication);
+        Ok(Self {
+            lock,
+            generation,
+            #[cfg(test)]
+            checkpoint: None,
+        })
+    }
+
+    pub(crate) fn check(&self) -> Result<(), AgentError> {
+        if self.lock.permits_generation(self.generation) {
+            Ok(())
+        } else {
+            Err(AgentError::new(
+                "app-locked",
+                "This operation was interrupted when FOKS locked. Try again after unlocking.",
+                false,
+            ))
+        }
+    }
+
+    pub(crate) fn checkpoint(&self, _phase: &'static str) -> Result<(), AgentError> {
+        #[cfg(test)]
+        if let Some(checkpoint) = &self.checkpoint {
+            checkpoint(_phase);
+        }
+        self.check()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_checkpoint(
+        mut self,
+        checkpoint: impl Fn(&str) + Send + Sync + 'static,
+    ) -> Self {
+        self.checkpoint = Some(Arc::new(checkpoint));
+        self
+    }
+
+    /// Serializes final publication against lock invalidation. Never use this
+    /// for dialogs, network I/O, transfers, or temporary-file synchronization.
+    pub(crate) fn publish<T>(
+        &self,
+        publish: impl FnOnce() -> Result<T, AgentError>,
+    ) -> Result<T, AgentError> {
+        self.checkpoint("before-publication")?;
+        let _publication = self
+            .lock
+            .publication
+            .lock()
+            .map_err(|_| publication_unavailable())?;
+        self.check()?;
+        publish()
+    }
+}
+
+pub(crate) fn unlocked_interval(app: &AppHandle) -> Result<UnlockedInterval, AgentError> {
+    let lock = app
+        .try_state::<Arc<AppLock>>()
+        .ok_or_else(publication_unavailable)?;
+    UnlockedInterval::capture(Arc::clone(&lock))
+}
+
+#[cfg(test)]
+impl AppLock {
+    pub(crate) fn unlocked_for_test() -> Arc<Self> {
+        let lock = Arc::new(Self::for_capability(Capability {
+            available: true,
+            reason: None,
+            mechanism: "test",
+        }));
+        lock.locked.store(false, Ordering::Release);
+        lock
+    }
+    pub(crate) fn interval_for_test(self: &Arc<Self>) -> UnlockedInterval {
+        UnlockedInterval::capture(self.clone()).unwrap()
+    }
+    pub(crate) fn invalidate_for_test(&self, unlock: bool) {
+        self.lock().unwrap();
+        if unlock {
+            self.locked.store(false, Ordering::Release);
+        }
     }
 }
 
@@ -170,21 +330,14 @@ pub async fn unlock_app(
     lock: State<'_, Arc<AppLock>>,
 ) -> Result<LockStateDto, AgentError> {
     crate::commands::require_main_window(&webview)?;
-    if !lock.locked.load(Ordering::Acquire) {
+    let Some(generation) = lock.begin_unlock()? else {
         return Ok(lock.state());
-    }
-    if lock.authenticating.swap(true, Ordering::AcqRel) {
-        return Err(AgentError::new(
-            "authentication-in-progress",
-            "An unlock prompt is already open.",
-            false,
-        ));
-    }
+    };
     let owned = Arc::clone(&lock);
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = AuthenticationGuard(&owned.authenticating);
         match authenticate("Unlock FOKS to access your vault") {
-            Ok(true) => owned.locked.store(false, Ordering::Release),
+            Ok(true) => owned.complete_unlock(generation)?,
             Ok(false) => {}
             Err(message) => {
                 return Err(AgentError::new("authentication-failed", message, false));
@@ -314,6 +467,70 @@ mod tests {
         lock.locked.store(false, Ordering::Release);
         assert!(!lock.permits_generation(before));
         assert_ne!(before, lock.generation.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn publication_completes_before_lock_or_is_rejected_after_lock() {
+        let lock = AppLock::unlocked_for_test();
+        let interval = lock.interval_for_test();
+        let (entered, entered_rx) = std::sync::mpsc::channel();
+        let (finish, finish_rx) = std::sync::mpsc::channel();
+        let worker_interval = interval.clone();
+        let publish = std::thread::spawn(move || {
+            worker_interval.publish(|| {
+                entered.send(()).unwrap();
+                finish_rx.recv().unwrap();
+                Ok(())
+            })
+        });
+        entered_rx.recv().unwrap();
+        // This is the same mutex lock() takes. Its unavailability proves the
+        // effect cannot overlap completed invalidation, without a sleep/race.
+        assert!(lock.publication.try_lock().is_err());
+        assert!(interval.check().is_ok());
+        let invalidate = lock.clone();
+        let locking = std::thread::spawn(move || invalidate.lock());
+        finish.send(()).unwrap();
+        publish.join().unwrap().unwrap();
+        locking.join().unwrap().unwrap();
+        assert!(interval
+            .publish::<()>(|| panic!("old interval published after lock completion"))
+            .is_err());
+    }
+
+    #[test]
+    fn a_later_lock_invalidates_an_already_open_authentication_prompt() {
+        let lock = AppLock::unlocked_for_test();
+        let old = lock.interval_for_test();
+        lock.lock().unwrap();
+        let generation = lock.begin_unlock().unwrap().unwrap();
+        let reached = Arc::new(std::sync::Barrier::new(2));
+        let resume = Arc::new(std::sync::Barrier::new(2));
+        let worker_lock = lock.clone();
+        let worker_reached = reached.clone();
+        let worker_resume = resume.clone();
+        let authentication = std::thread::spawn(move || {
+            let _guard = AuthenticationGuard(&worker_lock.authenticating);
+            worker_reached.wait();
+            worker_resume.wait();
+            worker_lock.complete_unlock(generation)
+        });
+        reached.wait();
+        lock.lock().unwrap();
+        resume.wait();
+        assert_eq!(
+            authentication.join().unwrap().unwrap_err().code,
+            "authentication-interrupted"
+        );
+        assert!(lock.state().locked);
+        assert!(!lock.authenticating.load(Ordering::Acquire));
+        assert!(old.check().is_err());
+        let next = lock.begin_unlock().unwrap().unwrap();
+        let _guard = AuthenticationGuard(&lock.authenticating);
+        lock.complete_unlock(next).unwrap();
+        assert!(!lock.state().locked);
+        assert!(old.check().is_err());
+        assert!(lock.interval_for_test().check().is_ok());
     }
 
     #[test]

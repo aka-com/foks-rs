@@ -447,6 +447,35 @@ pub struct ChatReply {
     pub result: ChatResult,
 }
 
+impl ChatAction {
+    pub fn deadline_class(&self) -> crate::DeadlineClass {
+        match self {
+            Self::LoadIntent { .. } => crate::DeadlineClass::Ordinary,
+            Self::SaveIntent { .. } => crate::DeadlineClass::Ordinary,
+            Self::ClearIntent { .. } => crate::DeadlineClass::Ordinary,
+            Self::ImportIntent { .. } => crate::DeadlineClass::Ordinary,
+            Self::Channels => crate::DeadlineClass::Ordinary,
+            Self::History { .. } => crate::DeadlineClass::Ordinary,
+            Self::NotificationHistory { .. } => crate::DeadlineClass::Ordinary,
+            Self::Inbox => crate::DeadlineClass::Ordinary,
+            Self::SyncInbox { .. } => crate::DeadlineClass::Ordinary,
+            Self::MarkRead { .. } => crate::DeadlineClass::Ordinary,
+            Self::PollInbox { .. } => crate::DeadlineClass::ChatPoll,
+            Self::PrepareChannel { .. } => crate::DeadlineClass::Ordinary,
+            Self::PrepareMessage { .. } => crate::DeadlineClass::Ordinary,
+            Self::SubmitMessage { .. } => crate::DeadlineClass::Ordinary,
+            Self::Status { .. } => crate::DeadlineClass::Ordinary,
+            Self::OperationBody { .. } => crate::DeadlineClass::Ordinary,
+            Self::Attempt { .. } => crate::DeadlineClass::Ordinary,
+            Self::Reconcile { .. } => crate::DeadlineClass::Ordinary,
+            Self::Cancel { .. } => crate::DeadlineClass::Ordinary,
+            Self::Finalize { .. } => crate::DeadlineClass::Ordinary,
+            Self::Pending => crate::DeadlineClass::Ordinary,
+            Self::CleanupPending => crate::DeadlineClass::Ordinary,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -7,7 +7,17 @@
 #![forbid(unsafe_code)]
 
 mod auth;
+mod chunk_binding;
+mod chunk_collection;
+mod chunk_ledger;
+mod chunk_storage;
+mod storage_lease;
+pub use chunk_binding::{adopt_chunk_store, ChunkAdoptionProgress};
+pub use chunk_collection::{collect_chunk_store, ChunkCollectionReport};
+pub use chunk_ledger::{inventory_chunk_store, ChunkCapacityConfig};
+pub mod chunks;
 mod config;
+mod deadline;
 mod descriptors;
 mod diagnostics;
 mod entropy;
@@ -27,6 +37,8 @@ mod operations;
 pub mod pki;
 mod rate_limit;
 mod read_pool;
+#[cfg(unix)]
+pub mod restricted_storage;
 pub mod rpc;
 mod services;
 pub mod sso;
@@ -36,6 +48,7 @@ pub mod usage;
 pub mod waitlist;
 mod writer;
 
+pub use chunk_storage::externalize_chunks;
 pub use config::{Config, ReadDatabaseConfig, SessionLimits};
 #[cfg(unix)]
 pub use descriptors::raise_descriptor_limit;
@@ -48,15 +61,22 @@ pub use fatal::CoreThread;
 pub use fault::{SessionFaultPoint, SessionFaults};
 pub use metrics::{
     AdmissionRejection, CheckpointMetricsSnapshot, ExpiryKind, ExpiryMetricsSnapshot,
-    FanoutMetricsSnapshot, RealtimeMetricsSnapshot, ReconcileMetricsSnapshot, ServerMetrics,
-    ServerMetricsSnapshot,
+    FanoutMetricsSnapshot, KexMetricsSnapshot, RealtimeMetricsSnapshot, ReconcileMetricsSnapshot,
+    ServerMetrics, ServerMetricsSnapshot,
 };
 pub use net::{start, AcceptErrorKind, RunningServer, ServerAddresses};
 pub use rate_limit::RateLimitConfig;
 pub use standalone::{
-    backup_standalone_installation, restore_backup, start_standalone, BackupArtifacts,
-    BackupSchedule, RunningStandaloneServer, StandaloneConfig,
+    backup_standalone_installation, backup_standalone_installation_with_chunk_store,
+    restore_backup, start_standalone, BackupArtifacts, BackupSchedule, RunningStandaloneServer,
+    StandaloneConfig,
 };
 pub use writer::{DatabaseWriterGuard, GuardedDatabase, Writer, WriterHandle, WriterMetrics};
 
 pub mod web_admin;
+
+#[cfg(feature = "celld-proof")]
+pub mod hosted_personal;
+
+#[cfg(feature = "celld-proof")]
+pub mod proof;

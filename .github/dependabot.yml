@@ -6,6 +6,8 @@ updates:
     directories:
       - "/"
       - "/fuzz"
+      - "/tools/foks-celld-guarded"
+      - "/tools/foks-hosted-transport-check"
     schedule:
       interval: weekly
       day: monday
@@ -17,7 +19,21 @@ updates:
       # scripts/test_dependency_audit.py checks that every pin is listed.
       cargo-patch:
         patterns: ["*"]
-        exclude-patterns: ["libfuzzer-sys", "openidconnect", "rmcp", "rusqlite"]
+        exclude-patterns:
+          [
+            "libfuzzer-sys",
+            "nix",
+            "object_store",
+            "openidconnect",
+            "rmcp",
+            "rusqlite",
+            "serde_json",
+            "sha2",
+            "sysctl",
+            "tikv-jemallocator",
+            "tokio",
+            "v8"
+          ]
         update-types: ["patch"]
     ignore:
       # The Tauri CLI refuses to build when the tauri crate and the

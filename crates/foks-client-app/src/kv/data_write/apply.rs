@@ -8,6 +8,12 @@ pub(super) fn apply_write<R: Read>(
     team: bool,
     remote_possible: &mut bool,
 ) -> Result<Option<String>> {
+    if spec.kind == DataWriteKind::Put {
+        if let Some(receipt) = session.resume_adapter_file_upload()? {
+            *remote_possible = true;
+            return Ok(Some(hex(&receipt.node_id.0)));
+        }
+    }
     let (read_role, write_role) = if team {
         (Role::member(-0x4000), Role::ADMIN)
     } else {

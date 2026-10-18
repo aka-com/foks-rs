@@ -7,10 +7,12 @@
 
 #![forbid(unsafe_code)]
 
+mod allocation;
 mod decode;
 mod encode;
 mod error;
 
+pub use allocation::{reserve_allocation, with_allocation_budget, AllocationBudget};
 pub use decode::{
     decode, decode_prefix, decode_prefix_sensitive, decode_sensitive, validate, validate_signable,
 };

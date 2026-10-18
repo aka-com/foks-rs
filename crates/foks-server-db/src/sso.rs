@@ -1,4 +1,5 @@
 //! Durable claims only: provider calls and encryption belong outside the SQLite writer.
+use crate::allocation::RowAllocationExt as _;
 use crate::{error::sql_integer, Database, Error, ReadDatabase, Result};
 use rusqlite::{params, OptionalExtension as _, TransactionBehavior};
 
@@ -140,7 +141,7 @@ impl Database {
         let (host_count, identity_count): (i64, i64) = tx.query_row(
             "SELECT count(*),coalesce(sum(source_hash=?2),0) FROM sso_sessions WHERE host=?1",
             params![row.host, row.source_hash],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.budgeted_get(0)?, r.budgeted_get(1)?)),
         )?;
         if host_count >= 1000 || identity_count >= 4 {
             return Err(Error::Capacity("SSO sessions"));
@@ -196,7 +197,7 @@ pub(crate) fn policy_matches(
     let valid: bool = c.query_row(
         "SELECT EXISTS(SELECT 1 FROM sso_policy WHERE host=?1 AND config_hash=?2 AND blocked_reason IS NULL)",
         params![host, hash],
-        |r| r.get(0),
+        |r| r.budgeted_get(0),
     )?;
     if valid {
         Ok(())
@@ -209,7 +210,7 @@ fn read_session(
     host: &[u8; 33],
     id: &[u8; 32],
 ) -> Result<Option<SsoSession>> {
-    Ok(c.query_row("SELECT config_hash,source_hash,uid,state,revision,expires_at_ms,ciphertext,authorization_epoch,interrupted FROM sso_sessions WHERE host=?1 AND session_hash=?2",params![host,id],|r|Ok(SsoSession{host:*host,session_hash:*id,config_hash:r.get(0)?,source_hash:r.get(1)?,uid:r.get(2)?,state:SsoSessionState::decode(r.get(3)?)?,revision:r.get::<_,i64>(4)? as u64,expires_at_ms:r.get::<_,i64>(5)? as u64,ciphertext:r.get(6)?,authorization_epoch:r.get::<_,i64>(7)? as u64,interrupted:r.get(8)?})).optional()?)
+    Ok(c.query_row("SELECT config_hash,source_hash,uid,state,revision,expires_at_ms,ciphertext,authorization_epoch,interrupted FROM sso_sessions WHERE host=?1 AND session_hash=?2",params![host,id],|r|Ok(SsoSession{host:*host,session_hash:*id,config_hash:r.budgeted_get(0)?,source_hash:r.budgeted_get(1)?,uid:r.budgeted_get(2)?,state:SsoSessionState::decode(r.budgeted_get(3)?)?,revision:r.budgeted_get::<_,i64>(4)? as u64,expires_at_ms:r.budgeted_get::<_,i64>(5)? as u64,ciphertext:r.budgeted_get(6)?,authorization_epoch:r.budgeted_get::<_,i64>(7)? as u64,interrupted:r.budgeted_get(8)?})).optional()?)
 }
 
 pub(crate) fn policy_epoch_matches(
@@ -222,7 +223,7 @@ pub(crate) fn policy_epoch_matches(
     let current: i64 = c.query_row(
         "SELECT authorization_epoch FROM sso_policy WHERE host=?1",
         [host],
-        |r| r.get(0),
+        |r| r.budgeted_get(0),
     )?;
     if current != sql_integer(epoch)? {
         return Err(Error::AuthorizationChanged);

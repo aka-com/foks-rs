@@ -481,9 +481,13 @@ fn adapter_clock_boot_id_migration_matches_a_new_database() {
         adapter_time(200_000, 0),
     )
     .unwrap();
-    // Recreate the version 40 table shape, which had no boot identity.
+    // Recreate the version 42 table shapes, which had no boot identity.
     db.connection
-        .execute_batch("ALTER TABLE kv_adapter_clocks DROP COLUMN boot_id; PRAGMA user_version=40;")
+        .execute_batch(
+            "ALTER TABLE kv_adapter_clocks DROP COLUMN boot_id;
+             ALTER TABLE kv_upload_clocks DROP COLUMN boot_id;
+             PRAGMA user_version=42;",
+        )
         .unwrap();
     drop(db);
     let path = temp.path().join("hard.sqlite");

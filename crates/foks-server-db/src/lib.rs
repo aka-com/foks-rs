@@ -2,11 +2,21 @@
 
 #![forbid(unsafe_code)]
 
+mod allocation;
 mod capabilities;
 mod capability_keys;
 mod capacity;
 mod certificates;
+mod chunk_binding;
+mod chunk_collection;
+mod chunk_ledger;
 mod clock;
+pub use chunk_binding::{ChunkStorageBinding, ChunkStorageBindingState};
+pub use chunk_collection::ChunkDeletion;
+pub use chunk_ledger::{
+    ChunkInventoryCheckpoint, ChunkInventoryEntry, ChunkObject, ChunkPhysicalUsage,
+    ChunkPublicationPolicy, ChunkReservation, ChunkReservationAction,
+};
 mod config;
 mod connection;
 mod device_nag;
@@ -19,12 +29,23 @@ mod idempotency;
 mod identity;
 mod invites;
 mod kv;
+pub use kv::{
+    KV_HISTORICAL_NAME_SELECTION_SQL, KV_LIST_INITIAL_SQL, KV_LIST_MAC_SQL, KV_LIST_TIME_SQL,
+    KV_NAME_CONFLICT_SQL, KV_PUBLIC_USAGE_SQL,
+};
+mod kv_objects;
+pub use kv_objects::{ExternalKvChunk, KvChunkKey, KvChunkPayload, StoredKvChunkObject};
 mod log_upload;
 mod maintenance;
 mod merkle;
 mod names;
 mod passphrases;
 mod read;
+mod read_dependency;
+pub use read_dependency::{ReadDependency, ReadDependencySchema};
+pub use schema::read_dependency::{
+    READ_DEPENDENCY_SCHEMA, READ_DEPENDENCY_TABLES, READ_DEPENDENCY_TRIGGERS,
+};
 mod realtime;
 mod recovery;
 mod schema;
@@ -54,7 +75,9 @@ pub use capacity::{
 pub use certificates::{StoredCertificate, StoredCredentialBinding};
 pub use clock::{Clock, SystemClock};
 pub use config::Config;
-pub use connection::{Database, DatabasePathIdentity, Pragmas, ReadDatabase, ReadSnapshot};
+pub use connection::{
+    Database, DatabasePathIdentity, Pragmas, ReadDatabase, ReadDatabaseOpener, ReadSnapshot,
+};
 pub use device_nag::DeviceNagSnapshot;
 pub use error::{Error, Result};
 pub use federation::{

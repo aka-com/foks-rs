@@ -16,7 +16,9 @@ fn every_injected_stage_rolls_back_all_authoritative_state() {
     ] {
         let mut database = common::TestDatabase::new();
         database.reserve(1_000_000);
+        let coordinate = database.database.read_dependency().unwrap();
         assert!(database.commit(Some(point)).is_err(), "{point:?}");
+        assert_eq!(database.database.read_dependency().unwrap(), coordinate);
         assert!(database.database.identity(&[1; 33]).unwrap().is_none());
         assert!(database.database.current_root().unwrap().is_none());
         assert!(matches!(

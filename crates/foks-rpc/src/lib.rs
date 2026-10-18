@@ -26,7 +26,9 @@ use status::check_status;
 #[cfg(test)]
 mod realtime_status_tests;
 mod response;
+mod response_budget;
 pub use realtime::*;
+pub use response_budget::{with_response_budget, ResponseAllocationBudget};
 mod server;
 
 pub use generated::*;

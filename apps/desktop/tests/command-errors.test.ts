@@ -61,9 +61,39 @@ test('recovery follows explicit cause and scope rather than fatality alone', () 
     ['chat-channel-integrity', 'quarantine', 'channel'],
     ['unsupported-schema', 'quarantine', 'profile'],
     ['chat-access-denied', 'revalidate', 'team'],
+    ['deadline-clock-unavailable', 'quarantine', 'agent'],
+    ['deadline-domain-mismatch', 'quarantine', 'agent'],
+    ['upload-spool-full', 'refresh', 'request'],
+    ['upload-clock-untrusted', 'refresh', 'request'],
+    ['deadline-clock', 'refresh', 'request'],
+    ['missing-deadline', 'refresh', 'request'],
+    ['app-lock-unavailable', 'refresh', 'request'],
+    ['authentication-interrupted', 'retry', 'request'],
     ['unknown', 'refresh', 'request'],
   ])
     assert.deepEqual(commandRecovery(error(code, true)), { kind, scope });
+});
+
+test('deadline, lock-state and upload admission failures have explicit outcomes', () => {
+  for (const [code, outcome] of [
+    ['deadline-clock', 'unknown'],
+    ['deadline-clock-unavailable', 'unknown'],
+    ['deadline-domain-mismatch', 'unknown'],
+    ['missing-deadline', 'unknown'],
+    ['app-lock-unavailable', 'unknown'],
+    ['missing-deadline-policy', 'not-started'],
+    ['upload-expired', 'rejected'],
+    ['upload-identity-conflict', 'rejected'],
+    ['upload-generation-mismatch', 'rejected'],
+    ['upload-legacy-read-only', 'rejected'],
+    ['upload-pending-full', 'rejected'],
+    ['upload-retention-full', 'rejected'],
+    ['upload-spool-full', 'rejected'],
+    ['upload-clock-untrusted', 'rejected'],
+    ['upload-future', 'rejected'],
+    ['authentication-interrupted', 'rejected'],
+  ])
+    assert.equal(failureOutcome(error(code)), outcome, code);
 });
 
 test('unknown read failures stay local while unknown mutation outcomes remain conservative', async () => {

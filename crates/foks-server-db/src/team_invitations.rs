@@ -1,4 +1,5 @@
 //! Invitation storage and transaction authority; no cryptographic or network I/O.
+use crate::allocation::RowAllocationExt as _;
 use crate::{
     error::sql_integer, Database, Error, ReadDatabase, ReadSnapshot, Result,
     TeamAdminAuthoritySnapshot, TeamGrantAuthority,
@@ -25,7 +26,7 @@ pub struct CertificateUpload<'a> {
     pub exact: &'a [u8],
 }
 pub(crate) fn require_actor(c: &Connection, actor: &InvitationActor<'_>, now: u64) -> Result<()> {
-    let active:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM devices WHERE uid=?1 AND active=1 AND (device_id=?2 OR subkey_id=?2))",params![actor.uid,actor.credential],|r|r.get(0))?;
+    let active:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM devices WHERE uid=?1 AND active=1 AND (device_id=?2 OR subkey_id=?2))",params![actor.uid,actor.credential],|r|r.budgeted_get(0))?;
     if !active {
         return Err(Error::AuthorizationChanged);
     }
@@ -49,19 +50,19 @@ fn lookup(c: &Connection, hash: &[u8; 32]) -> Result<Option<Vec<u8>>> {
     Ok(c.query_row(
         "SELECT exact_certificate FROM team_invitation_certificates WHERE certificate_hash=?1",
         [hash],
-        |r| r.get(0),
+        |r| r.budgeted_get(0),
     )
     .optional()?)
 }
 fn certificates(c: &Connection, team: &[u8]) -> Result<Vec<Vec<u8>>> {
     let mut q=c.prepare("SELECT exact_certificate FROM team_invitation_certificates WHERE team_id=?1 AND generation=(SELECT max(generation) FROM team_shared_keys WHERE team_id=?1 AND role_type=2 AND visibility=0) ORDER BY certificate_hash LIMIT 64")?;
     let rows = q
-        .query_map([team], |r| r.get(0))?
+        .query_map([team], |r| r.budgeted_get(0))?
         .collect::<rusqlite::Result<_>>()?;
     Ok(rows)
 }
 fn local_user_permission(c: &Connection, viewer: &[u8], target: &[u8]) -> Result<bool> {
-    Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM user_local_view_permissions WHERE viewer_uid=?1 AND target_id=?2)",params![viewer,target],|r|r.get(0))?)
+    Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM user_local_view_permissions WHERE viewer_uid=?1 AND target_id=?2)",params![viewer,target],|r|r.budgeted_get(0))?)
 }
 macro_rules! invitation_reads {
     () => {
@@ -111,7 +112,7 @@ impl Database {
         if admin.team_id != upload.team {
             return Err(Error::AuthorizationChanged);
         }
-        let matches:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM team_shared_keys WHERE team_id=?1 AND role_type=2 AND visibility=0 AND generation=?2 AND verify_key=?3 AND exact_hepk=?4)",params![upload.team,sql_integer(upload.generation)?,upload.verify_key,upload.exact_hepk],|r|r.get(0))?;
+        let matches:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM team_shared_keys WHERE team_id=?1 AND role_type=2 AND visibility=0 AND generation=?2 AND verify_key=?3 AND exact_hepk=?4)",params![upload.team,sql_integer(upload.generation)?,upload.verify_key,upload.exact_hepk],|r|r.budgeted_get(0))?;
         if !matches {
             return Err(Error::AuthorizationChanged);
         }
@@ -125,17 +126,17 @@ impl Database {
         let count: i64 = tx.query_row(
             "SELECT count(*) FROM team_invitation_certificates WHERE team_id=?1 AND generation=?2",
             params![upload.team, sql_integer(upload.generation)?],
-            |r| r.get(0),
+            |r| r.budgeted_get(0),
         )?;
         let global: i64 = tx.query_row(
             "SELECT count(*) FROM team_invitation_certificates",
             [],
-            |r| r.get(0),
+            |r| r.budgeted_get(0),
         )?;
         let total_team: i64 = tx.query_row(
             "SELECT count(*) FROM team_invitation_certificates WHERE team_id=?1",
             [upload.team],
-            |r| r.get(0),
+            |r| r.budgeted_get(0),
         )?;
         if count >= 64 || total_team >= 4096 || global >= MAXIMUM_INVITATION_CERTIFICATES {
             return Err(Error::QuotaExceeded);
@@ -167,7 +168,7 @@ impl Database {
         match authority {
             None if payload.viewee.as_bytes() == actor.uid => {}
             Some(a) => {
-                let matches:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM team_shared_keys k WHERE team_id=?1 AND role_type=?2 AND visibility=?3 AND generation=?4 AND verify_key=?5 AND generation=(SELECT max(generation) FROM team_shared_keys WHERE team_id=k.team_id AND role_type=k.role_type AND visibility=k.visibility))",params![payload.viewee.as_bytes(),sql_integer(a.role_type)?,a.visibility,sql_integer(a.generation)?,a.verify_key],|r|r.get(0))?;
+                let matches:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM team_shared_keys k WHERE team_id=?1 AND role_type=?2 AND visibility=?3 AND generation=?4 AND verify_key=?5 AND generation=(SELECT max(generation) FROM team_shared_keys WHERE team_id=k.team_id AND role_type=k.role_type AND visibility=k.visibility))",params![payload.viewee.as_bytes(),sql_integer(a.role_type)?,a.visibility,sql_integer(a.generation)?,a.verify_key],|r|r.budgeted_get(0))?;
                 if !matches {
                     return Err(Error::AuthorizationChanged);
                 }
@@ -189,17 +190,17 @@ pub(crate) fn insert_local_permission(
     if role == foks_proto::Role::NONE {
         return Err(Error::Invalid("local viewer role"));
     }
-    let exists:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM users WHERE uid=?1 UNION ALL SELECT 1 FROM teams WHERE team_id=?1)",[target],|r|r.get(0))?;
+    let exists:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM users WHERE uid=?1 UNION ALL SELECT 1 FROM teams WHERE team_id=?1)",[target],|r|r.budgeted_get(0))?;
     if !exists {
         return Err(Error::AuthorizationChanged);
     }
-    let viewer_exists:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM users WHERE uid=?1 UNION ALL SELECT 1 FROM teams WHERE team_id=?1)",[viewer],|r|r.get(0))?;
+    let viewer_exists:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM users WHERE uid=?1 UNION ALL SELECT 1 FROM teams WHERE team_id=?1)",[viewer],|r|r.budgeted_get(0))?;
     if !viewer_exists {
         return Err(Error::AuthorizationChanged);
     }
-    let existing:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM user_local_view_permissions WHERE viewer_uid=?1 AND target_id=?2 UNION ALL SELECT 1 FROM team_local_view_permissions WHERE team_id=?1 AND target_id=?2)",params![viewer,target],|r|r.get(0))?;
+    let existing:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM user_local_view_permissions WHERE viewer_uid=?1 AND target_id=?2 UNION ALL SELECT 1 FROM team_local_view_permissions WHERE team_id=?1 AND target_id=?2)",params![viewer,target],|r|r.budgeted_get(0))?;
     if !existing {
-        let total:i64=c.query_row("SELECT (SELECT count(*) FROM user_local_view_permissions)+(SELECT count(*) FROM team_local_view_permissions)",[],|r|r.get(0))?;
+        let total:i64=c.query_row("SELECT (SELECT count(*) FROM user_local_view_permissions)+(SELECT count(*) FROM team_local_view_permissions)",[],|r|r.budgeted_get(0))?;
         if total >= MAXIMUM_LOCAL_VIEW_PERMISSIONS {
             return Err(Error::QuotaExceeded);
         }
@@ -209,7 +210,7 @@ pub(crate) fn insert_local_permission(
         let count: i64 = c.query_row(
             "SELECT count(*) FROM user_local_view_permissions WHERE target_id=?1",
             [target],
-            |r| r.get(0),
+            |r| r.budgeted_get(0),
         )?;
         if !exists && count >= 1024 {
             return Err(Error::QuotaExceeded);
@@ -219,11 +220,11 @@ pub(crate) fn insert_local_permission(
             params![viewer, target],
         )?;
     } else {
-        let existing:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM team_local_view_permissions WHERE team_id=?1 AND target_id=?2)",params![viewer,target],|r|r.get(0))?;
+        let existing:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM team_local_view_permissions WHERE team_id=?1 AND target_id=?2)",params![viewer,target],|r|r.budgeted_get(0))?;
         let count: i64 = c.query_row(
             "SELECT count(*) FROM team_local_view_permissions WHERE target_id=?1",
             [target],
-            |r| r.get(0),
+            |r| r.budgeted_get(0),
         )?;
         if !existing && count >= 1024 {
             return Err(Error::QuotaExceeded);
@@ -262,7 +263,7 @@ pub(crate) fn commit_local_invitation_acceptance(
         .query_row(
             "SELECT team_id FROM team_invitation_certificates WHERE certificate_hash=?1",
             [a.certificate_hash],
-            |r| r.get(0),
+            |r| r.budgeted_get(0),
         )
         .optional()?;
     if destination.as_deref() != Some(a.destination.as_slice())
@@ -281,7 +282,7 @@ pub(crate) fn commit_local_invitation_acceptance(
         if authority.team_id != a.joiner.as_bytes() {
             return Err(Error::AuthorizationChanged);
         }
-        let selected: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM team_shared_keys WHERE team_id=?1 AND role_type=?2 AND visibility=?3)",params![a.joiner.as_bytes(),sql_integer(role)?,visibility],|r|r.get(0))?;
+        let selected: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM team_shared_keys WHERE team_id=?1 AND role_type=?2 AND visibility=?3)",params![a.joiner.as_bytes(),sql_integer(role)?,visibility],|r|r.budgeted_get(0))?;
         if !selected {
             return Err(Error::AuthorizationChanged);
         }
@@ -292,7 +293,7 @@ pub(crate) fn commit_local_invitation_acceptance(
             let head: Vec<u8> = c.query_row(
                 "SELECT link_hash FROM team_chain_heads WHERE team_id=?1",
                 [team],
-                |r| r.get(0),
+                |r| r.budgeted_get(0),
             )?;
             if expected.as_ref().map(|h| h.as_slice()) != Some(head.as_slice()) {
                 return Err(Error::AuthorizationChanged);
@@ -301,22 +302,22 @@ pub(crate) fn commit_local_invitation_acceptance(
     } else if a.joiner.as_bytes() != a.uid || a.source_role != foks_proto::Role::OWNER {
         return Err(Error::AuthorizationChanged);
     }
-    let pending:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM team_local_join_requests WHERE team_id=?1 AND joiner_id=?2 AND source_role_type=?3 AND source_visibility=?4 AND state=0)",params![a.destination,a.joiner.as_bytes(),sql_integer(role)?,visibility],|r|r.get(0))?;
+    let pending:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM team_local_join_requests WHERE team_id=?1 AND joiner_id=?2 AND source_role_type=?3 AND source_visibility=?4 AND state=0)",params![a.destination,a.joiner.as_bytes(),sql_integer(role)?,visibility],|r|r.budgeted_get(0))?;
     if pending {
         return Err(Error::InvitationAlreadyPending);
     }
     let team_count: i64 = c.query_row(
         "SELECT (SELECT count(*) FROM team_local_join_requests WHERE team_id=?1 AND state=0)+(SELECT count(*) FROM team_remote_join_requests WHERE team_id=?1 AND state=0)",
         [&a.destination],
-        |r| r.get(0),
+        |r| r.budgeted_get(0),
     )?;
     let joiner_count: i64 = c.query_row(
         "SELECT count(*) FROM team_local_join_requests WHERE joiner_id=?1 AND state=0",
         [a.joiner.as_bytes()],
-        |r| r.get(0),
+        |r| r.budgeted_get(0),
     )?;
     let total: i64 = c.query_row("SELECT count(*) FROM team_local_join_requests", [], |r| {
-        r.get(0)
+        r.budgeted_get(0)
     })?;
     if team_count >= 1000 || joiner_count >= 100 || total >= MAXIMUM_LOCAL_JOIN_REQUESTS {
         return Err(Error::QuotaExceeded);
@@ -324,7 +325,7 @@ pub(crate) fn commit_local_invitation_acceptance(
     let (floor, visibility): (i64, i64) = c.query_row(
         "SELECT member_load_floor_type,member_load_floor_visibility FROM teams WHERE team_id=?1",
         [&a.destination],
-        |r| Ok((r.get(0)?, r.get(1)?)),
+        |r| Ok((r.budgeted_get(0)?, r.budgeted_get(1)?)),
     )?;
     let floor = stored_role(crate::error::unsigned(floor)?, visibility)?;
     insert_local_permission(
@@ -380,7 +381,7 @@ impl Database {
             .query_row(
                 "SELECT state FROM team_local_join_requests WHERE receipt=?1 AND team_id=?2",
                 params![rsvp, authority.team_id],
-                |r| r.get(0),
+                |r| r.budgeted_get(0),
             )
             .optional()?;
         match state {
@@ -412,12 +413,12 @@ fn local_inbox(
             ],
             |r| {
                 Ok((
-                    r.get::<_, Vec<u8>>(0)?,
-                    r.get::<_, Vec<u8>>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, i64>(3)?,
-                    r.get::<_, Vec<u8>>(4)?,
-                    r.get::<_, i64>(5)?,
+                    r.budgeted_get::<_, Vec<u8>>(0)?,
+                    r.budgeted_get::<_, Vec<u8>>(1)?,
+                    r.budgeted_get::<_, i64>(2)?,
+                    r.budgeted_get::<_, i64>(3)?,
+                    r.budgeted_get::<_, Vec<u8>>(4)?,
+                    r.budgeted_get::<_, i64>(5)?,
                 ))
             },
         )?
@@ -465,13 +466,13 @@ pub(crate) fn approve_local_additions(
     let host: Vec<u8> = c.query_row(
         "SELECT host_id FROM teams WHERE team_id=?1",
         [m.team_id],
-        |r| r.get(0),
+        |r| r.budgeted_get(0),
     )?;
     for member in m.members {
         if member.scoped_host_id.is_some_and(|h| h != host) {
             continue;
         }
-        let present:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM team_members WHERE team_id=?1 AND party_id=?2 AND scoped_host_id IS NULL AND source_role_type=?3 AND source_visibility=?4)",params![m.team_id,member.party_id,sql_integer(member.source_role_type)?,member.source_visibility],|r|r.get(0))?;
+        let present:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM team_members WHERE team_id=?1 AND party_id=?2 AND scoped_host_id IS NULL AND source_role_type=?3 AND source_visibility=?4)",params![m.team_id,member.party_id,sql_integer(member.source_role_type)?,member.source_visibility],|r|r.budgeted_get(0))?;
         if present {
             continue;
         }
@@ -509,22 +510,22 @@ impl Database {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let valid:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM team_invitation_certificates c JOIN team_shared_keys k ON k.team_id=c.team_id AND k.generation=c.generation WHERE c.certificate_hash=?1 AND c.team_id=?2 AND c.generation=?3 AND k.role_type=2 AND k.visibility=0 AND k.exact_hepk=?4)",params![a.certificate_hash.as_slice(),a.team,sql_integer(a.generation)?,a.exact_hepk],|r|r.get(0))?;
+        let valid:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM team_invitation_certificates c JOIN team_shared_keys k ON k.team_id=c.team_id AND k.generation=c.generation WHERE c.certificate_hash=?1 AND c.team_id=?2 AND c.generation=?3 AND k.role_type=2 AND k.visibility=0 AND k.exact_hepk=?4)",params![a.certificate_hash.as_slice(),a.team,sql_integer(a.generation)?,a.exact_hepk],|r|r.budgeted_get(0))?;
         if !valid {
             return Err(Error::AuthorizationChanged);
         }
         let head: Vec<u8> = tx.query_row(
             "SELECT link_hash FROM team_chain_heads WHERE team_id=?1",
             [&a.team],
-            |r| r.get(0),
+            |r| r.budgeted_get(0),
         )?;
         if head != a.destination_head {
             return Err(Error::AuthorizationChanged);
         }
-        let pending:i64=tx.query_row("SELECT (SELECT count(*) FROM team_remote_join_requests WHERE team_id=?1 AND state=0)+(SELECT count(*) FROM team_local_join_requests WHERE team_id=?1 AND state=0)",[&a.team],|r|r.get(0))?;
+        let pending:i64=tx.query_row("SELECT (SELECT count(*) FROM team_remote_join_requests WHERE team_id=?1 AND state=0)+(SELECT count(*) FROM team_local_join_requests WHERE team_id=?1 AND state=0)",[&a.team],|r|r.budgeted_get(0))?;
         let total: i64 =
             tx.query_row("SELECT count(*) FROM team_remote_join_requests", [], |r| {
-                r.get(0)
+                r.budgeted_get(0)
             })?;
         if pending >= 1000 || total >= MAXIMUM_REMOTE_JOIN_REQUESTS {
             return Err(Error::QuotaExceeded);
@@ -549,7 +550,7 @@ impl Database {
             .query_row(
                 "SELECT state FROM team_remote_join_requests WHERE team_id=?1 AND receipt=?2",
                 params![a.team_id, rsvp.as_slice()],
-                |r| r.get(0),
+                |r| r.budgeted_get(0),
             )
             .optional()?;
         match state {
@@ -570,7 +571,7 @@ impl ReadSnapshot<'_> {
         team: &[u8],
         rsvp: &[u8; 17],
     ) -> Result<Option<Vec<u8>>> {
-        Ok(self.connection().query_row("SELECT exact_request FROM team_remote_join_requests WHERE team_id=?1 AND receipt=?2 AND state=0",params![team,rsvp.as_slice()],|r|r.get(0)).optional()?)
+        Ok(self.connection().query_row("SELECT exact_request FROM team_remote_join_requests WHERE team_id=?1 AND receipt=?2 AND state=0",params![team,rsvp.as_slice()],|r|r.budgeted_get(0)).optional()?)
     }
     pub fn remote_invitation_inbox(
         &self,
@@ -589,9 +590,9 @@ impl ReadSnapshot<'_> {
                 ],
                 |r| {
                     Ok((
-                        r.get::<_, Vec<u8>>(0)?,
-                        r.get::<_, Vec<u8>>(1)?,
-                        r.get::<_, i64>(2)?,
+                        r.budgeted_get::<_, Vec<u8>>(0)?,
+                        r.budgeted_get::<_, Vec<u8>>(1)?,
+                        r.budgeted_get::<_, i64>(2)?,
                     ))
                 },
             )?
@@ -628,7 +629,7 @@ pub(crate) fn approve_remote_invitation(
         .query_row(
             "SELECT state FROM team_remote_join_requests WHERE team_id=?1 AND receipt=?2",
             params![team, rsvp.as_slice()],
-            |r| r.get(0),
+            |r| r.budgeted_get(0),
         )
         .optional()?;
     match state {
@@ -662,13 +663,13 @@ impl Database {
         let host: Vec<u8> = tx.query_row(
             "SELECT host_id FROM teams WHERE team_id=?1",
             [&admin.team_id],
-            |r| r.get(0),
+            |r| r.budgeted_get(0),
         )?;
         let prior: Option<Vec<u8>> = tx
             .query_row(
                 "SELECT exact_removal FROM team_removal_proofs WHERE team_id=?1 AND commitment=?2",
                 params![admin.team_id, removal.commitment.as_slice()],
-                |r| r.get(0),
+                |r| r.budgeted_get(0),
             )
             .optional()?;
         let prior = prior.ok_or(Error::AuthorizationChanged)?;

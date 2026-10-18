@@ -18,6 +18,19 @@ pub(crate) fn reserve_username(
     ports: &IdentityPorts<'_>,
     argument: &[u8],
 ) -> Result<Vec<u8>, RpcStatus> {
+    reserve_username_for_principal(ports, argument, None)
+}
+
+/// Reserves a username. With a `principal`, the reservation is for a username
+/// change, and the writer checks in the reserving transaction that the
+/// principal's credential still belongs to an active interactive owner of the
+/// account.
+pub(crate) fn reserve_username_for_principal(
+    ports: &IdentityPorts<'_>,
+    argument: &[u8],
+    principal: Option<&crate::auth::Principal>,
+) -> Result<Vec<u8>, RpcStatus> {
+    let actor = principal.map(|p| (p.uid().to_vec(), p.device_id().to_vec()));
     const RESERVATION_LIFETIME_MICROSECONDS: u64 = 10 * 60 * 1_000_000;
     let Value::Array(fields) = decode(argument).map_err(bad_arguments)? else {
         return Err(bad_arguments(
@@ -52,7 +65,18 @@ pub(crate) fn reserve_username(
     let writer = ports.writer.ok_or(RpcStatus::Unsupported)?;
     let result =
         writer.call_with_current_time(Arc::clone(ports.clock), move |database, current_time| {
-            database.reserve_name(&normalized, &token, 1, current_time, expires_at)?;
+            if let Some((uid, credential)) = actor {
+                database.reserve_name_for_username_change(
+                    &uid,
+                    &credential,
+                    &normalized,
+                    &token,
+                    current_time,
+                    expires_at,
+                )?;
+            } else {
+                database.reserve_name(&normalized, &token, 1, current_time, expires_at)?;
+            }
             Ok(())
         });
     match result {
@@ -335,6 +359,11 @@ pub(crate) fn client_certificate_chain(
 pub(super) fn map_reservation_error(error: crate::Error) -> RpcStatus {
     match error {
         crate::Error::Database(foks_server_db::Error::NameInUse) => RpcStatus::NameInUse,
+        // The reserving credential no longer belongs to an active interactive
+        // owner of the account.
+        crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => {
+            RpcStatus::PermissionDenied("active device does not authorize this request".to_owned())
+        }
         other => crate::status::unmapped(other, "username_reservation"),
     }
 }

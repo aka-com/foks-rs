@@ -3,15 +3,17 @@
 //! tokens, remote view permissions and passphrase or recovery challenges, are
 //! not reported.
 //!
-//! The report reads one snapshot. It scans every KV and realtime message row,
-//! so it is meant for an operator command, not for each metrics scrape; the
-//! limits alone come from [`CapacityResource::limit`] without a database read.
+//! The report reads one snapshot. It reads the materialized KV namespace
+//! counters and scans every realtime message row, so it is meant for an
+//! operator command, not for each metrics scrape; the limits alone come from
+//! [`CapacityResource::limit`] without a database read.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
 use rusqlite::Connection;
 
+use crate::allocation::RowAllocationExt as _;
 use crate::error::unsigned;
 use crate::team_invitations::{
     MAXIMUM_INVITATION_CERTIFICATES, MAXIMUM_LOCAL_JOIN_REQUESTS, MAXIMUM_LOCAL_VIEW_PERMISSIONS,
@@ -171,7 +173,7 @@ impl ReadSnapshot<'_> {
         let connection = self.connection();
         let config = self.config();
         let count = |sql: &str| -> Result<u64> {
-            unsigned(connection.query_row(sql, [], |row| row.get(0))?)
+            unsigned(connection.query_row(sql, [], |row| row.budgeted_get(0))?)
         };
         let page_size = pragma(connection, "page_size")?;
         let database_bytes = pragma(connection, "page_count")?
@@ -183,7 +185,7 @@ impl ReadSnapshot<'_> {
         let reservations = unsigned(connection.query_row(
             "SELECT count(*) FROM team_names WHERE team_id IS NULL AND expires_at > ?1",
             [crate::error::sql_integer(now)?],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?)?;
         let (kv_namespaces, largest_bytes, most_objects) = kv_namespaces(connection)?;
         let mut usage = Vec::with_capacity(CapacityResource::ALL.len());
@@ -213,16 +215,12 @@ impl ReadSnapshot<'_> {
                 CapacityResource::DatabaseBytes => database_bytes,
                 CapacityResource::KvNamespaceBytes => largest_bytes,
                 CapacityResource::KvNamespaceObjects => most_objects,
-                CapacityResource::KvNamespaceDirectories => count(
-                    "SELECT coalesce(max(heads), 0) FROM (
-                         SELECT count(*) AS heads FROM kv_directory_heads GROUP BY uid
-                     )",
-                )?,
-                CapacityResource::KvNamespaceDirents => count(
-                    "SELECT coalesce(max(heads), 0) FROM (
-                         SELECT count(*) AS heads FROM kv_dirent_heads GROUP BY uid
-                     )",
-                )?,
+                CapacityResource::KvNamespaceDirectories => {
+                    count("SELECT coalesce(max(directory_count), 0) FROM kv_namespaces")?
+                }
+                CapacityResource::KvNamespaceDirents => {
+                    count("SELECT coalesce(max(dirent_count), 0) FROM kv_namespaces")?
+                }
             };
             usage.push(CapacityUsage {
                 resource,
@@ -240,33 +238,21 @@ impl ReadSnapshot<'_> {
 }
 
 fn pragma(connection: &Connection, name: &str) -> Result<u64> {
-    unsigned(connection.pragma_query_value(None, name, |row| row.get(0))?)
+    unsigned(connection.pragma_query_value(None, name, |row| row.budgeted_get(0))?)
 }
 
 /// Returns the largest namespaces by bytes, the largest byte count and the
-/// largest object count. The terms match the namespace quota check in
-/// `kv::ensure_kv_capacity`, grouped over every namespace at once. Only the
-/// listed namespaces are held in memory.
+/// largest object count. The values are the materialized counters that the
+/// namespace quota check in `kv::ensure_kv_capacity` reads. Only the listed
+/// namespaces are held in memory.
 fn kv_namespaces(connection: &Connection) -> Result<(Vec<KvNamespaceUsage>, u64, u64)> {
-    let mut statement = connection.prepare(
-        "SELECT uid, sum(bytes), sum(objects) FROM (
-             SELECT uid, sum(length(exact_directory)) AS bytes, count(*) AS objects
-               FROM kv_directories GROUP BY uid
-             UNION ALL SELECT uid, sum(length(exact_root)), count(*) FROM kv_roots GROUP BY uid
-             UNION ALL SELECT uid, sum(length(exact_node)), count(*) FROM kv_nodes GROUP BY uid
-             UNION ALL SELECT uid, sum(length(exact_dirent)), count(*) FROM kv_dirents GROUP BY uid
-             UNION ALL SELECT uid, sum(length(exact_metadata)), count(*)
-               FROM kv_file_uploads GROUP BY uid
-             UNION ALL SELECT uid, sum(length(ciphertext) + length(exact_upload_chunk)), count(*)
-               FROM kv_file_chunks GROUP BY uid
-             UNION ALL SELECT uid, count(*) * 64, count(*) FROM kv_locks GROUP BY uid
-         ) GROUP BY uid",
-    )?;
+    let mut statement = connection
+        .prepare("SELECT namespace_id, accounted_bytes, accounted_objects FROM kv_namespaces")?;
     let rows = statement.query_map([], |row| {
         Ok((
-            row.get::<_, Vec<u8>>(0)?,
-            row.get::<_, i64>(1)?,
-            row.get::<_, i64>(2)?,
+            row.budgeted_get::<_, Vec<u8>>(0)?,
+            row.budgeted_get::<_, i64>(1)?,
+            row.budgeted_get::<_, i64>(2)?,
         ))
     })?;
     // Ordered so that the greatest key ranks lowest (fewer bytes, then the
@@ -308,9 +294,9 @@ fn realtime_teams(connection: &Connection) -> Result<Vec<RealtimeTeamUsage>> {
     let limit = i64::try_from(CapacityReport::LISTED_PARTIES).map_err(|_| Error::IntegerRange)?;
     let rows = statement.query_map([limit], |row| {
         Ok((
-            row.get::<_, Vec<u8>>(0)?,
-            row.get::<_, i64>(1)?,
-            row.get::<_, i64>(2)?,
+            row.budgeted_get::<_, Vec<u8>>(0)?,
+            row.budgeted_get::<_, i64>(1)?,
+            row.budgeted_get::<_, i64>(2)?,
         ))
     })?;
     rows.map(|row| {

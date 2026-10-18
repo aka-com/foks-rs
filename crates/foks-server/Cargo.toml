@@ -5,8 +5,12 @@ edition.workspace = true
 license.workspace = true
 description = "Standalone single-host FOKS v0.1.9 server"
 
+[features]
+celld-proof = ["foks-metadata-core/native", "foks-hosted-transport/qualification"]
+
 [dependencies]
-nix = { version = "0.30", default-features = false, features = ["resource", "time"] }
+foks-hosted-transport = { workspace = true }
+nix = { version = "0.30", default-features = false, features = ["resource", "time", "fs", "dir"] }
 base64 = { workspace = true }
 foks-oidc = { workspace = true }
 serde_json = { workspace = true }
@@ -17,18 +21,28 @@ url = "2"
 chacha20poly1305 = { workspace = true }
 clap = { workspace = true }
 foks-crypto = { workspace = true }
+foks-local-deadline = { workspace = true, features = ["clock"] }
 foks-merkle-store = { workspace = true }
+foks-metadata-core = { workspace = true, features = ["owned-list"] }
 foks-proto = { workspace = true }
 foks-rpc = { workspace = true }
+foks-schema-contract = { workspace = true }
 foks-server-db = { workspace = true }
 foks-snowpack = { workspace = true }
 foks-verify = { workspace = true }
 getrandom = { workspace = true }
 libc = { workspace = true }
 lru = { workspace = true }
+# Exact: the S3 chunk store relies on its conditional-create (PUT if absent)
+# and retry semantics; an update needs the live object-store qualification
+# described in the README before the pin moves.
+object_store = { version = "=0.14.2", default-features = false, features = ["aws"] }
+futures-util = "0.3"
+sha2 = { workspace = true }
+reqwest = { workspace = true }
 rcgen = { workspace = true }
 rustls = { workspace = true }
-rusqlite = { workspace = true }
+rusqlite = { workspace = true, features = ["limits", "hooks"] }
 rustls-pki-types = { workspace = true }
 signal-hook = { workspace = true }
 serde = { workspace = true }
@@ -42,6 +56,9 @@ x509-parser = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+foks-hosted-transport = { workspace = true, features = ["test-support"] }
+tokio = { workspace = true, features = ["test-util"] }
+foks-metadata-core = { workspace = true, features = ["native"] }
 foks-oidc = { workspace = true, features = ["test-support"] }
 foks-client-db = { workspace = true }
 

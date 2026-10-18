@@ -7,7 +7,7 @@ use foks_client_db::{
     HardStateStore, KvDirectoryProjection, MutationKind, MutationOperation, MutationState,
     SoftStateStore,
 };
-use foks_crypto::{derive_kv_keys, seal_kv_chunk, seal_kv_dirent_name};
+use foks_crypto::{derive_kv_keys, seal_kv_dirent_name};
 use foks_proto::{
     KvDirectory, KvDirectoryPair, KvDirectoryStatus, KvDirent, KvNodeId, KvNodeType, KvRoot,
     KvSmallFilePlaintext, Role, RoleAndGeneration, SecretSeed,
@@ -18,8 +18,7 @@ use zeroize::Zeroizing;
 use super::rpc::KvRequest;
 use super::support::{
     bound_dirent, is_kv_stale_cache, kv_directory_reaches, kv_key, kv_version_vector_from_tree,
-    random_kv_node_id, read_kv_upload_chunk, read_kv_upload_chunk_with_carry,
-    validate_kv_component, validate_kv_symlink,
+    random_kv_node_id, read_kv_upload_chunk, validate_kv_component, validate_kv_symlink,
 };
 use super::{KvPathScope, KvWriteOptions, KvWriteResult, KvWriteSession};
 use crate::{now_microseconds, random_bytes, Error, MutationCoordinator, MutationDraft, Result};
@@ -141,7 +140,7 @@ impl KvWriteSession<'_> {
     /// those same versions as its precondition, so the server rejects the
     /// reuse if a peer has changed any of them. A session that has not
     /// resolved a path naming `parent` falls back to the complete traversal.
-    fn scoped_tree(&mut self, parent: [u8; 16]) -> Result<Vec<KvDirectoryProjection>> {
+    pub(super) fn scoped_tree(&mut self, parent: [u8; 16]) -> Result<Vec<KvDirectoryProjection>> {
         if let Some(scope) = &self.scope {
             if scope.parent() == Some(parent) {
                 return Ok(scope.directories.clone());
@@ -290,7 +289,8 @@ impl KvWriteSession<'_> {
         if let Some(id) = expected_dirent_id {
             require_selected_entry(&tree, parent, name, id, options.expected_version)?;
         }
-        let (first, mut carry, first_is_final) = read_kv_upload_chunk(reader)?;
+        self.ensure_file_upload_claim(parent, name, expected_size, options, expected_dirent_id)?;
+        let (first, carry, first_is_final) = read_kv_upload_chunk(reader)?;
         let first_len = first.len();
         let node_type = if first_is_final && first.len() <= Self::SMALL_FILE_BYTES {
             KvNodeType::SmallFile
@@ -305,122 +305,48 @@ impl KvWriteSession<'_> {
             options,
             false,
         )?;
-        let (content_seed, key) = self.current_content_key(options.read_role)?;
-        let (node_id, boxed_small, large_metadata, first_chunk, file_seed) = if node_type
-            == KvNodeType::SmallFile
-        {
-            let id = random_kv_node_id(KvNodeType::SmallFile)?;
-            let boxed = derive_kv_keys(content_seed)?.seal_small_file(
-                id,
-                key,
-                KvSmallFilePlaintext::File(first),
-            )?;
-            (id, Some(boxed), None, None, None)
-        } else {
-            let id = random_kv_node_id(KvNodeType::File)?;
-            let file_seed = SecretSeed::new(random_bytes()?);
-            let keys = derive_kv_keys(content_seed)?;
-            let mut metadata = keys.seal_file_seed(id, key, 1, &file_seed, random_bytes()?)?;
-            if let Some(size) = expected_size {
-                metadata.custom_metadata =
-                    Some(keys.seal_large_file_size(id, metadata.version, size, random_bytes()?)?);
-            }
-            let chunk = seal_kv_chunk(&file_seed, id, 0, first_is_final, &first, 0)?;
-            (id, None, Some(metadata), Some(chunk), Some(file_seed))
-        };
-
-        let actual_size;
-        if let Some(boxed) = boxed_small {
-            actual_size =
-                u64::try_from(first_len).map_err(|_| Error::KvResponse("upload size overflow"))?;
-            self.call(KvRequest::PutSmall { id: node_id, boxed })?;
-        } else {
-            let metadata = large_metadata.expect("large-file metadata was constructed");
-            let mut chunk = first_chunk.expect("large-file first chunk was constructed");
-            let file_seed = file_seed.expect("large-file seed was constructed");
-            let mut clear_offset = u64::try_from(first_len)
-                .map_err(|_| Error::KvResponse("upload offset overflow"))?;
-            let mut encrypted_size = u64::try_from(chunk.ciphertext.len())
-                .map_err(|_| Error::KvResponse("upload size overflow"))?;
-            self.call(KvRequest::UploadInit {
-                file_id: node_id.object_id(),
-                metadata,
-                chunk: chunk.clone(),
-            })?;
-            while chunk.final_upload.is_none() {
-                let (clear, next_carry, final_chunk) =
-                    read_kv_upload_chunk_with_carry(reader, std::mem::take(&mut carry))?;
-                carry = next_carry;
-                let next_offset = clear_offset
-                    .checked_add(
-                        u64::try_from(clear.len())
-                            .map_err(|_| Error::KvResponse("upload offset overflow"))?,
-                    )
-                    .ok_or(Error::KvResponse("upload offset overflow"))?;
-                if next_offset > Self::MAX_UPLOAD_BYTES
-                    || (next_offset == Self::MAX_UPLOAD_BYTES && !final_chunk)
-                {
-                    return Err(Error::KvRequest("upload exceeds FOKS file size limit"));
-                }
-                chunk = seal_kv_chunk(
-                    &file_seed,
-                    node_id,
-                    clear_offset,
-                    final_chunk,
-                    &clear,
-                    encrypted_size,
-                )?;
-                clear_offset = next_offset;
-                encrypted_size = encrypted_size
-                    .checked_add(
-                        u64::try_from(chunk.ciphertext.len())
-                            .map_err(|_| Error::KvResponse("upload size overflow"))?,
-                    )
-                    .ok_or(Error::KvResponse("upload size overflow"))?;
-                self.call(KvRequest::UploadChunk {
-                    file_id: node_id.object_id(),
-                    chunk: chunk.clone(),
-                })?;
-            }
-            if clear_offset > Self::MAX_UPLOAD_BYTES || !carry.is_empty() {
-                return Err(Error::KvResponse("upload exceeds FOKS file size limit"));
-            }
-            actual_size = clear_offset;
+        if node_type == KvNodeType::File {
+            return self.prepare_and_submit_large_file(
+                parent,
+                name,
+                reader,
+                expected_size,
+                options,
+                expected_dirent_id,
+                first,
+                carry,
+                first_is_final,
+                tree,
+            );
         }
-
-        if expected_size.is_some_and(|expected| expected != actual_size) {
+        if let Some(id) = self.upload_identity.take() {
+            // The existing inline protocol does not participate in content replay.
+            // Retain an explicit unused-for-recovery tombstone, never a success claim.
+            let mut hard = HardStateStore::open(&self.host.database_path)?;
+            hard.finish_inline_upload_identity(&id)?;
+            hard.record_upload_terminal(&id, None)?;
+        }
+        let (content_seed, key) = self.current_content_key(options.read_role)?;
+        if expected_size.is_some_and(|expected| expected != first_len as u64) {
             return Err(Error::KvRequest(
                 "upload length does not match declared size",
             ));
         }
-        if node_type == KvNodeType::File {
-            SoftStateStore::open(&self.soft_database_path)?.record_large_file_size(
-                self.host.host_id.as_bytes(),
-                self.party.party.as_bytes(),
-                &node_id.0,
-                actual_size,
-            )?;
-        }
-        let mut result = self.link_uploaded_node_bound(
+        let node_id = random_kv_node_id(KvNodeType::SmallFile)?;
+        let boxed = derive_kv_keys(content_seed)?.seal_small_file(
+            node_id,
+            key,
+            KvSmallFilePlaintext::File(first),
+        )?;
+        self.call(KvRequest::PutSmall { id: node_id, boxed })?;
+        self.link_uploaded_node_bound(
             tree,
             parent,
             name.as_bytes(),
             node_id,
             options,
             expected_dirent_id,
-        )?;
-        if node_type == KvNodeType::File {
-            for directory in &mut result.path {
-                if let Some(entry) = directory
-                    .entries
-                    .iter_mut()
-                    .find(|entry| entry.node_id == node_id.0)
-                {
-                    entry.large_file_size = Some(actual_size);
-                }
-            }
-        }
-        Ok(result)
+        )
     }
 
     pub fn put_symlink(
@@ -777,7 +703,7 @@ impl KvWriteSession<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn link_uploaded_node_bound(
+    pub(super) fn link_uploaded_node_bound(
         &mut self,
         tree: Vec<KvDirectoryProjection>,
         parent: [u8; 16],
@@ -830,6 +756,10 @@ impl KvWriteSession<'_> {
                 if is_kv_stale_cache(&error) {
                     MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
                         .rejected(&operation.operation_id)?;
+                    if let Some(upload) = self.upload_parent {
+                        HardStateStore::open(&self.host.database_path)?
+                            .retry_upload_namespace(&upload)?;
+                    }
                     if attempt + 1 < Self::MAX_NAMESPACE_ATTEMPTS {
                         tree = self.refresh_or_sync(scope_parent)?;
                         continue;
@@ -1058,23 +988,22 @@ impl KvWriteSession<'_> {
         let operation_id = random_bytes()?;
         let subject_id = namespace_subject(dirents);
         let expected_version = Some(precondition.root_version);
-        MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
-            .prepare_with_parent(
-                MutationDraft {
-                    operation_id,
-                    kind: MutationKind::KvNamespace,
-                    host_id: self.host.host_id.as_bytes().to_vec(),
-                    scope_id: self.party.party.as_bytes().to_vec(),
-                    subject_id,
-                    expected_version,
-                    request_hash: foks_crypto::prefixed_hash(
-                        KV_NAMESPACE_REQUEST_HASH_TYPE_ID,
-                        &material,
-                    ),
-                },
-                material,
-                self.adapter_parent.map(|id| (id, self.adapter_completion)),
-            )
+        let draft = MutationDraft {
+            operation_id,
+            kind: MutationKind::KvNamespace,
+            host_id: self.host.host_id.as_bytes().to_vec(),
+            scope_id: self.party.party.as_bytes().to_vec(),
+            subject_id,
+            expected_version,
+            request_hash: foks_crypto::prefixed_hash(KV_NAMESPACE_REQUEST_HASH_TYPE_ID, &material),
+        };
+        let adapter = self.adapter_parent.map(|id| (id, self.adapter_completion));
+        let mut coordinator =
+            MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store);
+        match self.upload_parent {
+            Some(upload) => coordinator.prepare_upload_namespace(draft, material, upload, adapter),
+            None => coordinator.prepare_with_parent(draft, material, adapter),
+        }
     }
 
     /// Re-reads the mutated path, or the whole namespace where the mutation
@@ -1147,6 +1076,18 @@ impl KvWriteSession<'_> {
         let verified = HardStateStore::open(&self.host.database_path)?
             .mutation(&operation.operation_id)?
             .ok_or(Error::OperationBinding("verified KV operation disappeared"))?;
+        if let Some(upload) = self.upload_parent {
+            let version = dirents
+                .first()
+                .ok_or(Error::OperationBinding("empty upload publication"))?
+                .version;
+            HardStateStore::open(&self.host.database_path)?.verify_upload(
+                &upload,
+                version,
+                tree.len() as u64,
+                tree.iter().map(|d| d.entries.len() as u64).sum(),
+            )?;
+        }
         finalize_verified_material(
             &self.host.database_path,
             &mut *self.protected_store,
@@ -1155,11 +1096,14 @@ impl KvWriteSession<'_> {
         Ok(tree)
     }
 
-    fn call(&mut self, request: KvRequest) -> Result<Vec<u8>> {
+    pub(super) fn call(&mut self, request: KvRequest) -> Result<Vec<u8>> {
         self.connection.call(self.auth.borrowed(), &request)
     }
 
-    fn current_content_key(&self, role: Role) -> Result<(&SecretSeed, RoleAndGeneration)> {
+    pub(super) fn current_content_key(
+        &self,
+        role: Role,
+    ) -> Result<(&SecretSeed, RoleAndGeneration)> {
         let generation = self
             .private_keys
             .iter()
@@ -1249,7 +1193,7 @@ impl KvWriteSession<'_> {
         )
     }
 
-    fn validate_dirent_precondition(
+    pub(super) fn validate_dirent_precondition(
         &self,
         tree: &[KvDirectoryProjection],
         parent: [u8; 16],
@@ -1308,7 +1252,7 @@ impl KvWriteSession<'_> {
     }
 }
 
-fn require_selected_entry<'a>(
+pub(super) fn require_selected_entry<'a>(
     tree: &'a [KvDirectoryProjection],
     parent: [u8; 16],
     name: &str,
@@ -1349,7 +1293,7 @@ fn encode_namespace_material(
     ]))?))
 }
 
-fn decode_namespace_material(
+pub(super) fn decode_namespace_material(
     material: &[u8],
 ) -> Result<(foks_proto::KvPathVersionVector, Vec<KvDirent>)> {
     let Value::Array(fields) = decode(material)? else {
@@ -1436,6 +1380,18 @@ pub(crate) fn finalize_verified_material<S: crate::ProtectedMutationStore + ?Siz
             return Err(Error::OperationBinding(
                 "verified namespace fingerprint changed",
             ));
+        }
+        let mut hard = HardStateStore::open(database)?;
+        if let Some(upload) = hard.upload_for_namespace(&operation.operation_id)? {
+            if upload.state == foks_client_db::UploadState::Publishing {
+                let [entry] = dirents.as_slice() else {
+                    return Err(Error::OperationBinding("upload publication shape changed"));
+                };
+                if entry.value.0 != upload.file_id {
+                    return Err(Error::OperationBinding("upload publication node changed"));
+                }
+                hard.verify_upload(&upload.id, entry.version, 0, 0)?;
+            }
         }
         dirents
             .last()

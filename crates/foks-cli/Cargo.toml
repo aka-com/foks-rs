@@ -13,6 +13,7 @@ path = "src/main.rs"
 clap = { workspace = true }
 foks-client-app = { workspace = true }
 foks-agent-client = { workspace = true }
+foks-local-deadline = { workspace = true, features = ["clock"] }
 foks-agent-proto = { workspace = true }
 foks-mcp = { workspace = true }
 tokio = { workspace = true }

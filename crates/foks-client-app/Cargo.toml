@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+foks-local-deadline = { workspace = true, features = ["clock"] }
 base64 = { workspace = true }
 rustix = { version = "1.1", features = ["fs", "process"] }
 foks-agent-proto = { workspace = true }
@@ -31,9 +32,6 @@ thiserror = { workspace = true }
 toml = { workspace = true }
 url = { workspace = true }
 zeroize = { workspace = true }
-
-[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
-nix = { version = "0.30", default-features = false, features = ["time"] }
 
 [dev-dependencies]
 foks-server-db = { workspace = true }

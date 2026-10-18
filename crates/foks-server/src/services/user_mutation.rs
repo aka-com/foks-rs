@@ -75,7 +75,15 @@ pub(crate) fn commit(
     let host = ports.host().map_err(|_| RpcStatus::TransactionRetry)?;
     let hostchain_tail = ports.hostchain_tail.clone();
     let signer = identity.device_id.clone();
+    let authenticated_credential = principal.device_id().to_vec();
+    let is_rename = matches!(&decoded, crate::identity::mutation::Argument::Rename(..));
+    drop(reader);
     let result = writer.call(move |database| {
+        // A username change requires a link signed by an active interactive
+        // owner device, authenticated with that owner's credential.
+        if is_rename {
+            database.require_username_change_signer(&uid, &authenticated_credential, &signer)?;
+        }
         let now = clock.now_micros()?;
         let idempotency_expires_at = now
             .checked_add(IDEMPOTENCY_RECORD_LIFETIME_MICROSECONDS)
@@ -269,6 +277,7 @@ pub(crate) fn commit(
             username: command.username.as_ref(),
             uid: &command.uid,
             signer_device_id: &command.signer,
+            authenticated_credential_id: &authenticated_credential,
             expected_sequence: command.sequence,
             expected_tail_hash: &command.expected_tail_hash,
             link_hash: &command.link_hash,
@@ -310,6 +319,7 @@ pub(super) fn map_user_mutation_error(error: crate::Error) -> RpcStatus {
         crate::Error::Database(foks_server_db::Error::Reservation) => {
             bad_arguments("invalid rename reservation")
         }
+        crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => permission_denied(),
         crate::Error::Database(foks_server_db::Error::NameInUse) => RpcStatus::NameInUse,
         crate::Error::Database(foks_server_db::Error::StaleRoot) => {
             RpcStatus::RevokeRace("user chain or Merkle root changed".to_owned())

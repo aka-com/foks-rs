@@ -217,6 +217,8 @@ fn show_issues_exactly_one_version_bound_team_read() {
     let (output, requests) = capture_operations(
         strings(&[
             "kv-read",
+            "--dirent-id",
+            "00000000000000000000000000000000",
             "work",
             "personal",
             "/wifi/password",
@@ -230,6 +232,7 @@ fn show_issues_exactly_one_version_bound_team_read() {
             serde_json::to_value(KvReadResult {
                 store: store.clone(),
                 path: "/wifi/password".to_owned(),
+                dirent_id: [0; 16],
                 version: 19,
                 node_type: "small-file".to_owned(),
                 size: Some(15),
@@ -248,6 +251,7 @@ fn show_issues_exactly_one_version_bound_team_read() {
         Operation::ReadKv {
             store,
             path: "/wifi/password".to_owned(),
+            dirent_id: [0; 16],
             version: 19,
         }
     );
@@ -405,7 +409,48 @@ fn capture_upload(arguments: Vec<OsString>) -> (Output, UploadTranscript) {
     let (socket, listener) = private_socket(directory.path());
     let server = std::thread::spawn(move || {
         let mut stream = accept_bounded(&listener);
-        let request = foks_agent_proto::decode_request(&read_frame(&mut stream)).unwrap();
+        let mut request = foks_agent_proto::decode_request(&read_frame(&mut stream)).unwrap();
+        if matches!(request.operation, Operation::KvUploadIssuance { .. }) {
+            stream
+                .write_all(
+                    &foks_agent_proto::encode(&Response::success(
+                        request.id,
+                        serde_json::json!({"database_id":vec![1;16],"issued_at":1}),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+            drop(stream);
+            stream = accept_bounded(&listener);
+            request = foks_agent_proto::decode_request(&read_frame(&mut stream)).unwrap();
+        }
+        if let Operation::PrepareKvUpload { upload_id, .. } = &request.operation {
+            let id = upload_id.to_string();
+            stream
+                .write_all(
+                    &foks_agent_proto::encode(&Response::success(
+                        request.id,
+                        serde_json::json!({"state":"awaiting-source","upload_id":id}),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+            drop(stream);
+            stream = accept_bounded(&listener);
+            request = foks_agent_proto::decode_request(&read_frame(&mut stream)).unwrap();
+            assert!(
+                matches!(&request.operation,Operation::PutKvStream{header} if header.upload_id.is_some())
+            );
+            stream
+                .write_all(
+                    &foks_agent_proto::encode(&Response::success(
+                        request.id,
+                        serde_json::json!({"upload_ready":true}),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+        }
         let mut total = 0u64;
         let mut chunks = 0usize;
         let mut maximum_chunk = 0usize;
@@ -470,6 +515,7 @@ fn eighty_four_megabyte_file_uses_bounded_stream_frames_without_inline_content()
         transcript.request.operation,
         Operation::PutKvStream {
             header: foks_agent_proto::KvUploadHeader {
+                upload_id: Some(_),
                 adapter: None,
                 total_length: 88_080_384,
                 precondition: KvPrecondition::Create,
@@ -520,6 +566,7 @@ fn replacement_file_stream_is_bound_to_the_inspected_version_and_roles() {
         transcript.request.operation,
         Operation::PutKvStream {
             header: foks_agent_proto::KvUploadHeader {
+                upload_id: Some(id),
                 adapter: None,
                 total_length: 16,
                 read_role: KvRole::Member { visibility: -16384 },
@@ -528,7 +575,7 @@ fn replacement_file_stream_is_bound_to_the_inspected_version_and_roles() {
                 mkdir_p: false,
                 ..
             }
-        }
+        } if id.database_id() == Some([1; 16]) && id.issued_at() == Some(1)
     ));
     assert_eq!(transcript.total, 16);
     assert_eq!(transcript.chunks, 1);

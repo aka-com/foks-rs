@@ -142,8 +142,8 @@ fn overwritten_and_unlinked_versions_remain_readable() {
                 .kv_file_chunk(&UID, &file, 0)
                 .unwrap()
                 .unwrap()
-                .ciphertext,
-            b"ciphertext"
+                .payload,
+            foks_server_db::KvChunkPayload::Inline(b"ciphertext".to_vec())
         );
     }
 }
@@ -274,7 +274,7 @@ fn equal_file_ids_in_distinct_party_namespaces_do_not_share_liveness() {
         let party = [kind; 33];
         connection
             .execute(
-                "INSERT INTO kv_namespaces VALUES (?1, ?2, zeroblob(33))",
+                "INSERT INTO kv_namespaces(namespace_id, party_kind, host_id) VALUES (?1, ?2, zeroblob(33))",
                 params![party, kind],
             )
             .unwrap();

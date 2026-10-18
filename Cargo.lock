@@ -968,6 +968,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "crc-fast"
+version = "1.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e75b2483e97a5a7da73ac68a05b629f9c53cff58d8ed1c77866079e18b00dba5"
+dependencies = [
+ "digest 0.10.7",
+ "spin 0.10.1",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1559,6 +1569,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66b7e2430c6dff6a955451e2cfc438f09cea1965a9d6f87f7e3b90decc014099"
 
 [[package]]
+name = "enum-as-inner"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1e6a265c649f3f5979b601d26f1d05ada116434c87741c9493cb56218f76cbc"
+dependencies = [
+ "heck 0.5.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "enumflags2"
 version = "0.7.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1744,6 +1766,7 @@ dependencies = [
  "foks-crypto",
  "foks-go-interop",
  "foks-keystore",
+ "foks-local-deadline",
  "foks-oidc",
  "foks-proto",
  "foks-rpc",
@@ -1768,6 +1791,8 @@ name = "foks-agent-client"
 version = "0.4.0"
 dependencies = [
  "foks-agent-proto",
+ "foks-local-deadline",
+ "getrandom 0.4.3",
  "rustix",
  "serde_json",
  "tempfile",
@@ -1780,6 +1805,7 @@ name = "foks-agent-proto"
 version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
+ "foks-local-deadline",
  "foks-proto",
  "serde",
  "serde_json",
@@ -1797,6 +1823,7 @@ dependencies = [
  "foks-client-app",
  "foks-compat-artifact",
  "foks-keystore",
+ "foks-local-deadline",
  "foks-mcp",
  "foks-oidc",
  "foks-server-testkit",
@@ -1816,6 +1843,7 @@ dependencies = [
  "chacha20poly1305",
  "foks-client-db",
  "foks-crypto",
+ "foks-local-deadline",
  "foks-merkle-store",
  "foks-oidc",
  "foks-proto",
@@ -1825,6 +1853,7 @@ dependencies = [
  "foks-yubi",
  "getrandom 0.4.3",
  "libc",
+ "nix",
  "rcgen",
  "rusqlite",
  "rustls",
@@ -1847,6 +1876,7 @@ dependencies = [
  "foks-compat-artifact",
  "foks-crypto",
  "foks-keystore",
+ "foks-local-deadline",
  "foks-oidc",
  "foks-proto",
  "foks-protocol-metadata",
@@ -1858,7 +1888,6 @@ dependencies = [
  "fs2",
  "getrandom 0.4.3",
  "libc",
- "nix",
  "rusqlite",
  "rustix",
  "rustls",
@@ -1937,6 +1966,7 @@ dependencies = [
  "foks-agent-proto",
  "foks-client",
  "foks-crypto",
+ "foks-local-deadline",
  "foks-verify",
  "getrandom 0.4.3",
  "libc",
@@ -1960,6 +1990,7 @@ dependencies = [
  "foks-crypto",
  "foks-desktop",
  "foks-keystore",
+ "foks-local-deadline",
  "foks-protocol-metadata",
  "foks-verify",
  "foks-yubi",
@@ -2007,6 +2038,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "foks-hosted-transport"
+version = "0.4.0"
+dependencies = [
+ "foks-metadata-core",
+ "foks-rpc",
+ "foks-snowpack",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "foks-keystore"
 version = "0.4.0"
 dependencies = [
@@ -2022,6 +2064,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "foks-local-deadline"
+version = "0.4.0"
+dependencies = [
+ "libc",
+ "nix",
+ "serde",
+ "serde_json",
+ "sysctl",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "foks-mcp"
 version = "0.4.0"
 dependencies = [
@@ -2029,12 +2083,14 @@ dependencies = [
  "foks-agent-client",
  "foks-agent-proto",
  "foks-crypto",
+ "foks-local-deadline",
  "foks-proto",
  "futures-util",
  "getrandom 0.4.3",
  "rmcp",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.20",
  "time",
  "tokio",
@@ -2053,11 +2109,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "foks-metadata-core"
+version = "0.4.0"
+dependencies = [
+ "foks-merkle-store",
+ "foks-proto",
+ "foks-rpc",
+ "foks-schema-contract",
+ "foks-server-db",
+ "foks-snowpack",
+ "getrandom 0.4.3",
+ "hmac",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sha2 0.11.0",
+ "tempfile",
+ "zeroize",
+]
+
+[[package]]
 name = "foks-oidc"
 version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
+ "foks-local-deadline",
  "openidconnect",
  "reqwest",
  "serde_json",
@@ -2102,6 +2180,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "foks-schema-contract"
+version = "0.4.0"
+dependencies = [
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "foks-server"
 version = "0.4.0"
 dependencies = [
@@ -2110,13 +2195,18 @@ dependencies = [
  "clap",
  "foks-client-db",
  "foks-crypto",
+ "foks-hosted-transport",
+ "foks-local-deadline",
  "foks-merkle-store",
+ "foks-metadata-core",
  "foks-oidc",
  "foks-proto",
  "foks-rpc",
+ "foks-schema-contract",
  "foks-server-db",
  "foks-snowpack",
  "foks-verify",
+ "futures-util",
  "getrandom 0.4.3",
  "http-body-util",
  "hyper",
@@ -2124,12 +2214,15 @@ dependencies = [
  "libc",
  "lru",
  "nix",
+ "object_store",
  "rcgen",
+ "reqwest",
  "rusqlite",
  "rustls",
  "rustls-pki-types",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "signal-hook",
  "tempfile",
  "thiserror 2.0.20",
@@ -2149,8 +2242,12 @@ dependencies = [
  "foks-crypto",
  "foks-merkle-store",
  "foks-proto",
+ "foks-schema-contract",
+ "foks-snowpack",
+ "getrandom 0.4.3",
  "libc",
  "rusqlite",
+ "sha2 0.11.0",
  "subtle",
  "tempfile",
  "thiserror 2.0.20",
@@ -2170,6 +2267,7 @@ dependencies = [
  "foks-crypto",
  "foks-desktop",
  "foks-merkle-store",
+ "foks-metadata-core",
  "foks-oidc",
  "foks-proto",
  "foks-rpc",
@@ -2725,6 +2823,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "h2"
+version = "0.4.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d29020232d6aa3fb1daca64c1127cf662cf97f254ae16c18c05b8ab635fc118"
+dependencies = [
+ "atomic-waker",
+ "bytes",
+ "fnv",
+ "futures-core",
+ "futures-sink",
+ "http",
+ "indexmap 2.14.0",
+ "slab",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2868,6 +2985,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
+name = "humantime"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15cdd26707701c53297e2fa6afb323d55fbc1d0810c3aec078ae3ef0424c3c15"
+
+[[package]]
 name = "hybrid-array"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2888,6 +3011,7 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-core",
+ "h2",
  "http",
  "http-body",
  "httparse",
@@ -3168,6 +3292,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3403,7 +3536,7 @@ version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 dependencies = [
- "spin",
+ "spin 0.9.9",
 ]
 
 [[package]]
@@ -3541,6 +3674,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
 dependencies = [
  "regex-automata",
+]
+
+[[package]]
+name = "md-5"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
+dependencies = [
+ "cfg-if",
+ "digest 0.11.3",
 ]
 
 [[package]]
@@ -4088,6 +4231,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "object_store"
+version = "0.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1796bc93603f78c5760a69f2d58badc9618d22adade0a95385bb2adbae4eb94"
+dependencies = [
+ "async-trait",
+ "aws-lc-rs",
+ "base64 0.23.1",
+ "bytes",
+ "chrono",
+ "crc-fast",
+ "form_urlencoded",
+ "futures-channel",
+ "futures-core",
+ "futures-util",
+ "http",
+ "http-body-util",
+ "humantime",
+ "hyper",
+ "itertools 0.15.0",
+ "md-5",
+ "parking_lot",
+ "percent-encoding",
+ "quick-xml",
+ "rand 0.10.2",
+ "reqwest",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "url",
+ "wasm-bindgen-futures",
+ "web-time",
+]
+
+[[package]]
 name = "oid-registry"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4126,7 +4308,7 @@ dependencies = [
  "ed25519-dalek",
  "hmac",
  "http",
- "itertools",
+ "itertools 0.10.5",
  "log",
  "oauth2",
  "p256",
@@ -4661,6 +4843,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
 dependencies = [
  "memchr",
+ "serde",
 ]
 
 [[package]]
@@ -4906,6 +5089,7 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
+ "h2",
  "http",
  "http-body",
  "http-body-util",
@@ -5775,6 +5959,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
 
 [[package]]
+name = "spin"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "023a211cb3138dbc438680b32560ad89f699977624c9f8dbb95a47d5b4c07dd3"
+
+[[package]]
 name = "spki"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5903,6 +6093,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "sysctl"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cca424247104946a59dacd27eaad296223b7feec3d168a6dd04585183091eb0b"
+dependencies = [
+ "bitflags 2.13.1",
+ "byteorder",
+ "enum-as-inner",
+ "libc",
+ "thiserror 2.0.20",
+ "walkdir",
 ]
 
 [[package]]

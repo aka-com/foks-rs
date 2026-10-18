@@ -57,17 +57,96 @@ fn bootstrap_input() -> BootstrapInput {
 // Reconstruct the same predecessor schemas exercised by server-db's migration
 // tests, rather than changing only user_version on the current schema.
 fn predecessor(connection: &Connection, version: i64) {
-    assert!((43..=48).contains(&version));
-    connection
-        .execute_batch(
-            "DROP TRIGGER waitlist_count_insert;
-             DROP TRIGGER waitlist_count_delete;
-             DROP TABLE waitlist_count;
-             DROP INDEX waitlist_entries_email;
-             DROP INDEX waitlist_entries_created;
-             CREATE INDEX waitlist_entries_email_created ON waitlist_entries(email,created_at);",
-        )
-        .unwrap();
+    assert!((43..=SCHEMA_VERSION).contains(&version));
+    if version <= 59 {
+        connection
+            .execute_batch(include_str!(
+                "../../../../foks-server-db/tests/fixtures/remove_waitlist_count.sql"
+            ))
+            .unwrap();
+    }
+    if version <= 58 {
+        connection
+            .execute_batch(include_str!(
+                "../../../../foks-server-db/tests/fixtures/remove_read_dependency.sql"
+            ))
+            .unwrap();
+    }
+    if version <= 57 {
+        connection
+            .execute_batch(include_str!(
+                "../../../../foks-server-db/tests/fixtures/remove_kv_usage.sql"
+            ))
+            .unwrap();
+    }
+    if version == 56 {
+        connection
+            .execute_batch(include_str!(
+                "../../../../foks-server-db/tests/fixtures/remove_kv_historical.sql"
+            ))
+            .unwrap();
+    }
+    if version <= 55 {
+        connection
+            .execute_batch(include_str!(
+                "../../../../foks-server-db/tests/fixtures/remove_kv_current.sql"
+            ))
+            .unwrap();
+    }
+    if version <= 54 {
+        connection
+            .execute_batch(
+                "DROP TRIGGER chunk_attempt_policy_immutable;
+            DROP INDEX chunk_attempts_publication_policy;
+            ALTER TABLE chunk_object_attempts DROP COLUMN publication_policy;",
+            )
+            .unwrap();
+    }
+    if (51..=53).contains(&version) {
+        connection
+            .execute_batch("ALTER TABLE chunk_storage_binding DROP COLUMN authority_identity")
+            .unwrap();
+    }
+    if version == 52 {
+        connection
+            .execute_batch(include_str!(
+                "../../../../foks-server-db/tests/fixtures/remove_chunk_ledger.sql"
+            ))
+            .unwrap();
+        connection
+            .execute_batch(include_str!(
+                "../../../../foks-server-db/src/schema/chunk_ledger.sql"
+            ))
+            .unwrap();
+    }
+    if version == 51 {
+        connection
+            .execute_batch(include_str!(
+                "../../../../foks-server-db/tests/fixtures/remove_chunk_ledger.sql"
+            ))
+            .unwrap();
+    }
+    if version == 50 {
+        connection
+            .execute_batch(include_str!(
+                "../../../../foks-server-db/tests/fixtures/remove_chunk_binding.sql"
+            ))
+            .unwrap();
+    }
+    if version <= 49 {
+        connection
+            .execute_batch(include_str!(
+                "../../../../foks-server-db/tests/fixtures/remove_external_kv_chunks.sql"
+            ))
+            .unwrap();
+    }
+    if version <= 48 {
+        connection
+            .execute_batch(include_str!(
+                "../../../../foks-server-db/tests/fixtures/remove_kv_accounting.sql"
+            ))
+            .unwrap();
+    }
     if version <= 44 {
         for index in [
             "names_reservation_expiry",
@@ -184,7 +263,7 @@ fn supported_backup_schemas_validate_and_restore_without_changing_originals() {
         .unwrap()
         .unwrap()
         .probe_response;
-    for version in 43..=48 {
+    for version in 43..=SCHEMA_VERSION {
         let backup_root = temporary.path().join(format!("backup-{version}"));
         let artifacts = fixture.backup(&backup_root);
         let connection = Connection::open(&artifacts.database).unwrap();
@@ -231,7 +310,7 @@ fn backup_wal_is_recovered_only_in_private_copy_and_included_in_restore() {
         .unwrap()
         .unwrap()
         .probe_response;
-    for version in [47, 48] {
+    for version in [47, 48, SCHEMA_VERSION] {
         let root = temporary.path().join(format!("backup-{version}"));
         let artifacts = fixture.backup(&root);
         // Keep this idle writer open so the committed WAL is not checkpointed on
@@ -455,4 +534,51 @@ fn retention_accepts_supported_prior_schemas_and_preserves_retained_artifacts() 
     let before = snapshot(root.path());
     assert!(super::enforce_retention(root.path(), 1, &Config::default()).is_err());
     assert_eq!(snapshot(root.path()), before);
+}
+
+#[test]
+fn restore_rotates_private_read_identity_and_reopen_preserves_it() {
+    let fixture = Fixture::new();
+    let temporary = tempfile::tempdir().unwrap();
+    let backup_root = temporary.path().join("backup");
+    let artifacts = fixture.backup(&backup_root);
+    let original = ReadDatabase::open(&artifacts.database, Config::default())
+        .unwrap()
+        .read_dependency()
+        .unwrap();
+    let before = snapshot(&backup_root);
+    let mut previous = original;
+    for index in 0..2 {
+        let destination = temporary.path().join(format!("restore-{index}"));
+        let database = destination.join("server.sqlite");
+        restore_backup(
+            &artifacts,
+            &database,
+            destination.join("keys"),
+            Config::default(),
+        )
+        .unwrap();
+        let reader = ReadDatabase::open(&database, Config::default()).unwrap();
+        let restored = reader.read_dependency().unwrap();
+        assert_ne!(restored.incarnation, original.incarnation);
+        assert_ne!(restored.incarnation, previous.incarnation);
+        assert_eq!(restored.revision, 1);
+        assert!(matches!(
+            reader
+                .snapshot()
+                .unwrap()
+                .require_read_dependency(&original),
+            Err(foks_server_db::Error::ReadDependencyChanged)
+        ));
+        drop(reader);
+        assert_eq!(
+            Database::open(&database, Config::default())
+                .unwrap()
+                .read_dependency()
+                .unwrap(),
+            restored
+        );
+        assert_eq!(snapshot(&backup_root), before);
+        previous = restored;
+    }
 }

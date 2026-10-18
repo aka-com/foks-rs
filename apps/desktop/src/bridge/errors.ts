@@ -31,6 +31,28 @@ export type CommandRecovery =
   | { kind: 'quarantine'; scope: 'agent' | 'profile' | 'account' | 'channel' }
   | { kind: 'revalidate'; scope: 'team' };
 
+/**
+ * Refusals that the same request meets again until something else changes:
+ * the agent's upload admission, which needs reconciliation, capacity cleanup
+ * or clock repair first, and the desktop's own clock, deadline-policy and
+ * lock-state checks.
+ */
+const REFUSED_UNTIL_CHANGED = [
+  'upload-expired',
+  'upload-identity-conflict',
+  'upload-generation-mismatch',
+  'upload-legacy-read-only',
+  'upload-pending-full',
+  'upload-retention-full',
+  'upload-spool-full',
+  'upload-clock-untrusted',
+  'upload-future',
+  'deadline-clock',
+  'missing-deadline',
+  'missing-deadline-policy',
+  'app-lock-unavailable',
+];
+
 export function commandRecovery(error: CommandError): CommandRecovery {
   if (
     !error.ambiguous &&
@@ -47,6 +69,10 @@ export function commandRecovery(error: CommandError): CommandRecovery {
       'protocol',
       'response-binding',
       'version-mismatch',
+      // The agent cannot read its clock, or reads a clock domain other than
+      // this process's, so no request can carry a deadline it accepts.
+      'deadline-clock-unavailable',
+      'deadline-domain-mismatch',
     ].includes(error.code)
   )
     return { kind: 'quarantine', scope: 'agent' };
@@ -70,6 +96,12 @@ export function commandRecovery(error: CommandError): CommandRecovery {
     )
   )
     return { kind: 'revalidate', scope: 'team' };
+  if (REFUSED_UNTIL_CHANGED.includes(error.code))
+    return { kind: 'refresh', scope: 'request' };
+  // The app locked again during unlock authentication; unlocking again can
+  // succeed.
+  if (error.code === 'authentication-interrupted')
+    return { kind: 'retry', scope: 'request' };
   return { kind: error.retryable ? 'retry' : 'refresh', scope: 'request' };
 }
 

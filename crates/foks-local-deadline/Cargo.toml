@@ -1,0 +1,36 @@
+[package]
+name = "foks-local-deadline"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+clock = ["dep:nix", "dep:libc", "dep:sysctl"]
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+# Exact: clock_gettime produces the deadline envelope's nanosecond coordinate,
+# which the agent and its front ends compare across processes; an update is
+# checked with `cargo run -p foks-local-deadline --features clock --example clock_probe`.
+nix = { version = "=0.30.1", features = ["time"], optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true, optional = true }
+# Exact: kern.bootsessionuuid read through this crate names the macOS clock
+# domain and the receipt clocks' boot identity; an update is checked with the
+# same clock_probe example on macOS.
+sysctl = { version = "=0.7.1", optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[[example]]
+name = "clock_probe"
+required-features = ["clock"]
+
+[lints]
+workspace = true

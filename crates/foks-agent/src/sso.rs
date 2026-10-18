@@ -15,7 +15,8 @@ pub(super) fn handle(
     let session =
         crate::read_cache::open_profile_session(registry, profile, timeout, cancellation)?;
     let credentials = ClientCredentials::open(state_dir)?;
-    let http = foks_oidc::ProviderHttp::new(foks_oidc::NetworkPolicy::default())?;
+    let http = foks_oidc::ProviderHttp::new(foks_oidc::NetworkPolicy::default())?
+        .with_local_deadline(crate::request_control::current()?.deadline)?;
     if credentials.requires_import_verification(&session)? {
         use foks_client_app::portability::{
             reauthenticate_imported_account, ImportReauthenticationAction as Action,

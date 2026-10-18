@@ -120,7 +120,7 @@ fn a_retained_team_view_is_reused_until_its_profile_is_invalidated() {
 }
 
 fn cache_key(profile: &str, path: &str, version: u64) -> KvNodeCacheKey {
-    KvNodeCacheKey::new(&user_key(profile, 7), &entity(2), path, version)
+    KvNodeCacheKey::new(&user_key(profile, 7), &entity(2), path, [0; 16], version)
 }
 
 fn cache_entry(node: u8) -> KvNodeCacheEntry {
@@ -157,6 +157,9 @@ fn a_remembered_kv_path_is_scoped_and_dropped_with_its_profile() {
         KvNodeCache::get(&caches, &cache_key("local", "/a/large.bin", 4)),
         Some(cache_entry(1))
     );
+    let mut recreated = cache_key("local", "/a/large.bin", 4);
+    recreated.dirent_id = [9; 16];
+    assert!(KvNodeCache::get(&caches, &recreated).is_none());
     // A different version of the same path is a different entry, and so is
     // the same path in another profile.
     assert!(KvNodeCache::get(&caches, &cache_key("local", "/a/large.bin", 5)).is_none());
@@ -230,6 +233,7 @@ fn only_the_enumerated_operations_serve_reads() {
         Operation::ReadKv {
             store: KvStoreRef::Account(account.clone()),
             path: "/a".to_owned(),
+            dirent_id: [0; 16],
             version: 1,
         },
         Operation::ListTeamMembers {
@@ -299,6 +303,7 @@ fn mutating_operations_never_serve_reads() {
         Operation::RepairAdapterClock {
             profile: "local".to_owned(),
             account_alias: "owner".to_owned(),
+            domain: foks_agent_proto::data::ReceiptClockDomain::Adapter,
             action: foks_agent_proto::data::AdapterClockRepairAction::Confirm {
                 unix_seconds: 1,
                 confirmation_digest: "ab".repeat(32),
@@ -366,10 +371,12 @@ fn reads_of_devices_keys_and_rosters_leave_retained_material_in_place() {
         Operation::AdapterClockStatus {
             profile: "local".to_owned(),
             account_alias: "owner".to_owned(),
+            domain: foks_agent_proto::data::ReceiptClockDomain::Adapter,
         },
         Operation::RepairAdapterClock {
             profile: "local".to_owned(),
             account_alias: "owner".to_owned(),
+            domain: foks_agent_proto::data::ReceiptClockDomain::Adapter,
             action: foks_agent_proto::data::AdapterClockRepairAction::Preview { unix_seconds: 1 },
         },
         Operation::Probe {
@@ -664,6 +671,12 @@ fn one_base_transport_serves_a_profile_until_it_is_dropped() {
 
 #[test]
 fn a_session_carries_read_caches_only_inside_a_read_scope() {
+    let control = crate::request_control::RequestControl::background(
+        Duration::from_secs(5),
+        CancellationToken::new(),
+    )
+    .unwrap();
+    let _control = control.enter().unwrap();
     let temporary = tempfile::tempdir().expect("temporary directory");
     let root = temporary.path().join("state");
     let mut registry = ProfileRegistry::open(&root).expect("registry opens");

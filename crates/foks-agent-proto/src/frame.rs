@@ -319,6 +319,7 @@ mod tests {
             serde_json::to_value(KvChunkResult {
                 store,
                 path,
+                dirent_id: [0xff; 16],
                 version: u64::MAX,
                 offset: u64::MAX,
                 content: vec![0x5a; MAXIMUM_KV_PAYLOAD_BYTES],
@@ -347,6 +348,7 @@ mod tests {
             serde_json::to_value(KvChunkResult {
                 store,
                 path,
+                dirent_id: [0xff; 16],
                 version: u64::MAX,
                 offset: u64::MAX,
                 // Past what the ceiling admits once encoded, before the

@@ -6,13 +6,13 @@ use crate::{
     },
     commands::{require_main_window, AppState, MAIN},
 };
-use tauri::{Emitter as _, Manager as _, State};
+use tauri::{Emitter as _, Manager as _};
 use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons};
 
 #[tauri::command]
 pub async fn relocate_client_state(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
 ) -> Result<MaintenanceSnapshot, AgentError> {
     require_main_window(&webview)?;
     let app = webview.app_handle().clone();
@@ -172,7 +172,7 @@ fn collect_export_selection(
 #[tauri::command]
 pub fn client_state_maintenance_status(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
 ) -> Result<MaintenanceSnapshot, AgentError> {
     require_main_window(&webview)?;
     Ok(state.agent.maintenance_snapshot())
@@ -410,7 +410,7 @@ fn archive_operation(
 #[tauri::command]
 pub async fn maintain_client_state(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     action: StateArchiveAction,
 ) -> Result<MaintenanceSnapshot, AgentError> {
     require_main_window(&webview)?;

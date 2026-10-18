@@ -36,7 +36,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::State;
 
 /// The folder that holds every role's Trash folder in a store.
 pub(super) const TRASH_ROOT: &str = "/.trash";
@@ -698,7 +697,7 @@ async fn apply_trash_plan(
     store: &CatalogStoreRef,
     plan: TrashPlan,
 ) -> Result<TrashMutationDto, AgentError> {
-    let transport = state.agent.transport();
+    let transport = state.transport()?;
     let TrashPlan { steps, path } = plan;
     let cleanup_unknown = run_kv_writes(state, Some(store), move || {
         execute_trash_plan(transport.as_ref(), steps)
@@ -752,7 +751,7 @@ fn now_seconds() -> Result<u64, AgentError> {
 pub async fn trash_item(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     path: String,
     version: u64,
@@ -775,7 +774,7 @@ pub async fn trash_item(
 pub async fn restore_trash_item(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     path: String,
     version: u64,
@@ -802,7 +801,7 @@ pub async fn restore_trash_item(
 pub async fn remove_item(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     path: String,
     version: u64,
@@ -833,7 +832,7 @@ pub async fn remove_item(
 pub async fn empty_trash(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     entries: Vec<TrashEntryRequest>,
 ) -> Result<MutationDto, AgentError> {

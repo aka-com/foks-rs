@@ -827,6 +827,7 @@ impl ProfileRegistry {
                 // so this directory is provably this publication's own; the
                 // registry lock keeps the removal from racing a concurrent
                 // open's scan of the same directory.
+                let _completion = runtime::OperationScope::suspend();
                 let _lock = RegistryMutationLock::acquire(&self.root)?;
                 staging.release()?;
                 remove_profile_publication_directory(&staging_directory)?;
@@ -840,17 +841,25 @@ impl ProfileRegistry {
             let paths = ProfilePaths::for_directory(staging_directory.clone());
             let mut client = client_for_trust(&profile.trust, &self.root)?;
             client.set_timeout(timeout);
-            let client = client.with_cancellation_token(cancellation);
+            let operation = runtime::current_operation();
+            let client = match operation.as_ref() {
+                Some((deadline, _)) => client.with_local_deadline(deadline.clone())?,
+                None => client,
+            }
+            .with_cancellation_token(cancellation);
             let session = ProfileSession {
                 lease: self.lease.clone(),
                 profile: profile.clone(),
                 paths,
                 client,
+                operation,
                 adapter_clock: std::sync::Arc::new(crate::SystemAdapterClock),
                 read_caches: crate::ReadCaches::default(),
                 pairing_budget: None,
             };
+            session.check_operation()?;
             let probe = session.probe_and_pin_unchecked()?;
+            session.check_operation()?;
             if expected_host.is_some_and(|host| probe.host_id_hex != hex(host)) {
                 return Err(Error::InvalidProfile(
                     "checked server does not match the expected host",
@@ -898,6 +907,8 @@ impl ProfileRegistry {
                     "unpublished profile state directory already exists",
                 ));
             }
+            runtime::check_operation()?;
+            let _completion = runtime::OperationScope::suspend();
             staging.release()?;
             fs::rename(&staging_directory, &final_directory)?;
             File::open(&profiles_directory)?.sync_all()?;
@@ -947,6 +958,7 @@ impl ProfileRegistry {
         })();
 
         if publication.is_err() && !registry_was_committed.get() && !crash_was_injected.get() {
+            let _completion = runtime::OperationScope::suspend();
             // Ordinary failures are cleaned immediately. Crash-injection
             // paths intentionally retain the marker so reopen recovery is
             // exercised by tests.
@@ -1367,6 +1379,38 @@ pub(super) fn profile_publication_marker(session: &ProfileSession) -> PathBuf {
     session.paths.directory.join(PROFILE_PUBLICATION_MARKER)
 }
 
+/// Inspect a registered legacy publication without opening or migrating its
+/// database. The root maintenance lease excludes concurrent publishers.
+pub(super) fn legacy_publication_digest(
+    root: &Path,
+    profile: &Profile,
+) -> Result<Option<[u8; 32]>> {
+    profile.validate()?;
+    let directory = root.join("profiles").join(&profile.name);
+    let metadata = match fs::symlink_metadata(&directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+        || directory.canonicalize()? != directory
+    {
+        return Err(Error::InvalidConfig("profile publication path is unsafe"));
+    }
+    let Some((marker, digest)) =
+        read_profile_publication_marker(&directory.join(PROFILE_PUBLICATION_MARKER))?
+    else {
+        return Ok(None);
+    };
+    if marker.profile != *profile || marker.checkpoint.profile != profile.name {
+        return Err(Error::InvalidConfig(
+            "profile publication registry binding changed",
+        ));
+    }
+    Ok(Some(digest))
+}
+
 pub(super) fn profile_publication_is_pending(session: &ProfileSession) -> Result<bool> {
     read_profile_publication_marker(&session.paths.directory.join(PROFILE_PUBLICATION_MARKER))
         .map(|marker| marker.is_some())
@@ -1421,6 +1465,47 @@ impl ClientCredentials {
         cancellation: CancellationToken,
         expected_host: Option<&[u8; 33]>,
     ) -> Result<ProfilePublicationReport> {
+        let original = std::time::Instant::now()
+            .checked_add(timeout)
+            .ok_or(Error::InvalidConfig("operation deadline out of range"))?;
+        let deadline =
+            foks_local_deadline::Deadline::capture(original).map_err(foks_client::Error::from)?;
+        self.check_and_add_profile_for_host_with_deadline(
+            registry,
+            profile,
+            deadline,
+            cancellation,
+            expected_host,
+        )
+    }
+
+    pub fn check_and_add_profile_with_deadline(
+        &self,
+        registry: &mut ProfileRegistry,
+        profile: Profile,
+        deadline: foks_local_deadline::Deadline,
+        cancellation: CancellationToken,
+    ) -> Result<ProfilePublicationReport> {
+        self.check_and_add_profile_for_host_with_deadline(
+            registry,
+            profile,
+            deadline,
+            cancellation,
+            None,
+        )
+    }
+
+    pub fn check_and_add_profile_for_host_with_deadline(
+        &self,
+        registry: &mut ProfileRegistry,
+        profile: Profile,
+        deadline: foks_local_deadline::Deadline,
+        cancellation: CancellationToken,
+        expected_host: Option<&[u8; 33]>,
+    ) -> Result<ProfilePublicationReport> {
+        let _scope = runtime::OperationScope::enter(Some(&(deadline, cancellation.clone())))?;
+        runtime::check_operation()?;
+        let timeout = Duration::from_secs(15);
         if self.root != registry.root {
             return Err(Error::InvalidConfig(
                 "profile registry belongs to a different client state",
@@ -1442,6 +1527,7 @@ impl ClientCredentials {
             ),
         };
         let report = result?;
+        let _completion = runtime::OperationScope::suspend();
         let session = ProfileSession::open(registry, &profile.name)?;
         self.with_checked_session(&session, |_| Ok::<_, Error>(()))?;
         Ok(report)
@@ -1512,9 +1598,9 @@ impl RegistryMutationLock {
         }
         let file = options.open(root.join(REGISTRY_LOCK_FILE))?;
         match (wait, exclusive) {
-            (true, true) => fs2::FileExt::lock_exclusive(&file)?,
+            (true, true) => runtime::controlled_lock(&file)?,
             (false, true) => fs2::FileExt::try_lock_exclusive(&file)?,
-            (true, false) => fs2::FileExt::lock_shared(&file)?,
+            (true, false) => runtime::controlled_lock_mode(&file, false)?,
             (false, false) => fs2::FileExt::try_lock_shared(&file)?,
         }
         Ok(Self(file))
@@ -1644,7 +1730,7 @@ impl PublicationStaging {
         let Some(file) = Self::open_lock_file(&directory, false)? else {
             return Ok(());
         };
-        fs2::FileExt::lock_exclusive(&file)?;
+        runtime::controlled_lock(&file)?;
         let _ = fs2::FileExt::unlock(&file);
         Ok(())
     }
@@ -1794,6 +1880,7 @@ pub struct ProfileSession {
     pub(super) profile: Profile,
     pub(super) paths: ProfilePaths,
     pub(super) client: FoksClient,
+    pub(super) operation: Option<(foks_local_deadline::Deadline, CancellationToken)>,
     pub(super) adapter_clock: std::sync::Arc<dyn crate::AdapterClock>,
     /// Empty unless an embedder attached caches for a read operation. See
     /// [`crate::auth_cache`].
@@ -1807,6 +1894,9 @@ pub struct ProfileSession {
 
 impl ProfileSession {
     pub fn open(registry: &ProfileRegistry, name: &str) -> Result<Self> {
+        if let Some((deadline, cancellation)) = runtime::current_operation() {
+            return Self::open_with_deadline(registry, name, deadline, cancellation);
+        }
         let profile = registry.profile(name)?.clone();
         let paths = registry.prepare_profile_directory(name)?;
         let client = client_for_trust(&profile.trust, &registry.root)?;
@@ -1815,10 +1905,17 @@ impl ProfileSession {
             profile,
             paths,
             client,
+            operation: None,
             adapter_clock: std::sync::Arc::new(crate::SystemAdapterClock),
             read_caches: crate::ReadCaches::default(),
             pairing_budget: None,
         })
+    }
+
+    pub fn with_rpc_timeout(mut self, timeout: Duration) -> Self {
+        self.client
+            .limit_timeout(timeout.min(Duration::from_secs(15)));
+        self
     }
 
     /// Opens a profile over a transport an embedder already holds, so several
@@ -1833,23 +1930,76 @@ impl ProfileSession {
         cancellation: CancellationToken,
         base: &FoksClient,
     ) -> Result<Self> {
-        if timeout.is_zero() {
-            return Err(Error::InvalidConfig("zero profile operation timeout"));
-        }
+        let original = std::time::Instant::now()
+            .checked_add(timeout)
+            .ok_or(foks_client::Error::from(foks_local_deadline::Error::Range))?;
+        let deadline =
+            foks_local_deadline::Deadline::capture(original).map_err(foks_client::Error::from)?;
+        let mut session =
+            Self::open_with_deadline_and_client(registry, name, deadline, cancellation, base)?;
+        session.client.set_timeout(timeout);
+        Ok(session)
+    }
+
+    pub fn open_with_deadline_and_client(
+        registry: &ProfileRegistry,
+        name: &str,
+        deadline: foks_local_deadline::Deadline,
+        cancellation: CancellationToken,
+        base: &FoksClient,
+    ) -> Result<Self> {
+        let _control =
+            runtime::OperationScope::enter(Some(&(deadline.clone(), cancellation.clone())))?;
+        runtime::check_operation()?;
+        let (deadline, cancellation) =
+            runtime::current_operation().expect("installed operation control");
         let profile = registry.profile(name)?.clone();
         let paths = registry.prepare_profile_directory(name)?;
-        let mut client = base.clone();
-        client.set_timeout(timeout);
-        let client = client.with_cancellation_token(cancellation);
+        runtime::check_operation()?;
+        let mut client = base
+            .with_local_deadline(deadline.clone())?
+            .with_cancellation_token(cancellation.clone());
+        client.limit_timeout(Duration::from_secs(15));
         Ok(Self {
             lease: registry.lease.clone(),
             profile,
             paths,
             client,
+            operation: Some((deadline, cancellation)),
             adapter_clock: std::sync::Arc::new(crate::SystemAdapterClock),
             read_caches: crate::ReadCaches::default(),
             pairing_budget: None,
         })
+    }
+
+    pub fn open_with_deadline(
+        registry: &ProfileRegistry,
+        name: &str,
+        deadline: foks_local_deadline::Deadline,
+        cancellation: CancellationToken,
+    ) -> Result<Self> {
+        let _control =
+            runtime::OperationScope::enter(Some(&(deadline.clone(), cancellation.clone())))?;
+        runtime::check_operation()?;
+        let (deadline, cancellation) =
+            runtime::current_operation().expect("installed operation control");
+        let profile = registry.profile(name)?;
+        let base = client_for_trust(&profile.trust, &registry.root)?;
+        runtime::check_operation()?;
+        Self::open_with_deadline_and_client(registry, name, deadline, cancellation, &base)
+    }
+
+    pub fn check_operation(&self) -> Result<()> {
+        if let Some((deadline, cancellation)) = &self.operation {
+            if cancellation.is_cancelled() {
+                return Err(foks_client::Error::Cancelled.into());
+            }
+            deadline.check().map_err(foks_client::Error::from)?;
+        }
+        runtime::check_operation()
+    }
+    pub(crate) fn operation_scope(&self) -> Result<runtime::OperationScope> {
+        runtime::OperationScope::enter(self.operation.as_ref())
     }
 
     /// Bounds the total relay wait of an interactive pairing operation. The
@@ -1909,12 +2059,13 @@ impl ProfileSession {
         timeout: Duration,
         cancellation: CancellationToken,
     ) -> Result<Self> {
-        if timeout.is_zero() {
-            return Err(Error::InvalidConfig("zero profile operation timeout"));
-        }
-        let mut session = Self::open(registry, name)?;
+        let original = std::time::Instant::now()
+            .checked_add(timeout)
+            .ok_or(foks_client::Error::from(foks_local_deadline::Error::Range))?;
+        let deadline =
+            foks_local_deadline::Deadline::capture(original).map_err(foks_client::Error::from)?;
+        let mut session = Self::open_with_deadline(registry, name, deadline, cancellation)?;
         session.client.set_timeout(timeout);
-        session.client = session.client.with_cancellation_token(cancellation);
         Ok(session)
     }
 
@@ -1937,15 +2088,18 @@ impl ProfileSession {
     /// only after that profile's own rollback checkpoint and operation lock
     /// are acquired by the caller.
     pub(crate) fn related_profile(&self, registry: &ProfileRegistry, name: &str) -> Result<Self> {
+        self.check_operation()?;
+        let _control = self.operation_scope()?;
         let profile = registry.profile(name)?.clone();
         let paths = registry.prepare_profile_directory(name)?;
         let client = client_for_trust(&profile.trust, &registry.root)?
-            .with_operation_controls_from(&self.client);
+            .with_operation_controls_from(&self.client)?;
         Ok(Self {
             lease: registry.lease.clone(),
             profile,
             paths,
             client,
+            operation: self.operation.clone(),
             adapter_clock: std::sync::Arc::clone(&self.adapter_clock),
             // A related profile is only opened by cross-profile mutations, so
             // it never inherits read caches.

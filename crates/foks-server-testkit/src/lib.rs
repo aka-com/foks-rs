@@ -4,6 +4,8 @@
 
 mod account;
 mod binary;
+#[cfg(feature = "celld-proof")]
+pub mod celld_proof;
 mod certs;
 mod client;
 mod clock;
@@ -11,6 +13,7 @@ mod config;
 mod environment;
 pub mod oidc;
 mod process;
+mod recovery;
 mod scheduling;
 
 pub use account::TestAccountSpec;
@@ -21,4 +24,5 @@ pub use environment::{
 };
 pub use foks_server::web_admin::WebAdminConfig;
 pub use process::{InProcessServer, IsolatedTestServer, ProbeOverrideServer};
+pub use recovery::RecoveryLedger;
 pub use scheduling::WriterQueuePressure;

@@ -23,16 +23,18 @@
 [workspace]
 package_roots = ["crates/foks-*", "apps/desktop/src-tauri"]
 
-# Encoding, cryptography, verification, Merkle construction and protocol
-# metadata shared by client and server. Holds no local state and no
-# credentials.
+# Encoding, cryptography, verification, Merkle construction, protocol
+# metadata, the SQLite schema contract and the monotonic local deadline shared
+# by client and server. Holds no local state and no credentials.
 [layer.core]
 packages = [
     "foks-compat-artifact",
     "foks-crypto",
+    "foks-local-deadline",
     "foks-merkle-store",
     "foks-proto",
     "foks-protocol-metadata",
+    "foks-schema-contract",
     "foks-snowpack",
     "foks-verify",
 ]
@@ -78,8 +80,16 @@ packages = ["foks-cli", "foks-desktop", "foks-desktop-app", "foks-mcp"]
 may_depend_on = ["core", "agent-protocol", "agent-client"]
 
 # Server crates never depend on client, device, agent or front-end crates.
+# foks-metadata-core and foks-hosted-transport hold the metadata kernel and the
+# request allocation and framing budgets that the server shares with hosted
+# runtimes.
 [layer.server]
-packages = ["foks-server", "foks-server-db"]
+packages = [
+    "foks-hosted-transport",
+    "foks-metadata-core",
+    "foks-server",
+    "foks-server-db",
+]
 may_depend_on = ["core", "network"]
 
 [layer.test-support]
@@ -101,17 +111,22 @@ test_only = true
 # account, kv, jobs, device, recovery, passphrase, team and yubi commands open
 # ClientCredentials and ProfileSession in-process, and `state` calls the
 # portability functions directly, including verify_imported_profile for
-# `state verify-online`. The account admin, bot, rename and sync commands, team
-# invitations, mcp, sso and retention use the agent. The integration tests seed
-# state through foks-client-app and the encrypted-file keystore before starting
-# an agent.
+# `state verify-online`. `retention maintain` and the upload preflight drain
+# local upload cleanup in-process under the profile lock, and every command
+# enters a foks-client-app operation scope for its deadline (deadline.rs). The
+# account admin, bot, rename and sync commands, team invitations, mcp, sso and
+# the other retention commands use the agent. The integration tests seed state
+# through foks-client-app and the encrypted-file keystore before starting an
+# agent.
 [[exception]]
 package = "foks-cli"
 dependency = "foks-client-app"
-reason = "direct in-process client commands and offline state maintenance"
+reason = "direct in-process client commands, local cleanup and offline state maintenance"
 sites = [
     "crates/foks-cli/src/main.rs",
     "crates/foks-cli/src/state.rs",
+    "crates/foks-cli/src/deadline.rs",
+    "crates/foks-cli/src/retention.rs",
     "crates/foks-cli/tests/*.rs",
 ]
 

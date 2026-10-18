@@ -18,13 +18,15 @@ struct Call<F, T> {
     operation: F,
     response: SyncSender<Result<T>>,
     queued_at: Instant,
-    /// The end of the submitting request's execution budget, if any.
-    deadline: Option<Instant>,
+    /// The submitting request's deadline, taken from its ambient scope.
+    deadline: Option<crate::deadline::Deadline>,
     timing: Arc<WriterTiming>,
     reconciliation: Option<(
         Arc<crate::ServerMetrics>,
         crate::metrics::realtime::ReconcileSource,
     )>,
+    // Drop captured buffers before returning their allocation allowance.
+    resources: Option<Arc<crate::net::memory::Request>>,
 }
 
 impl<F, T> Task for Call<F, T>
@@ -34,6 +36,7 @@ where
 {
     fn run(self: Box<Self>, database: &mut Database) {
         let Self {
+            resources,
             operation,
             response,
             queued_at,
@@ -47,13 +50,19 @@ where
         // and its session closes the connection without a response, so the
         // client already treats the outcome as ambiguous. The job has not
         // opened a transaction, and skipping it leaves no partial effect.
-        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        if deadline.is_some_and(|deadline| deadline.remaining().is_err()) {
             timing.expired.fetch_add(1, Ordering::Relaxed);
-            let _ = response.send(Err(Error::DeadlineExceeded));
+            let _ = response.send(Err(crate::deadline::expired()));
             return;
         }
         let started = Instant::now();
-        let result = operation(database);
+        let result = crate::deadline::scope(deadline, || {
+            if let Some(resources) = resources.as_ref() {
+                resources.sync(|| operation(database))
+            } else {
+                operation(database)
+            }
+        });
         let execution = started.elapsed();
         timing.observe_execution(execution);
         if let Some((metrics, source)) = reconciliation {
@@ -79,7 +88,6 @@ pub struct Writer {
 #[derive(Clone)]
 pub struct WriterHandle {
     authorization: Option<Arc<WriteAuthorization>>,
-    deadline: Option<Instant>,
     queue: Arc<WriterQueue>,
 }
 
@@ -90,6 +98,7 @@ struct WriteAuthorization {
 }
 
 struct WriterQueue {
+    database_identity: DatabasePathIdentity,
     sender: SyncSender<Message>,
     accepting: Mutex<bool>,
     accepted: AtomicU64,
@@ -180,6 +189,7 @@ impl Writer {
         } = guard;
         let (sender, receiver) = mpsc::sync_channel(maximum_pending);
         let (startup_sender, startup_receiver) = mpsc::sync_channel(1);
+        let writer_identity = database_identity.clone();
         let thread = thread::spawn(move || {
             let database = Database::open_with_identity(database_identity, database_config);
             match database {
@@ -199,8 +209,8 @@ impl Writer {
             Ok(Ok(())) => Ok(Self {
                 handle: WriterHandle {
                     authorization: None,
-                    deadline: None,
                     queue: Arc::new(WriterQueue {
+                        database_identity: writer_identity,
                         sender,
                         accepting: Mutex::new(true),
                         accepted: AtomicU64::new(0),
@@ -259,6 +269,45 @@ impl Writer {
 }
 
 impl WriterHandle {
+    pub(crate) fn database_identity(&self) -> &DatabasePathIdentity {
+        &self.queue.database_identity
+    }
+
+    // These mutations only account an already admitted physical side effect.
+    // Revocation must not make published bytes disappear from the capacity ledger.
+    pub(crate) fn settle_chunk_publication(
+        &self,
+        token: foks_server_db::ChunkReservation,
+        success: bool,
+    ) -> Result<()> {
+        let accounting = Self {
+            queue: Arc::clone(&self.queue),
+            authorization: None,
+        };
+        // This is completion of already admitted work, not a new mutation.
+        crate::deadline::scope(None, || {
+            accounting.call(move |db| {
+                db.settle_chunk_publication(&token, success)?;
+                Ok(())
+            })
+        })
+    }
+    pub(crate) fn confirm_chunk_presence(
+        &self,
+        token: foks_server_db::ChunkReservation,
+    ) -> Result<()> {
+        let accounting = Self {
+            queue: Arc::clone(&self.queue),
+            authorization: None,
+        };
+        crate::deadline::scope(None, || {
+            accounting.call(move |db| {
+                db.confirm_chunk_presence(&token)?;
+                Ok(())
+            })
+        })
+    }
+
     pub(crate) fn for_authenticated_request(
         &self,
         uid: &[u8],
@@ -272,24 +321,6 @@ impl WriterHandle {
                 credential: credential.to_vec(),
                 clock,
             })),
-            deadline: self.deadline,
-        }
-    }
-
-    /// Returns a handle whose calls fail with `Error::DeadlineExceeded`,
-    /// without running their operation, if the writer reaches them at or
-    /// after `deadline`, or are submitted after it. A request handler passes
-    /// the instant at which its session stops waiting for the response. An
-    /// operation that has started runs to completion regardless of the
-    /// deadline. `SsoService` keeps its own handle without a deadline on
-    /// purpose: an access refresh commits a claim, calls the provider and then
-    /// commits the rotated refresh token, and that last write must not be
-    /// skipped once the claim has committed.
-    pub(crate) fn with_deadline(&self, deadline: Instant) -> Self {
-        Self {
-            authorization: self.authorization.clone(),
-            deadline: Some(deadline),
-            queue: self.queue.clone(),
         }
     }
 
@@ -313,6 +344,21 @@ impl WriterHandle {
         F: FnOnce(&mut Database) -> Result<T> + Send + 'static,
         T: Send + 'static,
     {
+        // A call takes the deadline of the request scope it runs in, if any.
+        // The writer skips the call with `Error::DeadlineExceeded`, without
+        // running its operation, if it is submitted at or after the deadline
+        // or the writer reaches it then. The session closes the connection of
+        // an expired request without a response, so the client already treats
+        // the outcome as ambiguous, and a skipped call has opened no
+        // transaction. An operation that has started runs to completion. A
+        // write that must follow an already committed step regardless of the
+        // request deadline runs under `crate::deadline::scope(None, ..)`, as
+        // the chunk settlement calls below and the SSO access refresh do.
+        let deadline = crate::deadline::current();
+        if deadline.is_some_and(|deadline| deadline.remaining().is_err()) {
+            self.queue.timing.expired.fetch_add(1, Ordering::Relaxed);
+            return Err(crate::deadline::expired());
+        }
         let authorization = self.authorization.clone();
         let operation = move |database: &mut Database| {
             if let Some(auth) = authorization {
@@ -333,15 +379,6 @@ impl WriterHandle {
             }
             operation(database)
         };
-        // A job submitted after its deadline would only occupy a queue slot
-        // until the writer reaches and skips it.
-        if self
-            .deadline
-            .is_some_and(|deadline| Instant::now() >= deadline)
-        {
-            self.queue.timing.expired.fetch_add(1, Ordering::Relaxed);
-            return Err(Error::DeadlineExceeded);
-        }
         let (response, receiver) = mpsc::sync_channel(1);
         let accepting = self
             .queue
@@ -353,10 +390,11 @@ impl WriterHandle {
         }
         self.queue.pending.fetch_add(1, Ordering::AcqRel);
         if let Err(error) = self.queue.sender.try_send(Message::Task(Box::new(Call {
+            resources: crate::net::memory::current(),
             operation,
             response,
             queued_at: Instant::now(),
-            deadline: self.deadline,
+            deadline,
             timing: Arc::clone(&self.queue.timing),
             reconciliation,
         }))) {
@@ -504,6 +542,69 @@ mod tests {
     use super::*;
 
     #[test]
+    fn expired_queued_task_cannot_mutate_but_cleanup_can_complete() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut db = Database::open(temporary.path().join("db"), Default::default()).unwrap();
+        let deadline = crate::deadline::Deadline::after(std::time::Duration::ZERO).unwrap();
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let executed = Arc::clone(&ran);
+        let (response, receiver) = mpsc::sync_channel(1);
+        // Inject a task at the dequeue boundary with an already consumed budget;
+        // no sleeps or scheduler timing are needed to exercise the real worker.
+        let task = Call {
+            operation: move |_: &mut Database| {
+                executed.store(true, Ordering::Release);
+                Ok(())
+            },
+            response,
+            queued_at: Instant::now(),
+            deadline: Some(deadline),
+            timing: Arc::new(WriterTiming::default()),
+            reconciliation: None,
+            resources: None,
+        };
+        Box::new(task).run(&mut db);
+        assert!(matches!(
+            receiver.recv().unwrap(),
+            Err(Error::DeadlineExceeded)
+        ));
+        assert!(!ran.load(Ordering::Acquire));
+        let writer_path = temporary.path().join("writer");
+        let mut accounting_db = Database::open(&writer_path, Default::default()).unwrap();
+        let connection = rusqlite::Connection::open(&writer_path).unwrap();
+        connection
+            .execute(
+                "INSERT INTO host_metadata VALUES(1,?1,'test',X'',X'')",
+                [[4u8; 33].as_slice()],
+            )
+            .unwrap();
+        drop(connection);
+        let binding = accounting_db
+            .prepare_chunk_storage_binding(&[5; 16], "test", false)
+            .unwrap();
+        accounting_db
+            .activate_chunk_storage_binding(&binding)
+            .unwrap();
+        accounting_db.confirm_empty_chunk_inventory().unwrap();
+        let token = accounting_db
+            .reserve_chunk_object(&[1; 32], 10, &[2; 16], 1)
+            .unwrap();
+        drop(accounting_db);
+        let writer = Writer::start(writer_path, Default::default(), 2).unwrap();
+        crate::deadline::scope(Some(deadline), || {
+            assert!(writer.call(|_| Ok(())).is_err());
+            writer
+                .handle()
+                .settle_chunk_publication(token, true)
+                .unwrap();
+            assert!(crate::deadline::check().is_err());
+        });
+        let usage = writer.call(|db| Ok(db.chunk_physical_usage()?)).unwrap();
+        assert_eq!(usage.present_bytes, 10);
+        assert_eq!(usage.unresolved_attempts, 0);
+    }
+
+    #[test]
     fn schema_upgrade_waits_for_exclusive_writer_ownership() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("upgrade.sqlite");
@@ -522,7 +623,25 @@ mod tests {
                 .execute_batch(&format!("DROP INDEX {index}"))
                 .unwrap();
         }
-        connection.execute_batch("DROP TRIGGER rt_membership_insert; DROP TRIGGER rt_membership_delete; DROP TRIGGER rt_membership_update; DROP TRIGGER rt_team_access_update; ALTER TABLE rt_user_inboxes DROP COLUMN reconcile_dirty; DROP TRIGGER waitlist_count_insert; DROP TRIGGER waitlist_count_delete; DROP TABLE waitlist_count; DROP INDEX waitlist_entries_email; DROP INDEX waitlist_entries_created; CREATE INDEX waitlist_entries_email_created ON waitlist_entries(email, created_at); PRAGMA user_version=43;").unwrap();
+        connection
+            .execute_batch(concat!(
+                include_str!("../../foks-server-db/tests/fixtures/remove_waitlist_count.sql"),
+                include_str!("../../foks-server-db/tests/fixtures/remove_read_dependency.sql"),
+                include_str!("../../foks-server-db/tests/fixtures/remove_kv_usage.sql"),
+                include_str!("../../foks-server-db/tests/fixtures/remove_kv_current.sql")
+            ))
+            .unwrap();
+        connection
+            .execute_batch(include_str!(
+                "../../foks-server-db/tests/fixtures/remove_external_kv_chunks.sql"
+            ))
+            .unwrap();
+        connection
+            .execute_batch(include_str!(
+                "../../foks-server-db/tests/fixtures/remove_kv_accounting.sql"
+            ))
+            .unwrap();
+        connection.execute_batch("DROP TRIGGER rt_membership_insert; DROP TRIGGER rt_membership_delete; DROP TRIGGER rt_membership_update; DROP TRIGGER rt_team_access_update; ALTER TABLE rt_user_inboxes DROP COLUMN reconcile_dirty; PRAGMA user_version=43;").unwrap();
         let guard = DatabaseWriterGuard::acquire(&path).unwrap();
         assert!(Writer::start(path.clone(), Default::default(), 2).is_err());
         assert_eq!(
@@ -633,25 +752,29 @@ mod tests {
 
         // The credential is unknown, so the authorization check would fail
         // with AuthorizationChanged if the expired job reached it.
-        let deadline = Instant::now() + std::time::Duration::from_millis(50);
+        let deadline =
+            crate::deadline::Deadline::after(std::time::Duration::from_millis(50)).unwrap();
         let clock: Arc<dyn foks_server_db::Clock> = Arc::new(TestClock(AtomicU64::new(0)));
         let expiring = writer
             .handle()
-            .with_deadline(deadline)
             .for_authenticated_request(&[1; 33], &[2; 33], clock);
         let expired = thread::spawn(move || {
-            expiring.call(|_| -> Result<()> { unreachable!("expired job ran") })
+            crate::deadline::scope(Some(deadline), || {
+                expiring.call(|_| -> Result<()> { unreachable!("expired job ran") })
+            })
         });
-        let current = writer
-            .handle()
-            .with_deadline(Instant::now() + std::time::Duration::from_secs(60));
-        let live = thread::spawn(move || current.call(|_| Ok(7)));
+        let current = writer.handle();
+        let live_deadline =
+            crate::deadline::Deadline::after(std::time::Duration::from_secs(60)).unwrap();
+        let live = thread::spawn(move || {
+            crate::deadline::scope(Some(live_deadline), || current.call(|_| Ok(7)))
+        });
         let queued = Instant::now() + std::time::Duration::from_secs(2);
         while writer.handle().metrics().pending != 3 {
             assert!(Instant::now() < queued, "jobs were not queued");
             thread::yield_now();
         }
-        thread::sleep(deadline.saturating_duration_since(Instant::now()));
+        thread::sleep(deadline.instant().saturating_duration_since(Instant::now()));
         release_sender.send(()).unwrap();
 
         blocker.join().unwrap().unwrap();
@@ -677,9 +800,11 @@ mod tests {
             4,
         )
         .unwrap();
-        let expired = writer.handle().with_deadline(Instant::now());
+        let expired = crate::deadline::Deadline::at(Instant::now());
         assert!(matches!(
-            expired.call(|_| -> Result<()> { unreachable!("expired job ran") }),
+            crate::deadline::scope(Some(expired), || {
+                writer.call(|_| -> Result<()> { unreachable!("expired job ran") })
+            }),
             Err(Error::DeadlineExceeded)
         ));
         let metrics = writer.handle().metrics();

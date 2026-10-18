@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, Connection, OptionalExtension as _, TransactionBehavior};
 
 use crate::{error::sql_integer, error::unsigned, Database, Error, ReadSnapshot, Result};
@@ -53,7 +54,7 @@ impl Database {
                      JOIN devices d ON d.device_id = b.parent_id
                      WHERE b.parent_id = ?1 AND d.active = 1",
                     [parent_id],
-                    |row| row.get(0),
+                    |row| row.budgeted_get(0),
                 )
                 .optional()?
         } else {
@@ -86,7 +87,7 @@ impl Database {
                 "SELECT role_type, visibility FROM devices
                  WHERE uid = ?1 AND device_id = ?2 AND active = 1",
                 params![uid, owner],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
             )
             .optional()?;
         let owner_role = owner_role.ok_or(Error::AuthorizationChanged)?;
@@ -100,7 +101,7 @@ impl Database {
                 "SELECT MAX(generation) FROM shared_keys
                  WHERE uid = ?1 AND role_type = ?2 AND visibility = ?3",
                 params![uid, sql_integer(value.role_type)?, value.visibility],
-                |row| row.get(0),
+                |row| row.budgeted_get(0),
             )
             .optional()?
             .flatten();
@@ -111,7 +112,7 @@ impl Database {
             .query_row(
                 "SELECT active FROM devices WHERE uid = ?1 AND device_id = ?2",
                 params![uid, value.parent_id],
-                |row| Ok(row.get::<_, i64>(0)? == 1),
+                |row| Ok(row.budgeted_get::<_, i64>(0)? == 1),
             )
             .optional()?
             .unwrap_or(false);
@@ -227,11 +228,11 @@ fn management_key(
             params![uid, parent_id],
             |row| {
                 Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                    row.budgeted_get(3)?,
+                    row.budgeted_get(4)?,
                 ))
             },
         )
@@ -252,11 +253,11 @@ fn all_management_keys(
     let result = statement
         .query_map([uid], |row| {
             Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
+                row.budgeted_get(0)?,
+                row.budgeted_get(1)?,
+                row.budgeted_get(2)?,
+                row.budgeted_get(3)?,
+                row.budgeted_get(4)?,
             ))
         })?
         .map(|row| decode_management_key(row?))

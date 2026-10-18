@@ -520,6 +520,23 @@ version, writes the records to a temporary file beside the destination
 (created readable only by its owner on Unix) and moves it into place once
 all are written; a vault with no passwords fails with `invalid-request`.
 
+`list_file_uploads` takes `{storeId, after}` and passes through the agent's
+`ListKvUploads` answer: `{uploads, next, capacity}` in its snake_case form,
+each upload `{upload_id, state, prepared_chunks, acknowledged_chunks,
+plaintext_bytes, reserved_bytes, node_id, version}`, decoded by
+`src/bridge/uploads.ts`. `after` is the 32-byte `next` cursor of the
+previous page. `resume_file_upload` and `cancel_file_upload` take `{storeId,
+uploadId}` and answer one upload. The Uploads button at the top of the Files
+list (`src/features/files/file-uploads.tsx`) reads them only when opened.
+
+Every command that reaches the agent runs under a deadline from its entry in
+`command_class` (`src-tauri/src/commands/deadline.rs`); a command with no
+entry fails with `missing-deadline-policy`, and an expired one with
+`deadline-exceeded`. A failure to read the local clock is `deadline-clock`.
+The agent's own clock failures are `deadline-clock-unavailable` and
+`deadline-domain-mismatch`, which `commandRecovery` in
+`src/bridge/errors.ts` treats as an agent failure.
+
 Phase 4 adds `list_accounts`, `create_group`, member add/promote/demote/remove and their
 resumable continuations, federated admission/re-run, and `copy_text`. Each
 mutation is followed by a fresh catalog/roster load; an ambiguous result is

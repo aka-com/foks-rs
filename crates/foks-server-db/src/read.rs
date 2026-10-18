@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{Connection, OptionalExtension as _};
 
 use crate::{error::unsigned, Database, ReadDatabase, ReadSnapshot, Result};
@@ -248,7 +249,7 @@ impl ReadDatabase {
             .query_row(
                 "SELECT location FROM tree_locations WHERE uid=?1 AND seqno=?2",
                 rusqlite::params![uid, crate::error::sql_integer(prior)?],
-                |r| r.get(0),
+                |r| r.budgeted_get(0),
             )
             .optional()?;
         bytes
@@ -415,10 +416,10 @@ fn team_parcels(
             ],
             |row| {
                 Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, Vec<u8>>(3)?,
+                    row.budgeted_get::<_, i64>(0)?,
+                    row.budgeted_get::<_, i64>(1)?,
+                    row.budgeted_get::<_, i64>(2)?,
+                    row.budgeted_get::<_, Vec<u8>>(3)?,
                 ))
             },
         )?
@@ -436,7 +437,7 @@ fn team_parcels(
             parcel.seed_chain = chain_statement
                 .query_map(
                     rusqlite::params![team_id, role_type, visibility, generation],
-                    |row| row.get::<_, Vec<u8>>(0),
+                    |row| row.budgeted_get::<_, Vec<u8>>(0),
                 )?
                 .map(|exact| {
                     foks_proto::SeedChainBox::decode(&exact?)
@@ -460,7 +461,7 @@ fn team_member_hepks(connection: &Connection, team_id: &[u8]) -> Result<Vec<Vec<
          WHERE m.team_id = ?1 ORDER BY k.exact_hepk",
     )?;
     let hepks = statement
-        .query_map([team_id], |row| row.get(0))?
+        .query_map([team_id], |row| row.budgeted_get(0))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(hepks)
 }
@@ -485,7 +486,7 @@ fn team_removal_box(
                 crate::error::sql_integer(source_role_type)?,
                 source_visibility
             ],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )
         .optional()?)
 }
@@ -502,8 +503,8 @@ fn team_removal(
             rusqlite::params![team_id, commitment],
             |row| {
                 Ok(TeamRemovalSnapshot {
-                    exact_box: row.get(0)?,
-                    exact_removal: row.get(1)?,
+                    exact_box: row.budgeted_get(0)?,
+                    exact_removal: row.budgeted_get(1)?,
                 })
             },
         )
@@ -679,14 +680,14 @@ fn team_snapshot_inner(connection: &Connection, team_id: &[u8]) -> Result<Option
             [team_id],
             |row| {
                 Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                    row.get(7)?,
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                    row.budgeted_get(3)?,
+                    row.budgeted_get(4)?,
+                    row.budgeted_get(5)?,
+                    row.budgeted_get(6)?,
+                    row.budgeted_get(7)?,
                 ))
             },
         )
@@ -713,10 +714,10 @@ fn team_snapshot_inner(connection: &Connection, team_id: &[u8]) -> Result<Option
     let links = statement
         .query_map([team_id], |row| {
             Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, Vec<u8>>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, Vec<u8>>(3)?,
+                row.budgeted_get::<_, i64>(0)?,
+                row.budgeted_get::<_, Vec<u8>>(1)?,
+                row.budgeted_get::<_, i64>(2)?,
+                row.budgeted_get::<_, Vec<u8>>(3)?,
             ))
         })?
         .map(|row| {
@@ -740,16 +741,16 @@ fn team_snapshot_inner(connection: &Connection, team_id: &[u8]) -> Result<Option
     let members = statement
         .query_map([team_id], |row| {
             Ok((
-                row.get::<_, Vec<u8>>(0)?,
-                row.get::<_, Option<Vec<u8>>>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, i64>(4)?,
-                row.get::<_, i64>(5)?,
-                row.get::<_, i64>(6)?,
-                row.get::<_, Vec<u8>>(7)?,
-                row.get::<_, Vec<u8>>(8)?,
-                row.get::<_, Option<Vec<u8>>>(9)?,
+                row.budgeted_get::<_, Vec<u8>>(0)?,
+                row.budgeted_get::<_, Option<Vec<u8>>>(1)?,
+                row.budgeted_get::<_, i64>(2)?,
+                row.budgeted_get::<_, i64>(3)?,
+                row.budgeted_get::<_, i64>(4)?,
+                row.budgeted_get::<_, i64>(5)?,
+                row.budgeted_get::<_, i64>(6)?,
+                row.budgeted_get::<_, Vec<u8>>(7)?,
+                row.budgeted_get::<_, Vec<u8>>(8)?,
+                row.budgeted_get::<_, Option<Vec<u8>>>(9)?,
             ))
         })?
         .map(|row| {
@@ -794,11 +795,11 @@ fn team_snapshot_inner(connection: &Connection, team_id: &[u8]) -> Result<Option
     let shared_keys = statement
         .query_map([team_id], |row| {
             Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, Vec<u8>>(3)?,
-                row.get::<_, Vec<u8>>(4)?,
+                row.budgeted_get::<_, i64>(0)?,
+                row.budgeted_get::<_, i64>(1)?,
+                row.budgeted_get::<_, i64>(2)?,
+                row.budgeted_get::<_, Vec<u8>>(3)?,
+                row.budgeted_get::<_, Vec<u8>>(4)?,
             ))
         })?
         .map(|row| {
@@ -845,7 +846,12 @@ fn team_local_view_permission(
              FROM team_local_view_permissions
              WHERE team_id = ?1 AND target_id = ?2",
             rusqlite::params![team_id, target_id],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            |row| {
+                Ok((
+                    row.budgeted_get::<_, i64>(0)?,
+                    row.budgeted_get::<_, i64>(1)?,
+                ))
+            },
         )
         .optional()?
         .map(|(role, visibility)| Ok((unsigned(role)?, visibility)))
@@ -875,7 +881,7 @@ fn generic_chain_inner(
         .query_row(
             "SELECT seed FROM subchain_tree_location_seeds WHERE entity_id = ?1",
             [entity_id],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )
         .optional()?;
     let Some(seed) = seed else {
@@ -894,11 +900,11 @@ fn generic_chain_inner(
             rusqlite::params![entity_id, crate::error::sql_integer(chain_type)?],
             |row| {
                 Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, Vec<u8>>(1)?,
-                    row.get::<_, Vec<u8>>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, Vec<u8>>(4)?,
+                    row.budgeted_get::<_, i64>(0)?,
+                    row.budgeted_get::<_, Vec<u8>>(1)?,
+                    row.budgeted_get::<_, Vec<u8>>(2)?,
+                    row.budgeted_get::<_, i64>(3)?,
+                    row.budgeted_get::<_, Vec<u8>>(4)?,
                 ))
             },
         )?
@@ -955,13 +961,13 @@ fn local_team_list_inner(
     let entries = statement
         .query_map(rusqlite::params![uid, host_id], |row| {
             Ok((
-                row.get::<_, Vec<u8>>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, i64>(4)?,
-                row.get::<_, i64>(5)?,
-                row.get::<_, i64>(6)?,
+                row.budgeted_get::<_, Vec<u8>>(0)?,
+                row.budgeted_get::<_, i64>(1)?,
+                row.budgeted_get::<_, i64>(2)?,
+                row.budgeted_get::<_, i64>(3)?,
+                row.budgeted_get::<_, i64>(4)?,
+                row.budgeted_get::<_, i64>(5)?,
+                row.budgeted_get::<_, i64>(6)?,
             ))
         })?
         .map(|row| {
@@ -994,7 +1000,14 @@ fn user_chain_inner(connection: &Connection, uid: &[u8]) -> Result<Option<UserCh
             "SELECT normalized_name, username_utf8, username_sequence, username_commitment_key
              FROM users WHERE uid = ?1",
             [uid],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| {
+                Ok((
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                    row.budgeted_get(3)?,
+                ))
+            },
         )
         .optional()?;
     let Some((normalized_name, username_utf8, username_sequence, commitment_key)) = user else {
@@ -1009,10 +1022,10 @@ fn user_chain_inner(connection: &Connection, uid: &[u8]) -> Result<Option<UserCh
     let links = link_statement
         .query_map([uid], |row| {
             Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, Vec<u8>>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, Vec<u8>>(3)?,
+                row.budgeted_get::<_, i64>(0)?,
+                row.budgeted_get::<_, Vec<u8>>(1)?,
+                row.budgeted_get::<_, i64>(2)?,
+                row.budgeted_get::<_, Vec<u8>>(3)?,
             ))
         })?
         .map(|row| {
@@ -1034,16 +1047,16 @@ fn user_chain_inner(connection: &Connection, uid: &[u8]) -> Result<Option<UserCh
          UNION SELECT exact_hepk FROM devices WHERE uid = ?1",
     )?;
     let exact_shared_hepks = hepk_statement
-        .query_map([uid], |row| row.get(0))?
+        .query_map([uid], |row| row.budgeted_get(0))?
         .collect::<std::result::Result<Vec<Vec<u8>>, _>>()?;
     let mut stmt = connection.prepare("SELECT chain_sequence, normalized_name, name_sequence, commitment_key FROM user_name_history WHERE uid=?1 ORDER BY chain_sequence")?;
     let names = stmt
         .query_map([uid], |r| {
             Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, Vec<u8>>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, Vec<u8>>(3)?,
+                r.budgeted_get::<_, i64>(0)?,
+                r.budgeted_get::<_, Vec<u8>>(1)?,
+                r.budgeted_get::<_, i64>(2)?,
+                r.budgeted_get::<_, Vec<u8>>(3)?,
             ))
         })?
         .map(|r| {
@@ -1110,7 +1123,13 @@ fn puk_material_inner(
                 crate::error::sql_integer(role_type)?,
                 visibility
             ],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| {
+                Ok((
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                ))
+            },
         )
         .optional()?;
     let Some((exact_box_set, sender_id, generation)) = parcel else {
@@ -1129,7 +1148,7 @@ fn puk_material_inner(
                 visibility,
                 generation
             ],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?
         .collect::<std::result::Result<Vec<Vec<u8>>, _>>()?;
     Ok(Some(PukMaterialSnapshot {
@@ -1163,11 +1182,11 @@ fn user_authority_inner(
             [uid],
             |row| {
                 Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                    row.budgeted_get(3)?,
+                    row.budgeted_get(4)?,
                 ))
             },
         )
@@ -1182,13 +1201,13 @@ fn user_authority_inner(
     let devices = device_statement
         .query_map([uid], |row| {
             Ok((
-                row.get::<_, Vec<u8>>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, Option<Vec<u8>>>(4)?,
-                row.get::<_, Vec<u8>>(5)?,
-                row.get::<_, Vec<u8>>(6)?,
+                row.budgeted_get::<_, Vec<u8>>(0)?,
+                row.budgeted_get::<_, i64>(1)?,
+                row.budgeted_get::<_, i64>(2)?,
+                row.budgeted_get::<_, i64>(3)?,
+                row.budgeted_get::<_, Option<Vec<u8>>>(4)?,
+                row.budgeted_get::<_, Vec<u8>>(5)?,
+                row.budgeted_get::<_, Vec<u8>>(6)?,
             ))
         })?
         .map(|row| {
@@ -1213,11 +1232,11 @@ fn user_authority_inner(
     let shared_keys = key_statement
         .query_map([uid], |row| {
             Ok((
-                row.get::<_, i64>(0)?,
-                row.get(1)?,
-                row.get::<_, i64>(2)?,
-                row.get(3)?,
-                row.get(4)?,
+                row.budgeted_get::<_, i64>(0)?,
+                row.budgeted_get(1)?,
+                row.budgeted_get::<_, i64>(2)?,
+                row.budgeted_get(3)?,
+                row.budgeted_get(4)?,
             ))
         })?
         .map(|row| {
@@ -1247,7 +1266,10 @@ fn user_authority_inner(
     )?;
     let stale_shared_key_roles = stale_statement
         .query_map([uid], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+            Ok((
+                row.budgeted_get::<_, i64>(0)?,
+                row.budgeted_get::<_, i64>(1)?,
+            ))
         })?
         .map(|row| {
             let (role_type, visibility) = row?;
@@ -1296,11 +1318,11 @@ fn roots_at_inner(connection: &Connection, epochs: &[u64]) -> Result<Option<Vec<
         let row: Option<StoredRoot> = statement
             .query_row([epoch], |row| {
                 Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                    row.budgeted_get(3)?,
+                    row.budgeted_get(4)?,
                 ))
             })
             .optional()?;
@@ -1332,11 +1354,11 @@ pub fn root_snapshot(connection: &Connection) -> Result<Option<RootSnapshot>> {
             [],
             |row| {
                 Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                    row.budgeted_get(3)?,
+                    row.budgeted_get(4)?,
                 ))
             },
         )
@@ -1409,19 +1431,19 @@ fn identity_snapshot_filtered(
             rusqlite::params![uid, device_id],
             |row| {
                 Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                    row.get(7)?,
-                    row.get(8)?,
-                    row.get(9)?,
-                    row.get(10)?,
-                    row.get(11)?,
-                    row.get(12)?,
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                    row.budgeted_get(3)?,
+                    row.budgeted_get(4)?,
+                    row.budgeted_get(5)?,
+                    row.budgeted_get(6)?,
+                    row.budgeted_get(7)?,
+                    row.budgeted_get(8)?,
+                    row.budgeted_get(9)?,
+                    row.budgeted_get(10)?,
+                    row.budgeted_get(11)?,
+                    row.budgeted_get(12)?,
                 ))
             },
         )
@@ -1475,8 +1497,9 @@ mod tests {
     fn request_snapshot_keeps_repository_reads_on_one_concurrent_view() {
         let temporary = tempfile::tempdir().unwrap();
         let path = temporary.path().join("snapshot.sqlite");
-        let setup = Connection::open(&path).unwrap();
+        let setup = crate::Database::open(&path, Default::default()).unwrap();
         setup
+            .connection
             .execute_batch(
                 "PRAGMA journal_mode = WAL;
                  CREATE TABLE value(version INTEGER NOT NULL);
@@ -1484,11 +1507,7 @@ mod tests {
             )
             .unwrap();
         drop(setup);
-
-        let database = ReadDatabase {
-            connection: Connection::open(&path).unwrap(),
-            config: crate::Config::default(),
-        };
+        let database = ReadDatabase::open(&path, Default::default()).unwrap();
         let (read_sender, read_receiver) = std::sync::mpsc::sync_channel(1);
         let (commit_sender, commit_receiver) = std::sync::mpsc::sync_channel(1);
         let writer = std::thread::spawn(move || {
@@ -1501,13 +1520,13 @@ mod tests {
         let snapshot = database.snapshot().unwrap();
         let before: i64 = snapshot
             .connection()
-            .query_row("SELECT version FROM value", [], |row| row.get(0))
+            .query_row("SELECT version FROM value", [], |row| row.budgeted_get(0))
             .unwrap();
         read_sender.send(()).unwrap();
         commit_receiver.recv().unwrap();
         let after: i64 = snapshot
             .connection()
-            .query_row("SELECT version FROM value", [], |row| row.get(0))
+            .query_row("SELECT version FROM value", [], |row| row.budgeted_get(0))
             .unwrap();
         drop(snapshot);
         writer.join().unwrap();
@@ -1515,7 +1534,7 @@ mod tests {
         assert_eq!((before, after), (1, 1));
         let current: i64 = database
             .connection
-            .query_row("SELECT version FROM value", [], |row| row.get(0))
+            .query_row("SELECT version FROM value", [], |row| row.budgeted_get(0))
             .unwrap();
         assert_eq!(current, 2);
     }

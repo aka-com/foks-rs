@@ -12,6 +12,7 @@ foks-crypto.workspace = true
 foks-proto.workspace = true
 getrandom.workspace = true
 foks-agent-client.workspace = true
+foks-local-deadline = { workspace = true, features = ["clock"] }
 foks-agent-proto.workspace = true
 # Exact: rmcp implements MCP message encoding and protocol-version negotiation;
 # an update is checked with tools/foks-v019-oracle/run-mcp-compat.sh.
@@ -26,6 +27,7 @@ futures-util = { version = "0.3", features = ["sink"] }
 zeroize.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 # Exact: the same rmcp release as the server dependency above.
 rmcp = { version = "=3.2.0", default-features = false, features = ["client"] }
 

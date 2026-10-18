@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 use zeroize::Zeroizing;
 
+mod backup_finalization;
+
 use crate::fatal::{CoreThread, FatalSignal};
 use crate::host::{load_or_bootstrap, BootstrapEndpoints, BootstrapInput, BootstrapState};
 use crate::keys::{DirectoryKeyProvider, HostKeyProvider as _};
@@ -16,6 +18,7 @@ use crate::Writer;
 use crate::{Config, ReadDatabaseConfig, Result, SessionLimits};
 
 pub struct StandaloneConfig {
+    pub chunk_store: Option<Arc<dyn crate::chunks::ChunkStore>>,
     pub web_admin: Option<crate::web_admin::WebAdminConfig>,
     pub vhost_management_host: String,
     pub oidc: Option<(crate::sso::OidcOperatorConfig, foks_oidc::NetworkPolicy)>,
@@ -48,6 +51,7 @@ pub struct RunningStandaloneServer {
     // Drop first so the backup thread cannot outlive the shared key-provider
     // lock held by `server` and race an offline rotation.
     backup: Option<crate::operations::BackupScheduler>,
+    chunk_store: Option<Arc<dyn crate::chunks::ChunkStore>>,
     web_admin_http: Option<crate::web_admin::WebAdminHttpServer>,
     oidc_http: Option<crate::sso::OidcHttpServer>,
     server: RunningServer,
@@ -90,9 +94,9 @@ pub struct BackupArtifacts {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct HostKeyBackupFiles {
-    include_genesis: bool,
-    include_genesis_capability: bool,
-    generated: Vec<String>,
+    pub(crate) include_genesis: bool,
+    pub(crate) include_genesis_capability: bool,
+    pub(crate) generated: Vec<String>,
 }
 
 struct ValidatedBackup {
@@ -212,7 +216,16 @@ fn read_validated_backup_artifacts(
     }
     // Database::open is the single authority on which prior schemas migrate.
     // Unsupported versions still fail; no backup-specific migration is added.
-    let migrated = foks_server_db::Database::open(&database_path, database_config.clone())?;
+    let mut migrated = foks_server_db::Database::open(&database_path, database_config.clone())?;
+    if migrated.has_external_chunks()? {
+        return Err(crate::Error::Chunk("backup is not self-contained"));
+    }
+    migrated.clear_private_chunk_storage_binding()?;
+    // This private copy is a new installation interval even when restoring the
+    // same public identity and history. Previously issued private read tokens
+    // must not bind to a coordinate recovered from the archive.
+    let previous_dependency = migrated.read_dependency()?;
+    migrated.rotate_private_read_dependency(&previous_dependency)?;
     if migrated.checkpoint()?.outcome() != foks_server_db::CheckpointOutcome::Complete {
         return Err(crate::Error::Database(foks_server_db::Error::Invalid(
             "backup migration checkpoint incomplete",
@@ -429,6 +442,27 @@ pub fn backup_standalone_installation(
     destination: impl AsRef<Path>,
     database_config: foks_server_db::Config,
 ) -> Result<BackupArtifacts> {
+    backup_standalone_installation_with_chunk_store(
+        database_path,
+        key_directory,
+        root_key,
+        destination,
+        database_config,
+        None,
+    )
+}
+
+/// Creates a self-contained backup, materializing any external encrypted chunks.
+pub fn backup_standalone_installation_with_chunk_store(
+    database_path: impl AsRef<Path>,
+    key_directory: impl AsRef<Path>,
+    root_key: [u8; 32],
+    destination: impl AsRef<Path>,
+    database_config: foks_server_db::Config,
+    chunk_store: Option<&dyn crate::chunks::ChunkStore>,
+) -> Result<BackupArtifacts> {
+    let _storage_lease =
+        crate::storage_lease::StorageLease::with_store(database_path.as_ref(), chunk_store, false)?;
     let source = foks_server_db::ReadDatabase::open(&database_path, database_config.clone())?;
     if !source.integrity_check()? {
         return Err(crate::Error::Database(foks_server_db::Error::Invalid(
@@ -497,6 +531,9 @@ pub fn backup_standalone_installation(
         &stored.key_manifest,
         &host_key_files,
         database_config,
+        chunk_store,
+        None,
+        &_storage_lease,
         |backup_database| {
             source.online_backup(backup_database)?;
             Ok(())
@@ -504,12 +541,16 @@ pub fn backup_standalone_installation(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_backup(
     destination: &Path,
     source_key_directory: &Path,
     manifest: &[u8],
     host_key_files: &HostKeyBackupFiles,
     database_config: foks_server_db::Config,
+    chunk_store: Option<&dyn crate::chunks::ChunkStore>,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+    source_storage: &crate::storage_lease::StorageLease,
     backup_database: impl FnOnce(&Path) -> Result<()>,
 ) -> Result<BackupArtifacts> {
     std::fs::create_dir(destination)?;
@@ -543,6 +584,13 @@ pub(crate) fn create_backup(
     }
     std::fs::File::open(&key_directory)?.sync_all()?;
     backup_database(&database)?;
+    crate::chunk_storage::hydrate_backup(
+        &database,
+        database_config.clone(),
+        chunk_store,
+        cancelled,
+        source_storage,
+    )?;
     let backup_check = foks_server_db::ReadDatabase::open(&database, database_config)?;
     if !backup_check.integrity_check()? {
         return Err(crate::Error::Database(foks_server_db::Error::Invalid(
@@ -550,20 +598,8 @@ pub(crate) fn create_backup(
         )));
     }
     drop(backup_check);
-    // Publish the manifest last; its presence is the durable completeness
-    // marker for an otherwise possibly partial crash artifact.
     let key_manifest = destination.join("key-manifest.txt");
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
-    }
-    let mut manifest_file = options.open(&key_manifest)?;
-    manifest_file.write_all(manifest)?;
-    manifest_file.sync_all()?;
-    std::fs::File::open(destination)?.sync_all()?;
+    backup_finalization::finalize_and_publish(&database, &key_manifest, manifest, cancelled)?;
     Ok(BackupArtifacts {
         database,
         key_directory,
@@ -648,6 +684,11 @@ impl RunningStandaloneServer {
     /// snapshot in a new directory. The operator root key is intentionally
     /// never copied and must be restored through its original secret channel.
     pub fn backup(&self, destination: impl AsRef<std::path::Path>) -> Result<BackupArtifacts> {
+        let _storage_lease = crate::storage_lease::StorageLease::with_store(
+            &self.database_path,
+            self.chunk_store.as_deref(),
+            false,
+        )?;
         let manifest = self.bootstrap.key_manifest.encode();
         let source =
             foks_server_db::ReadDatabase::open(&self.database_path, self.database_config.clone())?;
@@ -658,6 +699,9 @@ impl RunningStandaloneServer {
             &manifest,
             &host_key_files,
             self.database_config.clone(),
+            self.chunk_store.as_deref(),
+            None,
+            &_storage_lease,
             |backup_database| {
                 source.online_backup(backup_database)?;
                 Ok(())
@@ -688,6 +732,19 @@ pub(crate) fn host_key_backup_files(
 ) -> Result<HostKeyBackupFiles> {
     let generations = database.host_key_generations()?;
     let operation = database.active_host_rotation()?;
+    host_key_backup_files_from_loaded(generations, operation, || {
+        database
+            .capability_key_generations()
+            .map_err(crate::Error::from)
+    })
+}
+
+/// Shared read-only ledger closure. The supplier preserves native read/error order.
+pub(crate) fn host_key_backup_files_from_loaded(
+    generations: Vec<foks_server_db::HostKeyGeneration>,
+    operation: Option<foks_server_db::HostRotationOperation>,
+    capabilities: impl FnOnce() -> Result<Vec<foks_server_db::CapabilityKeyGeneration>>,
+) -> Result<HostKeyBackupFiles> {
     let active = generations
         .iter()
         .filter(|generation| generation.state == foks_server_db::HostKeyGenerationState::Active)
@@ -745,7 +802,7 @@ pub(crate) fn host_key_backup_files(
             generated.push(expected);
         }
     }
-    let capability_generations = database.capability_key_generations()?;
+    let capability_generations = capabilities()?;
     if capability_generations
         .iter()
         .filter(|generation| {
@@ -847,11 +904,26 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
         config.maximum_pending_writes,
         fatal.clone(),
     )?;
+    if config.chunk_store.is_none() && writer.call(|db| Ok(db.has_external_chunks()?))? {
+        return Err(crate::Error::Chunk(
+            "external references require a configured chunk store",
+        ));
+    }
     let bootstrap_keys = Arc::clone(&keys);
     let bootstrap_input = input.clone();
     let bootstrap = writer.call(move |database| {
         load_or_bootstrap(database, bootstrap_keys.as_ref(), &bootstrap_input)
     })?;
+    let startup_storage = crate::storage_lease::StorageLease::with_store(
+        &config.database_path,
+        config.chunk_store.as_deref(),
+        false,
+    )?;
+    crate::chunk_binding::initialize_online(
+        &writer.handle(),
+        config.chunk_store.as_deref(),
+        &startup_storage,
+    )?;
     // Existing durable state is validated before PKI helpers can call their
     // create-on-first-bootstrap key APIs. A missing persisted purpose key must
     // fail closed rather than leave replacement material behind.
@@ -952,6 +1024,7 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
     );
     let server = RunningServer::start_bound(
         Config {
+            chunk_store: config.chunk_store.clone(),
             vhost_management_host: config.vhost_management_host.clone(),
             sso,
             web_admin,
@@ -1000,6 +1073,7 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
                 key_directory.clone(),
                 bootstrap.key_manifest.encode(),
                 database_config.clone(),
+                config.chunk_store.clone(),
                 Arc::clone(&config.clock),
                 Arc::clone(&metrics),
                 fatal.clone(),
@@ -1008,6 +1082,7 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
         .transpose()?;
     management.mark_ready();
     Ok(RunningStandaloneServer {
+        chunk_store: config.chunk_store,
         web_admin_http,
         oidc_http,
         backup,

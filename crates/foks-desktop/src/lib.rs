@@ -6,6 +6,10 @@
 mod chat;
 pub mod ops;
 pub use chat::{chat_request, chat_request_cancellable, validate_chat_reply};
+mod deadline;
+pub use deadline::{
+    bind_transport_deadline, discard_transport_result, local_deadline_error, PendingOperation,
+};
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -68,6 +72,7 @@ pub enum IpcErrorCode {
     VersionMismatch,
     Cancelled,
     DeadlineExceeded,
+    DeadlineClock,
     Ambiguous,
 }
 
@@ -83,6 +88,7 @@ impl IpcErrorCode {
             Self::VersionMismatch => "version-mismatch",
             Self::Cancelled => "cancelled",
             Self::DeadlineExceeded => "deadline-exceeded",
+            Self::DeadlineClock => "deadline-clock",
             Self::Ambiguous => "ambiguous",
         }
     }
@@ -235,17 +241,42 @@ impl std::error::Error for AgentError {}
 
 pub trait AgentTransport: Send + Sync + 'static {
     fn call(&self, operation: Operation) -> Result<Value, AgentError>;
+    /// A supplied operation context must reach the concrete IPC transport.
+    /// Unsupported adapters fail closed instead of silently resetting its cap.
+    fn call_with_deadline(
+        &self,
+        mut operation: Operation,
+        _deadline: &foks_local_deadline::Deadline,
+        _cancelled: &dyn Fn() -> bool,
+    ) -> Result<Value, AgentError> {
+        operation.zeroize_plaintext();
+        Err(deadline::unsupported())
+    }
+
+    fn put_kv_stream_with_deadline(
+        &self,
+        _header: KvUploadHeader,
+        _reader: &mut dyn std::io::Read,
+        _deadline: &foks_local_deadline::Deadline,
+    ) -> Result<Value, AgentError> {
+        Err(deadline::unsupported())
+    }
     fn call_cancellable(
         &self,
         operation: Operation,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Value, AgentError> {
+        let mutation = operation.is_mutation();
+        let mut operation = PendingOperation::new(operation);
         if cancelled() {
             return Err(AgentError::Cancelled);
         }
-        let mutation = operation.is_mutation();
-        let result = self.call(operation);
-        if result.is_ok() && cancelled() {
+        let mut result = self.call(operation.take());
+        if cancelled() {
+            if deadline::preserve_terminal_transport_error(&mut result) {
+                return result;
+            }
+            discard_transport_result(&mut result);
             return Err(if mutation {
                 AgentError::Ambiguous("Request cancelled after mutation started.".into())
             } else {
@@ -267,6 +298,31 @@ pub trait AgentTransport: Send + Sync + 'static {
 }
 
 impl AgentTransport for AgentClient {
+    fn call_with_deadline(
+        &self,
+        operation: Operation,
+        deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Value, AgentError> {
+        let mut operation = PendingOperation::new(operation);
+        let client = self
+            .with_local_deadline(deadline.clone())
+            .map_err(agent_client_error)?;
+        <Self as AgentTransport>::call_cancellable(&client, operation.take(), cancelled)
+    }
+
+    fn put_kv_stream_with_deadline(
+        &self,
+        header: KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+        deadline: &foks_local_deadline::Deadline,
+    ) -> Result<Value, AgentError> {
+        let client = self
+            .with_local_deadline(deadline.clone())
+            .map_err(agent_client_error)?;
+        <Self as AgentTransport>::put_kv_stream(&client, header, reader)
+    }
+
     fn call(&self, operation: Operation) -> Result<Value, AgentError> {
         <Self as AgentTransport>::call_cancellable(self, operation, &|| false)
     }
@@ -329,6 +385,7 @@ pub fn agent_client_error(error: impl std::borrow::Borrow<foks_agent_client::Err
     match error {
         Error::Cancelled => AgentError::Cancelled,
         Error::DeadlineExceeded => AgentError::DeadlineExceeded,
+        Error::LocalDeadline(_) => ipc(IpcErrorCode::DeadlineClock),
         Error::Ambiguous(cause) => {
             let cause = agent_client_error(cause.as_ref());
             let code = match &cause {
@@ -1249,11 +1306,13 @@ pub fn read_catalog_item(
     let value = transport.call(Operation::ReadKv {
         store: store.clone(),
         path: item.metadata.path.clone(),
+        dirent_id: item.metadata.dirent_id,
         version: item.metadata.version,
     })?;
     let mut read: KvReadResult = decode_agent_value(value)?;
     if read.store != store
         || read.path != item.metadata.path
+        || read.dirent_id != item.metadata.dirent_id
         || read.version != item.metadata.version
         || read.node_type != item.metadata.node_type
         || read.read_role != item.metadata.read_role
@@ -1297,12 +1356,14 @@ pub fn read_catalog_item(
                     decode_agent_value(transport.call(Operation::ReadKvChunk {
                         store: store.clone(),
                         path: item.metadata.path.clone(),
+                        dirent_id: item.metadata.dirent_id,
                         version: item.metadata.version,
                         offset,
                         length,
                     })?)?;
                 let invalid = chunk.store != store
                     || chunk.path != item.metadata.path
+                    || chunk.dirent_id != item.metadata.dirent_id
                     || chunk.version != item.metadata.version
                     || chunk.offset != offset
                     || chunk.content.is_empty()
@@ -1554,6 +1615,7 @@ fn file_mutation(
             .map_err(|_| "content size exceeds maximum upload limit")?;
         Ok(KvAccountMutation::Stream {
             header: KvUploadHeader {
+                upload_id: new_upload_id(total_length)?,
                 adapter: None,
                 store,
                 path,
@@ -1578,6 +1640,7 @@ fn file_upload_header(
     mkdir_p: bool,
 ) -> Result<KvUploadHeader, &'static str> {
     Ok(KvUploadHeader {
+        upload_id: new_upload_id(total_length)?,
         adapter: None,
         store,
         path,
@@ -2667,6 +2730,7 @@ mod tests {
                 Operation::ReadKv {
                     store,
                     path,
+                    dirent_id,
                     version,
                 } => {
                     assert_eq!(store, self.store);
@@ -2675,6 +2739,7 @@ mod tests {
                     Ok(serde_json::to_value(KvReadResult {
                         store,
                         path,
+                        dirent_id,
                         version,
                         node_type: "file".to_owned(),
                         // As the agent answers now: a large file has no size
@@ -2690,6 +2755,7 @@ mod tests {
                 Operation::ReadKvChunk {
                     store,
                     path,
+                    dirent_id,
                     version,
                     offset,
                     length,
@@ -2701,6 +2767,7 @@ mod tests {
                     Ok(serde_json::to_value(KvChunkResult {
                         store,
                         path,
+                        dirent_id,
                         version,
                         offset,
                         content: (0..count)
@@ -2779,6 +2846,35 @@ mod tests {
             }),
             total,
             operations: Mutex::new(Vec::new()),
+        }
+    }
+
+    #[test]
+    fn selected_read_rejects_recreated_identity_at_initial_read_and_later_chunk() {
+        struct Replaced {
+            inner: LargeReadTransport,
+            after_chunks: bool,
+        }
+        impl AgentTransport for Replaced {
+            fn call(&self, operation: Operation) -> Result<Value, AgentError> {
+                let corrupt = if self.after_chunks {
+                    matches!(&operation, Operation::ReadKvChunk { offset, .. } if *offset > 0)
+                } else {
+                    matches!(&operation, Operation::ReadKv { .. })
+                };
+                let mut value = self.inner.call(operation)?;
+                if corrupt {
+                    value["dirent_id"] = serde_json::to_value([8; 16]).unwrap();
+                }
+                Ok(value)
+            }
+        }
+        for after_chunks in [false, true] {
+            let transport = Replaced {
+                inner: large_read_transport(2 * u64::from(KV_READ_CHUNK_BYTES)),
+                after_chunks,
+            };
+            assert!(read_catalog_item(&transport, &large_file_item()).is_err());
         }
     }
 
@@ -2864,6 +2960,7 @@ mod tests {
             edit_kv_file_mutation(&item, vec![0; MAXIMUM_INLINE_KV_BYTES + 1]).unwrap(),
             KvAccountMutation::Stream {
                 header: KvUploadHeader {
+                    upload_id: None,
                     adapter: None,
                     precondition: KvPrecondition::ExactEntry { version: 7, .. },
                     read_role: KvRole::Member { visibility: -1 },
@@ -2883,6 +2980,7 @@ mod tests {
         assert!(matches!(
             create_kv_file_upload(&account, "/large", 84 * 1024 * 1024).unwrap(),
             KvUploadHeader {
+                upload_id: None,
                 adapter: None,
                 total_length: 88_080_384,
                 read_role: KvRole::Owner,
@@ -2897,6 +2995,7 @@ mod tests {
         assert!(matches!(
             edit_kv_file_upload(&file, 64).unwrap(),
             KvUploadHeader {
+                upload_id: None,
                 adapter: None,
                 total_length: 64,
                 read_role: KvRole::Member { visibility: -1 },
@@ -2909,6 +3008,7 @@ mod tests {
         assert!(matches!(
             edit_kv_file_upload(&item, 64).unwrap(),
             KvUploadHeader {
+                upload_id: None,
                 adapter: None,
                 total_length: 64,
                 read_role: KvRole::Member { visibility: -1 },
@@ -3102,4 +3202,33 @@ mod chat_transport_tests {
             AgentError::Cancelled
         );
     }
+}
+
+fn new_upload_id(_length: u64) -> Result<Option<foks_agent_proto::UploadHandle>, &'static str> {
+    // Issuance requires the profile's checked hard-state generation, obtained by
+    // ensure_upload_identity immediately before using the source.
+    Ok(None)
+}
+
+/// Allocate and retain the complete handle before registration or source reads.
+pub fn ensure_upload_identity(
+    transport: &dyn AgentTransport,
+    header: &mut KvUploadHeader,
+) -> Result<(), AgentError> {
+    if header.upload_id.is_none() && header.adapter.is_none() {
+        let value = transport.call(Operation::KvUploadIssuance {
+            store: header.store.clone(),
+        })?;
+        let context: foks_agent_proto::KvUploadIssuance = serde_json::from_value(value)
+            .map_err(|_| AgentError::Transport("invalid upload issuance context".into()))?;
+        let mut random = [0; 16];
+        getrandom::fill(&mut random)
+            .map_err(|_| AgentError::Transport("upload randomness unavailable".into()))?;
+        header.upload_id = Some(foks_agent_proto::UploadHandle::new(
+            context.database_id,
+            context.issued_at,
+            random,
+        ));
+    }
+    Ok(())
 }

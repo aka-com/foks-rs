@@ -144,6 +144,9 @@ pub(super) fn handle(
             BotAction::Status { operation_id, .. } => (operation_id, BotEnrollmentAction::Status),
             BotAction::Cancel { operation_id } => (operation_id, BotEnrollmentAction::Cancel),
             BotAction::Export { operation_id } => (operation_id, BotEnrollmentAction::Export),
+            BotAction::CompleteExport { operation_id } => {
+                (operation_id, BotEnrollmentAction::CompleteExport)
+            }
             _ => unreachable!(),
         };
         let id = std::array::from_fn(|i| {

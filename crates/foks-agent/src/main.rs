@@ -8,6 +8,7 @@ mod data;
 mod invitations;
 mod profile_work;
 mod read_cache;
+mod request_control;
 mod retention;
 mod sso;
 mod timers;
@@ -71,7 +72,7 @@ const MAXIMUM_COMPATIBILITY_ARTIFACT_BYTES: usize = 64 * 1024;
 const MAXIMUM_COMPATIBILITY_ARTIFACT_FETCHES: usize = 4;
 const MAXIMUM_CONCURRENT_READS: usize = 4;
 const MAXIMUM_CONCURRENT_CHAT_POLLS: usize = 32;
-const CHAT_POLL_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(test)]
 const DEVICE_PAIRING_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// Work an interactive pairing still has to do after its last relay receive:
 /// the authenticated chain load, the identity mutation and the wait for the
@@ -101,7 +102,7 @@ const MAXIMUM_CACHED_CATALOG_BYTES: usize = 128 * 1024 * 1024;
 const MAXIMUM_SINGLE_CATALOG_BYTES: usize = 64 * 1024 * 1024;
 const CATALOG_CACHE_LIFETIME: Duration = Duration::from_secs(60);
 /// The background loops whose period is fixed rather than configured.
-const RETENTION_PERIOD: Duration = Duration::from_secs(60);
+const RETENTION_PERIOD: Duration = Duration::from_millis(250);
 const OWNERSHIP_PERIOD: Duration = Duration::from_secs(5);
 /// The soonest the scheduler wakes after a pass. A job that is due but could
 /// not run — its profile was busy, or its own backoff moved it — must not
@@ -361,7 +362,7 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
                     scheduler_cancellation.cancel();
                     break;
                 }
-                if !ready.load(Ordering::Acquire) {
+                if !ready.load(Ordering::Acquire) || !retention::due() {
                     timers::timers().skipped(timers::RETENTION);
                     continue;
                 }
@@ -373,7 +374,11 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
                 let run = timers::timers().begin(timers::RETENTION, now_ms);
                 tokio::task::spawn_blocking(move || {
                     let _permit=permit;
-                    retention::run_one_profile(&state);
+                    match request_control::RequestControl::background(Duration::from_millis(50), CancellationToken::new())
+                        .map_err(foks_client_app::Error::from).and_then(|control| control.enter()) {
+                        Ok(_scope) => retention::run_one_profile(&state),
+                        Err(error) => eprintln!("retention deadline unavailable: {error}"),
+                    }
                     run.finish(timers::Outcome::Ok);
                 });
             }
@@ -719,6 +724,9 @@ async fn run_scheduled_batches(
         if cancellation.is_cancelled() {
             break;
         }
+        let job_control =
+            request_control::RequestControl::background(timeout, cancellation.clone())
+                .map_err(|e| e.to_string())?;
         let mut admitted = slice_admission();
         let outcome = loop {
             // Federation can discover additional profiles during execution, so
@@ -726,7 +734,11 @@ async fn run_scheduled_batches(
             // fair queue is rejoined after every completed job.
             let started = Instant::now();
             let admission = profile_work::coordinator()
-                .acquire(state_dir, admitted.scope(), timeout)
+                .acquire(
+                    state_dir,
+                    admitted.scope(),
+                    job_control.remaining().map_err(|e| e.to_string())?,
+                )
                 .await
                 .map_err(|error| error.to_string())?;
             let permit = tokio::time::timeout(
@@ -747,7 +759,9 @@ async fn run_scheduled_batches(
             let run_one = run_one.clone();
             let budget = scheduled_job_budget(remaining);
             let reserved = admitted.clone();
+            let worker_control = job_control.clone();
             let outcome = tokio::task::spawn_blocking(move || {
+                let _scope = worker_control.enter().map_err(|e| e.to_string())?;
                 let _admission = admission;
                 let _permit = permit;
                 run_one(budget, control, reserved)
@@ -802,6 +816,8 @@ fn run_scheduled_profile(
     cancellation: CancellationToken,
     admitted: SliceAdmission,
 ) -> Result<ScheduledSlice, Box<dyn std::error::Error>> {
+    let control = request_control::RequestControl::background(timeout, cancellation.clone())?;
+    let _scope = control.enter()?;
     let registry = ProfileRegistry::open(state_dir)?;
     let session =
         read_cache::open_profile_session(&registry, profile, timeout, cancellation.clone())?;
@@ -1078,6 +1094,63 @@ fn undecoded_frame_response(frame: &[u8], error: foks_agent_proto::Error) -> Res
     }
 }
 
+/// Own decoded plaintext through admission and queued worker cancellation.
+#[derive(Clone)]
+struct PendingRequest {
+    request: Option<Request>,
+    #[cfg(test)]
+    erased: Option<Arc<AtomicBool>>,
+}
+impl PendingRequest {
+    fn new(request: Request) -> Self {
+        Self {
+            request: Some(request),
+            #[cfg(test)]
+            erased: None,
+        }
+    }
+    fn take_operation(&mut self) -> Operation {
+        std::mem::replace(
+            &mut self.request.as_mut().expect("owned request").operation,
+            Operation::Ping,
+        )
+    }
+    fn into_poll(mut self) -> Request {
+        assert!(self.operation.is_chat_poll_wait());
+        self.request.take().expect("owned poll")
+    }
+}
+impl std::ops::Deref for PendingRequest {
+    type Target = Request;
+    fn deref(&self) -> &Request {
+        self.request.as_ref().expect("owned request")
+    }
+}
+impl Drop for PendingRequest {
+    fn drop(&mut self) {
+        if let Some(request) = &mut self.request {
+            request.operation.zeroize_plaintext();
+            #[cfg(test)]
+            if let Some(erased) = &self.erased {
+                erased.store(matches!(&request.operation, Operation::PutKv {content,..} if content.is_empty()), Ordering::Release);
+            }
+        }
+    }
+}
+struct PendingOperation(Option<Operation>);
+impl PendingOperation {
+    fn take(&mut self) -> Operation {
+        self.0.take().expect("owned operation")
+    }
+}
+impl Drop for PendingOperation {
+    fn drop(&mut self) {
+        if let Some(operation) = &mut self.0 {
+            operation.zeroize_plaintext();
+        }
+    }
+}
+
 #[cfg(unix)]
 async fn handle_connection(
     mut stream: tokio::net::UnixStream,
@@ -1095,7 +1168,7 @@ async fn handle_connection(
             Err(_) => return Err("agent read deadline exceeded".into()),
         };
         let request = match foks_agent_proto::decode_request(&frame) {
-            Ok(request) => request,
+            Ok(request) => PendingRequest::new(request),
             Err(error) => {
                 write_response(
                     &mut stream,
@@ -1106,15 +1179,27 @@ async fn handle_connection(
                 continue;
             }
         };
+        let control = match request_control::RequestControl::receive(&request, timeout) {
+            Ok(control) => control,
+            Err(error) => {
+                write_response(
+                    &mut stream,
+                    &dispatch_error_response(request.id, &error),
+                    timeout,
+                )
+                .await?;
+                continue;
+            }
+        };
         if !operation_allowed(ready.load(Ordering::Acquire), &request.operation) {
-            write_response(
+            write_controlled_response(
                 &mut stream,
-                &Response::error(
+                Response::error(
                     request.id,
                     ErrorCode::BootstrapRequired,
                     "initialize the local FOKS state before using this operation",
                 ),
-                timeout,
+                &control,
             )
             .await?;
             continue;
@@ -1127,6 +1212,7 @@ async fn handle_connection(
                 timeout,
                 request.id,
                 header.clone(),
+                control.clone(),
             )
             .await?;
             return Ok(());
@@ -1140,34 +1226,57 @@ async fn handle_connection(
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
             {
-                write_response(
+                write_controlled_response(
                     &mut stream,
-                    &Response::error(
+                    Response::error(
                         request.id,
                         ErrorCode::InvalidRequest,
                         "invalid profile name",
                     ),
-                    timeout,
+                    &control,
                 )
                 .await?;
                 continue;
             }
         }
         if let Operation::ReconcileProfile { profile } = &request.operation {
-            let (value, timing) =
-                connectivity::reconcile(&state_dir, profile, timeout, capacity.blocking.clone())
-                    .await;
-            write_response(
+            let observed = tokio::time::timeout_at(
+                tokio::time::Instant::from_std(control.deadline.instant()),
+                connectivity::reconcile_with_control(
+                    &state_dir,
+                    profile,
+                    &control,
+                    capacity.blocking.clone(),
+                ),
+            )
+            .await;
+            let (value, timing) = match observed {
+                Ok(value) => value,
+                Err(_) => return Err(foks_client::Error::DeadlineExceeded.into()),
+            };
+            control.check()?;
+            write_controlled_response(
                 &mut stream,
-                &Response::success(request.id, value).with_timing(timing),
-                timeout,
+                Response::success(request.id, value).with_timing(timing),
+                &control,
             )
             .await?;
             continue;
         }
         if let Operation::RefreshLease { profile } = &request.operation {
-            let result = match compatibility_http_client(timeout) {
-                Ok(client) => connectivity::renew(&state_dir, profile, client, timeout).await,
+            let result = match compatibility_http_client(Duration::from_secs(15)) {
+                Ok(client) => match tokio::time::timeout_at(
+                    tokio::time::Instant::from_std(control.deadline.instant()),
+                    connectivity::renew_with_control(&state_dir, profile, client, &control),
+                )
+                .await
+                {
+                    Ok(result) => {
+                        control.check()?;
+                        result
+                    }
+                    Err(_) => return Err(foks_client::Error::DeadlineExceeded.into()),
+                },
                 Err(error) => dispatch_error_response(request.id, &error).result,
             };
             let response = match result {
@@ -1191,7 +1300,7 @@ async fn handle_connection(
                     fields,
                 } => Response::error_with_fields(Some(request.id), code, message, fields),
             };
-            write_response(&mut stream, &response, timeout).await?;
+            write_controlled_response(&mut stream, response, &control).await?;
             continue;
         }
         if request.operation.is_chat_poll_wait() {
@@ -1201,7 +1310,8 @@ async fn handle_connection(
                 capacity.chat_polling.clone(),
                 capacity.active_chat_polls.clone(),
                 timeout,
-                request,
+                request.into_poll(),
+                control.clone(),
             )
             .await?
             {
@@ -1213,15 +1323,25 @@ async fn handle_connection(
         // that finds the profile in a state only an exclusive session
         // settles is run again under exclusive admission, once; the answer
         // it did not get is never written.
-        let request_started = Instant::now();
         let mut scope = profile_work::admission_scope(&request.operation);
-        let supervised = loop {
-            let remaining_timeout = timeout.saturating_sub(request_started.elapsed());
+        let mut supervised = loop {
+            let remaining_timeout = match control.remaining() {
+                Ok(remaining) => remaining,
+                Err(error) => {
+                    write_controlled_response(
+                        &mut stream,
+                        dispatch_error_response(request.id, &error),
+                        &control,
+                    )
+                    .await?;
+                    continue 'requests;
+                }
+            };
             if remaining_timeout.is_zero() {
-                write_response(
+                write_controlled_response(
                     &mut stream,
-                    &dispatch_error_response(request.id, &profile_work::AdmissionError::Deadline),
-                    timeout,
+                    dispatch_error_response(request.id, &profile_work::AdmissionError::Deadline),
+                    &control,
                 )
                 .await?;
                 continue 'requests;
@@ -1233,19 +1353,20 @@ async fn handle_connection(
             // occupy every worker and prevent an unrelated profile from proceeding.
             let admitted_at = Instant::now();
             let profile_permit = match profile_work::coordinator()
-                .acquire(
+                .acquire_control(
                     &state_dir,
                     scope.clone(),
+                    &control,
                     admission_budget(remaining_timeout),
                 )
                 .await
             {
                 Ok(permit) => permit,
                 Err(error) => {
-                    write_response(
+                    write_controlled_response(
                         &mut stream,
-                        &dispatch_error_response(request.id, &error),
-                        timeout,
+                        dispatch_error_response(request.id, &error),
+                        &control,
                     )
                     .await?;
                     continue 'requests;
@@ -1260,14 +1381,14 @@ async fn handle_connection(
                 Ok(Ok(permit)) => permit,
                 Ok(Err(_)) => return Err("agent worker pool closed".into()),
                 Err(_) => {
-                    write_response(
+                    write_controlled_response(
                         &mut stream,
-                        &Response::error(
+                        Response::error(
                             request.id,
                             ErrorCode::Busy,
                             "agent worker pool is saturated",
                         ),
-                        timeout,
+                        &control,
                     )
                     .await?;
                     continue 'requests;
@@ -1275,16 +1396,12 @@ async fn handle_connection(
             };
             let state = state_dir.clone();
             let operation_ready = ready.clone();
-            let operation_timeout = if request.operation.is_device_pairing_wait() {
-                timeout.max(DEVICE_PAIRING_TIMEOUT)
-            } else {
-                remaining_timeout.saturating_sub(admitted_at.elapsed())
-            };
+            let operation_timeout = control.remaining().unwrap_or(Duration::ZERO);
             if operation_timeout.is_zero() {
-                write_response(
+                write_controlled_response(
                     &mut stream,
-                    &dispatch_error_response(request.id, &profile_work::AdmissionError::Deadline),
-                    timeout,
+                    dispatch_error_response(request.id, &profile_work::AdmissionError::Deadline),
+                    &control,
                 )
                 .await?;
                 continue 'requests;
@@ -1302,11 +1419,12 @@ async fn handle_connection(
                 read_cache::operation_is_abandonable(&request.operation).then_some(&mut stream);
             let shared = matches!(scope, profile_work::Scope::SharedProfile(_));
             let worker_flag = Arc::clone(&needs_exclusive);
-            let supervised = supervise_blocking(
+            let worker_control = control.clone();
+            let supervised = supervise_blocking_with_control(
                 request.id,
                 permit,
                 profile_permit,
-                operation_timeout,
+                control.clone(),
                 abandonment,
                 move |cancellation| {
                     dispatch_timed(
@@ -1320,6 +1438,7 @@ async fn handle_connection(
                             shared,
                             needs_exclusive: worker_flag,
                         },
+                        worker_control,
                     )
                 },
             )
@@ -1337,7 +1456,11 @@ async fn handle_connection(
         if supervised.abandoned {
             return Ok(());
         }
-        write_response(&mut stream, &supervised.response, timeout).await?;
+        let response = std::mem::replace(
+            &mut supervised.response,
+            Response::success(0, serde_json::Value::Null),
+        );
+        write_controlled_response(&mut stream, response, &control).await?;
         let close_connection = supervised.close_connection;
         drop(supervised);
         if close_connection {
@@ -1369,6 +1492,7 @@ struct UploadReader {
     total: u64,
     read: u64,
     committed: bool,
+    ready: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl UploadReader {
@@ -1380,16 +1504,34 @@ impl UploadReader {
             total,
             read: 0,
             committed: false,
+            ready: None,
         }
+    }
+    fn with_ready(
+        receiver: tokio::sync::mpsc::Receiver<UploadMessage>,
+        total: u64,
+        ready: Option<tokio::sync::oneshot::Sender<()>>,
+    ) -> Self {
+        let mut reader = Self::new(receiver, total);
+        reader.ready = ready;
+        reader
     }
 }
 
 impl std::io::Read for UploadReader {
     fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+        let control =
+            request_control::current().map_err(|e| std::io::Error::other(e.to_string()))?;
+        control.check().map_err(std::io::Error::other)?;
+        if let Some(ready) = self.ready.take() {
+            let _ = ready.send(());
+        }
+
         if output.is_empty() {
             return Ok(0);
         }
         loop {
+            control.check().map_err(std::io::Error::other)?;
             if self.position < self.current.len() {
                 let count = output
                     .len()
@@ -1439,113 +1581,162 @@ async fn handle_streaming_upload(
     timeout: Duration,
     request_id: u64,
     header: KvUploadHeader,
+    control: request_control::RequestControl,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    control.check()?;
     if header.total_length > MAXIMUM_STREAM_KV_BYTES
         || (header.adapter.is_some() && header.total_length > 4 * 1024 * 1024)
     {
-        write_response(
+        write_controlled_response(
             stream,
-            &Response::error(
+            Response::error(
                 request_id,
                 ErrorCode::InvalidRequest,
                 "streaming KV upload exceeds the FOKS file size limit",
             ),
-            timeout,
+            &control,
         )
         .await?;
         return Ok(());
     }
     let profile_permit = match profile_work::coordinator()
-        .acquire(
+        .acquire_control(
             &state_dir,
             profile_work::operation_scope(&Operation::PutKvStream {
                 header: header.clone(),
             }),
-            timeout,
+            &control,
+            control.remaining()?,
         )
         .await
     {
         Ok(permit) => permit,
         Err(error) => {
-            write_response(
+            write_controlled_response(
                 stream,
-                &dispatch_error_response(request_id, &error),
-                timeout,
+                dispatch_error_response(request_id, &error),
+                &control,
             )
             .await?;
             return Ok(());
         }
     };
-    let permit = match tokio::time::timeout(timeout, blocking.acquire_owned()).await {
+    let permit = match tokio::time::timeout(control.remaining()?, blocking.acquire_owned()).await {
         Ok(Ok(permit)) => permit,
         Ok(Err(_)) => return Err("agent worker pool closed".into()),
         Err(_) => {
-            write_response(
+            write_controlled_response(
                 stream,
-                &Response::error(
+                Response::error(
                     request_id,
                     ErrorCode::Busy,
                     "agent worker pool is saturated",
                 ),
-                timeout,
+                &control,
             )
             .await?;
             return Ok(());
         }
     };
     let (sender, receiver) = tokio::sync::mpsc::channel(4);
-    let cancellation = CancellationToken::new();
+    let handshake = header.upload_id.is_some() && header.adapter.is_none();
+    let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
+    let ready_sender = handshake.then_some(ready_sender);
+    let cancellation = control.cancellation.clone();
     let worker_cancellation = cancellation.clone();
     let worker_header = header.clone();
+    let worker_control = control.clone();
     let worker = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let result = profile_work::with_control(timeout, worker_cancellation.clone(), || {
-            if let Some(submission) = worker_header.adapter {
-                data::upload(
-                    &state_dir,
-                    &ProfileRegistry::open(&state_dir)?,
-                    submission,
-                    &mut UploadReader::new(receiver, worker_header.total_length),
-                    timeout,
-                    worker_cancellation,
-                )
-            } else {
-                put_kv_reader(
-                    &state_dir,
-                    &ProfileRegistry::open(&state_dir)?,
-                    timeout,
-                    worker_cancellation,
-                    &worker_header.store,
-                    &worker_header.path,
-                    UploadReader::new(receiver, worker_header.total_length),
-                    Some(worker_header.total_length),
-                    worker_header.precondition,
-                    worker_header.read_role,
-                    worker_header.write_role,
-                    worker_header.mkdir_p,
-                )
-            }
-        });
-        let response = match result {
+        let result = (|| {
+            let _scope = worker_control.enter()?;
+            profile_work::with_control(timeout, worker_cancellation.clone(), || {
+                if let Some(submission) = worker_header.adapter {
+                    data::upload(
+                        &state_dir,
+                        &ProfileRegistry::open(&state_dir)?,
+                        submission,
+                        &mut UploadReader::new(receiver, worker_header.total_length),
+                        timeout,
+                        worker_cancellation,
+                    )
+                } else {
+                    put_kv_reader(
+                        &state_dir,
+                        &ProfileRegistry::open(&state_dir)?,
+                        timeout,
+                        worker_cancellation,
+                        &worker_header.store,
+                        &worker_header.path,
+                        UploadReader::with_ready(
+                            receiver,
+                            worker_header.total_length,
+                            ready_sender,
+                        ),
+                        Some(worker_header.total_length),
+                        worker_header.upload_id,
+                        worker_header.precondition,
+                        worker_header.read_role,
+                        worker_header.write_role,
+                        worker_header.mkdir_p,
+                    )
+                }
+            })
+        })();
+        let mut response = match result {
             Ok(value) => Response::success(request_id, value),
             Err(error) => dispatch_error_response(request_id, error.as_ref()),
         };
-        Ok::<_, Box<dyn std::error::Error + Send + Sync>>((response, profile_permit))
+        if let Err(error) = worker_control.check() {
+            response.zeroize_plaintext();
+            response = dispatch_error_response(request_id, &error);
+        }
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>((
+            GuardedResponse::new(response, permit),
+            profile_permit,
+        ))
     });
+    let mut worker = UploadWorker(Some(worker));
     let _cancel_on_drop = CancelOnDrop(cancellation.clone());
+    if handshake {
+        match tokio::time::timeout(control.remaining()?, ready_receiver).await {
+            Ok(Ok(())) => {
+                control.check()?;
+                write_controlled_response(
+                    stream,
+                    Response::success(request_id, serde_json::json!({"upload_ready":true})),
+                    &control,
+                )
+                .await?
+            }
+            Ok(Err(_)) => {
+                drop(sender);
+                let (response, _profile_permit) = tokio::time::timeout_at(
+                    tokio::time::Instant::from_std(control.deadline.instant()),
+                    worker.wait(),
+                )
+                .await
+                .map_err(|_| foks_client::Error::DeadlineExceeded)???;
+                write_controlled_response(stream, response, &control).await?;
+                return Ok(());
+            }
+            Err(_) => {
+                cancellation.cancel();
+                return Err("upload readiness deadline exceeded".into());
+            }
+        }
+    }
     let mut offset = 0u64;
     let mut committed = false;
     for _ in 0..MAXIMUM_STREAM_FRAMES {
-        let frame = match tokio::time::timeout(timeout, read_frame(stream)).await {
+        let frame = match tokio::time::timeout(control.remaining()?, read_frame(stream)).await {
             Ok(Ok(Some(frame))) => frame,
             Ok(Ok(None)) => return Ok(()),
             Ok(Err(error)) => return Err(error),
             Err(_) => return Err("streaming upload frame deadline exceeded".into()),
         };
-        let frame = foks_agent_proto::decode_upload_frame(&frame)?;
-        if frame.id != request_id {
-            return Err("streaming upload response binding changed".into());
-        }
+        let bytes = Zeroizing::new(frame);
+        let mut frame = foks_agent_proto::decode_upload_frame(&bytes)?;
+        validate_upload_frame_binding(&mut frame, request_id, &control)?;
         match frame.payload {
             foks_agent_proto::KvUploadPayload::Chunk {
                 offset: frame_offset,
@@ -1564,7 +1755,13 @@ async fn handle_streaming_upload(
                 if offset > header.total_length {
                     return Err("streaming upload exceeds its declared length".into());
                 }
-                if sender.send(UploadMessage::Chunk(content)).await.is_err() {
+                if tokio::time::timeout(
+                    control.remaining()?,
+                    sender.send(UploadMessage::Chunk(content)),
+                )
+                .await?
+                .is_err()
+                {
                     break;
                 }
             }
@@ -1572,7 +1769,10 @@ async fn handle_streaming_upload(
                 if offset != header.total_length {
                     return Err("streaming upload commit length mismatch".into());
                 }
-                if sender.send(UploadMessage::Commit).await.is_err() {
+                if tokio::time::timeout(control.remaining()?, sender.send(UploadMessage::Commit))
+                    .await?
+                    .is_err()
+                {
                     break;
                 }
                 committed = true;
@@ -1584,11 +1784,8 @@ async fn handle_streaming_upload(
     if !committed {
         cancellation.cancel();
     }
-    let (response, profile_permit) = match tokio::time::timeout(
-        timeout + CANCELLATION_GRACE,
-        worker,
-    )
-    .await
+    let (response, profile_permit) = match tokio::time::timeout(control.remaining()?, worker.wait())
+        .await
     {
         Ok(Ok(Ok((response, profile_permit)))) => (response, Some(profile_permit)),
         Ok(Ok(Err(error))) => (
@@ -1596,7 +1793,8 @@ async fn handle_streaming_upload(
                 request_id,
                 ErrorCode::OperationFailed,
                 format!("streaming upload worker failed: {error}"),
-            ),
+            )
+            .into(),
             None,
         ),
         Ok(Err(error)) => (
@@ -1604,7 +1802,8 @@ async fn handle_streaming_upload(
                 request_id,
                 ErrorCode::OperationFailed,
                 format!("streaming upload worker failed: {error}"),
-            ),
+            )
+            .into(),
             None,
         ),
         Err(_) => {
@@ -1614,14 +1813,65 @@ async fn handle_streaming_upload(
                         request_id,
                         ErrorCode::DeadlineExceeded,
                         "streaming upload outcome is ambiguous; refresh the store before another mutation",
-                    ),
+                    ).into(),
                     None,
                 )
         }
     };
-    write_response(stream, &response, timeout).await?;
+    write_controlled_response(stream, response, &control).await?;
     drop(profile_permit);
     Ok(())
+}
+
+fn validate_upload_frame_binding(
+    frame: &mut foks_agent_proto::KvUploadFrame,
+    request_id: u64,
+    control: &request_control::RequestControl,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let result = control
+        .check()
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+        .and_then(|()| {
+            if frame.id == request_id {
+                Ok(())
+            } else {
+                Err("streaming upload response binding changed".into())
+            }
+        });
+    if result.is_err() {
+        if let foks_agent_proto::KvUploadPayload::Chunk { content, .. } = &mut frame.payload {
+            content.zeroize();
+        }
+    }
+    result
+}
+
+type UploadTask = tokio::task::JoinHandle<
+    Result<(GuardedResponse, profile_work::Permit), Box<dyn std::error::Error + Send + Sync>>,
+>;
+struct UploadWorker(Option<UploadTask>);
+impl UploadWorker {
+    async fn wait(
+        &mut self,
+    ) -> Result<
+        Result<(GuardedResponse, profile_work::Permit), Box<dyn std::error::Error + Send + Sync>>,
+        tokio::task::JoinError,
+    > {
+        let result = self.0.as_mut().expect("upload worker").await;
+        self.0.take();
+        result
+    }
+}
+impl Drop for UploadWorker {
+    fn drop(&mut self) {
+        if let Some(task) = self.0.take() {
+            tokio::spawn(async move {
+                if let Ok(Ok((mut response, _permit))) = task.await {
+                    response.zeroize_plaintext();
+                }
+            });
+        }
+    }
 }
 
 fn operation_allowed(ready: bool, operation: &Operation) -> bool {
@@ -1639,10 +1889,56 @@ struct SupervisedResponse {
     /// response should be written.
     abandoned: bool,
     _profile_permit: Option<profile_work::Permit>,
+    _worker_permit: Option<OwnedSemaphorePermit>,
+}
+
+impl Drop for SupervisedResponse {
+    fn drop(&mut self) {
+        self.response.zeroize_plaintext();
+    }
+}
+
+struct GuardedResponse {
+    response: Response,
+    // The erasing Drop runs before this physical worker slot is released.
+    permit: Option<OwnedSemaphorePermit>,
+}
+impl GuardedResponse {
+    fn new(response: Response, permit: OwnedSemaphorePermit) -> Self {
+        Self {
+            response,
+            permit: Some(permit),
+        }
+    }
+    fn into_parts(mut self) -> (Response, Option<OwnedSemaphorePermit>) {
+        (
+            std::mem::replace(
+                &mut self.response,
+                Response::success(0, serde_json::Value::Null),
+            ),
+            self.permit.take(),
+        )
+    }
+    fn zeroize_plaintext(&mut self) {
+        self.response.zeroize_plaintext();
+    }
+}
+impl From<Response> for GuardedResponse {
+    fn from(response: Response) -> Self {
+        Self {
+            response,
+            permit: None,
+        }
+    }
+}
+impl Drop for GuardedResponse {
+    fn drop(&mut self) {
+        self.response.zeroize_plaintext();
+    }
 }
 
 struct WorkerCompletion {
-    response: Response,
+    response: GuardedResponse,
     profile_permit: profile_work::Permit,
 }
 
@@ -1676,23 +1972,32 @@ async fn connection_closed(stream: &mut tokio::net::UnixStream) {
     std::future::pending().await
 }
 
-async fn supervise_blocking(
+async fn supervise_blocking_with_control(
     request_id: u64,
     permit: OwnedSemaphorePermit,
     profile_permit: profile_work::Permit,
-    timeout: Duration,
+    control: request_control::RequestControl,
     // For cancellable reads, monitors client disconnection while the operation
     // runs. `None` applies only the operation deadline.
     abandonment: Option<&mut tokio::net::UnixStream>,
     operation: impl FnOnce(CancellationToken) -> Response + Send + 'static,
 ) -> SupervisedResponse {
-    let cancellation = CancellationToken::new();
+    let control = control.child();
+    let cancellation = control.cancellation.clone();
     let _cancel_on_drop = CancelOnDrop(cancellation.clone());
     let worker_cancellation = cancellation.clone();
+    let worker_control = control.clone();
     let mut task = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
+        let mut response = match worker_control.enter() {
+            Ok(_scope) => operation(worker_cancellation),
+            Err(error) => dispatch_error_response(request_id, &error),
+        };
+        if let Err(error) = worker_control.check() {
+            response.zeroize_plaintext();
+            response = dispatch_error_response(request_id, &error);
+        }
         WorkerCompletion {
-            response: operation(worker_cancellation),
+            response: GuardedResponse::new(response, permit),
             profile_permit,
         }
     });
@@ -1701,23 +2006,22 @@ async fn supervise_blocking(
             Some(stream) => {
                 tokio::select! {
                     biased;
-                    result = tokio::time::timeout(timeout, &mut task) => Some(result),
+                    result = tokio::time::timeout_at(tokio::time::Instant::from_std(control.deadline.instant()), &mut task) => Some(result),
                     () = connection_closed(stream) => None,
                 }
             }
-            None => Some(tokio::time::timeout(timeout, &mut task).await),
+            None => Some(tokio::time::timeout_at(tokio::time::Instant::from_std(control.deadline.instant()), &mut task).await),
         }
     }
     .await;
     let Some(completed) = completed else {
         cancellation.cancel();
-        // Allow the standard cancellation grace period for the worker to release
-        // profile admission and session resources. The timeout prevents an
-        // unresponsive worker from blocking the request loop.
-        let profile_permit = match tokio::time::timeout(CANCELLATION_GRACE, &mut task).await {
-            Ok(Ok(completion)) => Some(completion.profile_permit),
-            Ok(Err(_)) | Err(_) => None,
-        };
+        tokio::spawn(async move {
+            if let Ok(mut completion) = task.await {
+                completion.response.zeroize_plaintext();
+            }
+        });
+        let profile_permit = None;
         return SupervisedResponse {
             // Construct a response to preserve the common result type; the caller
             // does not write it because the socket is closed.
@@ -1729,15 +2033,20 @@ async fn supervise_blocking(
             close_connection: true,
             abandoned: true,
             _profile_permit: profile_permit,
+            _worker_permit: None,
         };
     };
     match completed {
-        Ok(Ok(completion)) => SupervisedResponse {
-            response: completion.response,
-            close_connection: false,
-            abandoned: false,
-            _profile_permit: Some(completion.profile_permit),
-        },
+        Ok(Ok(completion)) => {
+            let (response, worker_permit) = completion.response.into_parts();
+            SupervisedResponse {
+                response,
+                _worker_permit: worker_permit,
+                close_connection: false,
+                abandoned: false,
+                _profile_permit: Some(completion.profile_permit),
+            }
+        }
         Ok(Err(error)) => SupervisedResponse {
             response: Response::error(
                 request_id,
@@ -1747,16 +2056,16 @@ async fn supervise_blocking(
             close_connection: true,
             abandoned: false,
             _profile_permit: None,
+            _worker_permit: None,
         },
         Err(_) => {
             cancellation.cancel();
-            // Blocking work cannot be forcibly killed safely. Give network
-            // operations one poll interval to observe cancellation; if other
-            // synchronous work remains stuck, its permit keeps the pool bound.
-            let profile_permit = match tokio::time::timeout(CANCELLATION_GRACE, &mut task).await {
-                Ok(Ok(completion)) => Some(completion.profile_permit),
-                Ok(Err(_)) | Err(_) => None,
-            };
+            tokio::spawn(async move {
+                if let Ok(mut completion) = task.await {
+                    completion.response.zeroize_plaintext();
+                }
+            });
+            let profile_permit = None;
             SupervisedResponse {
                 response: Response::error(
                     request_id,
@@ -1766,9 +2075,53 @@ async fn supervise_blocking(
                 close_connection: true,
                 abandoned: false,
                 _profile_permit: profile_permit,
+            _worker_permit: None,
             }
         }
     }
+}
+
+#[cfg(test)]
+async fn supervise_blocking(
+    request_id: u64,
+    permit: OwnedSemaphorePermit,
+    profile_permit: profile_work::Permit,
+    timeout: Duration,
+    abandonment: Option<&mut tokio::net::UnixStream>,
+    operation: impl FnOnce(CancellationToken) -> Response + Send + 'static,
+) -> SupervisedResponse {
+    let control =
+        request_control::RequestControl::background(timeout, CancellationToken::new()).unwrap();
+    supervise_blocking_with_control(
+        request_id,
+        permit,
+        profile_permit,
+        control,
+        abandonment,
+        operation,
+    )
+    .await
+}
+
+async fn write_controlled_response(
+    stream: &mut tokio::net::UnixStream,
+    response: impl Into<GuardedResponse>,
+    control: &request_control::RequestControl,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut response = response.into();
+    control.check()?;
+    let encoded = foks_agent_proto::encode(&response.response);
+    response.zeroize_plaintext();
+    let frame = Zeroizing::new(encoded?);
+    control.check()?;
+    tokio::time::timeout_at(
+        tokio::time::Instant::from_std(control.deadline.instant()),
+        stream.write_all(&frame),
+    )
+    .await
+    .map_err(|_| foks_client::Error::DeadlineExceeded)??;
+    control.check()?;
+    Ok(())
 }
 
 struct CancelOnDrop(CancellationToken);
@@ -1799,6 +2152,11 @@ fn dispatch_controlled(
     cancellation: CancellationToken,
     ready: Arc<AtomicBool>,
 ) -> Response {
+    let request = PendingRequest::new(request);
+    let control = match request_control::RequestControl::receive(&request, timeout) {
+        Ok(control) => control,
+        Err(error) => return dispatch_error_response(request.id, &error),
+    };
     dispatch_timed(
         state_dir,
         request,
@@ -1810,22 +2168,30 @@ fn dispatch_controlled(
             shared: false,
             needs_exclusive: Arc::new(AtomicBool::new(false)),
         },
+        control,
     )
 }
 
 /// `dispatch_controlled` with the request's phases measured and attached to
 /// the response: the loop's waits, the worker's start latency, session opens,
 /// lock retries and the operation body, plus which caches served it.
+#[allow(clippy::too_many_arguments)]
 fn dispatch_timed(
     state_dir: &Path,
-    request: Request,
+    mut request: PendingRequest,
     timeout: Duration,
     cancellation: CancellationToken,
     ready: Arc<AtomicBool>,
     request_timing: RequestTiming,
     admission: Admission,
+    mut control: request_control::RequestControl,
 ) -> Response {
     let id = request.id;
+    control.cancellation = cancellation.clone();
+    let _scope = match control.enter() {
+        Ok(scope) => scope,
+        Err(error) => return dispatch_error_response(id, &error),
+    };
     let initializes = matches!(request.operation, Operation::InitializeState { .. });
     let start = request_timing
         .spawned_at
@@ -1837,7 +2203,7 @@ fn dispatch_timed(
             profile_work::with_shared_session(admission.shared, || {
                 dispatch_result(
                     state_dir,
-                    request.operation,
+                    request.take_operation(),
                     timeout,
                     cancellation,
                     ready.load(Ordering::Acquire),
@@ -1871,14 +2237,32 @@ fn dispatch_timed(
         waited_behind: request_timing.waited_behind.map(str::to_owned),
         ..ResponseTiming::default()
     };
-    match result {
+    let mut response = match result {
         Ok(value) => Response::success(id, value),
         Err(error) => dispatch_error_response(id, error.as_ref()),
     }
-    .with_timing(timing)
+    .with_timing(timing);
+    if let Err(error) = control.check() {
+        response.zeroize_plaintext();
+        return dispatch_error_response(id, &error);
+    }
+    response
 }
 
 fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -> Response {
+    let mut clock_source = Some(error);
+    while let Some(source) = clock_source {
+        if let Some(clock) = source.downcast_ref::<foks_local_deadline::Error>() {
+            let code = match clock {
+                foks_local_deadline::Error::Expired => ErrorCode::DeadlineExceeded,
+                foks_local_deadline::Error::DomainMismatch => ErrorCode::DeadlineDomainMismatch,
+                foks_local_deadline::Error::Unavailable(_) => ErrorCode::DeadlineClockUnavailable,
+                foks_local_deadline::Error::Range => ErrorCode::InvalidRequest,
+            };
+            return Response::error(id, code, clock.to_string());
+        }
+        clock_source = source.source();
+    }
     if let Some(error) = error.downcast_ref::<profile_work::AdmissionError>() {
         // DeadlineExceeded means a dispatched operation may have committed.
         // Admission failure is known not to have entered an operation body.
@@ -2085,6 +2469,23 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
                 );
             }
             let code = match retention {
+                foks_client_db::Error::UploadExpired => Some(ErrorCode::UploadExpired),
+                foks_client_db::Error::UploadIdentityConflict => {
+                    Some(ErrorCode::UploadIdentityConflict)
+                }
+                foks_client_db::Error::UploadGenerationMismatch => {
+                    Some(ErrorCode::UploadGenerationMismatch)
+                }
+                foks_client_db::Error::UploadLegacyReadOnly => {
+                    Some(ErrorCode::UploadLegacyReadOnly)
+                }
+                foks_client_db::Error::UploadPendingFull => Some(ErrorCode::UploadPendingFull),
+                foks_client_db::Error::UploadRetentionFull => Some(ErrorCode::UploadRetentionFull),
+                foks_client_db::Error::UploadSpoolFull => Some(ErrorCode::UploadSpoolFull),
+                foks_client_db::Error::UploadClockUntrusted => {
+                    Some(ErrorCode::UploadClockUntrusted)
+                }
+                foks_client_db::Error::UploadFutureHandle => Some(ErrorCode::UploadFuture),
                 foks_client_db::Error::AdapterRetentionFull => Some(ErrorCode::RetentionFull),
                 foks_client_db::Error::AdapterClockUntrusted => Some(ErrorCode::ClockUntrusted),
                 foks_client_db::Error::AdapterActiveFull => Some(ErrorCode::SubmissionActiveFull),
@@ -2096,7 +2497,12 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
             };
             if let Some(code) = code {
                 retention::rejected(code);
-                return Response::error(id, code, retention.to_string());
+                let message = if code == ErrorCode::UploadClockUntrusted {
+                    "Upload time needs confirmation. Use `foks-rs --state-dir <state directory> retention reanchor --domain upload --profile <profile> --account-alias <account> --unix-seconds <current time>` to preview a repair, then repeat with its --confirm-digest.".to_owned()
+                } else {
+                    retention.to_string()
+                };
+                return Response::error(id, code, message);
             }
         }
         if let Some(chat) = candidate.downcast_ref::<foks_client_db::Error>() {
@@ -3075,6 +3481,7 @@ fn put_kv_reader<R: std::io::Read>(
     path: &str,
     mut reader: R,
     expected_size: Option<u64>,
+    upload_id: Option<foks_agent_proto::UploadHandle>,
     precondition: KvPrecondition,
     read_role: KvRole,
     write_role: KvRole,
@@ -3083,6 +3490,39 @@ fn put_kv_reader<R: std::io::Read>(
     let session =
         read_cache::open_profile_session(registry, kv_store_profile(store), timeout, cancellation)?;
     with_vault_and_master(state_dir, &session, |session, vault, master| {
+        if let Some(upload_id) = upload_id {
+            let report = match store {
+                KvStoreRef::Account(store) => session.put_kv_file_upload_with_size(
+                    &store.account_alias,
+                    path,
+                    &mut reader,
+                    expected_size,
+                    upload_id,
+                    wire_precondition(precondition),
+                    wire_role_to_app(read_role),
+                    wire_role_to_app(write_role),
+                    mkdir_p,
+                    vault,
+                    master,
+                )?,
+                KvStoreRef::Team(store) => session.put_team_kv_file_upload_with_size(
+                    &store.account_alias,
+                    &store.team_alias,
+                    &store.team_id,
+                    path,
+                    &mut reader,
+                    expected_size,
+                    upload_id,
+                    wire_precondition(precondition),
+                    wire_role_to_app(read_role),
+                    wire_role_to_app(write_role),
+                    mkdir_p,
+                    vault,
+                    master,
+                )?,
+            };
+            return Ok(serde_json::to_value(report)?);
+        }
         let report = match store {
             KvStoreRef::Account(store) => session.put_kv_file_checked_with_size(
                 &store.account_alias,
@@ -3340,6 +3780,7 @@ fn dispatch_result(
     let scope = profile_work::operation_scope(&operation);
     let retry = reads.then(|| operation.clone());
     let run = |operation, timeout| {
+        let operation = PendingOperation(Some(operation));
         let dispatch =
             || dispatch_result_inner(state_dir, operation, timeout, cancellation.clone(), ready);
         if noninteractive {
@@ -3400,13 +3841,14 @@ fn dispatch_result(
 
 fn dispatch_result_inner(
     state_dir: &Path,
-    operation: Operation,
+    mut operation: PendingOperation,
     timeout: Duration,
     cancellation: CancellationToken,
     ready: bool,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    request_control::current()?.check()?;
     let mut registry = ProfileRegistry::open(state_dir)?;
-    match operation {
+    match operation.take() {
         operation @ (Operation::PrepareDataWrite { .. }
         | Operation::ExecuteDataWrite { .. }
         | Operation::DataWriteStatus { .. }
@@ -3444,11 +3886,15 @@ fn dispatch_result_inner(
         Operation::AdapterClockStatus {
             profile,
             account_alias,
+            domain,
         } => data::adapter_clock(
             state_dir,
             &registry,
-            profile,
-            account_alias,
+            foks_agent_proto::AccountStoreRef {
+                profile,
+                account_alias,
+            },
+            domain,
             None,
             timeout,
             cancellation,
@@ -3456,12 +3902,16 @@ fn dispatch_result_inner(
         Operation::RepairAdapterClock {
             profile,
             account_alias,
+            domain,
             action,
         } => data::adapter_clock(
             state_dir,
             &registry,
-            profile,
-            account_alias,
+            foks_agent_proto::AccountStoreRef {
+                profile,
+                account_alias,
+            },
+            domain,
             Some(action),
             timeout,
             cancellation,
@@ -3592,7 +4042,7 @@ fn dispatch_result_inner(
             };
             let credentials = open_credentials(state_dir)?;
             Ok(serde_json::to_value(
-                credentials.check_and_add_profile_with_control(
+                credentials.check_and_add_profile_with_deadline(
                     &mut registry,
                     Profile {
                         name,
@@ -3601,7 +4051,7 @@ fn dispatch_result_inner(
                         protocol,
                         trust,
                     },
-                    timeout,
+                    request_control::current()?.deadline,
                     cancellation,
                 )?,
             )?)
@@ -3637,7 +4087,7 @@ fn dispatch_result_inner(
             };
             let credentials = open_credentials(state_dir)?;
             Ok(serde_json::to_value(
-                credentials.check_and_add_profile_for_host_with_control(
+                credentials.check_and_add_profile_for_host_with_deadline(
                     &mut registry,
                     Profile {
                         name,
@@ -3646,7 +4096,7 @@ fn dispatch_result_inner(
                         protocol,
                         trust,
                     },
-                    timeout,
+                    request_control::current()?.deadline,
                     cancellation,
                     Some(candidate.host_id()),
                 )?,
@@ -4895,6 +5345,7 @@ fn dispatch_result_inner(
         Operation::ReadKv {
             store,
             path,
+            dirent_id,
             version,
         } => {
             let profile = kv_store_profile(&store).to_owned();
@@ -4902,14 +5353,19 @@ fn dispatch_result_inner(
                 read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 let report = match &store {
-                    KvStoreRef::Account(store) => {
-                        session.read_kv_entry(&store.account_alias, &path, version, vault)?
-                    }
+                    KvStoreRef::Account(store) => session.read_kv_entry(
+                        &store.account_alias,
+                        &path,
+                        dirent_id,
+                        version,
+                        vault,
+                    )?,
                     KvStoreRef::Team(store) => session.read_team_kv_entry(
                         &store.account_alias,
                         &store.team_alias,
                         &store.team_id,
                         &path,
+                        dirent_id,
                         version,
                         vault,
                     )?,
@@ -4917,6 +5373,7 @@ fn dispatch_result_inner(
                 Ok(serde_json::to_value(KvReadResult {
                     store,
                     path: report.path,
+                    dirent_id: report.dirent_id,
                     version: report.version,
                     node_type: report.node_type,
                     size: report.size,
@@ -4930,6 +5387,7 @@ fn dispatch_result_inner(
         Operation::ReadKvChunk {
             store,
             path,
+            dirent_id,
             version,
             offset,
             length,
@@ -4949,6 +5407,7 @@ fn dispatch_result_inner(
                     KvStoreRef::Account(store) => session.read_kv_chunk(
                         &store.account_alias,
                         &path,
+                        dirent_id,
                         version,
                         offset,
                         length,
@@ -4959,6 +5418,7 @@ fn dispatch_result_inner(
                         &store.team_alias,
                         &store.team_id,
                         &path,
+                        dirent_id,
                         version,
                         offset,
                         length,
@@ -4968,6 +5428,7 @@ fn dispatch_result_inner(
                 Ok(serde_json::to_value(KvChunkResult {
                     store,
                     path: report.path,
+                    dirent_id: report.dirent_id,
                     version: report.version,
                     offset: report.offset,
                     content: report.content,
@@ -4984,12 +5445,12 @@ fn dispatch_result_inner(
             precondition,
             mkdir_p,
         } => {
+            let content = Zeroizing::new(content);
             if content.len() > MAXIMUM_INLINE_KV_BYTES {
                 return Err(Box::new(AgentRequestError(
                     "inline KV content exceeds its local protocol limit",
                 )));
             }
-            let content = Zeroizing::new(content);
             let content_size = u64::try_from(content.len())?;
             put_kv_reader(
                 state_dir,
@@ -5000,11 +5461,139 @@ fn dispatch_result_inner(
                 &path,
                 std::io::Cursor::new(content.as_slice()),
                 Some(content_size),
+                None,
                 precondition,
                 read_role,
                 write_role,
                 mkdir_p,
             )
+        }
+        Operation::PrepareKvUpload {
+            store,
+            upload_id,
+            intent,
+        } => {
+            let intent = foks_client_app::KvUploadIntent::checked(
+                &intent.path,
+                Some(intent.total_length),
+                wire_precondition(intent.precondition),
+                wire_role_to_app(intent.read_role),
+                wire_role_to_app(intent.write_role),
+                intent.mkdir_p,
+            );
+            let session = read_cache::open_profile_session(
+                &registry,
+                kv_store_profile(&store),
+                timeout,
+                cancellation,
+            )?;
+            with_vault_and_master(state_dir, &session, |session, vault, _| {
+                let report = match &store {
+                    KvStoreRef::Account(s) => session.prepare_kv_upload(
+                        &s.account_alias,
+                        None,
+                        upload_id,
+                        &intent,
+                        vault,
+                    )?,
+                    KvStoreRef::Team(s) => session.prepare_kv_upload(
+                        &s.account_alias,
+                        Some(&s.team_id),
+                        upload_id,
+                        &intent,
+                        vault,
+                    )?,
+                };
+                Ok(serde_json::to_value(report)?)
+            })
+        }
+        Operation::KvUploadIssuance { store } => {
+            let session = read_cache::open_profile_session(
+                &registry,
+                kv_store_profile(&store),
+                timeout,
+                cancellation,
+            )?;
+            with_vault_and_master(state_dir, &session, |session, vault, _| {
+                let context = match &store {
+                    KvStoreRef::Account(s) => {
+                        session.kv_upload_issuance(&s.account_alias, None, vault)?
+                    }
+                    KvStoreRef::Team(s) => {
+                        session.kv_upload_issuance(&s.account_alias, Some(&s.team_id), vault)?
+                    }
+                };
+                Ok(serde_json::to_value(foks_agent_proto::KvUploadIssuance {
+                    database_id: context.database_id,
+                    issued_at: context.issued_at,
+                })?)
+            })
+        }
+        Operation::ListKvUploads { store, after } => {
+            let session = read_cache::open_profile_session(
+                &registry,
+                kv_store_profile(&store),
+                timeout,
+                cancellation,
+            )?;
+            with_vault_and_master(state_dir, &session, |session, vault, _| {
+                let page = match &store {
+                    KvStoreRef::Account(s) => {
+                        session.kv_upload_page(&s.account_alias, None, after, vault)?
+                    }
+                    KvStoreRef::Team(s) => {
+                        session.kv_upload_page(&s.account_alias, Some(&s.team_id), after, vault)?
+                    }
+                };
+                Ok(serde_json::to_value(page)?)
+            })
+        }
+        Operation::ResumeKvUpload { store, upload_id } => {
+            let session = read_cache::open_profile_session(
+                &registry,
+                kv_store_profile(&store),
+                timeout,
+                cancellation,
+            )?;
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
+                let report = match &store {
+                    KvStoreRef::Account(s) => {
+                        session.resume_kv_upload(&s.account_alias, upload_id, vault, master)?
+                    }
+                    KvStoreRef::Team(s) => session.resume_team_kv_upload(
+                        &s.account_alias,
+                        &s.team_alias,
+                        &s.team_id,
+                        upload_id,
+                        vault,
+                        master,
+                    )?,
+                };
+                Ok(serde_json::to_value(report)?)
+            })
+        }
+        Operation::CancelKvUpload { store, upload_id } => {
+            let session = read_cache::open_profile_session(
+                &registry,
+                kv_store_profile(&store),
+                timeout,
+                cancellation,
+            )?;
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
+                let report = match &store {
+                    KvStoreRef::Account(s) => {
+                        session.cancel_kv_upload(&s.account_alias, upload_id, vault, master)?
+                    }
+                    KvStoreRef::Team(s) => session.cancel_team_kv_upload(
+                        &s.account_alias,
+                        &s.team_id,
+                        upload_id,
+                        vault,
+                        master,
+                    )?,
+                };
+                Ok(serde_json::to_value(report)?)
+            })
         }
         Operation::PutKvStream { .. } => Err(Box::new(AgentRequestError(
             "streaming KV upload requires the streaming connection path",
@@ -6104,6 +6693,13 @@ fn checked_session<T>(
     session: &ProfileSession,
     operation: impl FnOnce(&CheckedProfileSession<'_>) -> Result<T, Box<dyn std::error::Error>>,
 ) -> Result<T, Box<dyn std::error::Error>> {
+    struct Wake<'a>(&'a str);
+    impl Drop for Wake<'_> {
+        fn drop(&mut self) {
+            retention::wake_profile(self.0);
+        }
+    }
+    let _wake = (!profile_work::session_is_shared()).then(|| Wake(&session.profile().name));
     let mut operation = Some(operation);
     if profile_work::session_is_shared() {
         // Admitted beside other reads: the session shares the profile's
@@ -6111,7 +6707,7 @@ fn checked_session<T>(
         // request back to be admitted that way.
         loop {
             profile_work::check_control()
-                .map_err(|_| Box::new(ProfileBusyError) as Box<dyn std::error::Error>)?;
+                .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)?;
             match credentials.try_with_shared_checked_session(session, |checked| {
                 #[cfg(test)]
                 let _span = credential_reads::CheckedSpan::enter();
@@ -6124,12 +6720,12 @@ fn checked_session<T>(
                 SharedSessionOutcome::Contended => {}
             }
             profile_work::wait_for_external_lock()
-                .map_err(|_| Box::new(ProfileBusyError) as Box<dyn std::error::Error>)?;
+                .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)?;
         }
     }
     loop {
         profile_work::check_control()
-            .map_err(|_| Box::new(ProfileBusyError) as Box<dyn std::error::Error>)?;
+            .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)?;
         let result = credentials.try_with_checked_session(session, |checked| {
             #[cfg(test)]
             let _span = credential_reads::CheckedSpan::enter();
@@ -6141,7 +6737,7 @@ fn checked_session<T>(
         // None proves the closure was not entered. Never retry an error from
         // the closure, checkpoint publication, or response decoding.
         profile_work::wait_for_external_lock()
-            .map_err(|_| Box::new(ProfileBusyError) as Box<dyn std::error::Error>)?;
+            .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)?;
     }
 }
 
@@ -6157,7 +6753,7 @@ fn checked_sessions<T>(
     let mut operation = Some(operation);
     loop {
         profile_work::check_control()
-            .map_err(|_| Box::new(ProfileBusyError) as Box<dyn std::error::Error>)?;
+            .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)?;
         let result = credentials.try_with_checked_sessions(left, right, |left, right| {
             #[cfg(test)]
             let _span = credential_reads::CheckedSpan::enter();
@@ -6167,7 +6763,7 @@ fn checked_sessions<T>(
             return Ok(value);
         }
         profile_work::wait_for_external_lock()
-            .map_err(|_| Box::new(ProfileBusyError) as Box<dyn std::error::Error>)?;
+            .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)?;
     }
 }
 
@@ -6792,6 +7388,12 @@ mod tests {
 
     #[test]
     fn streaming_reader_requires_an_exact_commit_and_detects_disconnect() {
+        let control = request_control::RequestControl::background(
+            Duration::from_secs(10),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        let _scope = control.enter().unwrap();
         use std::io::Read as _;
 
         let (sender, receiver) = tokio::sync::mpsc::channel(4);
@@ -6842,7 +7444,7 @@ mod tests {
         let ready = Arc::new(AtomicBool::new(false));
         let status = dispatch_controlled(
             &state,
-            Request::new(1, Operation::AgentStatus),
+            test_request(1, Operation::AgentStatus),
             Duration::from_secs(15),
             CancellationToken::new(),
             ready.clone(),
@@ -6856,7 +7458,7 @@ mod tests {
 
         let initialized = dispatch_controlled(
             &state,
-            Request::new(
+            test_request(
                 2,
                 Operation::InitializeState {
                     backend: WireCredentialBackend::PrivateFile,
@@ -6876,7 +7478,7 @@ mod tests {
         ready.store(false, Ordering::Release);
         let resumed = dispatch_controlled(
             &state,
-            Request::new(
+            test_request(
                 3,
                 Operation::InitializeState {
                     // Durable state wins over a stale caller preference.
@@ -6896,7 +7498,7 @@ mod tests {
 
         let added = dispatch_controlled(
             &state,
-            Request::new(
+            test_request(
                 4,
                 Operation::AddProfile {
                     name: "local".to_owned(),
@@ -6924,7 +7526,7 @@ mod tests {
 
         let status = dispatch_controlled(
             &state,
-            Request::new(4, Operation::AgentStatus),
+            test_request(4, Operation::AgentStatus),
             Duration::from_secs(15),
             CancellationToken::new(),
             ready,
@@ -6941,12 +7543,12 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let state = directory.path().join("state");
         ProfileRegistry::open(&state).unwrap();
-        let ping = dispatch(&state, Request::new(1, Operation::Ping));
+        let ping = dispatch(&state, test_request(1, Operation::Ping));
         assert!(matches!(
             ping.result,
             foks_agent_proto::ResponseResult::Success { .. }
         ));
-        let profiles = dispatch(&state, Request::new(2, Operation::ListProfiles));
+        let profiles = dispatch(&state, test_request(2, Operation::ListProfiles));
         assert!(matches!(
             profiles.result,
             foks_agent_proto::ResponseResult::Success { .. }
@@ -6972,7 +7574,7 @@ mod tests {
 
         let response = dispatch(
             &state,
-            Request::new(
+            test_request(
                 1,
                 Operation::SetProfileLabel {
                     profile: "offline".to_owned(),
@@ -6989,7 +7591,7 @@ mod tests {
                     "changed": true
                 })
         ));
-        let profiles = dispatch(&state, Request::new(2, Operation::ListProfiles));
+        let profiles = dispatch(&state, test_request(2, Operation::ListProfiles));
         assert!(matches!(
             profiles.result,
             ResponseResult::Success { value }
@@ -6998,7 +7600,7 @@ mod tests {
 
         let unchanged = dispatch(
             &state,
-            Request::new(
+            test_request(
                 3,
                 Operation::SetProfileLabel {
                     profile: "offline".to_owned(),
@@ -7029,7 +7631,7 @@ mod tests {
             .unwrap();
         let response = dispatch(
             &state,
-            Request::new(
+            test_request(
                 3,
                 Operation::ListProfileOverview {
                     profile: "local".to_owned(),
@@ -7077,7 +7679,7 @@ mod tests {
 
         let forgotten = dispatch(
             &state,
-            Request::new(
+            test_request(
                 1,
                 Operation::RemoveProfile {
                     name: "local".to_owned(),
@@ -7115,7 +7717,7 @@ mod tests {
 
         let described = dispatch(
             &state,
-            Request::new(
+            test_request(
                 10,
                 Operation::DescribeResetHardState {
                     profile: "local".to_owned(),
@@ -7135,7 +7737,7 @@ mod tests {
         foks_client_db::HardStateStore::open(&session.paths().soft_database).unwrap();
         let reset = dispatch(
             &state,
-            Request::new(
+            test_request(
                 11,
                 Operation::ResetHardState {
                     profile: "local".to_owned(),
@@ -7152,7 +7754,7 @@ mod tests {
         ));
         let repeated = dispatch(
             &state,
-            Request::new(
+            test_request(
                 12,
                 Operation::ResetHardState {
                     profile: "local".to_owned(),
@@ -7170,7 +7772,7 @@ mod tests {
 
         let described = dispatch(
             &state,
-            Request::new(
+            test_request(
                 13,
                 Operation::DescribeResetHardState {
                     profile: "local".to_owned(),
@@ -7183,7 +7785,7 @@ mod tests {
         let preview: WireResetStatePreview = serde_json::from_value(value).unwrap();
         let reset = dispatch(
             &state,
-            Request::new(
+            test_request(
                 14,
                 Operation::ResetHardState {
                     profile: "local".to_owned(),
@@ -7226,7 +7828,7 @@ mod tests {
 
         let described = dispatch(
             &state,
-            Request::new(
+            test_request(
                 20,
                 Operation::DescribeResetHardState {
                     profile: "local".to_owned(),
@@ -7243,7 +7845,7 @@ mod tests {
             .is_some_and(|reason| reason.contains("master key")));
         let reset = dispatch(
             &state,
-            Request::new(
+            test_request(
                 21,
                 Operation::ResetHardState {
                     profile: "local".to_owned(),
@@ -7307,7 +7909,7 @@ mod tests {
         let addresses = environment.addresses().unwrap();
         let probed = dispatch(
             &state,
-            Request::new(
+            test_request(
                 9,
                 Operation::CheckAndAddProfile {
                     name: "local".to_owned(),
@@ -7335,7 +7937,7 @@ mod tests {
 
         let response = dispatch(
             &state,
-            Request::new(
+            test_request(
                 10,
                 Operation::CreateAccount {
                     profile: "local".to_owned(),
@@ -7358,7 +7960,7 @@ mod tests {
 
         let listed_devices = dispatch(
             &state,
-            Request::new(
+            test_request(
                 18,
                 Operation::ListDevices {
                     profile: "local".to_owned(),
@@ -7377,7 +7979,7 @@ mod tests {
 
         let prepared = dispatch(
             &state,
-            Request::new(
+            test_request(
                 19,
                 Operation::PrepareOwnerBackup {
                     profile: "local".to_owned(),
@@ -7396,7 +7998,7 @@ mod tests {
         assert!(!format!("{prepared:?}").contains(&phrase));
         let committed = dispatch(
             &state,
-            Request::new(
+            test_request(
                 20,
                 Operation::CommitOwnerBackup {
                     profile: "local".to_owned(),
@@ -7415,7 +8017,7 @@ mod tests {
         let verify = |id, phrase: &str| {
             dispatch(
                 &state,
-                Request::new(
+                crate::test_request(
                     id,
                     Operation::VerifyRecoveryPhrase {
                         profile: "local".to_owned(),
@@ -7450,7 +8052,7 @@ mod tests {
         ));
         let revoked = dispatch(
             &state,
-            Request::new(
+            test_request(
                 21,
                 Operation::RevokeOwnerBackup {
                     profile: "local".to_owned(),
@@ -7477,7 +8079,7 @@ mod tests {
         assert!(check.revoked);
         let listed = dispatch(
             &state,
-            Request::new(
+            test_request(
                 11,
                 Operation::ListAccounts {
                     profile: "local".to_owned(),
@@ -7495,7 +8097,7 @@ mod tests {
         ));
         let missing_profile = dispatch(
             &state,
-            Request::new(
+            test_request(
                 110,
                 Operation::SetLocalAccountAlias {
                     profile: "missing".into(),
@@ -7511,7 +8113,7 @@ mod tests {
         assert!(!state.join("profiles/missing").exists());
         let renamed = dispatch(
             &state,
-            Request::new(
+            test_request(
                 111,
                 Operation::SetLocalAccountAlias {
                     profile: "local".into(),
@@ -7526,7 +8128,7 @@ mod tests {
         );
         let renamed_list = dispatch(
             &state,
-            Request::new(
+            test_request(
                 112,
                 Operation::ListAccounts {
                     profile: "local".into(),
@@ -7539,7 +8141,7 @@ mod tests {
         );
         let known = dispatch(
             &state,
-            Request::new(
+            test_request(
                 20,
                 Operation::ListKnownStores {
                     profile: "local".to_owned(),
@@ -7556,7 +8158,7 @@ mod tests {
 
         let duplicate_set = dispatch(
             &state,
-            Request::new(
+            test_request(
                 12,
                 Operation::SetPassphrase {
                     profile: "local".to_owned(),
@@ -7599,7 +8201,7 @@ mod tests {
                 },
             ),
         ] {
-            let response = dispatch(&state, Request::new(id, operation));
+            let response = dispatch(&state, test_request(id, operation));
             assert!(
                 matches!(
                     response.result,
@@ -7696,11 +8298,13 @@ mod tests {
             Operation::ReadKv {
                 store: KvStoreRef::Account(account.clone()),
                 path: "/entry".into(),
+                dirent_id: [0; 16],
                 version: 1,
             },
             Operation::ReadKvChunk {
                 store: KvStoreRef::Account(account),
                 path: "/entry".into(),
+                dirent_id: [0; 16],
                 version: 1,
                 offset: 0,
                 length: 10,
@@ -7712,10 +8316,12 @@ mod tests {
             Operation::AdapterClockStatus {
                 profile: profile.clone(),
                 account_alias: "owner".into(),
+                domain: foks_agent_proto::data::ReceiptClockDomain::Adapter,
             },
             Operation::RepairAdapterClock {
                 profile: profile.clone(),
                 account_alias: "owner".into(),
+                domain: foks_agent_proto::data::ReceiptClockDomain::Adapter,
                 action: foks_agent_proto::data::AdapterClockRepairAction::Preview {
                     unix_seconds: 1,
                 },
@@ -8172,10 +8778,12 @@ mod tests {
         let status = Operation::AdapterClockStatus {
             profile: "local".into(),
             account_alias: "owner".into(),
+            domain: foks_agent_proto::data::ReceiptClockDomain::Adapter,
         };
         let repair = Operation::RepairAdapterClock {
             profile: "local".into(),
             account_alias: "owner".into(),
+            domain: foks_agent_proto::data::ReceiptClockDomain::Adapter,
             action: foks_agent_proto::data::AdapterClockRepairAction::Preview { unix_seconds: 1 },
         };
         assert!(Arc::ptr_eq(
@@ -8199,21 +8807,27 @@ mod tests {
             .try_acquire(Path::new("/worker-test"), profile_work::Scope::profile("a"))
             .unwrap()
             .unwrap();
-        let result = supervise_blocking(
+        let (started, entered) = tokio::sync::oneshot::channel();
+        let supervised = tokio::spawn(supervise_blocking(
             7,
             permit,
             profile_permit,
-            Duration::from_millis(20),
+            Duration::from_millis(500),
             None,
             move |cancellation| {
+                started.send(()).unwrap();
                 while !cancellation.is_cancelled() {
                     std::thread::sleep(Duration::from_millis(1));
                 }
                 worker_observed.store(true, std::sync::atomic::Ordering::Release);
                 Response::success(7, serde_json::json!({ "late": true }))
             },
-        )
-        .await;
+        ));
+        tokio::time::timeout(Duration::from_secs(2), entered)
+            .await
+            .expect("worker did not start")
+            .unwrap();
+        let result = supervised.await.unwrap();
 
         assert!(!result.abandoned);
         assert!(result.close_connection);
@@ -8224,6 +8838,19 @@ mod tests {
                 ..
             }
         ));
+        // Deadline completion does not await physical cleanup. Wait for the
+        // actual owner to finish before asserting its cancellation observation.
+        drop(result);
+        drop(
+            coordinator
+                .acquire(
+                    Path::new("/worker-test"),
+                    profile_work::Scope::profile("a"),
+                    Duration::from_secs(2),
+                )
+                .await
+                .unwrap(),
+        );
         assert!(observed.load(std::sync::atomic::Ordering::Acquire));
         assert_eq!(workers.available_permits(), 1);
     }
@@ -8794,6 +9421,12 @@ mod tests {
         }
         let first = ProfileSession::open(&registry, "a").unwrap();
         let second = ProfileSession::open(&registry, "b").unwrap();
+        let control = request_control::RequestControl::background(
+            Duration::from_secs(10),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        let _scope = control.enter().unwrap();
         let mut entries = 0;
         let result =
             profile_work::with_control(Duration::from_secs(1), CancellationToken::new(), || {
@@ -8895,6 +9528,7 @@ mod tests {
         let (mut agent_side, client_side) = tokio::net::UnixStream::pair().unwrap();
         let observed = Arc::new(AtomicBool::new(false));
         let worker_observed = Arc::clone(&observed);
+        let (started, entered) = tokio::sync::oneshot::channel();
         let supervised = tokio::spawn(async move {
             supervise_blocking(
                 11,
@@ -8905,6 +9539,7 @@ mod tests {
                 Duration::from_secs(120),
                 Some(&mut agent_side),
                 move |cancellation| {
+                    started.send(()).unwrap();
                     while !cancellation.is_cancelled() {
                         std::thread::sleep(Duration::from_millis(1));
                     }
@@ -8914,19 +9549,29 @@ mod tests {
             )
             .await
         });
+        tokio::time::timeout(Duration::from_secs(2), entered)
+            .await
+            .expect("worker did not start")
+            .unwrap();
         drop(client_side);
         let response = supervised.await.unwrap();
 
         assert!(response.abandoned);
         assert!(response.close_connection);
-        assert!(observed.load(Ordering::Acquire));
         drop(response);
         // The profile and the worker are free for the request that was
         // waiting behind this one.
-        assert!(coordinator
-            .try_acquire(root, profile_work::Scope::profile("a"))
-            .unwrap()
-            .is_some());
+        drop(
+            coordinator
+                .acquire(
+                    root,
+                    profile_work::Scope::profile("a"),
+                    Duration::from_secs(2),
+                )
+                .await
+                .unwrap(),
+        );
+        assert!(observed.load(Ordering::Acquire));
         assert_eq!(workers.available_permits(), 1);
     }
 
@@ -9086,6 +9731,7 @@ mod tests {
             permit,
         ));
         let frame = foks_agent_proto::encode(&foks_agent_proto::Request {
+            deadline: test_request(0, Operation::Ping).deadline,
             version: foks_agent_proto::PROTOCOL_VERSION,
             id: 7,
             operation: Operation::ListPendingOperations {
@@ -9180,7 +9826,7 @@ mod tests {
             .reply
             .has_capability(foks_agent_proto::hello::capability::HISTORY_AFTER));
 
-        let mut older = serde_json::to_value(Request::new(
+        let mut older = serde_json::to_value(crate::test_request(
             12,
             Operation::SetLocalAccountAlias {
                 profile: "p".to_owned(),
@@ -9580,6 +10226,12 @@ mod tests {
             account_alias: "personal".to_owned(),
         });
         let dispatch = |operation| {
+            let control = request_control::RequestControl::background(
+                Duration::from_secs(15),
+                CancellationToken::new(),
+            )
+            .unwrap();
+            let _scope = control.enter().unwrap();
             dispatch_result(
                 &state,
                 operation,
@@ -9593,6 +10245,7 @@ mod tests {
         let chunk = |length: u32| Operation::ReadKvChunk {
             store: store.clone(),
             path: "/large".to_owned(),
+            dirent_id: [0; 16],
             version: 1,
             offset: 0,
             length,
@@ -9798,7 +10451,7 @@ mod tests {
         operation: Operation,
     ) -> credential_reads::Counts {
         credential_reads::reset();
-        let _ = dispatch(state, Request::new(id, operation));
+        let _ = dispatch(state, test_request(id, operation));
         credential_reads::counts()
     }
 
@@ -9994,7 +10647,7 @@ mod tests {
 
         let listed = dispatch(
             &state,
-            Request::new(
+            test_request(
                 1,
                 Operation::ListPendingOperations {
                     profile: "local".to_owned(),
@@ -10038,7 +10691,7 @@ mod tests {
             ),
         ] {
             let name = operation.name();
-            let response = dispatch(&state, Request::new(id, operation));
+            let response = dispatch(&state, test_request(id, operation));
             assert!(
                 matches!(
                     response.result,
@@ -10050,5 +10703,127 @@ mod tests {
                 "{name} was not refused by the import gate: {response:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+fn test_request(id: u64, operation: Operation) -> Request {
+    let deadline =
+        foks_local_deadline::Deadline::capture(Instant::now() + operation.deadline_class().cap())
+            .unwrap();
+    Request::new(id, operation, deadline.envelope().clone())
+}
+
+#[cfg(test)]
+mod deadline_rejection_tests {
+    use super::*;
+    #[test]
+    fn discarded_worker_closure_erases_decoded_request() {
+        let erased = Arc::new(AtomicBool::new(false));
+        let mut pending = PendingRequest::new(test_request(
+            1,
+            Operation::PutKv {
+                store: KvStoreRef::Account(AccountStoreRef {
+                    profile: "local".into(),
+                    account_alias: "owner".into(),
+                }),
+                path: "/secret".into(),
+                content: b"queued plaintext".to_vec(),
+                read_role: KvRole::Owner,
+                write_role: KvRole::Owner,
+                precondition: KvPrecondition::Create,
+                mkdir_p: false,
+            },
+        ));
+        pending.erased = Some(erased.clone());
+        let queued = move || {
+            drop(pending);
+        };
+        drop(queued);
+        assert!(erased.load(Ordering::Acquire));
+    }
+    #[test]
+    fn wrapped_clock_errors_keep_specific_ipc_codes() {
+        for (clock, expected) in [
+            (
+                foks_local_deadline::Error::DomainMismatch,
+                ErrorCode::DeadlineDomainMismatch,
+            ),
+            (
+                foks_local_deadline::Error::Unavailable("test clock".into()),
+                ErrorCode::DeadlineClockUnavailable,
+            ),
+        ] {
+            let client = foks_client::Error::LocalDeadline(clock.clone());
+            let nested = foks_client_app::Error::Client(client);
+            let provider = foks_client_app::Error::Client(foks_client::Error::Oidc(
+                foks_oidc::Error::LocalDeadline(clock.clone()),
+            ));
+            for error in [
+                &foks_client::Error::LocalDeadline(clock) as &(dyn std::error::Error + 'static),
+                &nested,
+                &provider,
+            ] {
+                assert!(
+                    matches!(dispatch_error_response(1,error).result, ResponseResult::Error { code, .. } if code == expected)
+                );
+            }
+        }
+    }
+    #[test]
+    fn rejected_upload_binding_erases_decoded_plaintext() {
+        let control = request_control::RequestControl::background(
+            Duration::from_secs(1),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        let mut frame = foks_agent_proto::KvUploadFrame {
+            version: foks_agent_proto::PROTOCOL_VERSION,
+            id: 2,
+            payload: foks_agent_proto::KvUploadPayload::Chunk {
+                offset: 0,
+                content: b"private bytes".to_vec(),
+            },
+        };
+        assert!(validate_upload_frame_binding(&mut frame, 1, &control).is_err());
+        let foks_agent_proto::KvUploadPayload::Chunk { content, .. } = frame.payload else {
+            unreachable!()
+        };
+        assert!(content.is_empty());
+    }
+    #[test]
+    fn late_response_keeps_physical_worker_slot_until_discard() {
+        let workers = Arc::new(Semaphore::new(1));
+        let permit = workers.clone().try_acquire_owned().unwrap();
+        let response = GuardedResponse::new(
+            Response::success(1, serde_json::json!({"plaintext":"secret"})),
+            permit,
+        );
+        assert_eq!(workers.available_permits(), 0);
+        drop(response);
+        assert_eq!(workers.available_permits(), 1);
+    }
+    #[tokio::test]
+    async fn expired_rejection_does_not_start_a_fresh_response_write_budget() {
+        let (mut writer, reader) = tokio::net::UnixStream::pair().unwrap();
+        let control = request_control::RequestControl::background(
+            Duration::from_millis(2),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        while Instant::now() < control.deadline.instant() {
+            tokio::task::yield_now().await;
+        }
+        assert!(write_controlled_response(
+            &mut writer,
+            Response::error(1, ErrorCode::Busy, "not started"),
+            &control
+        )
+        .await
+        .is_err());
+        assert_eq!(
+            reader.try_read(&mut [0; 1]).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
     }
 }

@@ -202,6 +202,52 @@ If the endpoint no longer matches what was shown, no signal is sent, since
 approval applied only to the endpoint originally displayed. The polkit
 start-time subject above is the same idea applied to processes.
 
+## Command deadlines and the unlocked interval
+
+Each command that reaches the agent takes `CommandState`
+(`src/commands/deadline.rs`) in place of the managed `AppState`. Building it
+looks the command's name up in `command_class`, which gives an agent
+`DeadlineClass`: Ordinary (15 s), Bulk (300 s) or Pairing (300 s). The host
+captures a `foks_local_deadline::Deadline` that far ahead before the command
+body runs, and a command missing from the table fails with
+`missing-deadline-policy` before its body runs. The test
+`deadline_policies_name_exactly_the_commands_that_take_command_state` in
+`src/command_signatures.rs` compares the table with the commands whose
+signature takes `CommandState`. Commands whose first step waits on a person,
+such as `download_file` and `export_logins` with their save dialogs, have no
+class; they call `begin_operation` after the dialog closes, so the wait is
+not taken from their budget.
+
+Every agent transport a command uses is bound to that deadline, and each
+request carries its envelope, so the agent enforces the same deadline. Work
+that blocks runs through `deadline::run` on one of 32 native workers;
+waiting for a worker and for its result both end at the deadline. A worker
+still running then keeps its admission until it returns, and its result is
+zeroized instead of delivered. An expired mutation is reported as
+ambiguous, so the vault must be refreshed before the next change. A view
+of `AppState` without a deadline refuses agent calls with `missing-deadline`.
+
+A read that delivers content captures an `UnlockedInterval`: the app-lock
+generation at the start of the command. Each agent call of the read is
+refused once the app has locked, and a response that arrives after locking
+is cleared and discarded. The result reaches the renderer, the clipboard,
+the browser or the destination file only inside `UnlockedInterval::publish`,
+which holds the lock's publication mutex, so locking cannot fall between
+the last check and that handoff. `read_item`, `copy_item_value`,
+`copy_item_field`, `open_item_url`, `store_usage`, `download_file`,
+`export_logins` and the read half of `copy_item_to_store` work this way;
+a chunked read checks the deadline and the interval again between chunks.
+Reads name the catalog entry by dirent id as well as path and version, and
+a result for another dirent is a `response-binding` error.
+
+The Uploads button above the Files list calls `list_file_uploads`, which
+returns the durable uploads the agent holds for the selected store and its
+upload capacity. `resume_file_upload` and `cancel_file_upload` act on one
+upload handle. They take a reservation through `begin_upload_reconciliation`,
+which, unlike other mutations, may proceed while an earlier change still
+needs a refresh, since it acts only on an existing handle; it still
+excludes concurrent mutations and does not clear the refresh requirement.
+
 ## Clipboard hygiene
 
 Copying a password to the clipboard hands it to every clipboard-history
@@ -360,7 +406,7 @@ Download reverses the path with three properties: atomicity, integrity,
 and no plaintext left behind on failure. The host opens the native save
 dialog itself, creates a temporary file **in the destination's directory**
 (so the final rename is on one filesystem), and streams chunks from the
-agent, validating that each chunk's store, path, version, and offset match
+agent, validating that each chunk's store, path, dirent id, version, and offset match
 the request and that the running total stays under the limit. Each chunk
 buffer is zeroized after it is written. When the agent signals end of
 file, the total length is compared to the item's authenticated size; a
@@ -898,7 +944,9 @@ no agent operation and no protocol change.
   `src/clipboard.rs`, `src/dragdrop.rs`, `src/commands/context/grants.rs`
   (`record_drop_paths`, `upload_path`), `src/commands/vault.rs`
   (`read_item`, `copy_item_value`, `copy_item_field`, `open_item_url`,
-  `download_file`),
+  `download_file`, `list_file_uploads`), `src/commands/deadline.rs`
+  (`CommandState`, `command_class`), `src/agent/deadline.rs`
+  (`deadline::run`),
   `src/commands/trash.rs` (`trash_item`, `restore_trash_item`, `remove_item`,
   `empty_trash`), `src/commands/vault_copy.rs` (`copy_item_to_store`),
   `src/commands/password_import.rs` (`begin_password_import`,

@@ -15,6 +15,7 @@ foks-agent-client = { workspace = true }
 foks-agent-proto = { workspace = true }
 foks-client = { workspace = true }
 foks-crypto = { workspace = true }
+foks-local-deadline = { workspace = true, features = ["clock"] }
 foks-verify = { workspace = true }
 getrandom = { workspace = true }
 libc = { workspace = true }

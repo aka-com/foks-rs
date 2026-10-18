@@ -9,7 +9,7 @@ pub(crate) struct ReadPool {
 }
 
 struct Inner {
-    config: ReadDatabaseConfig,
+    opener: foks_server_db::ReadDatabaseOpener,
     maximum_connections: usize,
     state: Mutex<State>,
 }
@@ -31,11 +31,13 @@ impl ReadPool {
                 "maximum read connections must be greater than zero",
             ));
         }
-        let database =
-            foks_server_db::ReadDatabase::open_pooled(&config.path, config.database.clone())?;
+        // The opener runs the KV capacity scan once; later connections check
+        // the file identity, the schema version and the schema contract.
+        let opener = foks_server_db::ReadDatabaseOpener::new(&config.path, config.database)?;
+        let database = opener.open()?;
         Ok(Self {
             inner: Arc::new(Inner {
-                config,
+                opener,
                 maximum_connections,
                 state: Mutex::new(State {
                     idle: vec![database],
@@ -56,8 +58,10 @@ impl ReadPool {
     }
 
     /// Checks out a connection and returns it with the number of connections
-    /// the pool held open when it was checked out.
+    /// the pool held open when it was checked out. A request whose deadline
+    /// has passed fails with `Error::DeadlineExceeded` before it checks out.
     fn checkout_counted(&self) -> Result<(ReadLease, usize)> {
+        crate::deadline::check()?;
         let mut state = self.inner.state.lock().map_err(|_| Error::Thread)?;
         if let Some(database) = state.idle.pop() {
             let lease = ReadLease {
@@ -73,10 +77,7 @@ impl ReadPool {
         let open = state.open_connections;
         drop(state);
 
-        match foks_server_db::ReadDatabase::open_pooled(
-            &self.inner.config.path,
-            self.inner.config.database.clone(),
-        ) {
+        match self.inner.opener.open() {
             Ok(database) => Ok((
                 ReadLease {
                     pool: Arc::clone(&self.inner),
@@ -95,8 +96,9 @@ impl ReadPool {
     /// Checks out a connection for an RPC request and records the number of
     /// open connections in `foks_reader_pool_open`. An exhausted pool is
     /// reported as `RateLimited` and counted in
-    /// `foks_reader_pool_exhausted_total`; any other failure is a server fault
-    /// counted at the `read_pool` site.
+    /// `foks_reader_pool_exhausted_total`. An expired request deadline is
+    /// reported as `RateLimited` through the shared statuses; any other failure
+    /// is a server fault counted at the `read_pool` site.
     pub(crate) fn lease(
         &self,
         metrics: &crate::ServerMetrics,
@@ -110,7 +112,7 @@ impl ReadPool {
                 metrics.reader_pool_exhausted();
                 Err(foks_rpc::RpcStatus::RateLimited)
             }
-            Err(error) => Err(crate::status::internal(error, "read_pool")),
+            Err(error) => Err(crate::status::unmapped(error, "read_pool")),
         }
     }
 }
@@ -211,48 +213,5 @@ mod tests {
         // Returned connections stay open, so reusing one keeps the count.
         let _reused = pool.lease(&metrics).unwrap();
         assert_eq!(metrics.snapshot().reader_pool_open, 2);
-    }
-
-    #[test]
-    fn pooled_connections_skip_the_kv_capacity_scan() {
-        let temporary = tempfile::tempdir().unwrap();
-        let path = temporary.path().join("pool.sqlite");
-        drop(foks_server_db::Database::open(&path, foks_server_db::Config::default()).unwrap());
-        // Only the KV capacity scan in ReadDatabase::open visits this row; its
-        // node exceeds the tighter limit below.
-        let connection = rusqlite::Connection::open(&path).unwrap();
-        connection
-            .pragma_update(None, "foreign_keys", false)
-            .unwrap();
-        let mut node_id = [0u8; 17];
-        node_id[0] = 3;
-        connection
-            .execute(
-                "INSERT INTO kv_nodes(uid, node_id, node_type, exact_node) VALUES (?1, ?2, 3, ?3)",
-                rusqlite::params![[1u8; 33], node_id, [0u8; 5]],
-            )
-            .unwrap();
-        drop(connection);
-        let config = foks_server_db::Config {
-            maximum_kv_node_bytes: 4,
-            ..foks_server_db::Config::default()
-        };
-        assert!(matches!(
-            foks_server_db::ReadDatabase::open(&path, config.clone()),
-            Err(foks_server_db::Error::QuotaExceeded)
-        ));
-
-        let pool = ReadPool::new(
-            ReadDatabaseConfig {
-                path,
-                database: config,
-            },
-            2,
-        )
-        .unwrap();
-        let first = pool.checkout().unwrap();
-        let second = pool.checkout().unwrap();
-        assert!(first.host_bootstrap().unwrap().is_none());
-        assert!(second.host_bootstrap().unwrap().is_none());
     }
 }

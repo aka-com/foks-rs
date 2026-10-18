@@ -102,8 +102,13 @@ impl Operations for ServerData {
         principal: &Principal,
     ) -> Result<Vec<u8>, RpcStatus> {
         let database = self.read_database()?;
-        crate::services::user::authorize_database(&database, principal)?;
-        crate::services::signup::reserve_username(&self.identity_ports(), argument)
+        crate::services::user::authorize_username_change(&database, principal)?;
+        drop(database);
+        crate::services::signup::reserve_username_for_principal(
+            &self.identity_ports(),
+            argument,
+            Some(principal),
+        )
     }
     fn get_tree_location(
         &self,
@@ -128,6 +133,7 @@ impl Operations for ServerData {
             .map_err(|_| RpcStatus::TransactionRetry)
     }
     fn change_username(&self, argument: &[u8], principal: &Principal) -> Result<(), RpcStatus> {
+        principal.require_interactive_device()?;
         let arg = foks_proto::ChangeUsernameArgument::decode(argument)
             .map_err(super::super::bad_arguments)?;
         let database = self.read_database()?;
@@ -136,6 +142,7 @@ impl Operations for ServerData {
             .user_chain(principal.uid())
             .map_err(|_| RpcStatus::TransactionRetry)?
             .ok_or_else(permission_denied)?;
+        drop(database);
         if chain.username_utf8 == arg.username.as_bytes() {
             return Err(RpcStatus::NoChange(
                 "username given matches current username".into(),

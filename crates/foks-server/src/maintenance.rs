@@ -248,10 +248,12 @@ mod tests {
             "PRAGMA foreign_keys=ON;
             INSERT INTO names(normalized_name,reservation_token,reservation_sequence,expires_at)
                 VALUES(x'61',zeroblob(17),1,1);
-            INSERT INTO kv_namespaces VALUES(zeroblob(33), 1, zeroblob(33));
+            INSERT INTO kv_namespaces(namespace_id,party_kind,host_id)
+                VALUES(zeroblob(33), 1, zeroblob(33));
             INSERT INTO kv_file_uploads(uid,file_id,exact_metadata,created_at,updated_at)
                 VALUES(zeroblob(33),zeroblob(16),x'00',1,1);
-            INSERT INTO kv_file_chunks VALUES(zeroblob(33),zeroblob(16),0,zeroblob(12),0,x'00');",
+            INSERT INTO kv_file_chunks(uid,file_id,clear_offset,ciphertext,final_chunk,exact_upload_chunk)
+                VALUES(zeroblob(33),zeroblob(16),0,zeroblob(12),0,x'00');",
         )
         .unwrap();
         drop(seed);
@@ -318,22 +320,34 @@ mod tests {
             "PRAGMA foreign_keys=ON;
              INSERT INTO names(normalized_name,reservation_token,reservation_sequence,expires_at)
                  VALUES(x'61',zeroblob(17),1,1);
-             INSERT INTO log_sends(log_send_id,created_at) VALUES(zeroblob(17),1);
-             CREATE TRIGGER fail_late_cleanup BEFORE DELETE ON log_sends
+             INSERT INTO log_sends(log_send_id,created_at) VALUES(zeroblob(17),1);",
+        )
+        .unwrap();
+        let writer = crate::Writer::start(path.clone(), Default::default(), 4).unwrap();
+        // Startup still verifies the qualified schema. Inject only after the
+        // writer owns its connection: this fixture exercises cleanup rollback,
+        // not admission of an altered schema or a reusable dependency proof.
+        seed.execute_batch(
+            "CREATE TRIGGER fail_late_cleanup BEFORE DELETE ON log_sends
                  BEGIN SELECT RAISE(ABORT,'injected late cleanup failure'); END;",
         )
         .unwrap();
         drop(seed);
-        let writer = crate::Writer::start(path.clone(), Default::default(), 4).unwrap();
         let metrics = Arc::new(ServerMetrics::default());
         let now = ABANDONED_UPLOAD_AGE_MICROS + 2;
-        assert!(run(
+        let error = run(
             &writer.handle(),
             Arc::new(FixedClock(now)),
             Arc::clone(&metrics),
-            None
+            None,
         )
-        .is_err());
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::Database(foks_server_db::Error::Sql(rusqlite::Error::SqliteFailure(
+                _, Some(message)
+            ))) if message == "injected late cleanup failure"
+        ));
         let failed = metrics.snapshot();
         assert_eq!(failed.expiry, crate::ExpiryMetricsSnapshot::default());
         assert_eq!(failed.maintenance_failures, 1);

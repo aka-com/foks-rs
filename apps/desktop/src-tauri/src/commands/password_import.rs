@@ -21,7 +21,6 @@
 //! the same import again skips the logins it saved.
 
 use crate::agent::AgentError;
-use crate::commands::context::AppState;
 use crate::commands::execution::{execute_kv_mutation, run_kv_writes, MutationKind};
 use crate::commands::preparation::{check_mutation_access, prepare_catalog_mutation};
 use crate::commands::trash::in_trash;
@@ -764,7 +763,7 @@ pub async fn begin_password_import(
 pub async fn commit_password_import(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     imports: State<'_, PasswordImports>,
     import_id: String,
     entries: Vec<u32>,
@@ -790,7 +789,7 @@ pub async fn commit_password_import(
         read_role,
         write_role,
     };
-    let transport = state.agent.transport();
+    let transport = state.transport()?;
     let outcomes = run_kv_writes(&state, Some(&store), move || {
         let permitted =
             || check_mutation_access(unlocked, crate::applock::unlocked_generation(&app));

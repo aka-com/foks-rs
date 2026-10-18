@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 37;
+pub const PROTOCOL_VERSION: u32 = 38;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -70,6 +70,7 @@ pub struct Request {
     pub version: u32,
     pub id: u64,
     pub operation: Operation,
+    pub deadline: foks_local_deadline::DeadlineEnvelope,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -383,6 +384,7 @@ pub enum KvPrecondition {
 pub struct KvReadResult {
     pub store: KvStoreRef,
     pub path: String,
+    pub dirent_id: [u8; 16],
     pub version: u64,
     pub node_type: String,
     pub size: Option<u64>,
@@ -402,6 +404,7 @@ pub struct KvReadResult {
 pub struct KvChunkResult {
     pub store: KvStoreRef,
     pub path: String,
+    pub dirent_id: [u8; 16],
     pub version: u64,
     pub offset: u64,
     #[serde(with = "crate::base64_bytes")]
@@ -411,6 +414,9 @@ pub struct KvChunkResult {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct KvUploadHeader {
+    /// Caller allocated before source streaming; retries resume this durable operation.
+    #[serde(default)]
+    pub upload_id: Option<foks_proto::UploadHandle>,
     #[serde(default)]
     pub adapter: Option<crate::data::DataSubmission>,
     pub store: KvStoreRef,
@@ -422,6 +428,33 @@ pub struct KvUploadHeader {
     /// Creates intermediate parent directories along the path if they do not exist.
     #[serde(default)]
     pub mkdir_p: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct KvUploadIntent {
+    pub path: String,
+    pub total_length: u64,
+    pub read_role: KvRole,
+    pub write_role: KvRole,
+    pub precondition: KvPrecondition,
+    pub mkdir_p: bool,
+}
+impl From<&KvUploadHeader> for KvUploadIntent {
+    fn from(header: &KvUploadHeader) -> Self {
+        Self {
+            path: header.path.clone(),
+            total_length: header.total_length,
+            read_role: header.read_role,
+            write_role: header.write_role,
+            precondition: header.precondition,
+            mkdir_p: header.mkdir_p,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct KvUploadIssuance {
+    pub database_id: [u8; 16],
+    pub issued_at: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -528,11 +561,155 @@ pub enum ProfileTrust {
 }
 
 impl Request {
-    pub fn new(id: u64, operation: Operation) -> Self {
+    pub fn new(
+        id: u64,
+        operation: Operation,
+        deadline: foks_local_deadline::DeadlineEnvelope,
+    ) -> Self {
         Self {
             version: PROTOCOL_VERSION,
             id,
             operation,
+            deadline,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeadlineClass {
+    Ordinary,
+    ChatPoll,
+    Pairing,
+    Bulk,
+}
+impl DeadlineClass {
+    pub fn cap(self) -> std::time::Duration {
+        std::time::Duration::from_secs(match self {
+            Self::Ordinary => 15,
+            Self::ChatPoll => 60,
+            Self::Pairing | Self::Bulk => 300,
+        })
+    }
+}
+impl Operation {
+    /// Explicit exhaustive policy: new variants require a budget decision.
+    pub fn deadline_class(&self) -> DeadlineClass {
+        match self {
+            Self::SetLocalAccountAlias { .. } => DeadlineClass::Ordinary,
+            Self::Invitations { .. } => DeadlineClass::Ordinary,
+            Self::WebAdmin { .. } => DeadlineClass::Ordinary,
+            Self::BotAccount { .. } => DeadlineClass::Ordinary,
+            Self::ListAccountRenames { .. } => DeadlineClass::Ordinary,
+            Self::RenameAccount { .. } => DeadlineClass::Ordinary,
+            Self::Sso { action, .. } => action.deadline_class(),
+            Self::PrepareDataWrite { .. } => DeadlineClass::Ordinary,
+            Self::ExecuteDataWrite { .. } => DeadlineClass::Ordinary,
+            Self::DataWriteStatus { .. } => DeadlineClass::Ordinary,
+            Self::PendingDataWrites { .. } => DeadlineClass::Ordinary,
+            Self::BindDataAccount { .. } => DeadlineClass::Ordinary,
+            Self::AdapterClockStatus { .. } => DeadlineClass::Ordinary,
+            Self::RepairAdapterClock { .. } => DeadlineClass::Ordinary,
+            Self::ReadData { .. } => DeadlineClass::Ordinary,
+            Self::Chat { action, .. } => action.deadline_class(),
+            Self::Ping => DeadlineClass::Ordinary,
+            Self::AgentStatus => DeadlineClass::Ordinary,
+            Self::RetentionStatus => DeadlineClass::Ordinary,
+            Self::DiscoverGoProfiles => DeadlineClass::Ordinary,
+            Self::InitializeState { .. } => DeadlineClass::Ordinary,
+            Self::AddProfile { .. } => DeadlineClass::Ordinary,
+            Self::CheckAndAddProfile { .. } => DeadlineClass::Ordinary,
+            Self::CheckAndAddGoProfile { .. } => DeadlineClass::Ordinary,
+            Self::RemoveProfile { .. } => DeadlineClass::Ordinary,
+            Self::SetProfileLabel { .. } => DeadlineClass::Ordinary,
+            Self::DescribeResetHardState { .. } => DeadlineClass::Ordinary,
+            Self::ResetHardState { .. } => DeadlineClass::Ordinary,
+            Self::ListProfiles => DeadlineClass::Ordinary,
+            Self::Probe { .. } => DeadlineClass::Ordinary,
+            Self::RefreshLease { .. } => DeadlineClass::Ordinary,
+            Self::ReconcileProfile { .. } => DeadlineClass::Ordinary,
+            Self::ListKnownStores { .. } => DeadlineClass::Ordinary,
+            Self::ListProfileOverview { .. } => DeadlineClass::Ordinary,
+            Self::ListAccounts { .. } => DeadlineClass::Ordinary,
+            Self::ListPendingOperations { .. } => DeadlineClass::Ordinary,
+            Self::CreateAccount { .. } => DeadlineClass::Ordinary,
+            Self::ResumeAccount { .. } => DeadlineClass::Ordinary,
+            Self::ListDevices { .. } => DeadlineClass::Ordinary,
+            Self::ListBackupEnrollments { .. } => DeadlineClass::Ordinary,
+            Self::DescribeServerStatus { .. } => DeadlineClass::Ordinary,
+            Self::RemoveDevice { .. } => DeadlineClass::Ordinary,
+            Self::ProvisionOwnerDevice { .. } => DeadlineClass::Ordinary,
+            Self::ResumeOwnerDeviceProvision { .. } => DeadlineClass::Ordinary,
+            Self::PrepareOwnerBackup { .. } => DeadlineClass::Ordinary,
+            Self::CommitOwnerBackup { .. } => DeadlineClass::Ordinary,
+            Self::RevokeOwnerBackup { .. } => DeadlineClass::Ordinary,
+            Self::RecoverOwnerAccount { .. } => DeadlineClass::Ordinary,
+            Self::ResumeOwnerRecovery { .. } => DeadlineClass::Ordinary,
+            Self::PassphraseStatus { .. } => DeadlineClass::Ordinary,
+            Self::SetPassphrase { .. } => DeadlineClass::Ordinary,
+            Self::ChangePassphrase { .. } => DeadlineClass::Ordinary,
+            Self::VerifyPassphrase { .. } => DeadlineClass::Ordinary,
+            Self::VerifyRecoveryPhrase { .. } => DeadlineClass::Ordinary,
+            Self::SetYubiPassphrase { .. } => DeadlineClass::Ordinary,
+            Self::ChangeYubiPassphrase { .. } => DeadlineClass::Ordinary,
+            Self::VerifyYubiPassphrase { .. } => DeadlineClass::Ordinary,
+            Self::SyncAccount { .. } => DeadlineClass::Ordinary,
+            Self::StartDevicePairing { .. } => DeadlineClass::Ordinary,
+            Self::RepublishDevicePairing { .. } => DeadlineClass::Ordinary,
+            Self::FinishDevicePairing { .. } => DeadlineClass::Pairing,
+            Self::AcceptDevicePairing { .. } => DeadlineClass::Pairing,
+            Self::AcceptGoProfilePairing { .. } => DeadlineClass::Pairing,
+            Self::ResumeDevicePairingAcceptance { .. } => DeadlineClass::Pairing,
+            Self::ResumeGoProfilePairing { .. } => DeadlineClass::Pairing,
+            Self::CopyGoProfileDevice { .. } => DeadlineClass::Pairing,
+            Self::ListYubiCards { .. } => DeadlineClass::Ordinary,
+            Self::ListYubiAccounts { .. } => DeadlineClass::Ordinary,
+            Self::CreateYubiAccount { .. } => DeadlineClass::Ordinary,
+            Self::ResumeYubiAccount { .. } => DeadlineClass::Ordinary,
+            Self::ProvisionYubiDevice { .. } => DeadlineClass::Ordinary,
+            Self::SyncYubiAccount { .. } => DeadlineClass::Ordinary,
+            Self::YubiPinStatus { .. } => DeadlineClass::Ordinary,
+            Self::ChangeYubiPin { .. } => DeadlineClass::Ordinary,
+            Self::ChangeYubiPuk { .. } => DeadlineClass::Ordinary,
+            Self::UnblockYubiPin { .. } => DeadlineClass::Ordinary,
+            Self::RotateYubiManagementKey { .. } => DeadlineClass::Ordinary,
+            Self::ResumeYubiManagementKey { .. } => DeadlineClass::Ordinary,
+            Self::RecoverYubiManagementKey { .. } => DeadlineClass::Ordinary,
+            Self::RecoverYubiSubkey { .. } => DeadlineClass::Ordinary,
+            Self::RevokeYubiDevice { .. } => DeadlineClass::Ordinary,
+            Self::ListKv { .. } => DeadlineClass::Ordinary,
+            Self::ListTeamKv { .. } => DeadlineClass::Ordinary,
+            Self::ReadKv { .. } => DeadlineClass::Ordinary,
+            Self::ReadKvChunk { .. } => DeadlineClass::Ordinary,
+            Self::PutKv { .. } => DeadlineClass::Ordinary,
+            Self::KvUploadIssuance { .. } => DeadlineClass::Ordinary,
+            Self::PrepareKvUpload { .. } => DeadlineClass::Ordinary,
+            Self::ListKvUploads { .. } => DeadlineClass::Ordinary,
+            Self::ResumeKvUpload { .. } => DeadlineClass::Bulk,
+            Self::CancelKvUpload { .. } => DeadlineClass::Ordinary,
+            Self::PutKvStream { .. } => DeadlineClass::Bulk,
+            Self::PutKvSymlink { .. } => DeadlineClass::Ordinary,
+            Self::MkdirKv { .. } => DeadlineClass::Ordinary,
+            Self::MoveKv { .. } => DeadlineClass::Ordinary,
+            Self::RemoveKv { .. } => DeadlineClass::Ordinary,
+            Self::CreateTeam { .. } => DeadlineClass::Ordinary,
+            Self::ResumeTeamCreation { .. } => DeadlineClass::Ordinary,
+            Self::AbandonTeamCreation { .. } => DeadlineClass::Ordinary,
+            Self::ListTeams { .. } => DeadlineClass::Ordinary,
+            Self::DiscoverTeams { .. } => DeadlineClass::Ordinary,
+            Self::SyncTeam { .. } => DeadlineClass::Ordinary,
+            Self::ListTeamDetails { .. } => DeadlineClass::Ordinary,
+            Self::ListTeamMembers { .. } => DeadlineClass::Ordinary,
+            Self::AddTeamMember { .. } => DeadlineClass::Ordinary,
+            Self::ResumeTeamMemberAddition { .. } => DeadlineClass::Ordinary,
+            Self::PromoteTeamMember { .. } => DeadlineClass::Ordinary,
+            Self::DemoteTeamMember { .. } => DeadlineClass::Ordinary,
+            Self::RemoveTeamMember { .. } => DeadlineClass::Ordinary,
+            Self::ResumeTeamMemberEdit { .. } => DeadlineClass::Ordinary,
+            Self::AddFederatedTeamMember { .. } => DeadlineClass::Ordinary,
+            Self::ListFederatedTeams { .. } => DeadlineClass::Ordinary,
+            Self::ExpelFederatedTeam { .. } => DeadlineClass::Ordinary,
+            Self::RefreshFederatedSecurity { .. } => DeadlineClass::Ordinary,
+            Self::RunDueJobs { .. } => DeadlineClass::Ordinary,
         }
     }
 }
@@ -593,16 +770,18 @@ pub enum Operation {
         profile: String,
         account_alias: String,
     },
-    /// Whether the account's adapter clock admits new assistant data writes.
+    /// Whether the account's receipt clock in `domain` admits new handles.
     AdapterClockStatus {
         profile: String,
         account_alias: String,
+        domain: crate::data::ReceiptClockDomain,
     },
-    /// Re-anchors the account's adapter clock at a confirmed wall time. The
-    /// MCP adapter never sends this; the CLI and the desktop do.
+    /// Re-anchors the account's receipt clock in `domain` at a confirmed wall
+    /// time. The MCP adapter never sends this; the CLI and the desktop do.
     RepairAdapterClock {
         profile: String,
         account_alias: String,
+        domain: crate::data::ReceiptClockDomain,
         action: crate::data::AdapterClockRepairAction,
     },
     ReadData {
@@ -960,11 +1139,13 @@ pub enum Operation {
     ReadKv {
         store: KvStoreRef,
         path: String,
+        dirent_id: [u8; 16],
         version: u64,
     },
     ReadKvChunk {
         store: KvStoreRef,
         path: String,
+        dirent_id: [u8; 16],
         version: u64,
         offset: u64,
         length: u32,
@@ -979,6 +1160,27 @@ pub enum Operation {
         precondition: KvPrecondition,
         #[serde(default)]
         mkdir_p: bool,
+    },
+    KvUploadIssuance {
+        store: KvStoreRef,
+    },
+    PrepareKvUpload {
+        store: KvStoreRef,
+        upload_id: foks_proto::UploadHandle,
+        intent: KvUploadIntent,
+    },
+    ListKvUploads {
+        store: KvStoreRef,
+        #[serde(default)]
+        after: Option<[u8; 32]>,
+    },
+    ResumeKvUpload {
+        store: KvStoreRef,
+        upload_id: foks_proto::UploadHandle,
+    },
+    CancelKvUpload {
+        store: KvStoreRef,
+        upload_id: foks_proto::UploadHandle,
     },
     PutKvStream {
         header: KvUploadHeader,
@@ -1223,6 +1425,11 @@ impl Operation {
             Self::ReadKv { .. } => "ReadKv",
             Self::ReadKvChunk { .. } => "ReadKvChunk",
             Self::PutKv { .. } => "PutKv",
+            Self::KvUploadIssuance { .. } => "KvUploadIssuance",
+            Self::PrepareKvUpload { .. } => "PrepareKvUpload",
+            Self::ListKvUploads { .. } => "ListKvUploads",
+            Self::ResumeKvUpload { .. } => "ResumeKvUpload",
+            Self::CancelKvUpload { .. } => "CancelKvUpload",
             Self::PutKvStream { .. } => "PutKvStream",
             Self::PutKvSymlink { .. } => "PutKvSymlink",
             Self::MkdirKv { .. } => "MkdirKv",
@@ -1332,6 +1539,7 @@ impl Operation {
                 | Self::ListYubiCards { .. }
                 | Self::ListYubiAccounts { .. }
                 | Self::YubiPinStatus { .. }
+                | Self::ListKvUploads { .. }
                 | Self::ListKv { .. }
                 | Self::ListTeamKv { .. }
                 | Self::ReadKv { .. }
@@ -1435,9 +1643,13 @@ impl std::fmt::Debug for Operation {
                 .field("token", &"<redacted>")
                 .finish(),
             Self::BindDataAccount { .. } => formatter.write_str("BindDataAccount"),
-            Self::AdapterClockStatus { .. } => formatter.write_str("AdapterClockStatus"),
-            Self::RepairAdapterClock { action, .. } => formatter
+            Self::AdapterClockStatus { domain, .. } => formatter
+                .debug_struct("AdapterClockStatus")
+                .field("domain", domain)
+                .finish_non_exhaustive(),
+            Self::RepairAdapterClock { domain, action, .. } => formatter
                 .debug_struct("RepairAdapterClock")
+                .field("domain", domain)
                 .field("action", action)
                 .finish_non_exhaustive(),
             Self::ReadData { .. } => formatter.write_str("ReadData"),
@@ -1963,16 +2175,19 @@ impl std::fmt::Debug for Operation {
             Self::ReadKv {
                 store,
                 path,
+                dirent_id,
                 version,
             } => formatter
                 .debug_struct("ReadKv")
                 .field("store", store)
                 .field("path", path)
+                .field("dirent_id", dirent_id)
                 .field("version", version)
                 .finish(),
             Self::ReadKvChunk {
                 store,
                 path,
+                dirent_id,
                 version,
                 offset,
                 length,
@@ -1980,6 +2195,7 @@ impl std::fmt::Debug for Operation {
                 .debug_struct("ReadKvChunk")
                 .field("store", store)
                 .field("path", path)
+                .field("dirent_id", dirent_id)
                 .field("version", version)
                 .field("offset", offset)
                 .field("length", length)
@@ -2001,6 +2217,31 @@ impl std::fmt::Debug for Operation {
                 .field("write_role", write_role)
                 .field("precondition", precondition)
                 .field("mkdir_p", mkdir_p)
+                .finish(),
+            Self::KvUploadIssuance { store } => formatter
+                .debug_struct("KvUploadIssuance")
+                .field("store", store)
+                .finish(),
+            Self::PrepareKvUpload {
+                store, upload_id, ..
+            } => formatter
+                .debug_struct("PrepareKvUpload")
+                .field("store", store)
+                .field("upload_id", upload_id)
+                .finish(),
+            Self::ListKvUploads { store, .. } => formatter
+                .debug_struct("ListKvUploads")
+                .field("store", store)
+                .finish(),
+            Self::ResumeKvUpload { store, upload_id } => formatter
+                .debug_struct("ResumeKvUpload")
+                .field("store", store)
+                .field("upload_id", upload_id)
+                .finish(),
+            Self::CancelKvUpload { store, upload_id } => formatter
+                .debug_struct("CancelKvUpload")
+                .field("store", store)
+                .field("upload_id", upload_id)
                 .finish(),
             Self::PutKvStream { header } => formatter
                 .debug_struct("PutKvStream")
@@ -2352,6 +2593,40 @@ impl std::fmt::Debug for Response {
 }
 
 impl Response {
+    /// Erase discarded response values; returned JSON may contain plaintext.
+    pub fn zeroize_plaintext(&mut self) {
+        fn erase(value: &mut serde_json::Value) {
+            match value {
+                serde_json::Value::String(text) => text.zeroize(),
+                serde_json::Value::Array(items) => {
+                    for item in items {
+                        erase(item);
+                    }
+                }
+                serde_json::Value::Object(fields) => {
+                    for (mut key, mut value) in std::mem::take(fields) {
+                        key.zeroize();
+                        erase(&mut value);
+                    }
+                }
+                serde_json::Value::Null
+                | serde_json::Value::Bool(_)
+                | serde_json::Value::Number(_) => *value = serde_json::Value::Null,
+            }
+        }
+        match &mut self.result {
+            ResponseResult::Success { value } => erase(value),
+            ResponseResult::Error {
+                message, fields, ..
+            } => {
+                message.zeroize();
+                fields.capability.zeroize();
+                fields.profile.zeroize();
+                fields.state_dir.zeroize();
+                fields.reason.zeroize();
+            }
+        }
+    }
     pub fn success(id: u64, value: serde_json::Value) -> Self {
         Self {
             version: PROTOCOL_VERSION,
@@ -2448,6 +2723,8 @@ impl std::fmt::Debug for ResponseResult {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ErrorCode {
+    DeadlineClockUnavailable,
+    DeadlineDomainMismatch,
     CredentialsRequired,
     SavedTrustMissing,
     ServerUnavailable,
@@ -2459,6 +2736,15 @@ pub enum ErrorCode {
     SubmissionActiveFull,
     SubmissionIdentityConflict,
     SubmissionFuture,
+    UploadExpired,
+    UploadIdentityConflict,
+    UploadGenerationMismatch,
+    UploadLegacyReadOnly,
+    UploadPendingFull,
+    UploadRetentionFull,
+    UploadSpoolFull,
+    UploadClockUntrusted,
+    UploadFuture,
 
     WebAdminUnsupported,
     WebAdminExpired,

@@ -525,6 +525,7 @@ fn prometheus(
     expiry_prometheus(&mut output, &metrics.expiry);
     checkpoint_prometheus(&mut output, &metrics.checkpoint);
     realtime_prometheus(&mut output, &metrics.realtime);
+    kex_prometheus(&mut output, &metrics.kex);
     capacity_prometheus(&mut output, capacity_limits);
     sso_prometheus(&mut output, sso);
     output
@@ -534,6 +535,34 @@ fn prometheus(
 /// reports. Alerting compares `database_bytes` with `foks_database_bytes`; the
 /// other quantities are counted only by that command, which scans tables a
 /// scrape does not read.
+fn kex_prometheus(output: &mut String, kex: &crate::KexMetricsSnapshot) {
+    use std::fmt::Write as _;
+    let _ = writeln!(
+        output,
+        "# TYPE foks_kex_active_polls gauge\nfoks_kex_active_polls {}",
+        kex.active
+    );
+    for (name, value) in [("admitted", kex.admitted), ("rejected", kex.rejected)] {
+        let _ = writeln!(
+            output,
+            "# TYPE foks_kex_{name}_total counter\nfoks_kex_{name}_total {value}"
+        );
+    }
+    let _ = writeln!(output, "# TYPE foks_kex_completed_total counter");
+    for (reason, value) in [
+        ("delivered", kex.delivered),
+        ("timeout", kex.timed_out),
+        ("disconnected", kex.disconnected),
+        ("shutdown", kex.shutdown),
+        ("failed", kex.failed),
+    ] {
+        let _ = writeln!(
+            output,
+            "foks_kex_completed_total{{reason=\"{reason}\"}} {value}"
+        );
+    }
+}
+
 fn capacity_prometheus(output: &mut String, limits: &[(foks_server_db::CapacityResource, u64)]) {
     use std::fmt::Write as _;
     let _ = writeln!(output, "# TYPE foks_capacity_limit gauge");

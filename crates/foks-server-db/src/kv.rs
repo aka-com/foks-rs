@@ -1,3 +1,19 @@
+/// Current-name presence query shared by contract with the typed metadata catalog.
+/// Names are deliberately nonunique; exclude only the requested dirent itself.
+pub const KV_NAME_CONFLICT_SQL: &str = "SELECT '1' FROM kv_dirent_current
+WHERE uid = ?1 AND parent_id = ?2 AND dirent_id != ?3 AND name_mac = ?4 LIMIT 1";
+
+pub const KV_LIST_INITIAL_SQL: &str = "SELECT d.exact_dirent, c.node_id FROM kv_dirent_current c
+JOIN kv_dirents d ON d.uid=c.uid AND d.parent_id=c.parent_id AND d.dirent_id=c.dirent_id AND d.version=c.version
+WHERE c.uid=?1 AND c.parent_id=?2 ORDER BY c.name_mac,c.dirent_id LIMIT ?3";
+pub const KV_LIST_MAC_SQL: &str = "SELECT d.exact_dirent, c.node_id FROM kv_dirent_current c
+JOIN kv_dirents d ON d.uid=c.uid AND d.parent_id=c.parent_id AND d.dirent_id=c.dirent_id AND d.version=c.version
+WHERE c.uid=?1 AND c.parent_id=?2 AND c.name_mac>?3 ORDER BY c.name_mac,c.dirent_id LIMIT ?4";
+pub const KV_LIST_TIME_SQL: &str = "SELECT d.exact_dirent, c.node_id FROM kv_dirent_current c
+JOIN kv_dirents d ON d.uid=c.uid AND d.parent_id=c.parent_id AND d.dirent_id=c.dirent_id AND d.version=c.version
+WHERE c.uid=?1 AND c.parent_id=?2 AND c.creation_time>=?3 ORDER BY c.creation_time,c.dirent_id LIMIT ?4";
+
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, OptionalExtension as _, TransactionBehavior};
 
 use crate::{error::sql_integer, Database, Error, ReadDatabase, ReadSnapshot, Result};
@@ -103,7 +119,7 @@ pub struct StoredKvFile {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StoredKvFileChunk {
-    pub ciphertext: Vec<u8>,
+    pub payload: crate::KvChunkPayload,
     pub offset: u64,
     pub final_chunk: bool,
 }
@@ -143,7 +159,7 @@ impl Database {
                        FROM teams t WHERE t.team_id = ?1
                  ) LIMIT 1",
                 [namespace_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
             )
             .optional()?;
         let Some((party_kind, host_id)) = party else {
@@ -186,7 +202,7 @@ impl Database {
                   AND d.version = h.version
                  WHERE h.uid = ?1 AND h.directory_id = ?2",
                 params![mutation.uid, mutation.id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
             )
             .optional()?;
         match existing {
@@ -253,15 +269,21 @@ impl Database {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existing: Option<Vec<u8>> = transaction
+        let existing: Option<(Vec<u8>, Option<i64>)> = transaction
             .query_row(
-                "SELECT exact_node FROM kv_nodes WHERE uid = ?1 AND node_id = ?2",
+                "SELECT exact_node,ciphertext_bytes FROM kv_nodes WHERE uid = ?1 AND node_id = ?2",
                 params![mutation.uid, mutation.id],
-                |row| row.get(0),
+                |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
             )
             .optional()?;
         match existing {
-            Some(exact) if exact == mutation.exact => Ok(()),
+            Some((exact, length)) if exact == mutation.exact => {
+                if length.is_none() {
+                    stamp_node_usage(&transaction, mutation)?;
+                    transaction.commit()?;
+                }
+                Ok(())
+            }
             Some(_) => Err(Error::KvConflict),
             None => {
                 ensure_kv_capacity(
@@ -281,6 +303,7 @@ impl Database {
                         mutation.exact
                     ],
                 )?;
+                stamp_node_usage(&transaction, mutation)?;
                 transaction.commit()?;
                 Ok(())
             }
@@ -324,7 +347,7 @@ impl Database {
                        AND d.dirent_id = h.dirent_id AND d.version = h.version
                      WHERE h.uid = ?1 AND h.parent_id = ?2 AND h.dirent_id = ?3",
                     params![uid, mutation.parent, mutation.id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
                 )
                 .optional()?;
             existing_heads.push(stored);
@@ -406,11 +429,7 @@ impl Database {
             if mutation.node_id[0] != 0 {
                 let conflicting_name = transaction
                     .query_row(
-                        "SELECT 1 FROM kv_dirent_heads h
-                         JOIN kv_dirents d ON d.uid = h.uid AND d.parent_id = h.parent_id
-                           AND d.dirent_id = h.dirent_id AND d.version = h.version
-                         WHERE h.uid = ?1 AND h.parent_id = ?2 AND h.dirent_id != ?3
-                           AND d.name_mac = ?4 AND substr(d.node_id, 1, 1) != X'00'",
+                        KV_NAME_CONFLICT_SQL,
                         params![uid, mutation.parent, mutation.id, mutation.name_mac],
                         |_| Ok(()),
                     )
@@ -455,6 +474,42 @@ impl Database {
     }
 
     pub fn put_kv_file_chunk(&mut self, mutation: &KvFileChunkMutation<'_>) -> Result<()> {
+        self.put_kv_file_chunk_impl(mutation, None, true)
+    }
+
+    /// Validates admission without retaining upload/chunk changes or reserving
+    /// quota. External I/O may follow; the eventual commit must recheck admission.
+    pub fn preflight_kv_file_chunk(&mut self, mutation: &KvFileChunkMutation<'_>) -> Result<()> {
+        self.put_kv_file_chunk_impl(mutation, None, false)
+    }
+
+    /// The caller must durably publish the immutable object before this commit.
+    pub fn put_kv_file_chunk_external(
+        &mut self,
+        mutation: &KvFileChunkMutation<'_>,
+        digest: &[u8; 32],
+    ) -> Result<()> {
+        crate::kv_objects::validate_encoded_chunk(
+            mutation.exact_chunk,
+            mutation.ciphertext,
+            mutation.offset,
+            mutation.final_size.is_some(),
+            Some(*digest),
+        )?;
+        let decoded = foks_proto::KvUploadChunk::decode(mutation.exact_chunk)
+            .map_err(|_| Error::Invalid("external KV chunk encoding"))?;
+        if decoded.final_upload.as_ref().map(|value| value.size) != mutation.final_size {
+            return Err(Error::Invalid("external KV chunk final size"));
+        }
+        self.put_kv_file_chunk_impl(mutation, Some(digest), true)
+    }
+
+    fn put_kv_file_chunk_impl(
+        &mut self,
+        mutation: &KvFileChunkMutation<'_>,
+        digest: Option<&[u8; 32]>,
+        commit: bool,
+    ) -> Result<()> {
         const MAXIMUM_CHUNK_BYTES: usize = 9 * 1024 * 1024;
         // A full 1 GiB cleartext file can expand to just over 2 GiB because
         // the v0.1.9 chunk format pads each 4 MiB clear chunk to 8 MiB.
@@ -486,7 +541,13 @@ impl Database {
                 "SELECT exact_metadata, complete, reclaiming FROM kv_file_uploads
                  WHERE uid = ?1 AND file_id = ?2",
                 params![mutation.uid, mutation.file_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| {
+                    Ok((
+                        row.budgeted_get(0)?,
+                        row.budgeted_get(1)?,
+                        row.budgeted_get(2)?,
+                    ))
+                },
             )
             .optional()?;
         let upload_complete = match (upload, mutation.exact_metadata) {
@@ -511,20 +572,24 @@ impl Database {
             }
             (Some((_, complete, false)), _) => complete,
         };
-        let existing: Option<Vec<u8>> = transaction
+        let existing: Option<(Vec<u8>, Option<Vec<u8>>)> = transaction
             .query_row(
-                "SELECT exact_upload_chunk FROM kv_file_chunks
+                "SELECT exact_upload_chunk, external_digest FROM kv_file_chunks
                  WHERE uid = ?1 AND file_id = ?2 AND clear_offset = ?3",
                 params![
                     mutation.uid,
                     mutation.file_id,
                     sql_integer(mutation.offset)?
                 ],
-                |row| row.get(0),
+                |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
             )
             .optional()?;
-        if let Some(existing) = existing {
-            return if existing == mutation.exact_chunk {
+        if let Some((existing, external_digest)) = existing {
+            let matches = match external_digest {
+                Some(stored) => stored == crate::kv_objects::chunk_digest(mutation.exact_chunk),
+                None => existing == mutation.exact_chunk,
+            };
+            return if matches {
                 Ok(())
             } else {
                 Err(Error::KvConflict)
@@ -535,10 +600,15 @@ impl Database {
         }
         let (count, maximum_offset, encrypted_bytes): (i64, Option<i64>, i64) = transaction
             .query_row(
-                "SELECT count(*), max(clear_offset), coalesce(sum(length(ciphertext)), 0)
-                 FROM kv_file_chunks WHERE uid = ?1 AND file_id = ?2",
+                KV_UPLOAD_USAGE_SQL,
                 params![mutation.uid, mutation.file_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| {
+                    Ok((
+                        row.budgeted_get(0)?,
+                        row.budgeted_get(1)?,
+                        row.budgeted_get(2)?,
+                    ))
+                },
             )?;
         if count >= MAXIMUM_CHUNKS
             || maximum_offset.is_some_and(|offset| {
@@ -568,17 +638,43 @@ impl Database {
                 .ok_or(Error::IntegerRange)?,
             1,
         )?;
+        if !commit {
+            return Ok(());
+        }
+        let external = digest.is_some();
+        let object_id = digest
+            .map(|digest| {
+                crate::chunk_ledger::require_present(
+                    &transaction,
+                    digest,
+                    mutation.exact_chunk.len() as u64,
+                )
+            })
+            .transpose()?;
         transaction.execute(
             "INSERT INTO kv_file_chunks
-             (uid, file_id, clear_offset, ciphertext, final_chunk, exact_upload_chunk)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+             (uid, file_id, clear_offset, ciphertext, final_chunk, exact_upload_chunk,
+              external_digest, external_ciphertext_bytes, external_encoded_bytes, external_object_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 mutation.uid,
                 mutation.file_id,
                 sql_integer(mutation.offset)?,
-                mutation.ciphertext,
+                if external {
+                    &[][..]
+                } else {
+                    mutation.ciphertext
+                },
                 i64::from(mutation.final_size.is_some()),
-                mutation.exact_chunk,
+                if external {
+                    &[][..]
+                } else {
+                    mutation.exact_chunk
+                },
+                digest.map(|value| value.as_slice()),
+                external.then_some(mutation.ciphertext.len() as i64),
+                external.then_some(mutation.exact_chunk.len() as i64),
+                object_id.as_ref().map(|id|id.as_slice()),
             ],
         )?;
         transaction.execute(
@@ -631,7 +727,7 @@ impl Database {
                 "SELECT created_at FROM kv_locks
                  WHERE uid = ?1 AND parent_id = ?2 AND dirent_id = ?3",
                 params![uid, parent, dirent],
-                |row| row.get(0),
+                |row| row.budgeted_get(0),
             )
             .optional()?;
         if let Some(created_at) = existing {
@@ -695,7 +791,7 @@ impl Database {
             .query_row(
                 "SELECT root_version, exact_root FROM kv_roots WHERE uid = ?1",
                 [mutation.uid],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
             )
             .optional()?;
         match &existing {
@@ -896,7 +992,7 @@ fn kv_node(
         .query_row(
             "SELECT node_type, exact_node FROM kv_nodes WHERE uid = ?1 AND node_id = ?2",
             params![uid, id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
         )
         .optional()?;
     stored
@@ -922,7 +1018,7 @@ fn kv_file(
             params![uid, id],
             |row| {
                 Ok(StoredKvFile {
-                    exact_metadata: row.get(0)?,
+                    exact_metadata: row.budgeted_get(0)?,
                 })
             },
         )
@@ -936,20 +1032,22 @@ fn kv_file_chunk(
     id: &[u8; 16],
     offset: u64,
 ) -> Result<Option<StoredKvFileChunk>> {
-    let stored: Option<(Vec<u8>, i64)> = connection
-        .query_row(
-            "SELECT c.ciphertext, c.final_chunk FROM kv_file_chunks c
-             JOIN kv_file_uploads f ON f.uid = c.uid AND f.file_id = c.file_id
-             WHERE c.uid = ?1 AND c.file_id = ?2 AND c.clear_offset = ?3
-               AND f.complete = 1 AND f.reclaiming = 0",
-            params![uid, id, sql_integer(offset)?],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()?;
-    Ok(stored.map(|(ciphertext, final_chunk)| StoredKvFileChunk {
-        ciphertext,
+    let mut statement = connection.prepare(
+        "SELECT c.ciphertext, c.external_digest, c.external_ciphertext_bytes,
+                c.external_encoded_bytes, c.final_chunk, o.object_id,o.namespace_id,o.object_key,o.key_format
+         FROM kv_file_chunks c LEFT JOIN chunk_objects o ON o.object_id=c.external_object_id
+         JOIN kv_file_uploads f ON f.uid = c.uid AND f.file_id = c.file_id
+         WHERE c.uid = ?1 AND c.file_id = ?2 AND c.clear_offset = ?3
+           AND f.complete = 1 AND f.reclaiming = 0",
+    )?;
+    let mut rows = statement.query(params![uid, id, sql_integer(offset)?])?;
+    let Some(row) = rows.next()? else {
+        return Ok(None);
+    };
+    Ok(Some(StoredKvFileChunk {
+        payload: crate::kv_objects::payload_from_row(row, 0, 5)?,
         offset,
-        final_chunk: final_chunk != 0,
+        final_chunk: row.budgeted_get(4)?,
     }))
 }
 
@@ -964,37 +1062,9 @@ fn kv_list(
         return Err(Error::Invalid("KV list limit"));
     }
     let (query, mac, time) = match cursor {
-        None => (
-            "SELECT d.exact_dirent, d.node_id FROM kv_dirent_heads h
-             JOIN kv_dirents d ON d.uid = h.uid AND d.parent_id = h.parent_id
-               AND d.dirent_id = h.dirent_id AND d.version = h.version
-             WHERE h.uid = ?1 AND h.parent_id = ?2
-               AND substr(d.node_id, 1, 1) != X'00'
-             ORDER BY d.name_mac, d.dirent_id LIMIT ?3",
-            None,
-            None,
-        ),
-        Some(KvListCursor::Mac(mac)) => (
-            "SELECT d.exact_dirent, d.node_id FROM kv_dirent_heads h
-             JOIN kv_dirents d ON d.uid = h.uid AND d.parent_id = h.parent_id
-               AND d.dirent_id = h.dirent_id AND d.version = h.version
-             WHERE h.uid = ?1 AND h.parent_id = ?2
-               AND substr(d.node_id, 1, 1) != X'00' AND d.name_mac > ?3
-             ORDER BY d.name_mac, d.dirent_id LIMIT ?4",
-            Some(mac),
-            None,
-        ),
-        Some(KvListCursor::Time(time)) => (
-            "SELECT d.exact_dirent, d.node_id FROM kv_dirent_heads h
-         JOIN kv_dirents d ON d.uid = h.uid AND d.parent_id = h.parent_id
-           AND d.dirent_id = h.dirent_id AND d.version = h.version
-         WHERE h.uid = ?1 AND h.parent_id = ?2
-           AND substr(d.node_id, 1, 1) != X'00'
-           AND d.creation_time >= ?3
-         ORDER BY d.creation_time, d.dirent_id LIMIT ?4",
-            None,
-            Some(time),
-        ),
+        None => (KV_LIST_INITIAL_SQL, None, None),
+        Some(KvListCursor::Mac(mac)) => (KV_LIST_MAC_SQL, Some(mac), None),
+        Some(KvListCursor::Time(time)) => (KV_LIST_TIME_SQL, None, Some(time)),
     };
     let mut statement = connection.prepare(query)?;
     let limit = i64::try_from(limit).map_err(|_| Error::IntegerRange)?;
@@ -1006,8 +1076,8 @@ fn kv_list(
     };
     let mut stored = Vec::new();
     while let Some(row) = rows.next()? {
-        let exact = row.get::<_, Vec<u8>>(0)?;
-        let node_id = row.get::<_, Vec<u8>>(1)?;
+        let exact = row.budgeted_get::<_, Vec<u8>>(0)?;
+        let node_id = row.budgeted_get::<_, Vec<u8>>(1)?;
         stored.push(StoredKvDirent {
             exact,
             node_id: node_id
@@ -1032,7 +1102,12 @@ fn kv_dirent(
                AND d.dirent_id = h.dirent_id AND d.version = h.version
              WHERE h.uid = ?1 AND h.parent_id = ?2 AND h.dirent_id = ?3",
             params![uid, parent, id],
-            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            |row| {
+                Ok((
+                    row.budgeted_get::<_, Vec<u8>>(0)?,
+                    row.budgeted_get::<_, Vec<u8>>(1)?,
+                ))
+            },
         )
         .optional()?
         .map(|(exact, node_id)| {
@@ -1047,6 +1122,13 @@ fn kv_dirent(
         .transpose()
 }
 
+/// Shared key selection; exact native payloads are fetched in this same statement.
+/// The private hosted catalog wraps the identical selection with separate bounds.
+pub const KV_HISTORICAL_NAME_SELECTION_SQL: &str = "SELECT e.dirent_id,e.version FROM kv_dirents e INDEXED BY kv_dirent_historical_name JOIN kv_directories d ON d.uid=e.uid AND d.directory_id=e.parent_id AND d.version=e.directory_version WHERE e.uid=?1 AND e.parent_id=?2 AND e.name_mac=?3 AND e.directory_version=CAST(?4 AS INTEGER) ORDER BY e.version DESC,e.dirent_id ASC LIMIT 1";
+static KV_HISTORICAL_NAME_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!("WITH selected AS ({}) SELECT e.exact_dirent,e.node_id,d.exact_directory FROM selected s JOIN kv_dirents e ON e.uid=?1 AND e.parent_id=?2 AND e.dirent_id=s.dirent_id AND e.version=s.version JOIN kv_directories d ON d.uid=e.uid AND d.directory_id=e.parent_id AND d.version=e.directory_version",KV_HISTORICAL_NAME_SELECTION_SQL)
+});
+
 fn kv_dirent_at_name(
     connection: &rusqlite::Connection,
     uid: &[u8],
@@ -1056,15 +1138,15 @@ fn kv_dirent_at_name(
 ) -> Result<Option<StoredKvDirent>> {
     let stored: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = connection
         .query_row(
-            "SELECT e.exact_dirent, e.node_id, d.exact_directory
-             FROM kv_dirents e JOIN kv_directories d
-               ON d.uid = e.uid AND d.directory_id = e.parent_id
-              AND d.version = e.directory_version
-             WHERE e.uid = ?1 AND e.parent_id = ?2
-               AND e.name_mac = ?3 AND e.directory_version = ?4
-             ORDER BY e.version DESC LIMIT 1",
+            KV_HISTORICAL_NAME_SQL.as_str(),
             params![uid, parent, name_mac, sql_integer(directory_version)?],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| {
+                Ok((
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                ))
+            },
         )
         .optional()?;
     stored
@@ -1133,7 +1215,7 @@ fn kv_version_vector(
         let version: i64 = connection.query_row(
             "SELECT version FROM kv_directory_heads WHERE uid = ?1 AND directory_id = ?2",
             params![uid, id],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         let mut entries_statement = connection.prepare(
             "SELECT h.dirent_id, h.version, d.node_id FROM kv_dirent_heads h
@@ -1145,9 +1227,9 @@ fn kv_version_vector(
         )?;
         let rows = entries_statement.query_map(params![uid, id], |row| {
             Ok((
-                row.get::<_, Vec<u8>>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, Vec<u8>>(2)?,
+                row.budgeted_get::<_, Vec<u8>>(0)?,
+                row.budgeted_get::<_, i64>(1)?,
+                row.budgeted_get::<_, Vec<u8>>(2)?,
             ))
         })?;
         let mut entries = Vec::new();
@@ -1200,7 +1282,7 @@ fn kv_version_check(
                 "SELECT version FROM kv_directory_heads
                  WHERE uid = ?1 AND directory_id = ?2",
                 params![uid, directory.id],
-                |row| row.get(0),
+                |row| row.budgeted_get(0),
             )
             .optional()?;
         let Some(current) = current else {
@@ -1217,7 +1299,7 @@ fn kv_version_check(
                     "SELECT version FROM kv_dirent_heads
                      WHERE uid = ?1 AND parent_id = ?2 AND dirent_id = ?3",
                     params![uid, directory.id, entry.id],
-                    |row| row.get(0),
+                    |row| row.budgeted_get(0),
                 )
                 .optional()?;
             let Some(current) = current else {
@@ -1253,47 +1335,64 @@ fn kv_version_check(
     }))
 }
 
+/// Public ciphertext Usage, distinct from quota accounting. Canonical text
+/// integers share the exact SQL with the lossless native/Wasm catalog ABI.
+pub const KV_PUBLIC_USAGE_SQL: &str = "SELECT CAST(usage_small_count AS TEXT),CAST(usage_small_bytes AS TEXT),CAST(usage_large_count AS TEXT),CAST(usage_large_bytes AS TEXT),CAST(usage_large_chunks AS TEXT),CAST(usage_unvalidated_small_count AS TEXT) FROM kv_namespaces WHERE namespace_id=?1";
+
 fn kv_usage(connection: &rusqlite::Connection, uid: &[u8]) -> Result<foks_proto::KvUsage> {
-    let mut statement = connection.prepare(
-        "SELECT exact_node FROM kv_nodes
-         WHERE uid = ?1 AND node_type IN (3, 4)",
-    )?;
-    let rows = statement.query_map([uid], |row| row.get::<_, Vec<u8>>(0))?;
-    let mut small_number = 0u64;
-    let mut small_bytes = 0u64;
-    for row in rows {
-        let exact = row?;
-        let boxed = foks_proto::KvSmallFileBox::decode(&exact)
-            .map_err(|_| Error::Invalid("stored KV small node"))?;
-        small_number = small_number.checked_add(1).ok_or(Error::IntegerRange)?;
-        small_bytes = small_bytes
-            .checked_add(u64::try_from(boxed.ciphertext.len()).map_err(|_| Error::IntegerRange)?)
-            .ok_or(Error::IntegerRange)?;
+    let values: Option<[String; 6]> = connection
+        .query_row(KV_PUBLIC_USAGE_SQL, [uid], |row| {
+            Ok([
+                row.budgeted_get(0)?,
+                row.budgeted_get(1)?,
+                row.budgeted_get(2)?,
+                row.budgeted_get(3)?,
+                row.budgeted_get(4)?,
+                row.budgeted_get(5)?,
+            ])
+        })
+        .optional()?;
+    let mut values_unsigned = [0u64; 6];
+    if let Some(values) = values {
+        for (out, value) in values_unsigned.iter_mut().zip(values) {
+            let signed = value
+                .parse::<i64>()
+                .map_err(|_| Error::Invalid("stored KV usage integer"))?;
+            if signed.to_string() != value {
+                return Err(Error::Invalid("stored KV usage integer"));
+            }
+            *out = crate::error::unsigned(signed)?;
+        }
     }
-    let large_number: i64 = connection.query_row(
-        "SELECT count(*) FROM kv_file_uploads WHERE uid = ?1",
-        [uid],
-        |row| row.get(0),
-    )?;
-    let (large_chunks, large_bytes): (i64, i64) = connection.query_row(
-        "SELECT count(*), coalesce(sum(length(ciphertext)), 0)
-         FROM kv_file_chunks WHERE uid = ?1",
-        [uid],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )?;
+    if values_unsigned[5] != 0 {
+        return Err(Error::Invalid("stored KV small node"));
+    }
     Ok(foks_proto::KvUsage {
         small: foks_proto::KvUsageStats {
-            number: small_number,
-            bytes: small_bytes,
+            number: values_unsigned[0],
+            bytes: values_unsigned[1],
         },
         large: foks_proto::KvChunkedUsageStats {
             base: foks_proto::KvUsageStats {
-                number: crate::error::unsigned(large_number)?,
-                bytes: crate::error::unsigned(large_bytes)?,
+                number: values_unsigned[2],
+                bytes: values_unsigned[3],
             },
-            chunks: crate::error::unsigned(large_chunks)?,
+            chunks: values_unsigned[4],
         },
     })
+}
+
+fn stamp_node_usage(
+    connection: &rusqlite::Connection,
+    mutation: &KvNodeMutation<'_>,
+) -> Result<()> {
+    let length = foks_proto::KvSmallFileBox::ciphertext_length(mutation.exact)
+        .map_err(|_| Error::Invalid("stored KV small node"))?;
+    if connection.execute("UPDATE kv_nodes SET ciphertext_bytes=?4 WHERE uid=?1 AND node_id=?2 AND exact_node=?3 AND ciphertext_bytes IS NULL",
+        params![mutation.uid,mutation.id,mutation.exact,sql_integer(length)?])? != 1 {
+        return Err(Error::Invalid("KV node usage stamp"));
+    }
+    Ok(())
 }
 
 fn kv_root(connection: &rusqlite::Connection, uid: &[u8]) -> Result<Option<StoredKvRoot>> {
@@ -1302,7 +1401,14 @@ fn kv_root(connection: &rusqlite::Connection, uid: &[u8]) -> Result<Option<Store
             "SELECT root_version, directory_id, directory_version, exact_root
              FROM kv_roots WHERE uid = ?1",
             [uid],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| {
+                Ok((
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                    row.budgeted_get(3)?,
+                ))
+            },
         )
         .optional()?;
     stored
@@ -1331,7 +1437,13 @@ fn kv_directory(
                ON d.uid = h.uid AND d.directory_id = h.directory_id AND d.version = h.version
              WHERE h.uid = ?1 AND h.directory_id = ?2",
             params![uid, id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| {
+                Ok((
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                ))
+            },
         )
         .optional()?;
     stored
@@ -1368,26 +1480,10 @@ fn ensure_kv_capacity(
     added_bytes: usize,
     added_objects: u64,
 ) -> Result<()> {
-    let (stored_bytes, stored_objects): (i64, i64) = connection.query_row(
-        "SELECT
-           coalesce((SELECT sum(length(exact_directory)) FROM kv_directories WHERE uid = ?1), 0) +
-           coalesce((SELECT sum(length(exact_root)) FROM kv_roots WHERE uid = ?1), 0) +
-           coalesce((SELECT sum(length(exact_node)) FROM kv_nodes WHERE uid = ?1), 0) +
-           coalesce((SELECT sum(length(exact_dirent)) FROM kv_dirents WHERE uid = ?1), 0) +
-           coalesce((SELECT sum(length(exact_metadata)) FROM kv_file_uploads WHERE uid = ?1), 0) +
-           coalesce((SELECT sum(length(ciphertext) + length(exact_upload_chunk))
-                     FROM kv_file_chunks WHERE uid = ?1), 0) +
-           coalesce((SELECT count(*) * 64 FROM kv_locks WHERE uid = ?1), 0),
-           (SELECT count(*) FROM kv_directories WHERE uid = ?1) +
-           (SELECT count(*) FROM kv_roots WHERE uid = ?1) +
-           (SELECT count(*) FROM kv_nodes WHERE uid = ?1) +
-           (SELECT count(*) FROM kv_dirents WHERE uid = ?1) +
-           (SELECT count(*) FROM kv_file_uploads WHERE uid = ?1) +
-           (SELECT count(*) FROM kv_file_chunks WHERE uid = ?1) +
-           (SELECT count(*) FROM kv_locks WHERE uid = ?1)",
-        [uid],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )?;
+    let (stored_bytes, stored_objects): (i64, i64) =
+        connection.query_row(KV_NAMESPACE_USAGE_SQL, [uid], |row| {
+            Ok((row.budgeted_get(0)?, row.budgeted_get(1)?))
+        })?;
     let next_bytes = crate::error::unsigned(stored_bytes)?
         .checked_add(u64::try_from(added_bytes).map_err(|_| Error::IntegerRange)?)
         .ok_or(Error::IntegerRange)?;
@@ -1409,13 +1505,10 @@ fn ensure_kv_tree_capacity(
     added_directories: u64,
     added_dirents: u64,
 ) -> Result<()> {
-    let (directories, dirents): (i64, i64) = connection.query_row(
-        "SELECT
-           (SELECT count(*) FROM kv_directory_heads WHERE uid = ?1),
-           (SELECT count(*) FROM kv_dirent_heads WHERE uid = ?1)",
-        [uid],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )?;
+    let (directories, dirents): (i64, i64) =
+        connection.query_row(KV_TREE_USAGE_SQL, [uid], |row| {
+            Ok((row.budgeted_get(0)?, row.budgeted_get(1)?))
+        })?;
     let next_directories = crate::error::unsigned(directories)?
         .checked_add(added_directories)
         .ok_or(Error::IntegerRange)?;
@@ -1451,10 +1544,108 @@ pub(crate) fn validate_kv_tree_capacity(
             i64::try_from(config.maximum_kv_node_bytes).map_err(|_| Error::IntegerRange)?,
             i64::try_from(config.maximum_kv_dirent_bytes).map_err(|_| Error::IntegerRange)?,
         ],
-        |row| row.get(0),
+        |row| row.budgeted_get(0),
     )?;
     if invalid != 0 {
         return Err(Error::QuotaExceeded);
     }
     Ok(())
 }
+
+const KV_UPLOAD_USAGE_SQL: &str = "SELECT chunk_count,
+                    (SELECT clear_offset FROM kv_file_chunks
+                     WHERE uid = ?1 AND file_id = ?2 ORDER BY clear_offset DESC LIMIT 1),
+                    chunk_bytes
+                 FROM kv_file_uploads WHERE uid = ?1 AND file_id = ?2";
+const KV_NAMESPACE_USAGE_SQL: &str =
+    "SELECT accounted_bytes, accounted_objects FROM kv_namespaces WHERE namespace_id = ?1";
+const KV_TREE_USAGE_SQL: &str =
+    "SELECT directory_count, dirent_count FROM kv_namespaces WHERE namespace_id = ?1";
+
+#[cfg(test)]
+mod accounting_scaling_tests {
+    use super::*;
+    use rusqlite::{Connection, StatementStatus};
+
+    #[test]
+    fn production_usage_queries_have_bounded_vm_work_with_retained_history() {
+        let mut c = Connection::open_in_memory().unwrap();
+        crate::schema::initialize(&mut c).unwrap();
+        c.execute_batch("PRAGMA foreign_keys=ON;
+            INSERT INTO kv_namespaces(namespace_id,party_kind,host_id) VALUES(zeroblob(33),1,zeroblob(33));
+            INSERT INTO kv_directories VALUES(zeroblob(33),zeroblob(16),1,3,0,1,0,X'01');
+            INSERT INTO kv_directory_heads VALUES(zeroblob(33),zeroblob(16),1);
+            INSERT INTO kv_file_uploads(uid,file_id,exact_metadata,created_at,updated_at) VALUES(zeroblob(33),zeroblob(16),X'01',0,0);").unwrap();
+        let mut costs = Vec::new();
+        for size in [1_i64, 100, 10000] {
+            let tx = c.transaction().unwrap();
+            for version in 1..=size {
+                // One current dirent, many retained historical versions.
+                tx.execute("INSERT OR IGNORE INTO kv_dirents VALUES(zeroblob(33),zeroblob(16),zeroblob(16),?1,1,zeroblob(17),zeroblob(32),0,X'01')", [version]).unwrap();
+            }
+            tx.execute("INSERT INTO kv_dirent_heads VALUES(zeroblob(33),zeroblob(16),zeroblob(16),?1) ON CONFLICT(uid,parent_id,dirent_id) DO UPDATE SET version=excluded.version", [size]).unwrap();
+            // Grow live head cardinality too: the prior count(heads) queries
+            // must fail this guard even though history has just one main head.
+            for number in 1..=size {
+                let mut id = [0_u8; 16];
+                id[..8].copy_from_slice(&number.to_be_bytes());
+                tx.execute(
+                    "INSERT OR IGNORE INTO kv_directories VALUES(zeroblob(33),?1,1,3,0,1,0,X'01')",
+                    [id],
+                )
+                .unwrap();
+                tx.execute(
+                    "INSERT OR IGNORE INTO kv_directory_heads VALUES(zeroblob(33),?1,1)",
+                    [id],
+                )
+                .unwrap();
+                tx.execute("INSERT OR IGNORE INTO kv_dirents VALUES(zeroblob(33),zeroblob(16),?1,1,1,zeroblob(17),zeroblob(32),0,X'01')", [id]).unwrap();
+                tx.execute(
+                    "INSERT OR IGNORE INTO kv_dirent_heads VALUES(zeroblob(33),zeroblob(16),?1,1)",
+                    [id],
+                )
+                .unwrap();
+            }
+
+            for offset in 0..size.min(512) {
+                tx.execute("INSERT OR IGNORE INTO kv_file_chunks(uid,file_id,clear_offset,ciphertext,final_chunk,exact_upload_chunk) VALUES(zeroblob(33),zeroblob(16),?1,X'01',0,X'02')", [offset]).unwrap();
+            }
+            tx.commit().unwrap();
+            let mut current = Vec::new();
+            // These are the exact private constants used by admission above;
+            // reverting the production queries to aggregate scans fails here.
+            for sql in [
+                KV_NAMESPACE_USAGE_SQL,
+                KV_TREE_USAGE_SQL,
+                KV_UPLOAD_USAGE_SQL,
+            ] {
+                let mut statement = c.prepare(sql).unwrap();
+                if sql == KV_UPLOAD_USAGE_SQL {
+                    let _: i64 = statement
+                        .query_row(params![[0_u8; 33], [0_u8; 16]], |r| r.budgeted_get(0))
+                        .unwrap();
+                } else {
+                    let _: i64 = statement
+                        .query_row([[0_u8; 33]], |r| r.budgeted_get(0))
+                        .unwrap();
+                }
+                current.push(statement.get_status(StatementStatus::VmStep));
+            }
+            costs.push(current);
+        }
+        assert_eq!(costs[0], costs[1]);
+        assert_eq!(costs[1], costs[2]);
+    }
+}
+
+#[cfg(test)]
+#[path = "kv_current_tests.rs"]
+mod current_tests;
+
+#[cfg(test)]
+#[path = "kv_historical_tests.rs"]
+mod historical_tests;
+
+#[cfg(test)]
+#[path = "kv_usage_tests.rs"]
+mod usage_tests;

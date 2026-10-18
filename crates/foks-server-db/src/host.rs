@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, Connection, OptionalExtension as _, Transaction, TransactionBehavior};
 
 use crate::{error::sql_integer, error::unsigned, Database, Error, Result};
@@ -211,7 +212,14 @@ fn stored_metadata_connection(connection: &Connection) -> Result<Option<StoredBo
             "SELECT host_id, canonical_name, bootstrap_blob, key_manifest_blob
              FROM host_metadata WHERE singleton = 1",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| {
+                Ok((
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                    row.budgeted_get(3)?,
+                ))
+            },
         )
         .optional()
         .map_err(Into::into)
@@ -223,7 +231,14 @@ fn stored_metadata_transaction(transaction: &Transaction<'_>) -> Result<Option<S
             "SELECT host_id, canonical_name, bootstrap_blob, key_manifest_blob
              FROM host_metadata WHERE singleton = 1",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| {
+                Ok((
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                    row.budgeted_get(3)?,
+                ))
+            },
         )
         .optional()
         .map_err(Into::into)
@@ -247,7 +262,7 @@ fn bootstrap_matches(transaction: &Transaction<'_>, bootstrap: &HostBootstrap) -
         .query_row(
             "SELECT link_hash, exact_link FROM hostchain_links WHERE seqno = 1",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
         )
         .optional()?;
     if link
@@ -263,7 +278,7 @@ fn bootstrap_matches(transaction: &Transaction<'_>, bootstrap: &HostBootstrap) -
             "SELECT generation_id FROM capability_key_generations
              WHERE encrypted_file_name = 'capability.key' AND state = 1",
             [],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )
         .optional()?;
     if capability_generation != Some(bootstrap.capability_key_generation.to_vec()) {
@@ -276,11 +291,11 @@ fn bootstrap_matches(transaction: &Transaction<'_>, bootstrap: &HostBootstrap) -
             [sql_integer(bootstrap.root_epoch)?],
             |row| {
                 Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                    row.budgeted_get(3)?,
+                    row.budgeted_get(4)?,
                 ))
             },
         )
@@ -302,9 +317,9 @@ fn bootstrap_matches(transaction: &Transaction<'_>, bootstrap: &HostBootstrap) -
         )?
         .query_map([], |row| {
             Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Vec<u8>>(2)?,
+                row.budgeted_get::<_, i64>(0)?,
+                row.budgeted_get::<_, String>(1)?,
+                row.budgeted_get::<_, Vec<u8>>(2)?,
             ))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -324,7 +339,7 @@ fn bootstrap_matches(transaction: &Transaction<'_>, bootstrap: &HostBootstrap) -
         .query_row(
             "SELECT epoch, root_hash FROM merkle_root_heads WHERE singleton = 1",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
         )
         .optional()?;
     let generation: Option<(Vec<u8>, Vec<u8>, i64, i64)> = transaction
@@ -332,7 +347,14 @@ fn bootstrap_matches(transaction: &Transaction<'_>, bootstrap: &HostBootstrap) -
             "SELECT generation_id, public_entity_id, state, activated_hostchain_seqno
              FROM host_key_generations WHERE purpose = 1",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| {
+                Ok((
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                    row.budgeted_get(3)?,
+                ))
+            },
         )
         .optional()?;
     Ok(services == expected

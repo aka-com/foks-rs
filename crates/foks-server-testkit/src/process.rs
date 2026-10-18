@@ -63,6 +63,12 @@ impl InProcessServer {
             limits: environment.inner.session_limits,
             rate_limits: environment.inner.rate_limits,
             backup: environment.inner.backup.clone(),
+            chunk_store: environment
+                .inner
+                .chunk_store
+                .lock()
+                .expect("test chunk store lock")
+                .clone(),
             clock: environment.inner.clock.clone(),
             entropy: Arc::new(foks_server::OsEntropy),
             session_faults: Some(Arc::clone(&environment.inner.session_faults)),
@@ -328,6 +334,12 @@ impl ProbeOverrideServer {
             probe_response: Arc::from(probe_response),
             read_database: None,
             writer: None,
+            chunk_store: environment
+                .inner
+                .chunk_store
+                .lock()
+                .expect("test chunk store lock")
+                .clone(),
             clock: environment.inner.clock.clone(),
             entropy: Arc::new(foks_server::OsEntropy),
             key_provider: None,

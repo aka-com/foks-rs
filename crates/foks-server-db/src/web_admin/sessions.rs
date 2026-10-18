@@ -78,7 +78,7 @@ impl Database {
         }
         cleanup(&tx, now)?;
         let(all,own):(i64,i64)=tx.query_row("SELECT count(*),coalesce(sum(t.uid=?1),0) FROM web_login_confirmations c JOIN web_login_tickets t
-             USING(ticket_hash)",[ctx.credential.uid],|r|Ok((r.get(0)?,r.get(1)?)))?;
+             USING(ticket_hash)",[ctx.credential.uid],|r|Ok((r.budgeted_get(0)?,r.budgeted_get(1)?)))?;
         if all >= 2048 || own >= 6 {
             return Err(Error::Capacity("browser confirmations"));
         }

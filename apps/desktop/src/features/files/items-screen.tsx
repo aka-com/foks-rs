@@ -125,6 +125,7 @@ import type { Columns, RowNav } from './list-rows';
 import { TreeRow } from './folder-tree';
 import type { StoreTree } from './folder-tree';
 import { VaultDropZone } from './vault-drop-zone';
+import { FileUploadsPanel } from './file-uploads';
 import type { DropTarget, DropUpload } from './vault-drop-zone';
 
 /* --------------------------------------------------------------- pieces -- */
@@ -1879,6 +1880,13 @@ export function ItemsScreen({
             </div>
           </aside>
           <section className="lpane" aria-label="Folder contents">
+            {selectedStore ? (
+              <FileUploadsPanel
+                key={selectedStore.id}
+                bridge={bridge}
+                storeId={selectedStore.id}
+              />
+            ) : null}
             <div className="lt">
               <span className="where">
                 {state.query ? (

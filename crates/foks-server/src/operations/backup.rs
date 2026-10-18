@@ -16,6 +16,7 @@ pub(crate) struct BackupScheduler {
 }
 
 struct BackupSource {
+    chunk_store: Option<Arc<dyn crate::chunks::ChunkStore>>,
     database_path: PathBuf,
     key_directory: PathBuf,
     manifest: Vec<u8>,
@@ -31,6 +32,7 @@ impl BackupScheduler {
         source_key_directory: PathBuf,
         manifest: Vec<u8>,
         database_config: foks_server_db::Config,
+        chunk_store: Option<Arc<dyn crate::chunks::ChunkStore>>,
         clock: Arc<dyn foks_server_db::Clock>,
         metrics: Arc<ServerMetrics>,
         fatal: FatalSignal,
@@ -46,6 +48,7 @@ impl BackupScheduler {
         let cancelled = Arc::new(AtomicBool::new(false));
         let thread_cancelled = Arc::clone(&cancelled);
         let source = BackupSource {
+            chunk_store,
             database_path,
             key_directory: source_key_directory,
             manifest,
@@ -109,6 +112,11 @@ fn run_backup(
     sequence: u64,
     cancelled: &AtomicBool,
 ) -> Result<u64> {
+    let _storage_lease = crate::storage_lease::StorageLease::with_store(
+        &source.database_path,
+        source.chunk_store.as_deref(),
+        false,
+    )?;
     let (now, database, host_key_files) = checked(
         Phase::BackupRead,
         (|| {
@@ -130,6 +138,9 @@ fn run_backup(
         &source.manifest,
         &host_key_files,
         source.database_config.clone(),
+        source.chunk_store.as_deref(),
+        Some(cancelled),
+        &_storage_lease,
         |backup_database| {
             database.online_backup_until(backup_database, || cancelled.load(Ordering::Acquire))?;
             Ok(())

@@ -32,12 +32,15 @@ pub fn run(state: &Path, command: McpCommand) -> Result<(), Box<dyn std::error::
         McpCommand::Team(args) => (ToolSet::Team, args),
     };
     // Starting an agent is entry-point policy; the SDK adapter only uses authenticated IPC.
-    ensure_agent(state)?;
-    let backend = AgentBackend::connect(
+    let startup = super::deadline::current()?.shorten(Instant::now() + Duration::from_secs(5))?;
+    ensure_agent_with_deadline(state, &startup)?;
+    let backend = AgentBackend::connect_with_deadline(
         &state.join("foks-rs.sock"),
         args.profile,
         args.account_alias,
+        &startup,
     )?;
+    super::deadline::pause()?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .max_blocking_threads(4)
@@ -64,28 +67,42 @@ enum AgentProbe {
     /// status. It holds the state directory's lock, so a second agent cannot
     /// start beside it.
     Unusable(String),
+    /// The probe could not run in this command's context: the local
+    /// deadline's clock is unavailable or changed domain, the socket is
+    /// unsafe, or the request was cancelled. None of these shows that no
+    /// agent is running, so nothing is started.
+    Failed(foks_agent_client::Error),
+    /// Connecting found no socket, or a socket nothing listens on.
     Absent,
+}
+
+/// Classifies a Hello that got no usable reply. Only a missing or refusing
+/// socket shows that no agent is running and authorizes starting one.
+fn hello_failure(error: foks_agent_client::Error) -> AgentProbe {
+    match error {
+        // Something answered the Hello, so a second agent could not take the
+        // state directory's lock.
+        error @ (foks_agent_client::Error::Protocol(_)
+        | foks_agent_client::Error::ResponseBinding) => {
+            AgentProbe::Unusable(incompatible_agent_message(&error))
+        }
+        error if no_listener(&error) => AgentProbe::Absent,
+        // A listener accepted the connection but did not answer in time, or
+        // closed it unanswered, as an agent at its connection limit does.
+        error
+            if matches!(error, foks_agent_client::Error::DeadlineExceeded)
+                || error.is_connection_loss() =>
+        {
+            AgentProbe::NotReady(error.to_string())
+        }
+        error => AgentProbe::Failed(error),
+    }
 }
 
 fn probe_agent(client: &AgentClient) -> AgentProbe {
     match client.hello(Peer::new("foks-rs", env!("CARGO_PKG_VERSION"))) {
         Ok(_) => {}
-        // Something answered the Hello, so a second agent could not take the
-        // state directory's lock.
-        Err(
-            error @ (foks_agent_client::Error::Protocol(_)
-            | foks_agent_client::Error::ResponseBinding),
-        ) => return AgentProbe::Unusable(incompatible_agent_message(&error)),
-        // A listener accepted the connection but did not answer in time, or
-        // closed it unanswered, as an agent at its connection limit does.
-        // Only a missing or refusing socket shows that no agent is running.
-        Err(error)
-            if matches!(error, foks_agent_client::Error::DeadlineExceeded)
-                || (error.is_connection_loss() && !no_listener(&error)) =>
-        {
-            return AgentProbe::NotReady(error.to_string())
-        }
-        Err(_) => return AgentProbe::Absent,
+        Err(error) => return hello_failure(error),
     }
     let detail = match client.call(Operation::AgentStatus) {
         Ok(Response {
@@ -161,26 +178,38 @@ const STARTUP_WAIT: Duration = Duration::from_secs(5);
 const PROBE_INTERVAL: Duration = Duration::from_millis(25);
 
 pub(super) fn ensure_agent(state: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let mut client = AgentClient::new(state.join("foks-rs.sock"));
+    ensure_agent_with_deadline(state, &super::deadline::current()?)
+}
+fn ensure_agent_with_deadline(
+    state: &Path,
+    original: &foks_local_deadline::Deadline,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let startup = original.shorten(Instant::now() + Duration::from_secs(5))?;
+    let mut client = super::deadline::agent_client(state)?.with_local_deadline(startup.clone())?;
     client.set_timeout(Duration::from_millis(250))?;
-    let deadline = Instant::now() + RUNNING_AGENT_STATUS_WAIT;
+    let deadline = (Instant::now() + RUNNING_AGENT_STATUS_WAIT).min(startup.instant());
     loop {
+        startup_context(&startup)?;
         match probe_agent(&client) {
             AgentProbe::Ready => return Ok(()),
             AgentProbe::Bootstrap => return Err(UNINITIALIZED_STATE.into()),
             AgentProbe::Unusable(message) => return Err(message.into()),
+            AgentProbe::Failed(error) => return Err(error.into()),
             AgentProbe::NotReady(detail) if Instant::now() >= deadline => {
                 return Err(format!(
                     "the running foks-agent did not report its status in time: {detail}; retry"
                 )
                 .into())
             }
-            AgentProbe::NotReady(_) => std::thread::sleep(PROBE_INTERVAL),
+            AgentProbe::NotReady(_) => std::thread::sleep(
+                PROBE_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+            ),
             AgentProbe::Absent => break,
         }
     }
-    // Use the packaged sibling, never a shell command or an executable named by a tool call.
+    // Use the packaged sibling, never a shell command or a caller-selected executable.
     let executable = std::env::current_exe()?.with_file_name("foks-agent");
+    startup_context(&startup)?;
     let child = Command::new(executable)
         .arg("--state-dir")
         .arg(state)
@@ -190,8 +219,12 @@ pub(super) fn ensure_agent(state: &Path) -> Result<(), Box<dyn std::error::Error
         .spawn()
         .map_err(|_| "cannot start packaged foks-agent; install it next to foks-rs")?;
     let mut child = Some(child);
-    let deadline = Instant::now() + STARTUP_WAIT;
+    let deadline = (Instant::now() + STARTUP_WAIT).min(startup.instant());
     loop {
+        if let Err(error) = startup_context(&startup) {
+            stop_child(child);
+            return Err(error);
+        }
         let detail = match probe_agent(&client) {
             AgentProbe::Ready => {
                 if let Some(mut child) = child {
@@ -213,6 +246,10 @@ pub(super) fn ensure_agent(state: &Path) -> Result<(), Box<dyn std::error::Error
                 stop_child(child);
                 return Err(message.into());
             }
+            AgentProbe::Failed(error) => {
+                stop_child(child);
+                return Err(error.into());
+            }
             AgentProbe::NotReady(detail) => Some(detail),
             AgentProbe::Absent if child.is_none() => return Err(UNINITIALIZED_STATE.into()),
             AgentProbe::Absent => None,
@@ -232,7 +269,19 @@ pub(super) fn ensure_agent(state: &Path) -> Result<(), Box<dyn std::error::Error
                 continue;
             }
         }
-        std::thread::sleep(PROBE_INTERVAL);
+        std::thread::sleep(PROBE_INTERVAL.min(deadline.saturating_duration_since(Instant::now())));
+    }
+}
+
+/// Refuses to continue when the command's deadline context is unusable: its
+/// clock domain changed or cannot be read. Expiry is not an error here; each
+/// wait ends at the startup deadline with its own diagnosis.
+fn startup_context(
+    startup: &foks_local_deadline::Deadline,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match startup.check() {
+        Ok(()) | Err(foks_local_deadline::Error::Expired) => Ok(()),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -251,6 +300,40 @@ mod tests {
     use super::*;
     use std::io::{Read as _, Write as _};
     use std::os::unix::fs::PermissionsExt as _;
+
+    fn scope() -> crate::deadline::CommandScope {
+        crate::deadline::CommandScope::enter(Duration::from_secs(15)).unwrap()
+    }
+
+    #[test]
+    fn only_missing_or_refused_endpoints_authorize_agent_startup() {
+        use foks_agent_client::Error;
+        for kind in [
+            std::io::ErrorKind::NotFound,
+            std::io::ErrorKind::ConnectionRefused,
+        ] {
+            assert!(matches!(
+                hello_failure(Error::Io(std::io::Error::from(kind))),
+                AgentProbe::Absent
+            ));
+        }
+        for error in [
+            Error::Cancelled,
+            Error::LocalDeadline(foks_local_deadline::Error::DomainMismatch),
+            Error::LocalDeadline(foks_local_deadline::Error::Unavailable("clock".into())),
+            Error::UnsafeSocket,
+        ] {
+            assert!(matches!(hello_failure(error), AgentProbe::Failed(_)));
+        }
+        assert!(matches!(
+            hello_failure(Error::Protocol(foks_agent_proto::Error::Version)),
+            AgentProbe::Unusable(_)
+        ));
+        assert!(matches!(
+            hello_failure(Error::DeadlineExceeded),
+            AgentProbe::NotReady(_)
+        ));
+    }
 
     /// An agent at the socket that answers every request with `reply`.
     fn serve_agent(
@@ -397,6 +480,7 @@ mod tests {
             );
             // The packaged agent is absent next to the test binary, so a
             // start attempt would fail instead of returning Ok.
+            let _scope = scope();
             ensure_agent(directory.path()).unwrap();
             assert_eq!(server.join().unwrap(), requests, "{case}");
         }
@@ -419,6 +503,7 @@ mod tests {
                 })
             },
         );
+        let _scope = scope();
         let error = ensure_agent(directory.path()).unwrap_err().to_string();
         assert_eq!(
             error,
@@ -444,6 +529,7 @@ mod tests {
     fn an_incompatible_running_agent_is_diagnosed_without_starting_another() {
         let directory = tempfile::tempdir().unwrap();
         let server = serve_agent(&directory.path().join("foks-rs.sock"), older_agent_refusal);
+        let _scope = scope();
         let error = ensure_agent(directory.path()).unwrap_err().to_string();
         assert_eq!(server.join().unwrap(), 1, "only the Hello was sent");
         assert_eq!(
@@ -471,6 +557,7 @@ mod tests {
                 "message": "unknown operation",
             })
         });
+        let _scope = scope();
         let error = ensure_agent(directory.path()).unwrap_err().to_string();
         assert_eq!(server.join().unwrap(), 1, "only the Hello was sent");
         assert!(

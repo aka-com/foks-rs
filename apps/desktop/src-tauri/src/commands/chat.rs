@@ -1,8 +1,5 @@
 //! Chat outcomes are scoped to their durable operations, without invalidating the vault.
-use super::{
-    context::AppState,
-    validation::{invalid_request, invalid_response, require_main_window},
-};
+use super::validation::{invalid_request, invalid_response, require_main_window};
 use crate::agent::AgentError;
 use foks_agent_proto::chat::{ChatAction, ChatReply, CHAT_OPEN_VIEWS};
 use std::{
@@ -12,7 +9,7 @@ use std::{
         Arc, Weak,
     },
 };
-use tauri::{Manager as _, State};
+use tauri::Manager as _;
 
 type ChatViews = HashMap<String, Weak<AtomicBool>>;
 
@@ -39,11 +36,12 @@ fn cancel_chat_view(views: &mut ChatViews, view_id: &str) {
 #[tauri::command]
 pub async fn chat_request(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     action: ChatAction,
     view_id: String,
 ) -> Result<ChatReply, AgentError> {
+    let state = state.begin_operation(action.deadline_class())?;
     require_main_window(&webview)?;
     let unlocked = crate::applock::unlocked_generation(webview.app_handle())?;
     if !action.validate() || !foks_agent_proto::chat::valid_chat_id(&view_id) {
@@ -70,9 +68,7 @@ pub async fn chat_request(
     let mutation = action.is_mutation();
     let (generation, store) = state.selected_chat(&store_id)?;
     let expected = store.clone();
-    let transport = state
-        .agent
-        .transport_for("chat_request", Some(&store.profile));
+    let transport = state.transport_for("chat_request", Some(&store.profile))?;
     let token = open_chat_view(
         &mut state
             .chat_views
@@ -82,23 +78,22 @@ pub async fn chat_request(
     )
     .ok_or_else(|| invalid_request("Too many open chat views."))?;
     let app = webview.app_handle().clone();
-    let reply = tauri::async_runtime::spawn_blocking(move || {
-        foks_desktop::chat_request_cancellable(transport.as_ref(), store, action, &|| {
-            token.load(Ordering::Acquire)
-                || crate::applock::require_unlocked_generation(&app, unlocked).is_err()
-        })
-        .map_err(AgentError::from_desktop)
-    })
-    .await
-    .map_err(|_| {
-        let mut error = AgentError::new(
-            "chat-interrupted",
-            "Chat was interrupted. Check pending operations before submitting again.",
-            true,
-        );
-        error.ambiguous = true;
-        error
-    })??;
+    let reply = {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            mutation,
+            move || {
+                foks_desktop::chat_request_cancellable(transport.as_ref(), store, action, &|| {
+                    token.load(Ordering::Acquire)
+                        || crate::applock::require_unlocked_generation(&app, unlocked).is_err()
+                })
+                .map_err(AgentError::from_desktop)
+            },
+            |_| {},
+        )
+        .await
+    }?;
     require_main_window(&webview)?;
     crate::applock::require_unlocked_generation(webview.app_handle(), unlocked)?;
     require_catalog_generation(
@@ -124,6 +119,10 @@ pub async fn chat_request(
         generation,
         unlocked,
     );
+    state
+        .deadline()?
+        .check()
+        .map_err(super::deadline::clock_error)?;
     Ok(reply)
 }
 
@@ -131,7 +130,7 @@ pub async fn chat_request(
 #[tauri::command]
 pub fn cancel_chat_requests(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     view_id: String,
 ) -> Result<(), AgentError> {
     require_main_window(&webview)?;
@@ -166,6 +165,7 @@ fn require_catalog_generation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::context::AppState;
 
     #[test]
     fn recovery_native_contract_preserves_local_mutation_classification() {
@@ -342,23 +342,59 @@ pub async fn open_chat_link(
     url: String,
 ) -> Result<serde_json::Value, AgentError> {
     require_main_window(&webview)?;
-    crate::applock::require_unlocked(webview.app_handle())?;
+    let deadline = foks_local_deadline::Deadline::capture(
+        std::time::Instant::now() + foks_agent_proto::DeadlineClass::Ordinary.cap(),
+    )
+    .map_err(super::deadline::clock_error)?;
+    let interval = crate::applock::unlocked_interval(webview.app_handle())?;
+    open_link_until(zeroize::Zeroizing::new(url), interval, &deadline).await
+}
+
+pub(super) async fn open_link_until(
+    url: zeroize::Zeroizing<String>,
+    interval: crate::applock::UnlockedInterval,
+    deadline: &foks_local_deadline::Deadline,
+) -> Result<serde_json::Value, AgentError> {
     let parsed = safe_external_url(&url).ok_or_else(|| invalid_request("Invalid chat link."))?;
-    open_external_url(parsed).await?;
+    open_external_url(parsed, interval, deadline).await?;
     Ok(serde_json::json!({"ok": true}))
 }
 
 /// Hands an address [`safe_external_url`] accepted to the platform's opener
-/// (see [`crate::opener`]), which shows it in the default browser.
-pub(super) async fn open_external_url(parsed: url::Url) -> Result<(), AgentError> {
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::opener::open(parsed.as_str()).map_err(|error| {
-            tracing::warn!(%error, "Could not open an external link");
-            invalid_request("Could not open the link.")
-        })
-    })
+/// (see [`crate::opener`]), which shows it in the default browser. Only the
+/// hand-off step is serialized with locking; connecting to the portal and
+/// waiting for a started launcher run outside the publication gate under
+/// worker admission.
+pub(super) async fn open_external_url(
+    parsed: url::Url,
+    interval: crate::applock::UnlockedInterval,
+    deadline: &foks_local_deadline::Deadline,
+) -> Result<(), AgentError> {
+    let worker_deadline = deadline.clone();
+    super::deadline::run(
+        deadline,
+        true,
+        move || {
+            let hand_off = |step: &mut dyn FnMut()| {
+                interval.publish(|| {
+                    worker_deadline
+                        .check()
+                        .map_err(super::deadline::clock_error)?;
+                    step();
+                    Ok(())
+                })
+            };
+            crate::opener::open_gated(parsed.as_str(), &hand_off).map_err(|failure| match failure {
+                crate::opener::Failure::Refused(error) => error,
+                crate::opener::Failure::Failed(error) => {
+                    tracing::warn!(%error, "Could not open an external link");
+                    invalid_request("Could not open the link.")
+                }
+            })
+        },
+        |_| {},
+    )
     .await
-    .map_err(|_| invalid_request("Link opening was interrupted."))?
 }
 
 pub(super) fn safe_external_url(input: &str) -> Option<url::Url> {

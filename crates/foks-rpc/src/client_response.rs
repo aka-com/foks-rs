@@ -1,5 +1,8 @@
 //! Client response envelopes and exact result extraction.
 
+mod owned;
+pub use owned::encode_success_response_owned_at;
+
 use crate::codec::{
     check_compatibility_header, encode_text, encode_unsigned, frame, read_frame, text, unsigned,
     Cursor,
@@ -220,8 +223,9 @@ pub fn encode_probe_success_response(probe_response: &[u8]) -> Result<Vec<u8>> {
 
 #[doc(hidden)]
 pub fn encode_success_response_at(response: &[u8], sequence: u64) -> Result<Vec<u8>> {
+    crate::response_budget::reserve_success(response.len())?;
     foks_snowpack::validate(response)?;
-    let mut content = Vec::with_capacity(response.len() + 32);
+    let mut content = Vec::with_capacity(response.len() + 64);
     content.push(0x94);
     encode_unsigned(METHOD_RESPONSE, &mut content);
     encode_unsigned(sequence, &mut content);
@@ -240,8 +244,9 @@ pub fn encode_success_response_at(response: &[u8], sequence: u64) -> Result<Vec<
 /// Encodes a successful response for a headerless (team or Kex) protocol, whose
 /// result is the bare protocol struct with no DataWrap envelope.
 pub fn encode_bare_success_response_at(response: &[u8], sequence: u64) -> Result<Vec<u8>> {
+    crate::response_budget::reserve_success(response.len())?;
     foks_snowpack::validate(response)?;
-    let mut content = Vec::with_capacity(response.len() + 8);
+    let mut content = Vec::with_capacity(response.len() + 64);
     content.push(0x94);
     encode_unsigned(METHOD_RESPONSE, &mut content);
     encode_unsigned(sequence, &mut content);
@@ -255,7 +260,8 @@ pub fn encode_bare_success_response_at(response: &[u8], sequence: u64) -> Result
 /// return value. go-foks void handlers return a nil result, so the result slot
 /// is a bare nil.
 pub fn encode_bare_void_success_response_at(sequence: u64) -> Result<Vec<u8>> {
-    let mut content = Vec::with_capacity(8);
+    crate::response_budget::reserve_response(256, true)?;
+    let mut content = Vec::with_capacity(64);
     content.push(0x94);
     encode_unsigned(METHOD_RESPONSE, &mut content);
     encode_unsigned(sequence, &mut content);

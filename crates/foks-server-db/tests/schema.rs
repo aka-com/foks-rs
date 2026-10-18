@@ -131,8 +131,40 @@ fn schema_objects(connection: &Connection) -> Vec<(String, String, Option<String
         .unwrap()
 }
 
+fn remove_accounting(connection: &Connection) {
+    connection
+        .execute_batch(include_str!("fixtures/remove_external_kv_chunks.sql"))
+        .unwrap();
+    connection
+        .execute_batch(include_str!("fixtures/remove_kv_accounting.sql"))
+        .unwrap();
+}
+
 fn predecessor(connection: &Connection, version: i64) {
-    assert!(matches!(version, 43..=48));
+    assert!(matches!(version, 43..=49 | 59));
+    connection
+        .execute_batch(include_str!("fixtures/remove_waitlist_count.sql"))
+        .unwrap();
+    if version == 59 {
+        connection
+            .pragma_update(None, "user_version", version)
+            .unwrap();
+        return;
+    }
+    connection
+        .execute_batch(concat!(
+            include_str!("fixtures/remove_read_dependency.sql"),
+            include_str!("fixtures/remove_kv_usage.sql"),
+            include_str!("fixtures/remove_kv_current.sql")
+        ))
+        .unwrap();
+    if version <= 48 {
+        remove_accounting(connection);
+    } else {
+        connection
+            .execute_batch(include_str!("fixtures/remove_external_kv_chunks.sql"))
+            .unwrap();
+    }
     if version <= 44 {
         for name in EXPIRY_INDEXES {
             connection
@@ -165,19 +197,6 @@ fn predecessor(connection: &Connection, version: i64) {
                  ON sso_sessions(host, admission_hash, expires_at_ms);
                  ALTER TABLE sso_identity_challenges
                  RENAME COLUMN source_hash TO admission_hash;",
-            )
-            .unwrap();
-    }
-    if version <= 48 {
-        connection
-            .execute_batch(
-                "DROP TRIGGER waitlist_count_insert;
-                 DROP TRIGGER waitlist_count_delete;
-                 DROP TABLE waitlist_count;
-                 DROP INDEX waitlist_entries_email;
-                 DROP INDEX waitlist_entries_created;
-                 CREATE INDEX waitlist_entries_email_created
-                 ON waitlist_entries(email, created_at);",
             )
             .unwrap();
     }
@@ -214,7 +233,7 @@ fn writer_upgrades_supported_predecessors_and_preserves_data_and_index_definitio
     };
     let expected_count = waitlist_count(&reference);
     assert_eq!(expected_count.len(), 3);
-    for version in [43, 44, 45, 46, 47, 48] {
+    for version in [43, 44, 45, 46, 47, 48, 49, 59] {
         let test = common::TestDatabase::new();
         let path = test.path.clone();
         drop(test.database);
@@ -324,78 +343,81 @@ fn version_48_upgrade_expires_old_sso_envelopes_and_requires_relinking() {
 }
 
 #[test]
-fn version_49_upgrade_keeps_the_earliest_entry_per_address_and_sso_state() {
-    let mut test = common::TestDatabase::new();
-    test.reserve(1_000_000);
-    test.commit(None).unwrap();
-    let path = test.path.clone();
-    drop(test.database);
-    let connection = Connection::open(&path).unwrap();
-    connection
-        .pragma_update(None, "foreign_keys", true)
-        .unwrap();
-    predecessor(&connection, 48);
-    connection.execute_batch(
-        "INSERT INTO waitlist_entries VALUES(X'01000000000000000000000001','a@example.com',300);
-         INSERT INTO waitlist_entries VALUES(X'01000000000000000000000002','A@EXAMPLE.COM',100);
-         INSERT INTO waitlist_entries VALUES(X'01000000000000000000000003','a@example.com',200);
-         INSERT INTO waitlist_entries VALUES(X'01000000000000000000000004','b@example.com',400);
-         INSERT INTO sso_identity_challenges(challenge,claim_hash,source_hash,expires_at_ms)
-         VALUES(zeroblob(32),zeroblob(32),zeroblob(32),1000);",
-    ).unwrap();
-
-    drop(Database::open(&path, Config::default()).unwrap());
-    let remaining = connection
-        .prepare("SELECT hex(waitlist_id),created_at FROM waitlist_entries ORDER BY created_at")
-        .unwrap()
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-        })
-        .unwrap()
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .unwrap();
-    assert_eq!(
-        remaining,
-        [
-            ("01000000000000000000000002".to_owned(), 100),
-            ("01000000000000000000000004".to_owned(), 400),
-        ]
-    );
-    assert!(connection
-        .execute(
-            "INSERT INTO waitlist_entries VALUES(X'01000000000000000000000005','B@example.com',500)",
-            [],
-        )
-        .is_err());
-    // The entry count starts from the deduplicated table and follows it.
-    let stored_count = || {
+fn version_60_upgrade_keeps_the_earliest_entry_per_address_and_sso_state() {
+    for version in [48, 59] {
+        let mut test = common::TestDatabase::new();
+        test.reserve(1_000_000);
+        test.commit(None).unwrap();
+        let path = test.path.clone();
+        drop(test.database);
+        let connection = Connection::open(&path).unwrap();
         connection
-            .query_row("SELECT entries FROM waitlist_count", [], |row| {
-                row.get::<_, i64>(0)
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        predecessor(&connection, version);
+        connection.execute_batch(
+            "INSERT INTO waitlist_entries VALUES(X'01000000000000000000000001','a@example.com',300);
+             INSERT INTO waitlist_entries VALUES(X'01000000000000000000000002','A@EXAMPLE.COM',100);
+             INSERT INTO waitlist_entries VALUES(X'01000000000000000000000003','a@example.com',200);
+             INSERT INTO waitlist_entries VALUES(X'01000000000000000000000004','b@example.com',400);
+             INSERT INTO sso_identity_challenges(challenge,claim_hash,source_hash,expires_at_ms)
+             VALUES(zeroblob(32),zeroblob(32),zeroblob(32),1000);",
+        ).unwrap();
+
+        drop(Database::open(&path, Config::default()).unwrap());
+        let remaining = connection
+            .prepare("SELECT hex(waitlist_id),created_at FROM waitlist_entries ORDER BY created_at")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
             })
             .unwrap()
-    };
-    assert_eq!(stored_count(), 2);
-    connection
-        .execute(
-            "INSERT INTO waitlist_entries VALUES(X'01000000000000000000000006','c@example.com',600)",
-            [],
-        )
-        .unwrap();
-    assert_eq!(stored_count(), 3);
-    connection
-        .execute("DELETE FROM waitlist_entries", [])
-        .unwrap();
-    assert_eq!(stored_count(), 0);
-    // Version 48 already has the current SSO formats; only older files lose them.
-    assert_eq!(
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(
+            remaining,
+            [
+                ("01000000000000000000000002".to_owned(), 100),
+                ("01000000000000000000000004".to_owned(), 400),
+            ]
+        );
+        assert!(connection
+            .execute(
+                "INSERT INTO waitlist_entries VALUES(X'01000000000000000000000005','B@example.com',500)",
+                [],
+            )
+            .is_err());
+        // The entry count starts from the deduplicated table and follows it.
+        let stored_count = || {
+            connection
+                .query_row("SELECT entries FROM waitlist_count", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap()
+        };
+        assert_eq!(stored_count(), 2);
         connection
-            .query_row("SELECT count(*) FROM sso_identity_challenges", [], |row| {
-                row.get::<_, i64>(0)
-            })
-            .unwrap(),
-        1
-    );
+            .execute(
+                "INSERT INTO waitlist_entries VALUES(X'01000000000000000000000006','c@example.com',600)",
+                [],
+            )
+            .unwrap();
+        assert_eq!(stored_count(), 3);
+        connection
+            .execute("DELETE FROM waitlist_entries", [])
+            .unwrap();
+        assert_eq!(stored_count(), 0);
+        // Versions 48 and later already have the current SSO formats; only older
+        // files lose them.
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM sso_identity_challenges", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            1
+        );
+    }
 }
 
 #[test]
@@ -540,4 +562,114 @@ fn every_validating_open_rejects_foreign_future_and_unsupported_old_files_withou
             application_id
         );
     }
+}
+
+#[test]
+fn accounting_upgrade_backfills_history_and_preserves_version_48_sso() {
+    let test = common::TestDatabase::new();
+    let c = Connection::open(&test.path).unwrap();
+    predecessor(&c, 48);
+    c.execute_batch("INSERT INTO kv_namespaces VALUES(zeroblob(33),1,zeroblob(33));
+        INSERT INTO kv_nodes(uid,node_id,node_type,exact_node) VALUES(zeroblob(33),X'0300000000000000000000000000000000',3,X'010203');
+        INSERT INTO kv_directories VALUES(zeroblob(33),zeroblob(16),1,3,0,1,0,X'0102');
+        INSERT INTO kv_directories VALUES(zeroblob(33),zeroblob(16),2,3,0,1,0,X'010203');
+        INSERT INTO kv_directory_heads VALUES(zeroblob(33),zeroblob(16),2);
+        INSERT INTO kv_file_uploads(uid,file_id,exact_metadata,created_at,updated_at) VALUES(zeroblob(33),zeroblob(16),X'01',0,0);
+        INSERT INTO kv_file_chunks(uid,file_id,clear_offset,ciphertext,final_chunk,exact_upload_chunk) VALUES(zeroblob(33),zeroblob(16),0,X'0102',0,X'010203');
+        INSERT INTO sso_identity_challenges(challenge,claim_hash,source_hash,expires_at_ms) VALUES(zeroblob(32),zeroblob(32),zeroblob(32),1000);").unwrap();
+    drop(test.database);
+    drop(Database::open(&test.path, Config::default()).unwrap());
+    assert_eq!(c.query_row("SELECT accounted_bytes,accounted_objects,directory_count,dirent_count FROM kv_namespaces", [], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?,r.get::<_,i64>(3)?))).unwrap(),(14,5,1,0));
+    assert_eq!(
+        c.query_row(
+            "SELECT chunk_count,chunk_bytes FROM kv_file_uploads",
+            [],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+        )
+        .unwrap(),
+        (1, 2)
+    );
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM sso_identity_challenges", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn failed_accounting_upgrade_rolls_back_backfill_and_ddl() {
+    let test = common::TestDatabase::new();
+    let c = Connection::open(&test.path).unwrap();
+    predecessor(&c, 48);
+    c.execute_batch("INSERT INTO kv_namespaces VALUES(zeroblob(33),1,zeroblob(33)); CREATE TRIGGER kv_file_chunks_upload_update AFTER UPDATE ON kv_file_chunks BEGIN SELECT 1; END;").unwrap();
+    let before = schema_objects(&c);
+    drop(test.database);
+    assert!(Database::open(&test.path, Config::default()).is_err());
+    assert_eq!(schema_objects(&c), before);
+    assert_eq!(
+        c.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+            .unwrap(),
+        48
+    );
+    c.execute_batch("DROP TRIGGER kv_file_chunks_upload_update;")
+        .unwrap();
+    drop(Database::open(&test.path, Config::default()).unwrap());
+}
+
+#[test]
+fn external_chunk_migration_preserves_inline_payload_and_accounting() {
+    let test = common::TestDatabase::new();
+    let c = Connection::open(&test.path).unwrap();
+    predecessor(&c, 49);
+    c.execute_batch("INSERT INTO kv_namespaces(namespace_id,party_kind,host_id) VALUES(zeroblob(33),1,zeroblob(33));
+        INSERT INTO kv_file_uploads(uid,file_id,exact_metadata,created_at,updated_at) VALUES(zeroblob(33),zeroblob(16),X'01',0,0);
+        INSERT INTO kv_file_chunks(uid,file_id,clear_offset,ciphertext,final_chunk,exact_upload_chunk) VALUES(zeroblob(33),zeroblob(16),0,X'0102',0,X'010203');").unwrap();
+    drop(test.database);
+    let database = Database::open(&test.path, Config::default()).unwrap();
+    assert!(!database.has_external_chunks().unwrap());
+    let chunk = database.next_kv_chunk(None, false).unwrap().unwrap();
+    assert_eq!(chunk.exact_chunk, Some(vec![1, 2, 3]));
+    assert_eq!(
+        chunk.chunk.payload,
+        foks_server_db::KvChunkPayload::Inline(vec![1, 2])
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT accounted_bytes,accounted_objects FROM kv_namespaces",
+            [],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+        )
+        .unwrap(),
+        (6, 2)
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT chunk_count,chunk_bytes FROM kv_file_uploads",
+            [],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+        )
+        .unwrap(),
+        (1, 2)
+    );
+}
+
+#[test]
+fn failed_external_chunk_migration_rolls_back_new_columns_and_indexes() {
+    let test = common::TestDatabase::new();
+    let c = Connection::open(&test.path).unwrap();
+    predecessor(&c, 49);
+    c.execute_batch("CREATE INDEX kv_chunks_inline ON kv_file_chunks(clear_offset);")
+        .unwrap();
+    let before = schema_objects(&c);
+    drop(test.database);
+    assert!(Database::open(&test.path, Config::default()).is_err());
+    assert_eq!(schema_objects(&c), before);
+    assert_eq!(
+        c.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+            .unwrap(),
+        49
+    );
+    c.execute_batch("DROP INDEX kv_chunks_inline;").unwrap();
+    drop(Database::open(&test.path, Config::default()).unwrap());
 }

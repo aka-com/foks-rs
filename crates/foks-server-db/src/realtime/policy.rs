@@ -1,12 +1,13 @@
 //! Authorization evaluated in the caller's transaction or read snapshot.
 use super::*;
+use crate::allocation::RowAllocationExt as _;
 
 /// Invoke after authorization, on the same transaction/snapshot as the read.
 pub(super) fn require_basic(c: &Connection, channel: RtChannelId) -> Result<()> {
     let format: i64 = c.query_row(
         "SELECT format FROM rt_channels WHERE channel_id=?1",
         params![channel.0.as_slice()],
-        |row| row.get(0),
+        |row| row.budgeted_get(0),
     )?;
     if format != 1 {
         return Err(Error::RtUnsupportedFormat);
@@ -60,7 +61,7 @@ pub(super) fn membership_role(
         AND t.host_id=?2 AND m.party_id=?3 AND m.source_role_type=3 AND m.source_visibility=0
         AND (m.scoped_host_id IS NULL OR m.scoped_host_id=?2)",
         params![team, a.host, a.uid],
-        |r| Ok((r.get(0)?, r.get(1)?)),
+        |r| Ok((r.budgeted_get(0)?, r.budgeted_get(1)?)),
     )
     .optional()?
     .map(|(kind, visibility)| role(kind, visibility))
@@ -138,7 +139,7 @@ pub(super) fn current_key(c: &Connection, team: &[u8], key: RoleAndGeneration) -
             key.role.protocol_value() as i64,
             key.role.visibility().unwrap_or(0)
         ],
-        |r| r.get(0),
+        |r| r.budgeted_get(0),
     )?;
     if key.generation == 0 || generation != Some(sql_integer(key.generation)?) {
         return Err(Error::RtRace);

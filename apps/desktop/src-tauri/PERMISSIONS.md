@@ -131,7 +131,9 @@ Four tests keep the three lists in agreement:
 
 Adding a command means adding it to `generate_handler!`, to `COMMANDS` in
 `build.rs`, and as `allow-<command>` to the capability; the tests name the
-list that is missing it.
+list that is missing it. A command that takes `CommandState` also needs a
+deadline class in `command_class` (`src/commands/deadline.rs`), checked by
+`deadline_policies_name_exactly_the_commands_that_take_command_state`.
 
 Each command also calls `require_main_window` itself, checked for every
 registered command by `every_command_checks_the_main_window` in
@@ -143,7 +145,11 @@ bounded by `require_unlocked`.
 
 Controls protecting value-bearing commands, in order of evaluation:
 
-1. `applock::require_unlocked` at the top of every value-bearing command.
+1. `applock::unlocked_interval` at the top of every value-bearing command.
+   Each agent call of the read is refused once the app locks, and the value
+   is handed to the renderer, the clipboard, the browser or a file only
+   inside `UnlockedInterval::publish`, which serializes that handoff with
+   locking.
 2. The native navigation policy in `src/navigation.rs`, so the window that may
    call these commands is only ever on FOKS's own origin.
 3. The CSP `script-src 'self'` in `tauri.conf.json`.

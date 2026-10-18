@@ -5,8 +5,8 @@ use crate::commands::accounts::{account_sync_response, passphrase_response};
 use crate::commands::application::AgentStatusDto;
 use crate::commands::context::AppState;
 use crate::commands::execution::{
-    ambiguous_mutation_response, ambiguous_worker_failure, apply_pending_operation_value,
-    apply_profile_operation_value, MutationKind,
+    ambiguous_mutation_response, apply_pending_operation_value, apply_profile_operation_value,
+    MutationKind,
 };
 use crate::commands::groups::GoProfileCandidateResponse;
 use crate::commands::servers::{
@@ -28,7 +28,6 @@ use foks_desktop::{ops, AgentTransport};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 use std::sync::{atomic::AtomicBool, Arc};
-use tauri::State;
 use zeroize::Zeroizing;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -377,24 +376,28 @@ pub(super) fn validated_pending_dtos(
 pub async fn initialize_client_state(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
 ) -> Result<AgentStatusDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let _mutation = state.begin_initialization()?;
     state.invalidate_catalog();
-    let transport = state.agent.transport();
+    let transport = state.transport()?;
     let uncertainty = Arc::clone(state.mutation_requires_refresh());
-    let status = tauri::async_runtime::spawn_blocking(move || {
-        execute_initialization_recovery(uncertainty.as_ref(), transport.as_ref())
-    })
+    let status = super::deadline::run(
+        state.deadline()?,
+        true,
+        move || execute_initialization_recovery(uncertainty.as_ref(), transport.as_ref()),
+        |_| {},
+    )
     .await
-    .map_err(|error| {
-        ambiguous_worker_failure(
-            &state,
-            format!("The initialization worker stopped before reporting its outcome: {error}"),
-        )
-    })??;
+    .inspect_err(|error| {
+        if error.ambiguous {
+            state
+                .mutation_requires_refresh()
+                .store(true, Ordering::Release);
+        }
+    })?;
     Ok(AgentStatusDto::from_agent(status, &state.agent))
 }
 
@@ -496,11 +499,11 @@ fn ambiguous_initialization_response(
 pub async fn discover_go_profiles(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
 ) -> Result<GoProfileDiscoveryDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
-    let value = success_value(state.agent.call(Operation::DiscoverGoProfiles).await?)?;
+    let value = success_value(state.call(Operation::DiscoverGoProfiles).await?)?;
     go_profile_discovery_response(value)
 }
 
@@ -508,7 +511,7 @@ pub async fn discover_go_profiles(
 pub async fn check_and_add_go_profile(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     candidate_id: String,
     host_id: String,
     profile_name: String,
@@ -536,22 +539,24 @@ pub async fn check_and_add_go_profile(
         ));
     }
     state.invalidate_catalog();
-    let transport = state.agent.transport();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        check_existing_or_add_profile(
-            transport.as_ref(),
-            profile_name,
-            probe,
-            Some((candidate_id, host_id)),
+    let transport = state.transport()?;
+    let result = {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            true,
+            move || {
+                check_existing_or_add_profile(
+                    transport.as_ref(),
+                    profile_name,
+                    probe,
+                    Some((candidate_id, host_id)),
+                )
+            },
+            |_| {},
         )
-    })
-    .await
-    .map_err(|error| {
-        ambiguous_worker_failure(
-            &state,
-            format!("Server verification was interrupted before completion: {error}"),
-        )
-    })?;
+        .await
+    };
     match result {
         Ok(checked) => Ok(checked),
         Err(error) => {
@@ -568,18 +573,25 @@ pub async fn check_and_add_go_profile(
 #[tauri::command]
 pub async fn list_pending_operations(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
 ) -> Result<Vec<PendingOperationDto>, AgentError> {
     require_main_window(&webview)?;
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
-    let transport = state.agent.transport();
-    tauri::async_runtime::spawn_blocking(move || {
-        let pending = pending_operations(transport.as_ref(), &profile)?;
-        validated_pending_dtos(&pending)
-    })
-    .await
-    .map_err(|error| AgentError::unknown(format!("failed to load pending operations: {error}")))?
+    let transport = state.transport()?;
+    {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            false,
+            move || {
+                let pending = pending_operations(transport.as_ref(), &profile)?;
+                validated_pending_dtos(&pending)
+            },
+            |_| {},
+        )
+        .await
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -587,7 +599,7 @@ pub async fn list_pending_operations(
 pub async fn create_first_run_account(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     alias: String,
     username: String,
@@ -620,7 +632,7 @@ pub async fn create_first_run_account(
 pub async fn resume_first_run_account(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     alias: String,
 ) -> Result<MutationDto, AgentError> {
@@ -647,7 +659,7 @@ pub async fn resume_first_run_account(
 pub async fn set_first_run_passphrase(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     alias: String,
     passphrase: String,
@@ -674,7 +686,7 @@ pub async fn set_first_run_passphrase(
 pub async fn recover_owner_account(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     target_alias: String,
     phrase: String,
@@ -702,7 +714,7 @@ pub async fn recover_owner_account(
 pub async fn resume_owner_recovery(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     target_alias: String,
     phrase: String,
@@ -763,15 +775,20 @@ async fn pairing_offer_operation(
         apply_profile_operation_value(state, account.profile, operation, MutationKind::Create)
             .await?
     };
-    pairing_offer_response(value, &expected)
-        .map_err(|error| ambiguous_mutation_response(state, error.message))
+    let result = pairing_offer_response(value, &expected)
+        .map_err(|error| ambiguous_mutation_response(state, error.message))?;
+    state
+        .deadline()?
+        .check()
+        .map_err(super::deadline::clock_error)?;
+    Ok(result)
 }
 
 #[tauri::command]
 pub async fn start_device_pairing(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     account_store_id: String,
 ) -> Result<PairingOfferDto, AgentError> {
     require_main_window(&webview)?;
@@ -786,7 +803,7 @@ pub async fn start_device_pairing(
 pub async fn resume_device_pairing_offer(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     account_store_id: String,
 ) -> Result<PairingOfferDto, AgentError> {
     require_main_window(&webview)?;
@@ -801,7 +818,7 @@ pub async fn resume_device_pairing_offer(
 pub async fn finish_device_pairing(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     account_store_id: String,
 ) -> Result<DeviceProvisionDto, AgentError> {
     require_main_window(&webview)?;
@@ -831,7 +848,7 @@ pub async fn finish_device_pairing(
 pub async fn accept_device_pairing(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     target_alias: String,
     device_name: String,
@@ -864,7 +881,7 @@ pub async fn accept_device_pairing(
 pub async fn accept_go_profile_pairing(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     request: GoProfilePairingRequest,
 ) -> Result<DeviceProvisionDto, AgentError> {
     require_main_window(&webview)?;
@@ -905,7 +922,7 @@ pub async fn accept_go_profile_pairing(
 pub async fn resume_device_pairing_acceptance(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     target_alias: String,
 ) -> Result<DeviceProvisionDto, AgentError> {
@@ -940,7 +957,7 @@ pub async fn resume_device_pairing_acceptance(
 pub async fn resume_go_profile_pairing(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     candidate_id: String,
     profile: String,
     target_alias: String,
@@ -980,7 +997,7 @@ pub async fn resume_go_profile_pairing(
 pub async fn copy_go_profile_device(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     candidate_id: String,
     profile: String,
     target_alias: String,

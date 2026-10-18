@@ -4,8 +4,14 @@ use foks_client_db::{adapter_handle_hash, AdapterLedgerState};
 
 #[derive(Default)]
 pub struct AdapterMaintenanceCursor {
+    upload_turn: bool,
+    upload_work: bool,
+    adapter_work: bool,
+    blocked: std::collections::BTreeMap<Vec<u8>, std::time::Instant>,
+    uploads: crate::upload_maintenance::UploadMaintenanceCursor,
     after_handle: Vec<u8>,
     after_account: Option<(Vec<u8>, Vec<u8>)>,
+    account_due: std::collections::BTreeMap<(Vec<u8>, Vec<u8>), std::time::Instant>,
     temporary: Option<foks_client::ProtectedTemporaryScan>,
     final_scan: Option<foks_client::ProtectedTemporaryScan>,
     inventory: foks_client::ProtectedRecordInventory,
@@ -21,6 +27,9 @@ pub struct AdapterMaintenanceReport {
     pub examined: u64,
     pub cleanup_deferred: bool,
     pub clock_untrusted: bool,
+    pub made_progress: bool,
+    pub more_work: bool,
+    pub blocked: bool,
 }
 
 impl CheckedProfileSession<'_> {
@@ -29,7 +38,48 @@ impl CheckedProfileSession<'_> {
         cursor: &mut AdapterMaintenanceCursor,
         master: &[u8; 32],
     ) -> Result<AdapterMaintenanceReport> {
-        let started = std::time::Instant::now();
+        self.maintain_adapter_state_until(
+            cursor,
+            master,
+            std::time::Instant::now() + Duration::from_millis(50),
+        )
+    }
+
+    /// One cooperative physical turn. The caller retains checked ownership even
+    /// when a filesystem operation completes after the supplied deadline.
+    pub fn maintain_adapter_state_until(
+        &self,
+        cursor: &mut AdapterMaintenanceCursor,
+        master: &[u8; 32],
+        deadline: std::time::Instant,
+    ) -> Result<AdapterMaintenanceReport> {
+        if std::time::Instant::now() >= deadline {
+            return Ok(AdapterMaintenanceReport {
+                more_work: true,
+                ..Default::default()
+            });
+        }
+        cursor.upload_turn = !cursor.upload_turn;
+        let mut report = if cursor.upload_turn {
+            let report = self.maintain_upload_state_until(&mut cursor.uploads, master, deadline)?;
+            cursor.upload_work = report.more_work;
+            report
+        } else {
+            let report = self.maintain_adapter_only_until(cursor, master, deadline)?;
+            cursor.adapter_work = report.more_work;
+            report
+        };
+        report.more_work = cursor.upload_work || cursor.adapter_work;
+        Ok(report)
+    }
+
+    fn maintain_adapter_only_until(
+        &self,
+        cursor: &mut AdapterMaintenanceCursor,
+        master: &[u8; 32],
+        deadline: std::time::Instant,
+    ) -> Result<AdapterMaintenanceReport> {
+        let mut remaining = 8usize;
         let mut report = AdapterMaintenanceReport::default();
         let mut hard = HardStateStore::open(&self.paths.hard_database)?;
         let mut protected = EncryptedFileMutationStore::open(
@@ -38,15 +88,36 @@ impl CheckedProfileSession<'_> {
         )?;
         if let Some(entry) = hard.next_adapter_maintenance(&cursor.after_handle)? {
             cursor.after_handle = adapter_handle_hash(entry.handle).to_vec();
+            report.more_work = hard
+                .next_adapter_maintenance(&cursor.after_handle)?
+                .is_some();
             report.examined += 1;
+            cursor
+                .blocked
+                .retain(|_, until| *until > std::time::Instant::now());
+            if cursor
+                .blocked
+                .get(&cursor.after_handle)
+                .is_some_and(|until| *until > std::time::Instant::now())
+            {
+                report.blocked = true;
+                return Ok(report);
+            }
             if let Some(id) = entry.internal_id {
+                if hard.upload_for_adapter(&id)?.is_some() {
+                    // Upload maintenance owns every erasure/finalization for this
+                    // parent, including ancillary children, under one budget.
+                    // Upload domain owns progress; this row is not adapter backlog.
+                    return Ok(report);
+                }
                 let children = hard.mutation_children(&id)?;
                 for (child, _) in &children {
-                    if started.elapsed() >= Duration::from_millis(50) {
+                    if std::time::Instant::now() >= deadline || remaining == 0 {
                         report.cleanup_deferred = true;
                         break;
                     }
                     if child.state == MutationState::RemoteVerified {
+                        remaining -= 1;
                         // The owning KV helper validates kind and durable state.
                         if self
                             .client
@@ -62,7 +133,8 @@ impl CheckedProfileSession<'_> {
                     }
                 }
                 if entry.state == AdapterLedgerState::Live
-                    && started.elapsed() < Duration::from_millis(50)
+                    && std::time::Instant::now() < deadline
+                    && remaining > 0
                 {
                     let parent = hard
                         .mutation(&id)?
@@ -89,7 +161,8 @@ impl CheckedProfileSession<'_> {
                 .adapter_submission(entry.handle)?
                 .ok_or(foks_client_db::Error::AdapterIdentityConflict)?;
             if entry.state != AdapterLedgerState::Live
-                && started.elapsed() < Duration::from_millis(50)
+                && std::time::Instant::now() < deadline
+                && remaining > 0
             {
                 if entry.terminal_at.is_none() {
                     hard.finish_adapter_submission(
@@ -100,11 +173,12 @@ impl CheckedProfileSession<'_> {
                         self.adapter_clock.sample().ok(),
                     )?;
                 }
-                match self.compact_data_write(
+                match self.compact_data_write_budgeted(
                     &mut hard,
                     &entry,
                     master,
-                    started + Duration::from_millis(50),
+                    deadline,
+                    &mut remaining,
                 ) {
                     Ok(()) => report.compacted += u64::from(entry.internal_id.is_some()),
                     Err(Error::ProtectedStore(_))
@@ -114,10 +188,20 @@ impl CheckedProfileSession<'_> {
                     Err(error) => return Err(error),
                 }
             }
+            if report.cleanup_deferred && report.compacted == 0 && remaining == 8 {
+                if cursor.blocked.len() >= 128 {
+                    cursor.blocked.pop_first();
+                }
+                cursor.blocked.insert(
+                    cursor.after_handle.clone(),
+                    std::time::Instant::now() + Duration::from_secs(60),
+                );
+                report.blocked = true;
+            }
         } else {
             cursor.after_handle.clear();
         }
-        if started.elapsed() < Duration::from_millis(50) {
+        if std::time::Instant::now() < deadline && remaining > 0 {
             if let Some((host, user)) = hard.next_adapter_clock_account(
                 cursor
                     .after_account
@@ -125,15 +209,30 @@ impl CheckedProfileSession<'_> {
                     .map(|(h, u)| (h.as_slice(), u.as_slice())),
             )? {
                 cursor.after_account = Some((host.clone(), user.clone()));
-                match self.adapter_clock.sample().and_then(|sample| {
-                    hard.prune_adapter_submissions(&host, &user, sample)
-                        .map_err(Error::from)
-                }) {
-                    Ok(pruned) => report.pruned = pruned as u64,
-                    Err(Error::ClientDatabase(foks_client_db::Error::AdapterClockUntrusted)) => {
-                        report.clock_untrusted = true
+                report.more_work |= hard
+                    .next_adapter_clock_account(Some((&host, &user)))?
+                    .is_some();
+                let account = (host.clone(), user.clone());
+                cursor
+                    .account_due
+                    .retain(|_, until| *until > std::time::Instant::now());
+                if !cursor.account_due.contains_key(&account) {
+                    match self.adapter_clock.sample().and_then(|sample| {
+                        hard.prune_adapter_submissions(&host, &user, sample)
+                            .map_err(Error::from)
+                    }) {
+                        Ok(pruned) => report.pruned = pruned as u64,
+                        Err(Error::ClientDatabase(
+                            foks_client_db::Error::AdapterClockUntrusted,
+                        )) => report.clock_untrusted = true,
+                        Err(error) => return Err(error),
                     }
-                    Err(error) => return Err(error),
+                    if cursor.account_due.len() >= 128 {
+                        cursor.account_due.pop_first();
+                    }
+                    cursor
+                        .account_due
+                        .insert(account, std::time::Instant::now() + Duration::from_secs(60));
                 }
             } else {
                 cursor.after_account = None;
@@ -141,12 +240,11 @@ impl CheckedProfileSession<'_> {
         } else {
             report.cleanup_deferred = true;
         }
-        if started.elapsed() < Duration::from_millis(50) {
-            let deadline = started + Duration::from_millis(50);
+        if std::time::Instant::now() < deadline && remaining > 0 {
             let progress = cursor.inventory.advance(&hard, deadline)?;
             report.examined += progress.examined;
             report.inventory_saturated = progress.saturated;
-            report.cleanup_deferred |= !progress.complete;
+            note_inventory_progress(&mut report, progress);
             if progress.restarted {
                 cursor.final_scan = None;
             }
@@ -154,11 +252,12 @@ impl CheckedProfileSession<'_> {
                 if cursor.final_scan.is_none() {
                     cursor.final_scan = Some(protected.temporary_scan()?);
                 }
-                match protected.reconcile_unowned_until(
+                match protected.reconcile_unowned_budgeted(
                     cursor.final_scan.as_mut().expect("scan initialized"),
                     &cursor.inventory,
                     hard.metadata()?,
                     deadline,
+                    remaining,
                 ) {
                     Ok(scan) => {
                         report.final_removed += scan.final_removed;
@@ -178,9 +277,10 @@ impl CheckedProfileSession<'_> {
                 if cursor.temporary.is_none() {
                     cursor.temporary = Some(protected.temporary_scan()?);
                 }
-                match protected.cleanup_temporary_until(
+                match protected.cleanup_temporary_budgeted(
                     cursor.temporary.as_mut().expect("scan initialized"),
                     deadline,
+                    remaining,
                 ) {
                     Ok(scan) => {
                         report.temporary_removed += scan.removed;
@@ -196,14 +296,72 @@ impl CheckedProfileSession<'_> {
                 }
             }
         }
+        report.made_progress =
+            report.compacted + report.pruned + report.final_removed + report.temporary_removed > 0;
+        report.more_work |= (report.cleanup_deferred && !report.blocked)
+            || cursor.final_scan.is_some()
+            || cursor.temporary.is_some();
         Ok(report)
     }
+}
+
+fn note_inventory_progress(
+    report: &mut AdapterMaintenanceReport,
+    progress: foks_client::ProtectedInventoryProgress,
+) {
+    // A saturated inventory can never authorize final-file erasure. Temporary
+    // scanning and other domains may still progress; saturation alone is idle.
+    report.cleanup_deferred |= !progress.complete && !progress.saturated;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use foks_client::ProtectedMutationStore;
+
+    #[test]
+    fn saturated_inventory_does_not_advertise_impossible_progress() {
+        let mut report = AdapterMaintenanceReport::default();
+        note_inventory_progress(
+            &mut report,
+            foks_client::ProtectedInventoryProgress {
+                saturated: true,
+                ..Default::default()
+            },
+        );
+        assert!(!report.cleanup_deferred && !report.more_work);
+        note_inventory_progress(
+            &mut report,
+            foks_client::ProtectedInventoryProgress {
+                examined: 256,
+                ..Default::default()
+            },
+        );
+        assert!(report.cleanup_deferred);
+    }
+
+    #[test]
+    fn thousands_of_compacted_receipts_do_not_request_fast_continuation() {
+        let f = crate::test_support::AccountFixture::start();
+        f.run(|s, _, master| {
+            let pinned = s.pinned_host()?;
+            let host = pinned.host_id();
+            let mut connection = rusqlite::Connection::open(&s.paths.hard_database).unwrap();
+            let tx = connection.transaction().unwrap();
+            for n in 0u64..8192 {
+                let mut random = [0;16]; random[8..].copy_from_slice(&n.to_be_bytes());
+                let handle = SubmissionHandle::new(100, random);
+                tx.execute("INSERT INTO kv_adapter_submissions(handle_hash,handle,handle_version,schema_version,host_id,user_id,team_id,input_hash,internal_id,state,issued_at,created_at,terminal_at,expires_at) VALUES(?1,?2,1,1,?3,?4,x'',zeroblob(32),NULL,2,100,100,101,3000000)", rusqlite::params![adapter_handle_hash(handle),handle.to_string(),host.as_bytes(),[2u8;33]]).unwrap();
+            }
+            tx.commit().unwrap();
+            let mut cursor = AdapterMaintenanceCursor::default();
+            for _ in 0..4 {
+                let report = s.maintain_adapter_state(&mut cursor, master)?;
+                assert!(!report.more_work && !report.made_progress, "retained history is not actionable: {report:?}");
+            }
+            Ok(())
+        });
+    }
 
     #[test]
     fn repeated_cleanup_failure_keeps_terminal_ownership_and_the_reserved_slot() {

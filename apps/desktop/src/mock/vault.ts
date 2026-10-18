@@ -740,6 +740,24 @@ export function mockVaultCommands(
         return { applied: true };
       },
     ),
+    // The mock records no durable uploads. The native command passes the
+    // agent's answer through, so these answer in its snake_case form.
+    list_file_uploads: mockCommand(async () => ({
+      uploads: [],
+      next: null,
+      capacity: {
+        max_reserved_bytes: 268435456,
+        max_pending: 16,
+        max_receipts: 8192,
+        max_receipt_bytes: 16777216,
+      },
+    })),
+    resume_file_upload: mockCommand(async () => {
+      throw failure('not-recorded', 'Upload is not recorded.');
+    }),
+    cancel_file_upload: mockCommand(async () => {
+      throw failure('not-recorded', 'Upload is not recorded.');
+    }),
     import_dropped_file: mockCommand(
       async ({
         storeId,

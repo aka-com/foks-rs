@@ -1,4 +1,4 @@
--- Shared by fresh schema creation and the atomic version-49 writer upgrade,
+-- Applied by fresh schema creation and the atomic version-60 writer upgrade,
 -- which runs it after removing duplicate addresses. One row holds the number
 -- of waitlist entries, so the cap check of an unauthenticated join reads one
 -- row instead of counting the table. The triggers keep it equal to

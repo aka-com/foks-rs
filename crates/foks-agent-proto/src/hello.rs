@@ -248,7 +248,9 @@ mod tests {
                 }
             })
         );
-        // A Hello is not a versioned request, so it never reaches dispatch.
+        // A Hello is not a versioned request and carries no deadline, so it
+        // never reaches dispatch; the agent recognizes it after the request
+        // decode fails, whatever its version.
         assert!(decode_request(&encode(&hello).unwrap()).is_err());
         assert_eq!(decode_hello(&encode(&hello).unwrap()).unwrap(), Some(hello));
     }
@@ -273,7 +275,16 @@ mod tests {
             assert_eq!(hello.id, 9);
             assert_eq!(hello.operation.accept.maximum, version + 1);
         }
-        let ping = encode(&Request::new(1, Operation::Ping)).unwrap();
+        let deadline = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "domain": {
+                "clock": "darwin_uptime_raw_v1",
+                "boot": "12345678-1234-1234-1234-123456789abc"
+            },
+            "expires_ns": "1"
+        }))
+        .unwrap();
+        let ping = encode(&Request::new(1, Operation::Ping, deadline)).unwrap();
         assert_eq!(decode_hello(&ping).unwrap(), None);
         assert_eq!(decode_hello(&[0, 0, 0, 1, b'{']).unwrap(), None);
         let oversized = frame(serde_json::json!({

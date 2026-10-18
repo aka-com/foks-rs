@@ -21,7 +21,7 @@ impl Database {
         let revision: i64 = tx.query_row(
             "SELECT revision FROM host_admin_grants WHERE host_id=?1 AND uid=?2",
             params![host, uid],
-            |r| r.get(0),
+            |r| r.budgeted_get(0),
         )?;
         audit(
             &tx,
@@ -52,7 +52,7 @@ impl ReadDatabase {
         unsigned(self.connection.query_row(
             "SELECT count(*) FROM host_admin_grants WHERE active=1",
             [],
-            |r| r.get(0),
+            |r| r.budgeted_get(0),
         )?)
     }
 
@@ -65,13 +65,13 @@ impl ReadDatabase {
         let rows = q
             .query_map([after], |r| {
                 Ok(HostAdminGrant {
-                    host: r.get(0)?,
-                    uid: r.get(1)?,
-                    username: String::from_utf8(r.get(2)?)
+                    host: r.budgeted_get(0)?,
+                    uid: r.budgeted_get(1)?,
+                    username: String::from_utf8(r.budgeted_get(2)?)
                         .map_err(|_| rusqlite::Error::InvalidQuery)?,
-                    revision: r.get::<_, i64>(3)? as u64,
-                    active: r.get(4)?,
-                    reason: r.get(5)?,
+                    revision: r.budgeted_get::<_, i64>(3)? as u64,
+                    active: r.budgeted_get(4)?,
+                    reason: r.budgeted_get(5)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;

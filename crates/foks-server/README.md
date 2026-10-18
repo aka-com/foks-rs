@@ -149,15 +149,16 @@ systemd units and deployment notes are in [`../../packaging`](../../packaging).
 
 `server.toml` is parsed strictly: an unknown key or table is an error, so
 `config-check` does not accept a misspelled setting. Besides the paths,
-listeners, backup schedule and `[waitlist]` table, it holds three limit
+listeners, backup schedule and `[waitlist]` table, it holds four limit
 tables. `init` writes them with their defaults; an omitted key or table takes
 the same default.
 
 - `[limits]` sets the RPC session limits and the writer queue:
   `worker_threads` (4), `maximum_read_connections` (32),
   `maximum_active_connections` (256), `maximum_pending_connections` (32),
-  `maximum_in_flight_requests` (64), `maximum_realtime_polls_per_account`
-  (8), `request_timeout_seconds` (30) and `maximum_pending_writes` (64). The
+  `maximum_kex_receive_polls` (32), `maximum_in_flight_requests` (64, at
+  least 2), `maximum_realtime_polls_per_account` (8),
+  `request_timeout_seconds` (15) and `maximum_pending_writes` (64). The
   `serve` flags of the same names set the same values.
 - `[rate_limits]` sets the per-source admission limits: the token buckets
   `connection_burst` (512), `connections_per_second` (256), `request_burst`
@@ -176,8 +177,16 @@ the same default.
   take their paths from flags and use the defaults, including the 64 GiB
   database ceiling, unless `--config` names a `server.toml`; pass it when the
   table raises `maximum_database_bytes`.
+- `[chunk_capacity]` sets the physical capacity of an external chunk store:
+  `maximum_bytes` (64 GiB), `maximum_objects` (1,000,000),
+  `maximum_unresolved_attempts` (128) and `maximum_uncertain_bytes`
+  (256 MiB). The `serve` flags `--maximum-chunk-bytes`,
+  `--maximum-chunk-objects`, `--maximum-chunk-unresolved-attempts` and
+  `--maximum-chunk-uncertain-bytes` set the same values. Each value must be
+  at most 2^63 - 1.
 
-Each value must be non-zero. `maximum_team_members` bounds the rows of one
+Each value must be non-zero, except `maximum_kex_receive_polls`, where zero
+refuses every KEX receive. `maximum_team_members` bounds the rows of one
 team roster and must not exceed 1,024, the number of roster rows a realtime
 mutation scans when it records message recipients; a larger roster could not
 create channels or send messages. A configured `[web_admin]` listener requires
@@ -229,14 +238,22 @@ configured capacity limits (see [Capacity limits](#capacity-limits)). They
 use fixed, non-user-derived names and never export paths, identities, request
 values, or key material.
 
-A request whose handler exceeds `request_timeout_seconds` is closed without a
-response. If its write is still in the writer queue at that point, the writer
-does not run it: it opens no transaction for the job and counts it in
-`foks_writer_expired_total`. A write that the handler submits after that point
-is refused without entering the queue and is counted the same way. A write that
-has already started runs to completion. A rising count means that handlers,
+Each request has one deadline, `request_timeout_seconds` after the first byte
+of its frame arrives. Reading the rest of the frame, waiting for a handler
+permit, reader checkout, the handler, its queued writes, external chunk
+transfers and the response write all consume it; idle time between requests
+does not. A request that reaches its deadline before the handler returns is
+closed without a response. If its write is still in the writer queue at that
+point, the writer does not run it: it opens no transaction for the job and
+counts it in `foks_writer_expired_total`. A write that the handler submits
+after that point is refused without entering the queue and is counted the same
+way. A write that has already started runs to completion, and so do the writes
+that settle an already published chunk and the write that records the outcome
+of a committed SSO access-refresh claim. A rising count means that handlers,
 including their wait in the writer queue, take longer than the request timeout
-before their writes start.
+before their writes start. Long polls (OIDC completion, KEX receive and
+realtime inbox) wait on their own timeouts instead, and their response write
+gets a fresh `io_timeout` allowance.
 
 `foks_requests_total{family,status}` counts written responses by route family
 (the protocol name, such as `KvStore` or `Reg`) and wire status code (`0` for
@@ -256,13 +273,18 @@ are not counted. `foks_reader_pool_exhausted_total` counts requests refused
 with status 1012 because every pooled read connection was in use. The
 `foks_reader_pool_open` gauge is the number of connections that pool holds
 open; it never decreases, because the pool keeps every connection it opens.
-`foks_rate_limited_requests_total` counts only per-source token-bucket and
-handler-permit refusals. `foks_admission_rejected_total{reason}` counts every
-admission refusal by its cause: `connection_rate` and `request_rate` (the
-per-source token buckets), `source_connections` (the per-source connection
-limit), `admission_queue` (a full queue of accepted connections),
-`request_handlers` (every handler permit in use), and `account_realtime_polls`
-(the per-account realtime inbox poll limit).
+`foks_rate_limited_requests_total` counts per-source token-bucket,
+handler-permit, request-memory and KEX receive refusals.
+`foks_admission_rejected_total{reason}` counts every admission refusal by its
+cause: `connection_rate` and `request_rate` (the per-source token buckets),
+`source_connections` (the per-source connection limit), `admission_queue` (a
+full queue of accepted connections), `request_handlers` (every handler permit
+in use), `account_realtime_polls` (the per-account realtime inbox poll limit),
+`kex_receive_polls` (the global KEX receive limit) and `request_memory` (the
+shared request working-memory budget). `foks_kex_active_polls`,
+`foks_kex_admitted_total`, `foks_kex_rejected_total` and
+`foks_kex_completed_total{reason}` (`delivered`, `timeout`, `disconnected`,
+`shutdown`, `failed`) describe KEX receives.
 
 When OIDC is configured and the host has a rollout policy, `/metrics` also
 reports the `foks_oidc_*` rollout gauges: mode, provider block, authorization
@@ -326,6 +348,13 @@ Poll reads therefore wait for one of `maximum_read_connections / 2` permits
 (at least one) before leasing a reader, so that polls never hold more than
 half of the pool and ordinary requests are not refused with status 1012
 because polls hold every reader.
+
+A KEX receive can stay open for up to an hour. At most
+`maximum_kex_receive_polls` receives, capped at half of
+`maximum_active_connections`, are outstanding at once across all
+connections; a receive over that limit is refused at once with status 1012
+and is not queued, so receives cannot hold every connection of the public
+listener.
 
 The public KEX relay holds at most 4,096 pairing packets or 32 MiB of them,
 each for up to two hours, and refuses a send at either bound with status 1012.
@@ -528,7 +557,8 @@ edits or deletion must add transactional invalidation or equivalent fanout.
 
 Defaults are enforced before authoritative KV writes:
 
-- 64 KiB per encoded small node;
+- 64 KiB per encoded small node at the database layer; public small-file RPCs
+  enforce the Go-compatible 2 KiB plaintext plus authenticator boundary;
 - at most 64 dirents per mutation batch and 1,000 entries per list page;
 - 9 MiB per stored encrypted chunk and 512 chunks per upload;
 - the client-compatible 1 GiB cleartext file ceiling, allowing up to just over
@@ -563,23 +593,105 @@ bytes, the ten largest KV namespaces by stored bytes and the ten teams with
 the most stored realtime message bytes, by identifier only. The command reads
 the configuration and the database but not the key, TLS or OIDC files. It
 reads one snapshot over a read-only connection, so it runs while the server
-serves, but it scans every KV and realtime message row. `/metrics` therefore
+serves, but it scans every realtime message row. `/metrics` therefore
 exports only the limits, as `foks_capacity_limit{resource}` with the same
 resource names; alerting can compare
 `foks_capacity_limit{resource="database_bytes"}` with `foks_database_bytes`.
 
-Namespace accounting charges encoded bytes actually stored, including upload
-envelopes and ciphertext duplication. Tombstone/history versions remain
+Namespace accounting charges the inline representation, including upload
+envelopes and ciphertext duplication, even when chunks are stored externally.
+Transactional counters avoid rescanning namespace history for each mutation.
+Tombstone/history versions remain
 charged until a future authenticated compactor can prove they are reclaimable.
 SQLite, filesystem, WAL, backup, and key-directory overhead means operators
 must reserve more disk than the configured database limit.
 
 No throughput number is a product claim yet. The single writer, `FULL`
 synchronous WAL commits, repeated reachable-tree version-vector construction,
-and namespace quota scans are expected to be the first saturation points.
+and whole-database validation on cold startup remain saturation candidates.
 Benchmark reports must state hardware, SQLite settings, dataset shape, p50/p95/
 p99 latency, writer saturation, reader latency, WAL growth, and checkpoint
 cost before quoting capacity.
+
+## External encrypted chunks
+
+Large encrypted file chunks can live outside SQLite without changing go-foks
+RPCs, encryption, padding, exact upload retries, or usage replies. Small-file payloads (the Go-compatible 2 KiB plaintext boundary), directory
+entries, file metadata and authoritative identity state remain in SQLite. Larger
+text notes also use the chunk path. Mixed inline/external rows are supported; enabling a store affects
+new uploads and does not copy existing files during startup.
+
+Add one store table to the installation TOML used by `serve-config`:
+
+```toml
+[chunk_store]
+kind = "s3"
+bucket = "foks-chunks"
+region = "auto" # Use the actual region for AWS S3.
+endpoint = "https://ACCOUNT_ID.r2.cloudflarestorage.com"
+prefix = "tenant-unique-namespace"
+timeout_seconds = 10
+```
+
+Use a distinct, stable prefix per installation. Static credentials use `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and
+optional `AWS_SESSION_TOKEN`; do not put secrets in the TOML. The backend also
+supports its object-store library's environment-configured web identity,
+container credentials and instance-metadata fallback; it does not load general
+AWS shared profiles. Grant object GET and conditional PUT in the chosen prefix. Objects
+must remain immutable and readable. Endpoint HTTPS is mandatory except an
+explicit `allow_http_loopback = true` for literal loopback HTTP test endpoints.
+Conditional creation must be supported; there is no overwrite fallback.
+
+For a local filesystem instead:
+
+```toml
+[chunk_store]
+kind = "filesystem"
+directory = "/srv/foks/chunks"
+```
+
+The filesystem implementation fsyncs objects and directories, rejects symlink
+leaves, and verifies existing objects. It cannot bound a hung filesystem call.
+S3 uses one deadline across each operation, retries and verification reads. That
+deadline alone does not bound the complete RPC: queuing, SQLite and client
+retries also count toward the 15-second hosted target.
+
+Object publication precedes the SQLite commit; authorization, ordering and quota
+are checked again before commit. An interrupted or rejected commit can leave an
+unreferenced object. **There is no object garbage collector in this release.**
+Objects remain after upload cleanup or removal of their SQLite references. Do
+not configure bucket lifecycle deletion. Monitor physical object growth; current
+quota charging does not include orphan objects. History pruning and deletion
+need coordinated writers, reads and backups before they are safe to enable.
+
+To convert existing inline chunks, stop the server and run:
+
+```sh
+foks-server externalize-chunks --config /srv/foks/server.toml
+```
+
+The command takes the installation writer lock and commits each reference only
+after object publication. It is resumable after interruption. It leaves freed
+SQLite pages available for reuse; it does not vacuum or shrink the database.
+Keep the selected store and prefix stable. Startup fails if external references
+exist with no configured store; a wrong/missing object fails on access.
+
+Library and scheduled backups fetch external chunks into the private SQLite
+snapshot before publishing its completeness manifest. Completed backups remain
+self-contained and restore without the original store. Missing/corrupt objects
+fail backup creation. Hydration requires temporary disk and database capacity
+for the original duplicated inline representation and can be slow; it is not a
+15-second failover path. Scheduled shutdown checks cancellation between chunks.
+
+For the standalone `serve` and `backup` commands, `--chunk-store-config PATH`
+accepts a separate TOML file containing the same settings **without** the
+`[chunk_store]` table header. Supply it to `backup` for an external source;
+omitting it fails rather than publishing a backup that depends on the bucket.
+Restore does not need this flag.
+
+Separating chunk storage does not replicate or fence SQLite. Qualify the actual
+object provider and metadata replication/failover deployment together. Local
+mock tests establish API behavior, not S3/R2 durability across an AZ failure.
 
 ## Backup, restore, and integrity
 
@@ -609,11 +721,12 @@ Backup authenticates every encrypted key generation with the root key and
 uses a read-only source connection. Restore accepts only a complete manifest,
 integrity-checked database, and exact declared key set, and requires empty
 destination paths. Both commands open the database with the compiled limits
-unless `--config /var/lib/foks/server.toml` supplies the `[storage]` and
-`[waitlist]` tables; the paths still come from the flags.
+unless `--config /var/lib/foks/server.toml` supplies the `[storage]`,
+`[waitlist]` and `[chunk_capacity]` tables; the paths still come from the
+flags.
 
 Restore and retention validation also accept the same prior schemas as server
-startup (43 through 48, upgraded to 49). They copy the database and any WAL into
+startup (43 through 59, upgraded to 60). They copy the database and any WAL into
 a private temporary directory, apply the normal transactional migrations,
 checkpoint, and validate that copy. Restore installs the migrated database;
 validation never opens or changes the original snapshot in SQLite. Retention

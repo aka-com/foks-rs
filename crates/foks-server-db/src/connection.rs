@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 #[cfg(unix)]
 use std::fs::OpenOptions;
 #[cfg(unix)]
@@ -9,14 +10,43 @@ use rusqlite::{Connection, OpenFlags, Transaction};
 use crate::{schema, Config, Result};
 
 pub struct Database {
+    pub(crate) dependency_schema: crate::ReadDependencySchema,
     pub(crate) connection: Connection,
     pub(crate) config: Config,
     pub(crate) path: PathBuf,
 }
 
 pub struct ReadDatabase {
+    pub(crate) dependency_schema: crate::ReadDependencySchema,
     pub(crate) connection: Connection,
     pub(crate) config: Config,
+}
+
+/// Opens additional readers for one already validated database and configuration.
+///
+/// Construction validates legacy capacity invariants once. Subsequent opens
+/// check file identity and schema, while the writer enforces capacity on every
+/// mutation. The database must not be modified by out-of-band SQL while this
+/// opener is in use; a different configuration requires a new opener.
+#[derive(Clone)]
+pub struct ReadDatabaseOpener {
+    identity: DatabasePathIdentity,
+    config: Config,
+}
+
+impl ReadDatabaseOpener {
+    pub fn new(path: impl AsRef<Path>, config: Config) -> Result<Self> {
+        let identity = DatabasePathIdentity::existing(path.as_ref())?;
+        let database = ReadDatabase::open(identity.path(), config.clone())?;
+        identity.recheck()?;
+        drop(database);
+        Ok(Self { identity, config })
+    }
+
+    pub fn open(&self) -> Result<ReadDatabase> {
+        self.identity.recheck()?;
+        ReadDatabase::open_identity(&self.identity, self.config.clone())
+    }
 }
 
 /// Stable identity for a regular, single-link SQLite database path.
@@ -75,6 +105,33 @@ impl DatabasePathIdentity {
         }
     }
 
+    /// Host-local authority identity. This is not rollback detection or a distributed fence.
+    pub fn authority_identity(&self) -> Result<[u8; 32]> {
+        self.recheck()?;
+        #[cfg(unix)]
+        {
+            use sha2::{Digest as _, Sha256};
+            use std::os::unix::ffi::OsStrExt as _;
+            let path = self.path.as_os_str().as_bytes();
+            if path.len() > 4096 {
+                return Err(crate::Error::Invalid("database authority path length"));
+            }
+            let mut hash = Sha256::new();
+            hash.update(b"foks-local-chunk-authority-v2\0");
+            hash.update((path.len() as u64).to_be_bytes());
+            hash.update(path);
+            hash.update(self.device.to_be_bytes());
+            hash.update(self.inode.to_be_bytes());
+            Ok(hash.finalize().into())
+        }
+        #[cfg(not(unix))]
+        {
+            Err(crate::Error::Invalid(
+                "local collection authority unavailable",
+            ))
+        }
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -108,6 +165,7 @@ impl DatabasePathIdentity {
 /// reader can delay WAL checkpoints.
 #[must_use = "repository reads are pinned only while the snapshot is alive"]
 pub struct ReadSnapshot<'connection> {
+    pub(crate) dependency_schema: &'connection crate::ReadDependencySchema,
     transaction: Transaction<'connection>,
     config: &'connection Config,
 }
@@ -154,7 +212,9 @@ impl Database {
         configure(&connection, &config)?;
         schema::initialize(&mut connection)?;
         crate::kv::validate_kv_tree_capacity(&connection, &config)?;
+        let dependency_schema = crate::read_dependency::verify(&connection)?;
         Ok(Self {
+            dependency_schema,
             connection,
             config,
             path,
@@ -174,7 +234,9 @@ impl Database {
         configure(&connection, &config)?;
         schema::validate_connection(&connection)?;
         crate::kv::validate_kv_tree_capacity(&connection, &config)?;
+        let dependency_schema = crate::read_dependency::verify(&connection)?;
         Ok(Self {
+            dependency_schema,
             connection,
             config,
             path,
@@ -189,6 +251,8 @@ impl Database {
         let connection = Connection::open_with_flags(identity.path(), flags)?;
         identity.recheck()?;
         configure_reader(&connection, &self.config)?;
+        schema::validate_connection(&connection)?;
+        crate::read_dependency::verify(&connection)?;
         Ok(connection)
     }
 
@@ -199,14 +263,14 @@ impl Database {
     pub fn integrity_check(&self) -> Result<bool> {
         let result: String =
             self.connection
-                .pragma_query_value(None, "integrity_check", |row| row.get(0))?;
+                .pragma_query_value(None, "integrity_check", |row| row.budgeted_get(0))?;
         Ok(result == "ok")
     }
 
     pub fn quick_check(&self) -> Result<bool> {
         let result: String = self
             .connection
-            .pragma_query_value(None, "quick_check", |row| row.get(0))?;
+            .pragma_query_value(None, "quick_check", |row| row.budgeted_get(0))?;
         Ok(result == "ok")
     }
 
@@ -216,24 +280,22 @@ impl Database {
 }
 
 impl ReadDatabase {
-    /// Opens a reader after checking the application ID, the schema version
-    /// and that every stored KV tree fits `config`. The KV check reads every
-    /// row of the KV head, node and dirent tables, so its cost grows with the
-    /// stored data. Offline tools and backup and restore verification use this
-    /// constructor.
+    /// Opens a reader after checking the application ID, the schema version,
+    /// the schema contract and that every stored KV tree fits `config`. The KV
+    /// check reads every row of the KV head, node and dirent tables, so its
+    /// cost grows with the stored data. Offline tools and backup and restore
+    /// verification use this constructor; a running server opens its pooled
+    /// and metrics readers through [`ReadDatabaseOpener`], which runs the KV
+    /// check once.
     pub fn open(path: impl AsRef<Path>, config: Config) -> Result<Self> {
-        let database = Self::open_pooled(path, config)?;
+        let identity = DatabasePathIdentity::existing(path.as_ref())?;
+        let database = Self::open_identity(&identity, config)?;
         crate::kv::validate_kv_tree_capacity(&database.connection, &database.config)?;
         Ok(database)
     }
 
-    /// Opens a reader after checking only the application ID and the schema
-    /// version. A running server uses this for its read pools and its metrics
-    /// reader. The server's writer runs the KV capacity check when it opens the
-    /// same file at startup, and repeating that scan for each additional
-    /// connection costs time without adding a check.
-    pub fn open_pooled(path: impl AsRef<Path>, config: Config) -> Result<Self> {
-        let identity = DatabasePathIdentity::existing(path.as_ref())?;
+    fn open_identity(identity: &DatabasePathIdentity, config: Config) -> Result<Self> {
+        identity.recheck()?;
         let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
             | OpenFlags::SQLITE_OPEN_NO_MUTEX
             | OpenFlags::SQLITE_OPEN_NOFOLLOW;
@@ -241,13 +303,18 @@ impl ReadDatabase {
         identity.recheck()?;
         configure_reader(&connection, &config)?;
         schema::validate_connection(&connection)?;
-        Ok(Self { connection, config })
+        let dependency_schema = crate::read_dependency::verify(&connection)?;
+        Ok(Self {
+            connection,
+            config,
+            dependency_schema,
+        })
     }
 
     pub fn integrity_check(&self) -> Result<bool> {
         let result: String =
             self.connection
-                .pragma_query_value(None, "integrity_check", |row| row.get(0))?;
+                .pragma_query_value(None, "integrity_check", |row| row.budgeted_get(0))?;
         Ok(result == "ok")
     }
 
@@ -258,6 +325,7 @@ impl ReadDatabase {
     /// Pins subsequent repository reads to one database state.
     pub fn snapshot(&self) -> Result<ReadSnapshot<'_>> {
         Ok(ReadSnapshot {
+            dependency_schema: &self.dependency_schema,
             transaction: self.connection.unchecked_transaction()?,
             config: &self.config,
         })
@@ -424,9 +492,11 @@ fn configure(connection: &Connection, config: &Config) -> Result<()> {
     connection.pragma_update(None, "synchronous", "FULL")?;
     connection.pragma_update(None, "trusted_schema", false)?;
     connection.pragma_update(None, "temp_store", "MEMORY")?;
-    let page_size: i64 = connection.pragma_query_value(None, "page_size", |row| row.get(0))?;
+    let page_size: i64 =
+        connection.pragma_query_value(None, "page_size", |row| row.budgeted_get(0))?;
     let page_size = u64::try_from(page_size).map_err(|_| crate::Error::IntegerRange)?;
-    let page_count: i64 = connection.pragma_query_value(None, "page_count", |row| row.get(0))?;
+    let page_count: i64 =
+        connection.pragma_query_value(None, "page_count", |row| row.budgeted_get(0))?;
     let current_bytes = u64::try_from(page_count)
         .map_err(|_| crate::Error::IntegerRange)?
         .checked_mul(page_size)
@@ -458,16 +528,21 @@ fn configure_reader(connection: &Connection, config: &Config) -> Result<()> {
 
 fn pragmas(connection: &Connection) -> Result<Pragmas> {
     let read_count = |name| -> Result<u64> {
-        let value: i64 = connection.pragma_query_value(Some("main"), name, |row| row.get(0))?;
+        let value: i64 =
+            connection.pragma_query_value(Some("main"), name, |row| row.budgeted_get(0))?;
         u64::try_from(value).map_err(|_| crate::Error::IntegerRange)
     };
     Ok(Pragmas {
-        foreign_keys: connection.pragma_query_value(None, "foreign_keys", |row| row.get(0))?,
-        journal_mode: connection.pragma_query_value(None, "journal_mode", |row| row.get(0))?,
-        synchronous: connection.pragma_query_value(None, "synchronous", |row| row.get(0))?,
+        foreign_keys: connection
+            .pragma_query_value(None, "foreign_keys", |row| row.budgeted_get(0))?,
+        journal_mode: connection
+            .pragma_query_value(None, "journal_mode", |row| row.budgeted_get(0))?,
+        synchronous: connection
+            .pragma_query_value(None, "synchronous", |row| row.budgeted_get(0))?,
         busy_timeout_millis: read_count("busy_timeout")?,
         wal_autocheckpoint_pages: read_count("wal_autocheckpoint")?,
         wal_reuse_limit_bytes: read_count("journal_size_limit")?,
-        trusted_schema: connection.pragma_query_value(None, "trusted_schema", |row| row.get(0))?,
+        trusted_schema: connection
+            .pragma_query_value(None, "trusted_schema", |row| row.budgeted_get(0))?,
     })
 }

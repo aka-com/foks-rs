@@ -1,5 +1,6 @@
 //! Immutable message append, exact send confirmations, and bounded history queries.
 use super::*;
+use crate::allocation::RowAllocationExt as _;
 
 impl Database {
     pub fn rt_send(
@@ -28,7 +29,7 @@ impl Database {
             .query_row(
                 "SELECT channel_id FROM rt_channels WHERE short_id=?1",
                 params![send.channel.get()],
-                |r| r.get(0),
+                |r| r.budgeted_get(0),
             )
             .optional()?
             .ok_or(Error::NotFound("realtime channel"))?;
@@ -48,7 +49,7 @@ impl Database {
         let mut identity = send.clone();
         identity.expected_previous_sequence = 0;
         let envelope = proto(identity.encoded())?;
-        let existing=tx.query_row("SELECT channel_id,sender,envelope,sequence,insert_time FROM rt_messages WHERE message_id=?1",params![send.metadata.id.0.as_slice()],|r|Ok((r.get::<_,Vec<u8>>(0)?,r.get::<_,Vec<u8>>(1)?,r.get::<_,Vec<u8>>(2)?,r.get::<_,i64>(3)?,r.get::<_,i64>(4)?))).optional()?;
+        let existing=tx.query_row("SELECT channel_id,sender,envelope,sequence,insert_time FROM rt_messages WHERE message_id=?1",params![send.metadata.id.0.as_slice()],|r|Ok((r.budgeted_get::<_,Vec<u8>>(0)?,r.budgeted_get::<_,Vec<u8>>(1)?,r.budgeted_get::<_,Vec<u8>>(2)?,r.budgeted_get::<_,i64>(3)?,r.budgeted_get::<_,i64>(4)?))).optional()?;
         if let Some((channel, sender, old, sequence, insert_time)) = existing {
             if channel != id || sender != actor.uid || old != envelope {
                 return Err(Error::OperationConflict);
@@ -65,7 +66,7 @@ impl Database {
         let last: i64 = tx.query_row(
             "SELECT last_sequence FROM rt_channels WHERE channel_id=?1",
             params![id],
-            |r| r.get(0),
+            |r| r.budgeted_get(0),
         )?;
         if send.expected_previous_sequence != 0
             && sql_integer(send.expected_previous_sequence)? != last
@@ -77,7 +78,7 @@ impl Database {
                 .query_row(
                     "SELECT message_id FROM rt_messages WHERE channel_id=?1 AND sequence=?2",
                     params![id, sql_integer(send.metadata.previous_sequence)?],
-                    |r| r.get(0),
+                    |r| r.budgeted_get(0),
                 )
                 .optional()?;
             if previous.as_deref() != Some(send.metadata.previous_id.0.as_slice()) {
@@ -201,7 +202,7 @@ impl ReadSnapshot<'_> {
                 .query_row(
                     "SELECT exact_message FROM rt_messages WHERE channel_id=?1 AND sequence=?2",
                     params![q.channel.0.as_slice(), sql_integer(seq)?],
-                    |r| r.get(0),
+                    |r| r.budgeted_get(0),
                 )
                 .optional()?;
             if let Some(bytes) = bytes {
@@ -244,7 +245,7 @@ fn load_messages(
     let sql=format!("SELECT exact_message FROM rt_messages WHERE channel_id=?1 AND sequence {operator} ?2 AND sequence<=?3 ORDER BY sequence {direction} LIMIT ?4");
     let mut query = c.prepare(&sql)?;
     let rows = query.query_map(params![id.as_slice(), low, high, limit as i64], |r| {
-        r.get::<_, Vec<u8>>(0)
+        r.budgeted_get::<_, Vec<u8>>(0)
     })?;
     let mut out = Vec::new();
     for row in rows {

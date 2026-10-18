@@ -128,21 +128,26 @@ reads the clock inside the closure, not at enqueue time, so timestamps stay
 monotone with the total order the writer imposes. A test pins this: a job
 queued behind a slow one records a time after the slow one finished.
 
-**A job whose request has timed out is skipped.** An RPC session waits at
-most the request execution timeout (30 s) for its handler, then closes the
-connection without a response, and the client treats the outcome as
-ambiguous. The handler's writer handle carries that deadline. If the writer
-reaches a queued job at or after it, the job is answered with
-`DeadlineExceeded` without opening a transaction and is counted in
+**A job whose request has timed out is skipped.** Each request has one
+deadline, the request timeout (15 s) after the first byte of its frame. Body
+reading, the handler, reader checkout, queued writes, external chunk transfers
+and the response write all consume it. The session stops waiting for the
+handler at the deadline and closes the connection without a response, and the
+client treats the outcome as ambiguous. The handler runs inside a thread-local
+deadline scope, and `WriterHandle::call` records the scope's deadline with the
+job. If the writer reaches a queued job at or after it, the job is answered
+with `DeadlineExceeded` without opening a transaction and is counted in
 `foks_writer_expired_total`. A job submitted after the deadline is refused
 the same way before it enters the queue, so it does not take a queue slot from
 a request that is still waiting. The client already has to allow for the write
 having happened or not, so skipping a job that never started is safe, and
 under overload it keeps the writer on requests that are still waiting. A job
 that has started runs to completion; SQLite work is not cancelled midway.
-The SSO access refresh that request authorization can trigger carries no
-deadline: it commits a claim, calls the provider and must then commit the
-rotated refresh token.
+Writes that complete an already committed step run under an empty deadline
+scope: the settlement of a published chunk object, and the part of the SSO
+access refresh that request authorization can trigger after its claim has
+committed, which calls the provider and must then commit the rotated refresh
+token.
 
 Queue wait and execution time are measured per job into counters that the
 metrics endpoint exposes, so an operator can see the queue filling before
@@ -171,13 +176,13 @@ registry of inodes.
 
 Network reads go through read-only connections opened with
 `SQLITE_OPEN_READ_ONLY | NO_MUTEX | NOFOLLOW`. Each validates the
-application ID and schema version before use. Pooled connections, the
-administration readers and the metrics reader use
-`ReadDatabase::open_pooled`, which skips the KV-tree capacity check that
-`ReadDatabase::open` runs. That check reads every row of the KV head, node
-and dirent tables; the writer already ran it when it opened the database
-at startup. Offline commands and backup and restore verification keep the
-full check. The pool is a vector of idle connections behind a mutex; it
+application ID, the schema version and the schema contract before use.
+`ReadDatabase::open` also runs the KV-tree capacity check, which reads the
+stored synchronization heads of every namespace. The pool opens its
+connections through a `ReadDatabaseOpener`, which runs that check once when
+the pool is created; later connections recheck the file identity, the schema
+version and the contract. Only the writer may modify the database while an
+opener is in use. The pool is a vector of idle connections behind a mutex; it
 opens connections lazily up to a maximum (default 32) and, when exhausted,
 returns `Error::ReaderPool` rather than waiting. The request is answered
 with status 1012 and counted in `foks_reader_pool_exhausted_total`, apart
@@ -207,9 +212,11 @@ mechanism differs by resource.
 | Request handlers (shared) | 64 blocking permits | `try_acquire_owned` fails; status 1012 |
 | Realtime inbox polls | 8 per account; 256 in total (the authenticated listener's sessions) | status 1012 |
 | Realtime poll state reads | 16 readers (half the reader pool) | reads wait for a permit |
-| Request memory | 64 MiB, 2 × frame length reserved per frame | frames wait for permits |
+| KEX receives | 32, at most half the active sessions | status 1012, not queued |
+| Request memory | 64 MiB, 2 × frame length reserved per frame; frames up to 4 KiB use a separate 1 MiB budget | frames wait for permits |
+| Working and response memory | 512 MiB and 128 MiB, charged by the codec, SQL results and chunk transfers | status 1012, or the connection closes once a handler may have written |
 | Frame size | 16 MiB | rejected before allocation |
-| Request execution timeout | 30 s | connection closed; a write still queued is skipped |
+| Request deadline | 15 s from the first frame byte | connection closed; a write still queued is skipped |
 | I/O timeout | 15 s | connection closed |
 
 Handlers run on blocking threads under a semaphore, and they acquire their
@@ -272,15 +279,21 @@ take every poll slot from other users. Every refusal is counted in
 SQLite reserves two integers in the database header for applications: the
 *application ID* and the *user version*. The server writes
 `0x464f4b53` (the ASCII bytes "FOKS") as the application ID and its schema
-version, currently 49, as the user version. Both are checked by every
+version, currently 60, as the user version. Both are checked by every
 connection before use: a file with the wrong application ID is not a FOKS
 database. Readers require the current schema; the writer accepts explicitly
 supported prior schemas and migrates them before use.
 
-The schema itself is one concatenated string of 23 `.sql` files. A fresh
-file (both pragmas zero) receives the whole schema inside one `BEGIN
-IMMEDIATE` transaction, with the version stamped last. A file at version
-43 through 48 is upgraded in one transaction as well. Two properties make
+The base schema is one concatenated string of 25 `.sql` files. A fresh
+file (both pragmas zero) receives it inside one `BEGIN IMMEDIATE`
+transaction, followed by the steps that later versions added (the chunk
+incarnation rebuild, chunk authority and publication provenance, the current
+KV entry and historical name indexes, the public usage counters, the unique
+waitlist address index with its entry count, and the read-dependency
+coordinate), with the version stamped last. An upgrade runs the same steps. A
+file at version 43 through 59 is upgraded in one transaction as well, and every
+connection then compares the complete `sqlite_schema` with the contract
+compiled from a fresh reference schema. Two properties make
 that upgrade safe:
 
 - The version is *re-read under the write lock* before acting. Another

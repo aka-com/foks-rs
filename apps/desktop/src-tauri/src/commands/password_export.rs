@@ -15,15 +15,15 @@
 //! small file under `/logins/`. Documents, files and Trash are not exported.
 
 use crate::agent::AgentError;
+use crate::applock::UnlockedInterval;
 use crate::commands::context::AppState;
 use crate::commands::trash::{decode_original_path, in_trash};
 use crate::commands::validation::{invalid_request, require_main_window};
-use crate::commands::vault::read_file_content;
+use crate::commands::vault::{read_file_content, select_download_destination};
 use foks_agent_proto::KvEntryShape;
 use foks_desktop::{CatalogItem, CatalogStoreReadState};
 use serde::Serialize;
 use std::path::Path;
-use tauri::State;
 use tauri_plugin_dialog::DialogExt as _;
 use zeroize::Zeroizing;
 
@@ -175,13 +175,14 @@ pub(super) fn export_record(path: &str, content: &[u8]) -> Option<Zeroizing<Stri
     ]))
 }
 
-/// Reads each of `items` and writes its record to `sink` after the header,
-/// checking `permitted` before each read. Returns how many were written and
+/// Reads each of `items` inside `interval` and before `deadline`, and writes
+/// its record to `sink` after the header. Returns how many were written and
 /// how many were left out because their text is not UTF-8.
 pub(super) fn write_export(
     transport: &dyn foks_desktop::AgentTransport,
     items: &[CatalogItem],
-    permitted: &dyn Fn() -> Result<(), AgentError>,
+    interval: &UnlockedInterval,
+    deadline: &foks_local_deadline::Deadline,
     sink: &mut dyn std::io::Write,
 ) -> Result<(usize, usize), AgentError> {
     let write_error = |error: std::io::Error| {
@@ -196,9 +197,8 @@ pub(super) fn write_export(
         .map_err(write_error)?;
     let (mut exported, mut skipped) = (0, 0);
     for item in items {
-        permitted()?;
         let mut content = Zeroizing::new(Vec::new());
-        read_file_content(transport, item, &mut |piece| {
+        read_file_content(transport, item, interval, deadline, &mut |piece| {
             content.extend_from_slice(piece);
             Ok(())
         })?;
@@ -243,11 +243,13 @@ fn store_logins(state: &AppState, id: &str) -> Result<Vec<CatalogItem>, AgentErr
 }
 
 /// Writes the export to `destination` through a temporary file beside it,
-/// which replaces the destination only once every login is written.
+/// which replaces the destination only once every login is written. Only the
+/// replacement runs inside the interval's publication gate.
 fn export_to_path(
     transport: &dyn foks_desktop::AgentTransport,
     items: &[CatalogItem],
-    permitted: &dyn Fn() -> Result<(), AgentError>,
+    interval: &UnlockedInterval,
+    deadline: &foks_local_deadline::Deadline,
     destination: &Path,
 ) -> Result<(usize, usize), AgentError> {
     let write_error = |error: std::io::Error| {
@@ -265,11 +267,21 @@ fn export_to_path(
         )
     })?;
     let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(write_error)?;
-    let counts = write_export(transport, items, permitted, temporary.as_file_mut())?;
+    let counts = write_export(
+        transport,
+        items,
+        interval,
+        deadline,
+        temporary.as_file_mut(),
+    )?;
     temporary.as_file().sync_all().map_err(write_error)?;
-    temporary
-        .persist(destination)
-        .map_err(|error| write_error(error.error))?;
+    // NamedTempFile removes the unpublished plaintext on every rejected path.
+    interval.publish(|| {
+        deadline.check().map_err(super::deadline::clock_error)?;
+        temporary
+            .persist(destination)
+            .map_err(|error| write_error(error.error))
+    })?;
     Ok(counts)
 }
 
@@ -279,27 +291,30 @@ fn export_to_path(
 pub async fn export_logins(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
 ) -> Result<LoginExportDto, AgentError> {
-    let unlocked = crate::applock::unlocked_generation(&app)?;
+    let interval = crate::applock::unlocked_interval(&app)?;
     require_main_window(&webview)?;
     let logins = store_logins(&state, &store_id)?;
     if logins.is_empty() {
         return Err(invalid_request("This vault has no passwords to export."));
     }
     let picker_app = app.clone();
+    let picker_interval = interval.clone();
     let destination = tauri::async_runtime::spawn_blocking(move || {
-        picker_app
-            .dialog()
-            .file()
-            .set_title("Save passwords as plain text")
-            .set_file_name("passwords.csv")
-            .add_filter("CSV", &["csv"])
-            .blocking_save_file()
+        select_download_destination(&picker_interval, || {
+            picker_app
+                .dialog()
+                .file()
+                .set_title("Save passwords as plain text")
+                .set_file_name("passwords.csv")
+                .add_filter("CSV", &["csv"])
+                .blocking_save_file()
+        })
     })
     .await
-    .map_err(|error| AgentError::unknown(format!("Save dialog failed: {error}")))?;
+    .map_err(|error| AgentError::unknown(format!("Save dialog failed: {error}")))??;
     let Some(destination) = destination else {
         return Ok(LoginExportDto {
             saved: false,
@@ -310,23 +325,26 @@ pub async fn export_logins(
     let destination = destination
         .into_path()
         .map_err(|error| AgentError::new("export-write", error.to_string(), false))?;
-    let transport = state.agent.transport();
-    let (exported, skipped) = tauri::async_runtime::spawn_blocking(move || {
-        let permitted = || {
-            if crate::applock::unlocked_generation(&app)? == unlocked {
-                Ok(())
-            } else {
-                Err(AgentError::new(
-                    "app-locked",
-                    "The application locked before the export finished.",
-                    false,
-                ))
-            }
-        };
-        export_to_path(transport.as_ref(), &logins, &permitted, &destination)
-    })
-    .await
-    .map_err(|error| AgentError::unknown(format!("The export stopped: {error}")))??;
+    // The dialog's wait is not part of the export's budget.
+    let state = state.begin_operation(foks_agent_proto::DeadlineClass::Bulk)?;
+    let transport = state.transport()?;
+    let deadline = state.deadline()?.clone();
+    let worker_deadline = deadline.clone();
+    let (exported, skipped) = super::deadline::run(
+        &deadline,
+        false,
+        move || {
+            export_to_path(
+                transport.as_ref(),
+                &logins,
+                &interval,
+                &worker_deadline,
+                &destination,
+            )
+        },
+        |_| {},
+    )
+    .await?;
     Ok(LoginExportDto {
         saved: true,
         exported,

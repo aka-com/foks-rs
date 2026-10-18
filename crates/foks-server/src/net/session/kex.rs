@@ -18,6 +18,21 @@ const MAX_SOURCE_BYTES: usize = MAX_RELAY_BYTES / 16;
 const MESSAGE_LIFETIME: Duration = Duration::from_secs(2 * 60 * 60);
 pub(super) const MAX_BLOCKING_WAIT: Duration = Duration::from_secs(60 * 60);
 
+#[derive(Debug)]
+pub(crate) struct ReceiveError {
+    pub(crate) status: RpcStatus,
+    pub(crate) completion: crate::metrics::kex::Completion,
+}
+
+impl From<RpcStatus> for ReceiveError {
+    fn from(status: RpcStatus) -> Self {
+        Self {
+            status,
+            completion: crate::metrics::kex::Completion::Failed,
+        }
+    }
+}
+
 struct Queued {
     inserted: Instant,
     encoded_bytes: usize,
@@ -102,7 +117,7 @@ impl Relay {
         Ok(())
     }
 
-    pub(super) async fn receive(&self, encoded: &[u8]) -> Result<KexWrapperMessage, RpcStatus> {
+    pub(super) async fn receive(&self, encoded: &[u8]) -> Result<KexWrapperMessage, ReceiveError> {
         let argument = KexReceiveArgument::decode(encoded).map_err(bad_arguments)?;
         require_device(&argument.receiver)?;
         let requested_wait = Duration::from_millis(argument.poll_wait_milliseconds);
@@ -125,17 +140,31 @@ impl Relay {
                             && queued.message.sequence == argument.sequence
                             && queued.message.sender != argument.receiver
                     })
-                    .map(|queued| queued.message.clone())
+                    .map(|queued| {
+                        if crate::net::memory::current().is_some_and(|memory| {
+                            !memory.admit_working(
+                                queued.encoded_bytes,
+                                crate::net::memory::Workload::Ordinary,
+                            )
+                        }) {
+                            return Err(RpcStatus::RateLimited);
+                        }
+                        Ok(queued.message.clone())
+                    })
+                    .transpose()?
             };
             if let Some(message) = message {
                 return Ok(message);
             }
             if requested_wait.is_zero() {
-                return Err(RpcStatus::KexBadSecret);
+                return Err(RpcStatus::KexBadSecret.into());
             }
             let remaining = deadline.saturating_duration_since(now);
             if remaining.is_zero() {
-                return Err(RpcStatus::TransactionRetry);
+                return Err(ReceiveError {
+                    status: RpcStatus::TransactionRetry,
+                    completion: crate::metrics::kex::Completion::TimedOut,
+                });
             }
             // Go checks the durable queue in five-second slices. Keep the
             // public long-poll request alive while yielding the Tokio worker,

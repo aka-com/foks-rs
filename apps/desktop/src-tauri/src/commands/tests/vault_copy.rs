@@ -97,7 +97,13 @@ fn a_large_file_is_read_whole_before_one_create_upload_into_the_target() {
     let item = download_item(total);
     let transport = CopyTransport::new(total);
 
-    let source = read_copy_source(&transport, &item).unwrap();
+    let source = read_copy_source(
+        &transport,
+        &item,
+        &crate::applock::AppLock::unlocked_for_test().interval_for_test(),
+        &deadline(),
+    )
+    .unwrap();
     assert!(matches!(source, CopySource::Spooled(_)));
     write_copy(&transport, source, &team_target("/shared/large.bin")).unwrap();
 
@@ -132,7 +138,13 @@ fn a_secret_is_created_inline_with_the_target_roles_and_a_create_precondition() 
     let transport = ReadTransport {
         calls: Mutex::new(Vec::new()),
     };
-    let source = read_copy_source(&transport, &item).unwrap();
+    let source = read_copy_source(
+        &transport,
+        &item,
+        &crate::applock::AppLock::unlocked_for_test().interval_for_test(),
+        &deadline(),
+    )
+    .unwrap();
     assert_eq!(transport.calls.lock().unwrap().len(), 1);
 
     let writes = CopyTransport::new(0);
@@ -161,7 +173,14 @@ fn folders_and_links_are_refused_before_any_read() {
         let transport = ReadTransport {
             calls: Mutex::new(Vec::new()),
         };
-        let error = read_copy_source(&transport, &item).err().unwrap();
+        let error = read_copy_source(
+            &transport,
+            &item,
+            &crate::applock::AppLock::unlocked_for_test().interval_for_test(),
+            &deadline(),
+        )
+        .err()
+        .unwrap();
         assert_eq!(error.code, "invalid-request", "{node_type}");
         assert!(transport.calls.lock().unwrap().is_empty(), "{node_type}");
     }
@@ -356,4 +375,11 @@ fn the_target_is_checked_before_the_source_is_read() {
             .unwrap();
         assert_eq!(error.code, "invalid-request", "{store} {path}");
     }
+}
+
+fn deadline() -> foks_local_deadline::Deadline {
+    foks_local_deadline::Deadline::capture(
+        std::time::Instant::now() + std::time::Duration::from_secs(300),
+    )
+    .unwrap()
 }

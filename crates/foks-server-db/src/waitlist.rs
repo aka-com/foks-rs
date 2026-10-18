@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, Connection, OptionalExtension as _, TransactionBehavior};
 
 use crate::error::unsigned;
@@ -46,7 +47,7 @@ impl Database {
         let count: i64 = transaction.query_row(
             "SELECT entries FROM waitlist_count WHERE singleton = 0",
             [],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         if count >= maximum {
             return Err(Error::Capacity("waitlist"));
@@ -110,8 +111,8 @@ fn waitlist_entries(connection: &Connection) -> Result<Vec<WaitlistEntry>> {
     let rows = statement.query_map([], |row| {
         Ok((
             row.get::<_, Vec<u8>>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, i64>(2)?,
+            row.budgeted_get::<_, String>(1)?,
+            row.budgeted_get::<_, i64>(2)?,
         ))
     })?;
     rows.map(|row| {

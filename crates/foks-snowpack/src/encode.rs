@@ -3,8 +3,10 @@ use zeroize::Zeroizing;
 use crate::{Error, ErrorKind, PathSegment, Value, ValueRef, MAX_DEPTH};
 
 pub fn encode(value: &Value) -> Result<Vec<u8>, Error> {
+    let capacity = owned_capacity(value, 0)?;
+    crate::reserve_allocation(capacity.saturating_add(4096))?;
     let mut encoder = Encoder {
-        output: Zeroizing::new(Vec::new()),
+        output: Zeroizing::new(Vec::with_capacity(capacity)),
         path: Vec::new(),
     };
     encoder.value(value)?;
@@ -19,6 +21,7 @@ pub fn encode_ref(value: &ValueRef<'_>) -> Result<Vec<u8>, Error> {
     // Reserve an upper bound before copying sensitive fields. Growing a Vec
     // after a plaintext write could free an unerased previous allocation.
     let capacity = encoding_capacity(value, 0)?;
+    crate::reserve_allocation(capacity.saturating_add(4096))?;
     let mut encoder = Encoder {
         output: Zeroizing::new(Vec::with_capacity(capacity)),
         path: Vec::new(),

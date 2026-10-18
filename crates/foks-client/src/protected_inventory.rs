@@ -19,6 +19,8 @@ pub enum ProtectedRecordFamily {
     TeamMetadata,
     RemoteAddition,
     InvitationAck,
+    UploadManifest,
+    UploadChunk(u32),
 }
 /// A key constructor carries all scope required by its family, so callers cannot
 /// accidentally derive a chat key from an operation ID alone.
@@ -31,11 +33,20 @@ pub enum ProtectedRecordKey<'a> {
     TeamMetadata(&'a [u8; 16]),
     RemoteAddition(&'a [u8; 16]),
     InvitationAck(&'a [u8; 16]),
+    UploadManifest(&'a [u8; 16]),
+    UploadChunk(&'a [u8; 16], u32),
 }
 impl ProtectedRecordKey<'_> {
     pub fn encoded(self) -> Vec<u8> {
         match self {
             Self::Mutation(id) => id.to_vec(),
+            Self::UploadManifest(id) => [b"foks-upload-manifest-v1:".as_slice(), id].concat(),
+            Self::UploadChunk(id, sequence) => [
+                b"foks-upload-chunk-v1:".as_slice(),
+                id,
+                &sequence.to_be_bytes(),
+            ]
+            .concat(),
             Self::Sso(id, stage) => [b"foks-client-sso-v1".as_slice(), id, &[stage]].concat(),
             Self::TeamRekey(id) => [b"team-member-key-refresh-request-v1:".as_slice(), id].concat(),
             Self::TeamRotation(id) => [b"team-rotation-request-v1:".as_slice(), id].concat(),
@@ -77,6 +88,7 @@ impl ProtectedRecordDescriptor {
     /// Existing terminal bytes still require typed validation before transfer.
     pub fn exportable(&self) -> bool {
         match &self.owner {
+            ProtectedRecordOwner::Upload(op) => op.state.terminal(),
             ProtectedRecordOwner::Mutation(op) => op.state.is_terminal(),
             ProtectedRecordOwner::Chat(op) => op.state.is_terminal(),
             ProtectedRecordOwner::Sso(flow) => matches!(
@@ -100,6 +112,9 @@ impl ProtectedRecordDescriptor {
     /// AEAD authentication is additionally performed by the encrypted store.
     pub fn validate_payload(&self, bytes: &[u8]) -> crate::Result<()> {
         match (&self.owner, self.family) {
+            (ProtectedRecordOwner::Upload(op), family) => {
+                crate::kv::uploads::validate_inventory(op, family, bytes)
+            }
             (ProtectedRecordOwner::Mutation(op), ProtectedRecordFamily::Mutation) => {
                 crate::mutation::validate_protected_request(op, bytes)
             }
@@ -129,7 +144,7 @@ impl ProtectedRecordDescriptor {
     }
 }
 
-/// Complete authority is available only after all four owner tables are exhausted.
+/// Complete authority is available only after all owner tables are exhausted.
 /// Saturation fails closed rather than treating a truncated set as authoritative.
 #[derive(Default)]
 pub struct ProtectedRecordInventory {
@@ -225,6 +240,49 @@ fn descriptors(owner: ProtectedRecordOwner) -> Vec<ProtectedRecordDescriptor> {
     use ProtectedRecordKey as K;
     let mut keys = Vec::with_capacity(4);
     match &owner {
+        ProtectedRecordOwner::Upload(op) => {
+            let presence = if op.state.terminal() {
+                TerminalCleanup
+            } else {
+                Required
+            };
+            let manifest_presence = if matches!(
+                op.state,
+                foks_client_db::UploadState::AwaitingSource
+                    | foks_client_db::UploadState::Preparing
+                    | foks_client_db::UploadState::NeedsSource
+            ) {
+                Optional
+            } else {
+                presence
+            };
+            keys.push((
+                K::UploadManifest(&op.id).encoded(),
+                F::UploadManifest,
+                manifest_presence,
+            ));
+            for chunk in &op.chunks {
+                keys.push((
+                    K::UploadChunk(&op.id, chunk.sequence).encoded(),
+                    F::UploadChunk(chunk.sequence),
+                    presence,
+                ));
+            }
+            if (op.state.terminal()
+                || matches!(
+                    op.state,
+                    foks_client_db::UploadState::Preparing
+                        | foks_client_db::UploadState::NeedsSource
+                ))
+                && op.chunk_count < 256
+            {
+                keys.push((
+                    K::UploadChunk(&op.id, op.chunk_count).encoded(),
+                    F::UploadChunk(op.chunk_count),
+                    Optional,
+                ));
+            }
+        }
         ProtectedRecordOwner::Mutation(op) => {
             let presence = if op.state.is_terminal() {
                 TerminalCleanup
@@ -290,7 +348,25 @@ fn descriptors(owner: ProtectedRecordOwner) -> Vec<ProtectedRecordDescriptor> {
             key,
             family,
             presence,
-            owner: owner.clone(),
+            owner: match &owner {
+                ProtectedRecordOwner::Upload(op) => {
+                    // Each descriptor needs only its own chunk binding. Avoid copying
+                    // a 256-row manifest into every descriptor's retained owner.
+                    let mut binding = op.clone();
+                    binding.chunks = match family {
+                        F::UploadChunk(sequence) => op
+                            .chunks
+                            .iter()
+                            .find(|c| c.sequence == sequence)
+                            .cloned()
+                            .into_iter()
+                            .collect(),
+                        _ => Vec::new(),
+                    };
+                    ProtectedRecordOwner::Upload(binding)
+                }
+                _ => owner.clone(),
+            },
         })
         .collect()
 }

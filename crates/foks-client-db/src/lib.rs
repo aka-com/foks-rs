@@ -7,6 +7,8 @@
 
 #![forbid(unsafe_code)]
 
+pub use foks_proto::UploadHandle;
+pub use repositories::uploads::*;
 mod chat_limits;
 pub use chat_limits::ChatLimits;
 mod merkle_checkpoint;
@@ -638,6 +640,27 @@ pub enum Error {
     #[error("adapter cleanup is deferred while protected material or child evidence remains")]
     AdapterCleanupDeferred,
 
+    #[error("upload handle is bound to different inputs or authority")]
+    UploadIdentityConflict,
+    #[error("legacy uploads may only recover existing prepared work or cancel")]
+    UploadLegacyReadOnly,
+    #[error("upload handle belongs to a different profile generation")]
+    UploadGenerationMismatch,
+    #[error("upload handle expired; a new explicit write requires a new handle")]
+    UploadExpired,
+    #[error("upload handle is too far in the future")]
+    UploadFutureHandle,
+    #[error("upload clock is untrusted; re-anchor it before new writes")]
+    UploadClockUntrusted,
+    #[error("upload pending capacity is full; recover existing work first")]
+    UploadPendingFull,
+    #[error("upload receipt capacity is full; retained evidence cannot be discarded")]
+    UploadRetentionFull,
+    #[error("upload spool capacity is full; complete protected cleanup first")]
+    UploadSpoolFull,
+    #[error("upload cleanup is deferred while protected material or dependencies remain")]
+    UploadCleanupDeferred,
+
     #[error("OIDC flow state: {0}")]
     SsoState(&'static str),
     #[error("chat state conflict: {0}")]
@@ -814,6 +837,9 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
         getrandom::fill(&mut write_token).map_err(|_| Error::Randomness)?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         transaction.execute_batch(SCHEMA)?;
+        transaction.execute_batch(repositories::uploads::SCHEMA)?;
+        repositories::uploads::migrate42(&transaction)?;
+        add_clock_boot_ids(&transaction)?;
         transaction.execute(
             "INSERT INTO hard_state_metadata
                  (singleton, database_id, hard_state_revision, write_token)
@@ -826,32 +852,74 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
         transaction.commit()?;
         return Ok(());
     };
-    // Neither migration path compares the migrated sqlite_schema with a fresh
+    // No migration step compares the migrated sqlite_schema with a fresh
     // database before setting user_version; inspect_existing does, and
     // migration_tests compares every supported predecessor. A check here
     // would refuse to open a field database whose schema differs from
     // INITIAL in a way the store does not depend on, which today fails only
     // at snapshot inspection.
+    //
+    // Each step migrates one version in its own IMMEDIATE transaction and
+    // rereads user_version inside it, since another opener may have migrated
+    // while this connection waited for the writer; the ladder then continues
+    // from the version found.
     if version == 38 {
         merkle_checkpoint::migrate(connection)?;
-        return Ok(());
+        return initialize_or_verify(connection);
     }
-    // Versions 39 and 40 differ from the current schema only in
-    // kv_adapter_clocks: version 40 renamed admission_floor (which version 38
-    // and 39 databases may carry) and version 41 added boot_id. Neither step
-    // changes a stored value, so both keep hard_state_revision and
-    // write_token, and the keyring rollback checkpoint still matches.
-    if version == 39 || version == 40 {
+    // Version 40 renamed kv_adapter_clocks.admission_floor, which version 38
+    // and 39 databases may carry. The rename changes no stored value, so it
+    // keeps hard_state_revision and write_token.
+    if version == 39 {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let version: u32 =
             transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if version == 39 || version == 40 {
+        if version == 39 {
             rename_adapter_admission_floor(&transaction)?;
-            add_adapter_boot_id(&transaction)?;
-            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            transaction.pragma_update(None, "user_version", 40)?;
         }
         transaction.commit()?;
-        return Ok(());
+        return initialize_or_verify(connection);
+    }
+    if version == 40 {
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if current == 40 {
+            tx.execute_batch(repositories::uploads::SCHEMA)?;
+            for table in ["kv_uploads", "kv_upload_chunks", "kv_upload_limits"] {
+                install_table_revision_triggers(&tx, table)?;
+            }
+            tx.pragma_update(None, "user_version", 41)?;
+        }
+        tx.commit()?;
+        return initialize_or_verify(connection);
+    }
+    if version == 41 {
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if current == 41 {
+            repositories::uploads::migrate42(&tx)?;
+            for table in repositories::uploads::TABLES42 {
+                install_table_revision_triggers(&tx, table)?;
+            }
+            tx.execute("UPDATE hard_state_metadata SET hard_state_revision=hard_state_revision+1,write_token=randomblob(16) WHERE singleton=1",[])?;
+            tx.pragma_update(None, "user_version", 42)?;
+        }
+        tx.commit()?;
+        return initialize_or_verify(connection);
+    }
+    // Version 43 adds boot_id to both receipt clock tables. Adding a nullable
+    // column changes no stored value, so the step keeps hard_state_revision
+    // and write_token, and the keyring rollback checkpoint still matches.
+    if version == 42 {
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if current == 42 {
+            add_clock_boot_ids(&tx)?;
+            tx.pragma_update(None, "user_version", 43)?;
+        }
+        tx.commit()?;
+        return initialize_or_verify(connection);
     }
     if version != SCHEMA_VERSION {
         return Err(Error::UnsupportedSchema {
@@ -882,21 +950,25 @@ fn rename_adapter_admission_floor(transaction: &Transaction<'_>) -> Result<()> {
     Ok(())
 }
 
-/// Version 41 records the boot identity of the adapter clock anchor. Existing
-/// rows keep NULL, so their next restart applies the restart-gap rule once.
-fn add_adapter_boot_id(transaction: &Transaction<'_>) -> Result<()> {
-    let has_boot_id: bool = transaction.query_row(
-        "SELECT EXISTS(
-            SELECT 1 FROM pragma_table_info('kv_adapter_clocks') WHERE name='boot_id'
-        )",
-        [],
-        |row| row.get(0),
-    )?;
-    if !has_boot_id {
-        transaction.execute_batch(
-            "ALTER TABLE kv_adapter_clocks
-             ADD COLUMN boot_id BLOB CHECK(boot_id IS NULL OR length(boot_id)=16);",
+/// Version 43 records the boot identity of each receipt clock anchor, in
+/// kv_adapter_clocks and kv_upload_clocks. Existing rows keep NULL, so their
+/// next restart applies the restart-gap rule once. A new database runs the
+/// same ALTER TABLE for kv_upload_clocks after its version 42 DDL, and
+/// `INITIAL` carries kv_adapter_clocks.boot_id where SQLite inserts it, so
+/// migrated and new databases store the same schema text.
+fn add_clock_boot_ids(transaction: &Transaction<'_>) -> Result<()> {
+    for table in ["kv_adapter_clocks", "kv_upload_clocks"] {
+        let has_boot_id: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name='boot_id')",
+            [table],
+            |row| row.get(0),
         )?;
+        if !has_boot_id {
+            transaction.execute_batch(&format!(
+                "ALTER TABLE {table}
+                 ADD COLUMN boot_id BLOB CHECK(boot_id IS NULL OR length(boot_id)=16);"
+            ))?;
+        }
     }
     Ok(())
 }
@@ -3397,6 +3469,7 @@ mod tests {
     }
 
     include!("adapter_tests.rs");
+    include!("upload_tests.rs");
 
     fn snapshot() -> TestHostSnapshot {
         TestHostSnapshot {

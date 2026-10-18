@@ -17,6 +17,7 @@
 //! A file larger than the free space there is refused before it is read.
 
 use crate::agent::AgentError;
+use crate::applock::UnlockedInterval;
 use crate::commands::context::AppState;
 use crate::commands::execution::{
     execute_kv_mutation, map_mutation_error, run_kv_writes, MutationKind,
@@ -32,7 +33,6 @@ use foks_desktop::{CatalogItem, CatalogStoreRef};
 use std::fs::File;
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::Path;
-use tauri::State;
 use zeroize::Zeroizing;
 
 /// The Poly1305 tag each sealed chunk carries after its ciphertext.
@@ -213,11 +213,13 @@ impl std::io::Read for SpoolReader {
 pub(super) fn read_copy_source(
     transport: &dyn foks_desktop::AgentTransport,
     item: &CatalogItem,
+    interval: &UnlockedInterval,
+    deadline: &foks_local_deadline::Deadline,
 ) -> Result<CopySource, AgentError> {
     match item.metadata.node_type.as_str() {
         "small-file" => {
             let mut content = Zeroizing::new(Vec::new());
-            read_file_content(transport, item, &mut |piece| {
+            read_file_content(transport, item, interval, deadline, &mut |piece| {
                 content.extend_from_slice(piece);
                 Ok(())
             })?;
@@ -231,7 +233,9 @@ pub(super) fn read_copy_source(
                 require_spool_space(item.metadata.size.unwrap_or(0), available, &directory)?;
             }
             let mut spool = SealedSpool::new()?;
-            read_file_content(transport, item, &mut |piece| spool.append(piece))?;
+            read_file_content(transport, item, interval, deadline, &mut |piece| {
+                spool.append(piece)
+            })?;
             Ok(CopySource::Spooled(spool))
         }
         "directory" => Err(invalid_request(
@@ -339,7 +343,7 @@ pub(super) fn copy_target(
 pub async fn copy_item_to_store(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     path: String,
     version: u64,
@@ -350,6 +354,7 @@ pub async fn copy_item_to_store(
     write_role: Option<String>,
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
+    let interval = crate::applock::unlocked_interval(&app)?;
     require_main_window(&webview)?;
     let state = copy_scope(&state, &store_id, &target_store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
@@ -362,15 +367,17 @@ pub async fn copy_item_to_store(
         read_role.as_deref(),
         write_role.as_deref(),
     )?;
-    let transport = state.agent.transport();
-    let source =
-        tauri::async_runtime::spawn_blocking(move || read_copy_source(transport.as_ref(), &item))
-            .await
-            .map_err(|error| {
-                AgentError::unknown(format!("Failed to read the item to copy: {error}"))
-            })??;
+    let transport = state.transport()?;
+    let worker_deadline = state.deadline()?.clone();
+    let source = super::deadline::run(
+        state.deadline()?,
+        false,
+        move || read_copy_source(transport.as_ref(), &item, &interval, &worker_deadline),
+        |_| {},
+    )
+    .await?;
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
-    let transport = state.agent.transport();
+    let transport = state.transport()?;
     let store = target.store.clone();
     run_kv_writes(&state, Some(&store), move || {
         write_copy(transport.as_ref(), source, &target)

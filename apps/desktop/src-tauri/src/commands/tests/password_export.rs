@@ -1,5 +1,4 @@
 use super::support::account_ref;
-use crate::agent::AgentError;
 use crate::commands::password_export::{
     csv_line, export_location, export_record, is_exported_login, login_columns, write_export,
     EXPORT_HEADER,
@@ -8,7 +7,7 @@ use crate::commands::password_import::{csv_records, parse_export};
 use foks_agent_proto::{KvEntryMetadata, KvEntryShape, KvReadResult, KvRole, Operation};
 use foks_desktop::{CatalogItem, CatalogStoreRef};
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 fn item(path: &str, node_type: &str, shape: Option<KvEntryShape>) -> CatalogItem {
     CatalogItem {
@@ -142,6 +141,7 @@ impl foks_desktop::AgentTransport for LoginTransport {
         let Operation::ReadKv {
             store,
             path,
+            dirent_id,
             version,
         } = operation
         else {
@@ -152,6 +152,7 @@ impl foks_desktop::AgentTransport for LoginTransport {
         serde_json::to_value(KvReadResult {
             store,
             path,
+            dirent_id,
             version,
             node_type: "small-file".to_owned(),
             size: Some(content.len() as u64),
@@ -192,7 +193,15 @@ fn logins() -> Vec<CatalogItem> {
 fn every_login_is_read_at_its_listed_version_and_written_after_the_header() {
     let transport = transport();
     let mut file = Vec::new();
-    let counts = write_export(&transport, &logins(), &|| Ok(()), &mut file).unwrap();
+    let lock = crate::applock::AppLock::unlocked_for_test();
+    let counts = write_export(
+        &transport,
+        &logins(),
+        &lock.interval_for_test(),
+        &deadline(),
+        &mut file,
+    )
+    .unwrap();
     assert_eq!(counts, (2, 1));
     let text = String::from_utf8(file).unwrap();
     assert!(text.starts_with(&format!("{EXPORT_HEADER}\r\n")));
@@ -207,22 +216,27 @@ fn every_login_is_read_at_its_listed_version_and_written_after_the_header() {
 #[test]
 fn a_lock_during_the_export_stops_it_before_the_next_read() {
     let transport = transport();
-    let calls = Mutex::new(0);
-    let error = write_export(
-        &transport,
-        &logins(),
-        &|| {
-            let mut calls = calls.lock().unwrap();
-            *calls += 1;
-            if *calls == 2 {
-                Err(AgentError::new("app-locked", "locked", false))
-            } else {
-                Ok(())
-            }
-        },
-        &mut Vec::new(),
-    )
-    .unwrap_err();
+    let lock = crate::applock::AppLock::unlocked_for_test();
+    let hook_lock = Arc::clone(&lock);
+    let interval = lock.interval_for_test().with_checkpoint(move |phase| {
+        if phase == "after-agent-read" {
+            hook_lock.invalidate_for_test(false);
+        }
+    });
+    let mut file = Vec::new();
+    let error = write_export(&transport, &logins(), &interval, &deadline(), &mut file).unwrap_err();
     assert_eq!(error.code, "app-locked");
     assert_eq!(transport.reads.lock().unwrap().len(), 1);
+    // The header is written; no record of the login read as the lock engaged.
+    assert_eq!(
+        String::from_utf8(file).unwrap(),
+        format!("{EXPORT_HEADER}\r\n")
+    );
+}
+
+fn deadline() -> foks_local_deadline::Deadline {
+    foks_local_deadline::Deadline::capture(
+        std::time::Instant::now() + std::time::Duration::from_secs(300),
+    )
+    .unwrap()
 }

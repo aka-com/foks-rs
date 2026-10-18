@@ -1,5 +1,5 @@
 //! Nonblocking Unix transport with a single absolute request deadline.
-use super::{check_upload_cancelled, Error, Result};
+use super::{check_upload_cancelled, Deadline, Error, Result};
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use std::io::{ErrorKind, Write};
 use std::os::unix::net::UnixStream;
@@ -12,10 +12,11 @@ pub(super) fn wait(
     stream: Option<&UnixStream>,
     events: PollFlags,
     cancelled: &dyn Fn() -> bool,
-    deadline: Instant,
+    deadline: &Deadline,
 ) -> Result<()> {
     check_upload_cancelled(cancelled, deadline)?;
     let remaining = deadline
+        .instant()
         .saturating_duration_since(Instant::now())
         .min(POLL_INTERVAL);
     let timeout = Timespec::try_from(remaining).map_err(|_| Error::DeadlineExceeded)?;
@@ -32,7 +33,7 @@ pub(super) fn wait(
 pub(super) fn connect(
     path: &Path,
     cancelled: &dyn Fn() -> bool,
-    deadline: Instant,
+    deadline: &Deadline,
 ) -> Result<UnixStream> {
     use rustix::net::{socket_with, AddressFamily, SocketAddrUnix, SocketFlags, SocketType};
     let address = SocketAddrUnix::new(path).map_err(|e| Error::Io(e.into()))?;
@@ -46,13 +47,18 @@ pub(super) fn connect(
     let stream = UnixStream::from(fd);
     stream.set_nonblocking(true)?;
     loop {
+        check_upload_cancelled(cancelled, deadline)?;
         match rustix::net::connect(&stream, &address) {
-            Ok(()) => return Ok(stream),
+            Ok(()) => {
+                check_upload_cancelled(cancelled, deadline)?;
+                return Ok(stream);
+            }
             Err(rustix::io::Errno::INPROGRESS | rustix::io::Errno::ALREADY) => loop {
                 check_upload_cancelled(cancelled, deadline)?;
                 let mut ready = [PollFd::new(&stream, PollFlags::OUT)];
                 let timeout = Timespec::try_from(
                     deadline
+                        .instant()
                         .saturating_duration_since(Instant::now())
                         .min(POLL_INTERVAL),
                 )
@@ -63,6 +69,7 @@ pub(super) fn connect(
                         rustix::net::sockopt::socket_error(&stream)
                             .map_err(|e| Error::Io(e.into()))?
                             .map_err(|e| Error::Io(e.into()))?;
+                        check_upload_cancelled(cancelled, deadline)?;
                         return Ok(stream);
                     }
                     Err(error) => return Err(Error::Io(error.into())),
@@ -83,7 +90,7 @@ pub(super) fn write_all(
     stream: &mut UnixStream,
     mut bytes: &[u8],
     cancelled: &dyn Fn() -> bool,
-    deadline: Instant,
+    deadline: &Deadline,
 ) -> Result<()> {
     stream.set_nonblocking(true)?;
     while !bytes.is_empty() {
@@ -103,7 +110,7 @@ pub(super) fn write_all(
             Err(error) => return Err(Error::Io(error)),
         }
     }
-    Ok(())
+    check_upload_cancelled(cancelled, deadline)
 }
 
 #[cfg(test)]
@@ -128,7 +135,7 @@ mod tests {
             &mut client,
             &vec![0; 8 * 1024 * 1024],
             &|| cancelled.load(Ordering::Acquire),
-            started + Duration::from_secs(5),
+            &Deadline::capture(started + Duration::from_secs(5)).unwrap(),
         )
         .unwrap_err();
         assert!(matches!(error, Error::Cancelled));
@@ -154,7 +161,7 @@ mod tests {
             &mut client,
             &vec![0; 8 * 1024 * 1024],
             &|| false,
-            started + Duration::from_millis(100),
+            &Deadline::capture(started + Duration::from_millis(100)).unwrap(),
         );
         stop.store(true, Ordering::Release);
         thread.join().unwrap();
@@ -173,7 +180,11 @@ mod tests {
         let _occupant = UnixStream::connect(&path).unwrap();
         let started = Instant::now();
         assert!(matches!(
-            connect(&path, &|| false, started + Duration::from_millis(100)),
+            connect(
+                &path,
+                &|| false,
+                &Deadline::capture(started + Duration::from_millis(100)).unwrap()
+            ),
             Err(Error::DeadlineExceeded)
         ));
         assert!(started.elapsed() < Duration::from_secs(2));
