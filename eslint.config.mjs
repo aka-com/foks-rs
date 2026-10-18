@@ -169,6 +169,16 @@ export default tseslint.config(
       '**/dist/**',
       'target/**',
       '.claude/worktrees/**',
+      // The celld qualification tools keep their own style, and some of their
+      // test code is deliberately non-idiomatic (Number precision loss,
+      // foreign errors thrown from a rollback). Their run-local.py evidence
+      // records the SHA-256 of the worker sources, so a lint fix would also
+      // invalidate recorded qualification evidence.
+      'tools/foks-celld-guarded/**',
+      'tools/foks-celld-proof/**',
+      'tools/foks-metadata-spike/**',
+      'tools/foks-schema-cookie-probe/**',
+      'tools/foks-sqlite-policy/**',
     ],
   },
   {

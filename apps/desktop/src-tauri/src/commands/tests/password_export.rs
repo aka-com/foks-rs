@@ -1,7 +1,7 @@
 use super::support::account_ref;
 use crate::commands::password_export::{
-    csv_line, export_location, export_record, is_exported_login, login_columns, write_export,
-    EXPORT_HEADER,
+    csv_line, export_location, export_record, export_to_path, is_exported_login, login_columns,
+    write_export, EXPORT_HEADER,
 };
 use crate::commands::password_import::{csv_records, parse_export};
 use foks_agent_proto::{KvEntryMetadata, KvEntryShape, KvReadResult, KvRole, Operation};
@@ -232,6 +232,25 @@ fn a_lock_during_the_export_stops_it_before_the_next_read() {
         String::from_utf8(file).unwrap(),
         format!("{EXPORT_HEADER}\r\n")
     );
+}
+
+#[test]
+fn a_file_failure_after_the_lock_is_reported_as_app_locked() {
+    for (locked, code) in [(false, "export-write"), (true, "app-locked")] {
+        let transport = transport();
+        let directory = tempfile::tempdir().unwrap();
+        // The temporary file cannot be created in a missing folder.
+        let destination = directory.path().join("missing").join("passwords.csv");
+        let lock = crate::applock::AppLock::unlocked_for_test();
+        let interval = lock.interval_for_test();
+        if locked {
+            lock.invalidate_for_test(false);
+        }
+        let error = export_to_path(&transport, &logins(), &interval, &deadline(), &destination)
+            .unwrap_err();
+        assert_eq!(error.code, code, "locked: {locked}");
+        assert!(transport.reads.lock().unwrap().is_empty());
+    }
 }
 
 fn deadline() -> foks_local_deadline::Deadline {

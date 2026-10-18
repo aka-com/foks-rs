@@ -298,7 +298,19 @@ fn main() {
             &[0x92, method, 7],
         );
     }
-    let request = Request::new(1, Operation::ListProfiles);
+    // The same fixed envelope as fuzz_targets/agent_frames.rs.
+    let deadline = serde_json::from_value(serde_json::json!({
+        "version": 1,
+        "domain": {
+            "clock": "linux_monotonic_v1",
+            "boot": "12345678-1234-1234-1234-123456789abc",
+            "device": "1",
+            "inode": "1"
+        },
+        "expires_ns": "1000000000"
+    }))
+    .unwrap();
+    let request = Request::new(1, Operation::ListProfiles, deadline);
     let encoded = foks_agent_proto::encode(&request).unwrap();
     seed("agent_frames", "list-profiles", &encoded);
     seed("agent_frames", "list-profiles-json", &encoded[4..]);

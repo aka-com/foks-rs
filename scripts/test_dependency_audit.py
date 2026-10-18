@@ -16,6 +16,22 @@ VERIFY_AUDITABLE = REPOSITORY / "scripts" / "verify-auditable-binaries.sh"
 DEPENDABOT = REPOSITORY / ".github" / "dependabot.yml"
 DEPENDENCY_WORKFLOW = REPOSITORY / ".github" / "workflows" / "foks-dependencies.yml"
 
+# Tracked lockfiles that neither cargo-deny nor Dependabot can check, because
+# their dependency graph cannot be resolved from a checkout. Each one is left
+# out of the coverage tests below, and must stay a tracked file.
+UNRESOLVABLE_LOCKFILES = {
+    # Its `celld` path dependency (runtime/source/crates/celld) is gitignored.
+    # prepare-runtime.py places the pinned celld source there on the macOS lab
+    # machine only, from a locally reviewed archive, so a CI or Dependabot
+    # checkout cannot load the graph.
+    Path("tools/foks-celld-guarded/Cargo.lock"),
+}
+
+
+def resolvable_lockfiles():
+    """Tracked Cargo.lock files whose graphs cargo-deny and Dependabot check."""
+    return [path for path in tracked_files("Cargo.lock") if path not in UNRESOLVABLE_LOCKFILES]
+
 
 def tracked_files(name):
     """Return repository-relative paths of tracked files with this basename."""
@@ -89,7 +105,7 @@ class DependencyCoverageTests(unittest.TestCase):
     def test_dependabot_lists_every_manifest_directory(self):
         configured = dependabot_directories(DEPENDABOT.read_text())
         expected = {
-            "cargo": {dependabot_directory(path) for path in tracked_files("Cargo.lock")},
+            "cargo": {dependabot_directory(path) for path in resolvable_lockfiles()},
             "npm": {dependabot_directory(path) for path in tracked_files("package-lock.json")},
             "gomod": {dependabot_directory(path) for path in tracked_files("go.mod")},
             "github-actions": {"/"},
@@ -113,8 +129,13 @@ class DependencyCoverageTests(unittest.TestCase):
         match = re.search(r"^\s*manifest:\s*\[([^\]]*)\]", DEPENDENCY_WORKFLOW.read_text(), re.M)
         self.assertIsNotNone(match, "cargo-deny manifest matrix not found")
         manifests = {item.strip() for item in match.group(1).split(",")}
-        expected = {(path.parent / "Cargo.toml").as_posix() for path in tracked_files("Cargo.lock")}
+        expected = {(path.parent / "Cargo.toml").as_posix() for path in resolvable_lockfiles()}
         self.assertEqual(manifests, expected)
+
+    def test_unresolvable_lockfiles_are_tracked(self):
+        # An exclusion is removed together with its lockfile, so that it cannot
+        # later exempt a different workspace created at the same path.
+        self.assertEqual(UNRESOLVABLE_LOCKFILES - set(tracked_files("Cargo.lock")), set())
 
     def test_exact_version_requirements_state_a_reason(self):
         undocumented = [

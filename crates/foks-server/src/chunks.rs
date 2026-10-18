@@ -603,26 +603,36 @@ impl S3Chunks {
         let configured_until = std::time::Instant::now()
             .checked_add(self.timeout)
             .ok_or(Error::Config("object deadline overflow"))?;
-        let until = crate::deadline::current().map_or(configured_until, |deadline| {
-            deadline.instant().min(configured_until)
-        });
+        let request_until = crate::deadline::current()
+            .map(|deadline| deadline.instant())
+            .filter(|request_until| *request_until < configured_until);
+        let until = request_until.unwrap_or(configured_until);
+        // Running out of time is a request deadline expiry when the request
+        // deadline is the earlier bound, and a chunk-store fault otherwise.
+        let timed_out = move || {
+            if request_until.is_some() {
+                crate::deadline::expired()
+            } else {
+                Error::Chunk("object operation timed out")
+            }
+        };
         // The caller can time out before a spawned transfer is dropped. Keep
         // its allocation reservation with the future that owns payload buffers.
         let task = remote_runtime()?.spawn(crate::net::memory::retain_future(async move {
             if std::time::Instant::now() >= until {
-                let _ = sender.send(Err(crate::deadline::expired()));
+                let _ = sender.send(Err(timed_out()));
                 return;
             }
             let result = tokio::time::timeout_at(until.into(), future)
                 .await
-                .unwrap_or(Err(Error::Chunk("object operation timed out")));
+                .unwrap_or_else(|_| Err(timed_out()));
             let _ = sender.send(result);
         }));
         // This also bounds waiting if runtime workers are overloaded. Abort is
         // cancellation, not a claim that an in-flight PUT could not complete.
         let result = receiver
             .recv_timeout(until.saturating_duration_since(std::time::Instant::now()))
-            .unwrap_or(Err(Error::Chunk("object operation timed out")));
+            .unwrap_or_else(|_| Err(timed_out()));
         task.abort();
         result
     }
@@ -1388,6 +1398,20 @@ secret_access_key = "not-accepted"
         let started = Instant::now();
         assert!(store.put(&chunk_digest(b"payload"), b"payload").is_err());
         assert!(started.elapsed() < Duration::from_millis(1800));
+    }
+
+    #[test]
+    fn s3_timeout_is_a_deadline_expiry_only_when_the_request_deadline_binds() {
+        let mock = MockS3::start();
+        let store = mock.store();
+        mock.state.slow.store(true, Ordering::Release);
+        let request = crate::deadline::Deadline::at(Instant::now() + Duration::from_millis(200));
+        let result = crate::deadline::scope(Some(request), || {
+            store.put(&chunk_digest(b"payload"), b"payload")
+        });
+        assert!(matches!(result, Err(Error::DeadlineExceeded)), "{result:?}");
+        let result = store.put(&chunk_digest(b"payload"), b"payload");
+        assert!(matches!(result, Err(Error::Chunk(_))), "{result:?}");
     }
 
     #[test]

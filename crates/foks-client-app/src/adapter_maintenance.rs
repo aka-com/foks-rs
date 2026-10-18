@@ -356,7 +356,11 @@ mod tests {
             tx.commit().unwrap();
             let mut cursor = AdapterMaintenanceCursor::default();
             for _ in 0..4 {
-                let report = s.maintain_adapter_state(&mut cursor, master)?;
+                let report = s.maintain_adapter_state_until(
+                    &mut cursor,
+                    master,
+                    crate::test_support::maintenance_deadline(),
+                )?;
                 assert!(!report.more_work && !report.made_progress, "retained history is not actionable: {report:?}");
             }
             Ok(())
@@ -501,7 +505,11 @@ mod tests {
         for _ in 0..10 {
             let report = credentials
                 .try_with_checked_session(&session, |checked| {
-                    checked.maintain_adapter_state(&mut cursor, &*credentials.master_key()?)
+                    checked.maintain_adapter_state_until(
+                        &mut cursor,
+                        &*credentials.master_key()?,
+                        crate::test_support::maintenance_deadline(),
+                    )
                 })
                 .unwrap()
                 .unwrap();
@@ -515,7 +523,11 @@ mod tests {
         assert_eq!(temporary, 1);
         let report = credentials
             .try_with_checked_session(&session, |checked| {
-                checked.maintain_adapter_state(&mut cursor, &*credentials.master_key()?)
+                checked.maintain_adapter_state_until(
+                    &mut cursor,
+                    &*credentials.master_key()?,
+                    crate::test_support::maintenance_deadline(),
+                )
             })
             .unwrap()
             .unwrap();

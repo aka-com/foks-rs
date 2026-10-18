@@ -541,7 +541,7 @@ fn reserve_file_chunk(
     let authority = authority.clone();
     let mut attempt = [0; 16];
     crate::Entropy::fill(&crate::OsEntropy, &mut attempt)
-        .map_err(|_| RpcStatus::TransactionRetry)?;
+        .map_err(|error| crate::status::internal(error, "kv_upload_attempt"))?;
     writer
         .call_with_current_time(Arc::clone(&authority.clock), move |database, now| {
             if !kv_write_is_current(database, &authority, &device, now)? {

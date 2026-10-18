@@ -67,7 +67,10 @@ impl WebAdminService {
         Ok(Arc::new(Self {
             config,
             clock,
-            readers: crate::read_pool::ReadPool::new(read, 2)?,
+            readers: crate::read_pool::ReadPool::with_opener(
+                crate::read_pool::opener(&read, Some(&writer))?,
+                2,
+            )?,
             writer,
             entropy,
             ready: AtomicBool::new(false),

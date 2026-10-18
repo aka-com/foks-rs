@@ -3,6 +3,29 @@ use std::sync::{Arc, Mutex};
 
 use crate::{Error, ReadDatabaseConfig, Result};
 
+/// Returns a reader opener for `config`. When `writer` owns the same file
+/// and validated KV limits that cover the reader's, its startup capacity scan
+/// stands for the reader's and the opener runs none. Otherwise the opener
+/// runs the scan once.
+pub(crate) fn opener(
+    config: &ReadDatabaseConfig,
+    writer: Option<&crate::WriterHandle>,
+) -> Result<foks_server_db::ReadDatabaseOpener> {
+    if let Some(writer) = writer {
+        let path = config.path.clone();
+        let database = config.database.clone();
+        if let Some(opener) =
+            writer.call(move |writer| Ok(writer.read_opener(&path, &database)?))?
+        {
+            return Ok(opener);
+        }
+    }
+    Ok(foks_server_db::ReadDatabaseOpener::new(
+        &config.path,
+        config.database.clone(),
+    )?)
+}
+
 #[derive(Clone)]
 pub(crate) struct ReadPool {
     inner: Arc<Inner>,
@@ -25,15 +48,24 @@ pub(crate) struct ReadLease {
 }
 
 impl ReadPool {
+    /// Opens a pool whose opener runs the KV capacity scan once.
+    #[cfg(any(test, feature = "celld-proof"))]
     pub(crate) fn new(config: ReadDatabaseConfig, maximum_connections: usize) -> Result<Self> {
+        Self::with_opener(opener(&config, None)?, maximum_connections)
+    }
+
+    /// Opens a pool from an opener that has already validated the database.
+    /// Connections check the file identity, the schema version and the schema
+    /// contract; none repeats the KV capacity scan.
+    pub(crate) fn with_opener(
+        opener: foks_server_db::ReadDatabaseOpener,
+        maximum_connections: usize,
+    ) -> Result<Self> {
         if maximum_connections == 0 {
             return Err(Error::Config(
                 "maximum read connections must be greater than zero",
             ));
         }
-        // The opener runs the KV capacity scan once; later connections check
-        // the file identity, the schema version and the schema contract.
-        let opener = foks_server_db::ReadDatabaseOpener::new(&config.path, config.database)?;
         let database = opener.open()?;
         Ok(Self {
             inner: Arc::new(Inner {

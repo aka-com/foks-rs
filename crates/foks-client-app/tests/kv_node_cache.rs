@@ -342,7 +342,14 @@ fn selected_identity_survives_user_and_team_cache_fallbacks() {
                                 std::time::Instant::now() < until,
                                 "cleanup stalled: {debt:?}"
                             );
-                            session.maintain_adapter_state(&mut cleanup, &master)?;
+                            // A 50 ms production turn starved under parallel load
+                            // backs its owner off for 60 s; record-count budgets
+                            // still bound each turn under this wider cap.
+                            session.maintain_adapter_state_until(
+                                &mut cleanup,
+                                &master,
+                                std::time::Instant::now() + std::time::Duration::from_secs(10),
+                            )?;
                         }
                         Ok::<_, foks_client_app::Error>(result)
                     };

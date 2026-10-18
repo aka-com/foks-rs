@@ -117,7 +117,8 @@ client operation onto a worker thread under a semaphore.
 | Recovery slot | 1 |
 | Local maintenance slot | 1 |
 | Chat long-poll workers | 4 (at most 32) |
-| Request timeout | 15 s (the desktop passes 60 s) |
+| Request deadline cap | 15 s ordinary, 60 s chat poll, 5 min pairing and bulk transfer |
+| `--request-timeout-seconds` | 15 s (the desktop passes 60 s) |
 | Admission reply margin | 2 s |
 | Chat poll timeout | 60 s |
 | Device pairing budget | 5 min, with 45 s reserved for completion |
@@ -129,16 +130,28 @@ in which reads may share a profile, mutations hold it exclusively, and
 registry changes reserve the whole state root. Disjoint profiles may pass
 a blocked waiter, but there is no partial multi-profile hold.
 
-The interesting design is in how deadlines are reported. A client waits
-its own budget from before it connects; the agent's budget starts once the
-request has been read. If admission could wait the whole budget, then an
-operation the agent never started would be answered after every client
-with the same budget had given up, and a definite "not started" would
+The interesting design is in how deadlines are reported. A client fixes
+its deadline before it connects, at most the cap for the operation's
+deadline class, and sends it in the request as an expiry on a same-host
+monotonic clock ([Chapter 17](17-wire.qmd)). The agent uses that deadline,
+shortened to its own cap for the class, so the client and the agent count
+down to the same instant. A request without a deadline, or with one from
+another clock domain, is refused before it runs. If admission could wait
+until that instant, then an operation the agent never started would be
+answered after the client had given up, and a definite "not started" would
 arrive as an ambiguous timeout. So admission and the wait for a worker end
-2 seconds earlier than the request budget, leaving room for the reply to
-travel. A test named for the property confirms that admission answers
-before a client with the same budget gives up, and another that admission
-errors are definite non-execution and never ambiguous timeouts.
+2 seconds before the deadline (a quarter of the remaining time, when that
+is less), leaving room for the reply to travel. A test named for the
+property confirms that admission answers before a client with the same
+budget gives up, and another that admission errors are definite
+non-execution and never ambiguous timeouts.
+
+The agent's `--request-timeout-seconds` does not lengthen a request. It can
+only lower the 15-second cap of an ordinary request. It also bounds waits
+that carry no client deadline, such as reading a request frame and writing
+its response, scheduled background profile work and the compatibility HTTP
+client. The 60 seconds the desktop passes therefore lengthen those waits
+only; an ordinary desktop request still ends after at most 15 seconds.
 
 When an operation *does* exceed its deadline after starting, the agent
 closes the connection with the message that the deadline was exceeded and
@@ -158,10 +171,10 @@ two SQLite databases with different application IDs, schemas, and rules.
 | | Hard state | Soft state |
 |---|---|---|
 | Application ID | `0x464f4b53` ("FOKS") | `0x464b5653` ("FKVS") |
-| Schema version | 41 | 6 |
+| Schema version | 43 | 6 |
 | Holds | verified public bytes, monotonic pins, crash-recovery journals, the submission ledger | decrypted KV projections, chat inbox rows, known stores, discovery hints |
 | Contains secrets | no | yes (plaintext cache) |
-| On schema mismatch | migrate supported versions 38 through 40 to 41; refuse other versions | refuse and name the recovery path: delete and rebuild |
+| On schema mismatch | migrate supported versions 38 through 42 to 43, one version at a time; refuse other versions | refuse and name the recovery path: delete and rebuild |
 | Losing it | a security event | a re-download |
 
 **Hard state** is evidence: signed chain links, Merkle roots, the exact
@@ -314,9 +327,11 @@ capabilities, so an agent left running by an older build is diagnosed as such
 instead of as an absent agent.
 Secret-bearing operation variants are redacted from debug output, and
 serialized frames and decoded secret strings are held in zeroizing
-buffers. The desktop launches the agent if none is running and hands it a
-longer request timeout; the CLI does the same for the MCP server; and
-closing any front end leaves the agent running for the others.
+buffers. The desktop launches the agent if none is running, and the CLI
+does the same for the MCP server. The desktop passes
+`--request-timeout-seconds 60`, which does not extend the deadline of any
+request (see "Bounded work and honest deadlines" above). Closing any front
+end leaves the agent running for the others.
 
 ## Where to look
 

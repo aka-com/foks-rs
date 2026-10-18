@@ -71,9 +71,12 @@ and needs to complete before the server can accept traffic.
 `ReadDatabase::open` continues to validate stored synchronization limits.
 `ReadDatabaseOpener` validates once and opens additional readers with the same
 configuration and checked file identity, avoiding those scans when the server
-read pool grows. Only the repository writer may modify a database while an
+read pool grows. `Database::read_opener` returns an opener without any scan
+when the writer's own open covers it: the same file, and reader KV limits at
+least the writer's. Only the repository writer may modify a database while an
 opener is live; out-of-band SQL or a configuration change requires a fresh
-validating opener.
+validating opener. `ReadDatabase::open_without_capacity_check` skips the check
+for offline reports that read the KV rows themselves.
 
 Schema 50 adds optional immutable external chunk references. The schema stores
 SHA-256 of the exact encoded upload chunk and its logical ciphertext/encoding

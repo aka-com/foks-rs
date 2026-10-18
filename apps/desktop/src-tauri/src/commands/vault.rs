@@ -506,8 +506,23 @@ pub(super) fn read_store_usage(
 
 /// Saves a File item to `destination` through a temporary file beside it.
 /// The read and the sync run under `interval` and `deadline`; only replacing
-/// the destination runs inside the interval's publication gate.
+/// the destination runs inside the interval's publication gate. Any failure
+/// after the interval ended, including creating or syncing the temporary
+/// file, is reported as `app-locked`.
 pub(super) fn download_to_path(
+    transport: &dyn foks_desktop::AgentTransport,
+    item: &CatalogItem,
+    destination: &Path,
+    interval: &UnlockedInterval,
+    deadline: &foks_local_deadline::Deadline,
+) -> Result<(), AgentError> {
+    download_in_interval(transport, item, destination, interval, deadline).or_else(|error| {
+        interval.check()?;
+        Err(error)
+    })
+}
+
+fn download_in_interval(
     transport: &dyn foks_desktop::AgentTransport,
     item: &CatalogItem,
     destination: &Path,

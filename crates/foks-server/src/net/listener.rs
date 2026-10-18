@@ -166,15 +166,18 @@ impl RunningServer {
                 )
             })
             .transpose()?;
-        if let Some(database) = &config.read_database {
+        // One opener serves this startup check and the request reader pool.
+        // With a writer for the same file it reuses the writer's KV capacity
+        // scan; without one it scans once.
+        let read_opener = if let Some(database) = &config.read_database {
             let source_storage = startup_storage
                 .as_ref()
                 .ok_or(Error::Chunk("missing source storage lease"))?;
             if let Some(writer) = &config.writer {
                 source_storage.require_writer(writer)?;
             }
-            let reader =
-                foks_server_db::ReadDatabase::open(&database.path, database.database.clone())?;
+            let opener = crate::read_pool::opener(database, config.writer.as_ref())?;
+            let reader = opener.open()?;
             if config.chunk_store.is_some()
                 && reader.chunk_storage_binding()?.is_none_or(|binding| {
                     binding.state != foks_server_db::ChunkStorageBindingState::Active
@@ -197,9 +200,12 @@ impl RunningServer {
             if let (Some(writer), Some(store)) = (&config.writer, &config.chunk_store) {
                 crate::chunk_ledger::initialize_online(writer, store.as_ref())?;
             }
+            Some(opener)
         } else if config.chunk_store.is_some() {
             return Err(Error::Chunk("chunk storage requires a bound database"));
-        }
+        } else {
+            None
+        };
         let BoundListeners {
             probe,
             public,
@@ -207,7 +213,8 @@ impl RunningServer {
             addresses,
         } = listeners;
         let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(config.rate_limits)?);
-        let service_data = ServerData::from_config(&config, Arc::clone(&rate_limiter))?;
+        let service_data =
+            ServerData::from_config(&config, read_opener, Arc::clone(&rate_limiter))?;
         #[cfg(feature = "celld-proof")]
         let service_data = service_data.with_proof(proof);
         let service_data = Arc::new(service_data);

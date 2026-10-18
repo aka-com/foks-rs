@@ -24,7 +24,8 @@ pub struct ReadDatabase {
 
 /// Opens additional readers for one already validated database and configuration.
 ///
-/// Construction validates legacy capacity invariants once. Subsequent opens
+/// [`ReadDatabaseOpener::new`] validates legacy capacity invariants once;
+/// [`Database::read_opener`] reuses the writer's validation. Subsequent opens
 /// check file identity and schema, while the writer enforces capacity on every
 /// mutation. The database must not be modified by out-of-band SQL while this
 /// opener is in use; a different configuration requires a new opener.
@@ -243,6 +244,26 @@ impl Database {
         })
     }
 
+    /// Returns a reader opener for `path` and `config` without a KV capacity
+    /// scan, or `None` when this writer's open does not cover one. Every
+    /// writer constructor ran the scan against this database's configuration,
+    /// and the writer enforces the same limits on each mutation, so the scan
+    /// is redundant when `path` names this database's file and the KV limits
+    /// in `config` are at least this database's. On `None` the caller uses
+    /// [`ReadDatabaseOpener::new`], which runs the scan.
+    pub fn read_opener(&self, path: &Path, config: &Config) -> Result<Option<ReadDatabaseOpener>> {
+        let identity = DatabasePathIdentity::existing(path)?;
+        if identity != DatabasePathIdentity::existing(&self.path)?
+            || !crate::kv::kv_tree_capacity_covers(&self.config, config)
+        {
+            return Ok(None);
+        }
+        Ok(Some(ReadDatabaseOpener {
+            identity,
+            config: config.clone(),
+        }))
+    }
+
     pub fn open_reader(&self) -> Result<Connection> {
         let identity = DatabasePathIdentity::existing(&self.path)?;
         let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
@@ -286,12 +307,23 @@ impl ReadDatabase {
     /// cost grows with the stored data. Offline tools and backup and restore
     /// verification use this constructor; a running server opens its pooled
     /// and metrics readers through [`ReadDatabaseOpener`], which runs the KV
-    /// check once.
+    /// check once, or not at all when [`Database::read_opener`] shows that the
+    /// writer's open already covered it.
     pub fn open(path: impl AsRef<Path>, config: Config) -> Result<Self> {
         let identity = DatabasePathIdentity::existing(path.as_ref())?;
         let database = Self::open_identity(&identity, config)?;
         crate::kv::validate_kv_tree_capacity(&database.connection, &database.config)?;
         Ok(database)
+    }
+
+    /// Opens a reader with the checks of [`ReadDatabase::open`] except the KV
+    /// capacity check. For offline reports that read the stored rows
+    /// themselves: the check would read the same KV rows a second time, and
+    /// it would refuse to open a database whose stored trees exceed lowered
+    /// limits, which is a state such a report must be able to show.
+    pub fn open_without_capacity_check(path: impl AsRef<Path>, config: Config) -> Result<Self> {
+        let identity = DatabasePathIdentity::existing(path.as_ref())?;
+        Self::open_identity(&identity, config)
     }
 
     fn open_identity(identity: &DatabasePathIdentity, config: Config) -> Result<Self> {

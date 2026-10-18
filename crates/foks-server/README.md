@@ -158,7 +158,7 @@ the same default.
   `maximum_active_connections` (256), `maximum_pending_connections` (32),
   `maximum_kex_receive_polls` (32), `maximum_in_flight_requests` (64, at
   least 2), `maximum_realtime_polls_per_account` (8),
-  `request_timeout_seconds` (15) and `maximum_pending_writes` (64). The
+  `request_timeout_seconds` (30) and `maximum_pending_writes` (64). The
   `serve` flags of the same names set the same values.
 - `[rate_limits]` sets the per-source admission limits: the token buckets
   `connection_burst` (512), `connections_per_second` (256), `request_burst`

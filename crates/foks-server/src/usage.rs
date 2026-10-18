@@ -33,7 +33,11 @@ pub fn usage_report(
             "database does not exist; the server creates it on first start",
         ));
     }
-    let database = foks_server_db::ReadDatabase::open(database_path, database_config)?;
+    // The report reads the KV rows itself, so it skips the KV capacity check,
+    // which would read them a second time and would refuse to open a database
+    // whose stored trees exceed lowered limits.
+    let database =
+        foks_server_db::ReadDatabase::open_without_capacity_check(database_path, database_config)?;
     let capacity = database.snapshot()?.capacity_report(now)?;
     let wal_bytes = crate::installation::wal_bytes(database_path)?;
     Ok(UsageReport {

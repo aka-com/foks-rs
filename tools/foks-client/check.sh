@@ -9,6 +9,8 @@ packages=(
   foks-rpc
   foks-snowpack
   foks-verify
+  foks-local-deadline
+  foks-schema-contract
   foks-client
   foks-oidc
   foks-client-app

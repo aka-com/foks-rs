@@ -86,7 +86,7 @@ impl Default for SessionLimits {
             maximum_in_flight_requests: 64,
             maximum_realtime_polls_per_account: 8,
             io_timeout: Duration::from_secs(15),
-            request_timeout: Duration::from_secs(15),
+            request_timeout: Duration::from_secs(30),
         }
     }
 }

@@ -1,7 +1,31 @@
 #![no_main]
 use foks_agent_proto as frame;
-use foks_agent_proto::{KvUploadFrame, KvUploadPayload, Operation, Request, PROTOCOL_VERSION};
+use foks_agent_proto::{
+    DeadlineEnvelope, KvUploadFrame, KvUploadPayload, Operation, Request, PROTOCOL_VERSION,
+};
 use libfuzzer_sys::fuzz_target;
+use std::sync::OnceLock;
+
+/// A fixed, valid envelope keeps the generated frames deterministic. Decoding
+/// checks only the envelope's syntax; clock domains are checked by the agent.
+fn deadline() -> DeadlineEnvelope {
+    static DEADLINE: OnceLock<DeadlineEnvelope> = OnceLock::new();
+    DEADLINE
+        .get_or_init(|| {
+            serde_json::from_value(serde_json::json!({
+                "version": 1,
+                "domain": {
+                    "clock": "linux_monotonic_v1",
+                    "boot": "12345678-1234-1234-1234-123456789abc",
+                    "device": "1",
+                    "inode": "1"
+                },
+                "expires_ns": "1000000000"
+            }))
+            .unwrap()
+        })
+        .clone()
+}
 
 fn inspect(bytes: &[u8]) {
     let _ = frame::request_id(bytes);
@@ -47,6 +71,7 @@ fuzz_target!(|input: &[u8]| {
     let request = Request::new(
         u64::from(input.first().copied().unwrap_or(0)),
         Operation::ListProfiles,
+        deadline(),
     );
     inspect(&frame::encode(&request).unwrap());
     let upload = KvUploadFrame {

@@ -3,10 +3,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use foks_server_db::{ReadDatabase, SsoRolloutStatus};
+use foks_server_db::{ReadDatabase, ReadDatabaseOpener, SsoRolloutStatus};
 
 use super::InFlight;
-use crate::{Error, ReadDatabaseConfig, Result, ServerMetrics};
+use crate::{Error, Result, ServerMetrics};
 
 /// How long one completed sample answers later scrapes.
 const CACHE_LIFETIME: Duration = Duration::from_secs(30);
@@ -22,7 +22,8 @@ const SAMPLE_TIMEOUT: Duration = Duration::from_secs(1);
 /// omits the gauges and increments `foks_oidc_sample_failures_total`.
 pub(super) struct SsoSampler {
     /// `None` when OIDC is not configured; the database is then never read.
-    database: Option<ReadDatabaseConfig>,
+    /// The opener does not repeat the KV capacity scan on a reopen.
+    database: Option<ReadDatabaseOpener>,
     timeout: Duration,
     reader: Arc<Mutex<Option<ReadDatabase>>>,
     cached: Arc<Mutex<Option<Cached>>>,
@@ -35,7 +36,7 @@ struct Cached {
 }
 
 impl SsoSampler {
-    pub(super) fn new(database: Option<ReadDatabaseConfig>) -> Self {
+    pub(super) fn new(database: Option<ReadDatabaseOpener>) -> Self {
         Self {
             database,
             timeout: SAMPLE_TIMEOUT,
@@ -102,12 +103,12 @@ impl SsoSampler {
 /// failed read drops the connection so that the next sample reopens it.
 fn read(
     reader: &Mutex<Option<ReadDatabase>>,
-    database: &ReadDatabaseConfig,
+    database: &ReadDatabaseOpener,
 ) -> Result<Option<SsoRolloutStatus>> {
     let mut reader = reader.lock().map_err(|_| Error::Thread)?;
     let connection = match reader.take() {
         Some(connection) => connection,
-        None => ReadDatabase::open(&database.path, database.database.clone())?,
+        None => database.open()?,
     };
     let result = rollout_status(&connection);
     if result.is_ok() {
@@ -141,17 +142,12 @@ mod tests {
             .unwrap()
     }
 
-    fn database() -> (tempfile::TempDir, ReadDatabaseConfig) {
+    fn database() -> (tempfile::TempDir, std::path::PathBuf, ReadDatabaseOpener) {
         let temporary = tempfile::tempdir().unwrap();
         let path = temporary.path().join("sample.sqlite");
         drop(foks_server_db::Database::open(&path, foks_server_db::Config::default()).unwrap());
-        (
-            temporary,
-            ReadDatabaseConfig {
-                path,
-                database: foks_server_db::Config::default(),
-            },
-        )
+        let opener = ReadDatabaseOpener::new(&path, foks_server_db::Config::default()).unwrap();
+        (temporary, path, opener)
     }
 
     #[test]
@@ -169,8 +165,7 @@ mod tests {
 
     #[test]
     fn samples_are_cached_and_failures_are_counted() {
-        let (temporary, config) = database();
-        let path = config.path.clone();
+        let (temporary, path, config) = database();
         let metrics = ServerMetrics::default();
         let mut sampler = SsoSampler::new(Some(config));
         // The first scrape must not time out on a loaded runner, or the
@@ -203,7 +198,7 @@ mod tests {
 
     #[test]
     fn a_slow_sample_times_out_and_is_not_repeated_while_running() {
-        let (_temporary, config) = database();
+        let (_temporary, _path, config) = database();
         let metrics = ServerMetrics::default();
         let mut sampler = SsoSampler::new(Some(config));
         sampler.timeout = Duration::from_millis(50);

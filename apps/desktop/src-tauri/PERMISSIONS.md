@@ -139,7 +139,9 @@ Each command also calls `require_main_window` itself, checked for every
 registered command by `every_command_checks_the_main_window` in
 `src/command_signatures.rs`, so that a capability granted too widely does not
 by itself open a command to another window. Value-bearing commands are further
-bounded by `require_unlocked`.
+bounded by the unlocked interval they capture with `applock::unlocked_interval`:
+their reads stop once the app locks, and their output is handed off only inside
+`UnlockedInterval::publish` (the first control below).
 
 ## Controls for value-returning commands
 

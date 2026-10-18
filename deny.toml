@@ -1,8 +1,9 @@
 # cargo-deny policy for the root workspace (Cargo.lock), the fuzz workspace
 # (fuzz/Cargo.lock) and the hosted qualification tools
 # (tools/foks-celld-guarded and tools/foks-hosted-transport-check).
-# .github/workflows/foks-dependencies.yml checks each on dependency changes,
-# weekly, and before desktop release builds:
+# .github/workflows/foks-dependencies.yml checks all but
+# tools/foks-celld-guarded on dependency changes, weekly, and before desktop
+# release builds:
 #
 #   cargo deny --locked check
 #   cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check \
@@ -11,7 +12,8 @@
 # The ignore and skip entries for root-only crates are unused in the other
 # graphs, so their checks allow those two lints; the root check still reports
 # stale entries. tools/foks-celld-guarded resolves only after
-# prepare-runtime.py has placed the pinned celld source under runtime/source.
+# prepare-runtime.py has placed the pinned celld source under runtime/source,
+# which happens only on the macOS lab machine, so CI does not check it.
 
 [graph]
 # Linux and macOS, the platforms FOKS supports. Dependencies used only on other

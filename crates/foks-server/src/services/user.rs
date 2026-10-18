@@ -284,7 +284,8 @@ pub(crate) fn authorize_username_change(
         .require_username_change_owner(principal.uid(), principal.device_id())
         .map_err(|error| match error {
             foks_server_db::Error::AuthorizationChanged => permission_denied(),
-            _ => RpcStatus::TransactionRetry,
+            other => crate::status::storage(&other, "username_change_owner")
+                .unwrap_or_else(|| crate::status::internal(other, "username_change_owner")),
         })
 }
 

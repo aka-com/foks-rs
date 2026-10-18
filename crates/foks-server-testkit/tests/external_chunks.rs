@@ -694,8 +694,7 @@ fn legacy_external_adoption_is_explicit_resumable_and_preserves_wire_reads() {
     // before reconstructing its schema, rather than retaining modern v2 keys.
     let historical_store = environment.filesystem_chunk_store().unwrap();
     {
-        let db = environment.open_database_with_default_limits()
-            .unwrap();
+        let db = environment.open_database_with_default_limits().unwrap();
         let mut after = None;
         while let Some(chunk) = db.next_kv_chunk(after.as_ref(), true).unwrap() {
             let foks_server_db::KvChunkPayload::External(reference) = &chunk.chunk.payload else {
@@ -1186,8 +1185,7 @@ fn interrupted_delete_stays_charged_and_resumes_without_reusing_retired_key() {
     let inner = environment.filesystem_chunk_store().unwrap();
     let bytes = b"unreferenced canonical encrypted bytes";
     let digest = foks_server::chunks::chunk_digest(bytes);
-    let mut db =
-        environment.open_database_with_default_limits().unwrap();
+    let mut db = environment.open_database_with_default_limits().unwrap();
     let old = db
         .reserve_chunk_object(&digest, bytes.len() as u64, &[1; 16], 1)
         .unwrap();
@@ -1216,8 +1214,7 @@ fn interrupted_delete_stays_charged_and_resumes_without_reusing_retired_key() {
         (usage.objects, usage.deleting_bytes),
         (1, bytes.len() as u64)
     );
-    let mut db =
-        environment.open_database_with_default_limits().unwrap();
+    let mut db = environment.open_database_with_default_limits().unwrap();
     let new = db
         .reserve_chunk_object(&digest, bytes.len() as u64, &[2; 16], 2)
         .unwrap();
@@ -1257,8 +1254,7 @@ fn legacy_clone_collection_never_deletes_another_copy_live_or_stopped_reference(
     let initial = environment.start_server().unwrap();
     initial.shutdown().unwrap();
     let store = environment.filesystem_chunk_store().unwrap();
-    let mut database =
-        environment.open_database_with_default_limits().unwrap();
+    let mut database = environment.open_database_with_default_limits().unwrap();
     let binding = database
         .prepare_chunk_storage_binding(&[0xa4; 16], &store.locator().unwrap(), false)
         .unwrap();

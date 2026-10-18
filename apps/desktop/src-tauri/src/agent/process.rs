@@ -225,9 +225,13 @@ pub(super) fn managed_agent_arguments(state_dir: &Path, socket: &Path) -> [std::
         state_dir.as_os_str().to_owned(),
         "--socket".into(),
         socket.as_os_str().to_owned(),
-        // The resident agent must allow as long as the desktop client waits.
-        // Accessing a Go CLI credential can raise a blocking macOS Keychain
-        // prompt, so the default 15 seconds is too short for that path.
+        // This does not lengthen a request: the agent bounds each request by
+        // the deadline the desktop sends, within its deadline class's cap
+        // (`DeadlineClass::cap`), and caps an Ordinary request at the smaller
+        // of 15 seconds and this value. The value bounds the agent's waits
+        // that carry no request deadline: reading a request frame and writing
+        // its response on a connection, scheduled background profile work, and
+        // the compatibility HTTP client.
         "--request-timeout-seconds".into(),
         "60".into(),
     ]

@@ -534,8 +534,10 @@ Every command that reaches the agent runs under a deadline from its entry in
 entry fails with `missing-deadline-policy`, and an expired one with
 `deadline-exceeded`. A failure to read the local clock is `deadline-clock`.
 The agent's own clock failures are `deadline-clock-unavailable` and
-`deadline-domain-mismatch`, which `commandRecovery` in
-`src/bridge/errors.ts` treats as an agent failure.
+`deadline-domain-mismatch`. `commandRecovery` in `src/bridge/errors.ts`
+treats `deadline-clock-unavailable` like `deadline-clock`, as a refusal of
+this request that a later request can pass, and `deadline-domain-mismatch`,
+which persists for the life of the agent process, as an agent failure.
 
 Phase 4 adds `list_accounts`, `create_group`, member add/promote/demote/remove and their
 resumable continuations, federated admission/re-run, and `copy_text`. Each

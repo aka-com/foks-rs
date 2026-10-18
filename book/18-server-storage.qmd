@@ -129,7 +129,7 @@ monotone with the total order the writer imposes. A test pins this: a job
 queued behind a slow one records a time after the slow one finished.
 
 **A job whose request has timed out is skipped.** Each request has one
-deadline, the request timeout (15 s) after the first byte of its frame. Body
+deadline, the request timeout (30 s by default) after the first byte of its frame. Body
 reading, the handler, reader checkout, queued writes, external chunk transfers
 and the response write all consume it. The session stops waiting for the
 handler at the deadline and closes the connection without a response, and the
@@ -179,10 +179,15 @@ Network reads go through read-only connections opened with
 application ID, the schema version and the schema contract before use.
 `ReadDatabase::open` also runs the KV-tree capacity check, which reads the
 stored synchronization heads of every namespace. The pool opens its
-connections through a `ReadDatabaseOpener`, which runs that check once when
-the pool is created; later connections recheck the file identity, the schema
-version and the contract. Only the writer may modify the database while an
-opener is in use. The pool is a vector of idle connections behind a mutex; it
+connections through a `ReadDatabaseOpener`. A server that owns the writer
+takes the opener from it (`Database::read_opener`): the writer ran the check
+when it opened the file and enforces the same limits on every mutation, so
+when the readers' KV limits are at least the writer's, no reader repeats the
+check. Without a writer, or with stricter reader limits,
+`ReadDatabaseOpener::new` runs it once. The listener's startup check, the
+request pool, the web admin pool and the metrics sampler open readers this
+way. Later connections recheck the file identity, the schema version and the
+contract. Only the writer may modify the database while an opener is in use. The pool is a vector of idle connections behind a mutex; it
 opens connections lazily up to a maximum (default 32) and, when exhausted,
 returns `Error::ReaderPool` rather than waiting. The request is answered
 with status 1012 and counted in `foks_reader_pool_exhausted_total`, apart
@@ -216,7 +221,7 @@ mechanism differs by resource.
 | Request memory | 64 MiB, 2 × frame length reserved per frame; frames up to 4 KiB use a separate 1 MiB budget | frames wait for permits |
 | Working and response memory | 512 MiB and 128 MiB, charged by the codec, SQL results and chunk transfers | status 1012, or the connection closes once a handler may have written |
 | Frame size | 16 MiB | rejected before allocation |
-| Request deadline | 15 s from the first frame byte | connection closed; a write still queued is skipped |
+| Request deadline | 30 s from the first frame byte | connection closed; a write still queued is skipped |
 | I/O timeout | 15 s | connection closed |
 
 Handlers run on blocking threads under a semaphore, and they acquire their

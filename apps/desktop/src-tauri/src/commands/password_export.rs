@@ -244,8 +244,23 @@ fn store_logins(state: &AppState, id: &str) -> Result<Vec<CatalogItem>, AgentErr
 
 /// Writes the export to `destination` through a temporary file beside it,
 /// which replaces the destination only once every login is written. Only the
-/// replacement runs inside the interval's publication gate.
-fn export_to_path(
+/// replacement runs inside the interval's publication gate. Any failure after
+/// the interval ended, including creating or syncing the temporary file, is
+/// reported as `app-locked`.
+pub(super) fn export_to_path(
+    transport: &dyn foks_desktop::AgentTransport,
+    items: &[CatalogItem],
+    interval: &UnlockedInterval,
+    deadline: &foks_local_deadline::Deadline,
+    destination: &Path,
+) -> Result<(usize, usize), AgentError> {
+    export_in_interval(transport, items, interval, deadline, destination).or_else(|error| {
+        interval.check()?;
+        Err(error)
+    })
+}
+
+fn export_in_interval(
     transport: &dyn foks_desktop::AgentTransport,
     items: &[CatalogItem],
     interval: &UnlockedInterval,

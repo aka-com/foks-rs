@@ -1,6 +1,18 @@
 use super::*;
 use foks_keystore::EncryptedFileSecretStore;
 use foks_server_testkit::TestEnvironment;
+
+/// Wall-clock cap for one maintenance turn in tests. Production turns get
+/// 50 ms; an owner that makes no progress before that deadline is backed off
+/// for 60 s. Under parallel test load a turn can be descheduled past 50 ms,
+/// so tests that count turns or drain within a fixed time use this cap. Every
+/// maintenance loop is also bounded by record counts (8 removals, 256 scanned
+/// entries, 131 probes, 128 prunes), and those bounds still end each turn.
+pub(crate) const MAINTENANCE_TURN: Duration = Duration::from_secs(10);
+
+pub(crate) fn maintenance_deadline() -> std::time::Instant {
+    std::time::Instant::now() + MAINTENANCE_TURN
+}
 pub(crate) struct AccountFixture {
     pub(crate) environment: TestEnvironment,
     pub(crate) _server: foks_server_testkit::InProcessServer,

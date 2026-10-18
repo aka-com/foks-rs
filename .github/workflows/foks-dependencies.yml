@@ -3,9 +3,8 @@ name: FOKS dependency audit
 on:
   pull_request:
     paths:
-      - "Cargo.lock"
+      - "**/Cargo.lock"
       - "**/Cargo.toml"
-      - "fuzz/Cargo.lock"
       - "deny.toml"
       - "package.json"
       - "package-lock.json"
@@ -19,9 +18,8 @@ on:
   push:
     branches: [main]
     paths:
-      - "Cargo.lock"
+      - "**/Cargo.lock"
       - "**/Cargo.toml"
-      - "fuzz/Cargo.lock"
       - "deny.toml"
       - "package.json"
       - "package-lock.json"
@@ -61,9 +59,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Every Cargo.lock in the repository; test_dependency_audit.py checks
-        # that this list stays complete.
-        manifest: [Cargo.toml, fuzz/Cargo.toml, tools/foks-celld-guarded/Cargo.toml, tools/foks-hosted-transport-check/Cargo.toml]
+        # Every Cargo.lock in the repository except
+        # tools/foks-celld-guarded/Cargo.lock, whose graph needs the pinned
+        # celld source that prepare-runtime.py places under its gitignored
+        # runtime/ directory on the macOS lab machine; test_dependency_audit.py
+        # checks that this list stays complete.
+        manifest: [Cargo.toml, fuzz/Cargo.toml, tools/foks-hosted-transport-check/Cargo.toml]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -86,8 +86,11 @@ impl ServerData {
         }
     }
 
+    /// `read_opener` opens the request reader pool; it is `Some` exactly when
+    /// `config.read_database` is.
     pub(crate) fn from_config(
         config: &crate::Config,
+        read_opener: Option<foks_server_db::ReadDatabaseOpener>,
         rate_limiter: Arc<crate::rate_limit::RateLimiter>,
     ) -> Result<Self> {
         crate::config::validate_vhost_management_host(&config.vhost_management_host)?;
@@ -138,12 +141,10 @@ impl ServerData {
             canonical_name,
             probe_endpoint,
             current_root: probe.merkle_root.encoded()?,
-            read_database: config
-                .read_database
-                .clone()
-                .map(|database| {
-                    let pool = crate::read_pool::ReadPool::new(
-                        database,
+            read_database: read_opener
+                .map(|opener| {
+                    let pool = crate::read_pool::ReadPool::with_opener(
+                        opener,
                         config.limits.maximum_read_connections,
                     )?;
                     config.metrics.reader_pool_opened(pool.open_connections()?);
@@ -429,10 +430,6 @@ pub(crate) async fn serve(
             return Ok(());
         }
         deadline.remaining()?;
-        // An admitted KEX receive keeps its permit through the response write
-        // and every early exit.
-        let mut kex_poll = None;
-        let mut kex_completion = None;
         let long_poll = !proof
             && matches!(
                 route_id,
@@ -451,56 +448,24 @@ pub(crate) async fn serve(
                     .ok()
             }
             Ok(call) if long_poll && call.route.id == RouteId::KexReceive => {
-                // A Go-compatible KEX receive can stay open for an hour. The
-                // global budget never queues, so receives cannot hold every
-                // ordinary connection.
-                let Ok(permit) = service_data.kex_polling.clone().try_acquire_owned() else {
-                    service_data.metrics.kex.rejected();
-                    service_data
-                        .metrics
-                        .request_rate_limited(crate::AdmissionRejection::KexReceivePolls);
-                    let response = request_memory
-                        .sync(|| encode_status_response_at(&RpcStatus::RateLimited, sequence))?;
-                    write_response_until(&mut stream, &response, deadline, limits.io_timeout)
-                        .await?;
-                    service_data
-                        .metrics
-                        .response_completed(family, STATUS_RATE_LIMIT_ERROR);
-                    return Ok(());
-                };
-                let kex = kex_poll.insert(crate::metrics::kex::Poll::new(
-                    Arc::clone(&service_data.metrics),
-                    permit,
-                ));
-                let poll = service_data.long_poll(call.route, sequence, request_memory);
-                let completion = &mut kex_completion;
-                let handler = async {
-                    match handlers::kex_receive_response(service_data.as_ref(), call).await {
-                        Ok(response) => {
-                            *completion = Some(crate::metrics::kex::Completion::Delivered);
-                            Ok(response)
-                        }
-                        Err(error) => {
-                            *completion = Some(error.completion);
-                            Err(error.status)
-                        }
+                let poll = match service_data.kex_long_poll(call.route, sequence, request_memory) {
+                    Ok(poll) => poll,
+                    Err(request_memory) => {
+                        let response = request_memory.sync(|| {
+                            encode_status_response_at(&RpcStatus::RateLimited, sequence)
+                        })?;
+                        write_response_until(&mut stream, &response, deadline, limits.io_timeout)
+                            .await?;
+                        service_data
+                            .metrics
+                            .response_completed(family, STATUS_RATE_LIMIT_ERROR);
+                        return Ok(());
                     }
                 };
-                match poll
-                    .run(stream.get_ref().0.readable(), &mut stop, handler)
+                let handler = handlers::kex_receive_response(service_data.as_ref(), call);
+                poll.run(stream.get_ref().0.readable(), &mut stop, handler)
                     .await?
-                {
-                    Ok(outcome) => Some(outcome),
-                    Err(unanswered) => {
-                        kex.complete(match unanswered {
-                            Unanswered::PeerReadable => {
-                                crate::metrics::kex::Completion::Disconnected
-                            }
-                            Unanswered::Stopped => crate::metrics::kex::Completion::Shutdown,
-                        });
-                        None
-                    }
-                }
+                    .ok()
             }
             Ok(call) if long_poll && call.route.id == RouteId::RealTimeRtPollInbox => {
                 let poll = service_data.long_poll(call.route, sequence, request_memory);
@@ -542,6 +507,7 @@ pub(crate) async fn serve(
                                 status: STATUS_OK,
                                 route,
                                 disconnect_before_response: false,
+                                kex: None,
                                 _memory: Arc::clone(&request_memory),
                             });
                         }
@@ -560,6 +526,7 @@ pub(crate) async fn serve(
                                         status,
                                         route: None,
                                         disconnect_before_response: false,
+                                        kex: None,
                                         _memory: Arc::clone(&request_memory),
                                     });
                                 }
@@ -584,6 +551,7 @@ pub(crate) async fn serve(
                                         status: STATUS_OK,
                                         route,
                                         disconnect_before_response: true,
+                                        kex: None,
                                         _memory: Arc::clone(&request_memory),
                                     });
                                 }
@@ -624,6 +592,7 @@ pub(crate) async fn serve(
                             status,
                             route,
                             disconnect_before_response: false,
+                            kex: None,
                             _memory: Arc::clone(&request_memory),
                         })
                     })
@@ -679,6 +648,8 @@ pub(crate) async fn serve(
             deadline
         };
         let _memory = outcome._memory;
+        // A KEX receive keeps its budget permit until its response is written.
+        let mut kex = outcome.kex;
         let response = outcome.response;
         let status = outcome.status;
         let route = outcome.route;
@@ -712,16 +683,16 @@ pub(crate) async fn serve(
         let write = tokio::select! {
             result = stop.changed() => {
                 let _ = result;
-                if let Some(kex) = kex_poll.as_mut() {
-                    kex.complete(crate::metrics::kex::Completion::Shutdown);
+                if let Some(kex) = kex.take() {
+                    kex.stopped();
                 }
                 break;
             }
             result = write_response_until(&mut stream, &response, response_deadline, limits.io_timeout) => result,
         };
         write?;
-        if let (Some(kex), Some(completion)) = (kex_poll.as_mut(), kex_completion) {
-            kex.complete(completion);
+        if let Some(kex) = kex {
+            kex.written();
         }
         service_data.metrics.response_completed(family, status);
     }
@@ -734,8 +705,33 @@ struct RequestOutcome {
     status: u64,
     route: Option<&'static crate::rpc::RouteSpec>,
     disconnect_before_response: bool,
+    /// Set for a KEX receive; see [`KexReceive`].
+    kex: Option<KexReceive>,
     // Fields drop in declaration order: buffers must go before reservations.
     _memory: Arc<super::memory::Request>,
+}
+
+/// An answered KEX receive's permit of the global KEX receive budget and its
+/// metrics. The completion the handler reported is recorded only once the
+/// response has been written; a receive dropped before that, by a failed or
+/// skipped write, is recorded as failed.
+struct KexReceive {
+    poll: crate::metrics::kex::Poll,
+    /// `None` when the handler did not run, after an armed fault.
+    completion: Option<crate::metrics::kex::Completion>,
+}
+
+impl KexReceive {
+    fn written(mut self) {
+        if let Some(completion) = self.completion {
+            self.poll.complete(completion);
+        }
+    }
+
+    fn stopped(mut self) {
+        self.poll
+            .complete(crate::metrics::kex::Completion::Shutdown);
+    }
 }
 
 /// Encodes a handler result and returns the response frame with the wire
@@ -807,8 +803,8 @@ enum Unanswered {
 /// realtime inbox poll. A Go-compatible long poll can remain open for a long
 /// time, so it is awaited on the connection task rather than a blocking worker;
 /// the listener's active-connection semaphore bounds how many run at once, and
-/// KEX receives also hold a permit of the global KEX receive budget. Long polls
-/// run outside the request deadline scope.
+/// KEX receives also hold a permit of the global KEX receive budget (see
+/// [`KexLongPoll`]). Long polls run outside the request deadline scope.
 struct LongPoll<'a> {
     metrics: &'a Arc<crate::ServerMetrics>,
     faults: Option<&'a crate::SessionFaults>,
@@ -848,6 +844,7 @@ impl LongPoll<'_> {
                 status: STATUS_OK,
                 route: Some(route),
                 disconnect_before_response: true,
+                kex: None,
                 _memory: self.request_memory,
             }));
         }
@@ -876,9 +873,77 @@ impl LongPoll<'_> {
             status,
             route: Some(route),
             disconnect_before_response: false,
+            kex: None,
             _memory: self.request_memory,
         }))
     }
+}
+
+/// A KEX receive long poll that holds a permit of the global KEX receive
+/// budget, from admission through its response write.
+struct KexLongPoll<'a> {
+    poll: LongPoll<'a>,
+    kex: crate::metrics::kex::Poll,
+}
+
+impl KexLongPoll<'_> {
+    /// Runs the receive as [`LongPoll::run`] does. An answered receive's
+    /// outcome carries the permit and the handler's completion as a
+    /// [`KexReceive`]; an unanswered one is recorded as disconnected or shut
+    /// down and releases the permit.
+    async fn run<P, H>(
+        self,
+        peer_readable: P,
+        stop: &mut watch::Receiver<bool>,
+        handler: H,
+    ) -> Result<std::result::Result<RequestOutcome, Unanswered>>
+    where
+        P: std::future::Future,
+        H: std::future::Future<Output = std::result::Result<Vec<u8>, kex::ReceiveError>>,
+    {
+        let mut poll = self.kex;
+        let mut completion = None;
+        let handler = async {
+            match handler.await {
+                Ok(response) => {
+                    completion = Some(crate::metrics::kex::Completion::Delivered);
+                    Ok(response)
+                }
+                Err(error) => {
+                    completion = Some(error.completion);
+                    Err(error.status)
+                }
+            }
+        };
+        match self.poll.run(peer_readable, stop, handler).await? {
+            Ok(mut outcome) => {
+                outcome.kex = Some(KexReceive { poll, completion });
+                Ok(Ok(outcome))
+            }
+            Err(unanswered) => {
+                poll.complete(match unanswered {
+                    Unanswered::PeerReadable => crate::metrics::kex::Completion::Disconnected,
+                    Unanswered::Stopped => crate::metrics::kex::Completion::Shutdown,
+                });
+                Ok(Err(unanswered))
+            }
+        }
+    }
+}
+
+/// Takes a permit of the KEX receive budget `polls`, or counts the rejection.
+/// The budget never queues, so receives cannot hold every ordinary
+/// connection.
+fn admit_kex_receive(
+    metrics: &Arc<crate::ServerMetrics>,
+    polls: &Arc<Semaphore>,
+) -> Option<crate::metrics::kex::Poll> {
+    let Ok(permit) = Arc::clone(polls).try_acquire_owned() else {
+        metrics.kex.rejected();
+        metrics.request_rate_limited(crate::AdmissionRejection::KexReceivePolls);
+        return None;
+    };
+    Some(crate::metrics::kex::Poll::new(Arc::clone(metrics), permit))
 }
 
 pub(crate) use foks_hosted_transport::framing::read_frame_ingress;
@@ -953,6 +1018,25 @@ impl ServerData {
             sequence,
             request_memory,
         }
+    }
+
+    /// A KEX receive long poll. A Go-compatible receive can stay open for an
+    /// hour, so it needs a permit of the global KEX receive budget. Without a
+    /// free permit the rejection is counted and the request memory is
+    /// returned for the `RateLimited` response.
+    fn kex_long_poll(
+        &self,
+        route: &'static RouteSpec,
+        sequence: u64,
+        request_memory: Arc<super::memory::Request>,
+    ) -> std::result::Result<KexLongPoll<'_>, Arc<super::memory::Request>> {
+        let Some(kex) = admit_kex_receive(&self.metrics, &self.kex_polling) else {
+            return Err(request_memory);
+        };
+        Ok(KexLongPoll {
+            poll: self.long_poll(route, sequence, request_memory),
+            kex,
+        })
     }
 
     fn should_disconnect(
@@ -1155,6 +1239,85 @@ mod tests {
         assert!(matches!(outcome, Err(Unanswered::Stopped)));
         assert_eq!(memory.available_permits(), 1);
         assert_eq!(metrics.snapshot().handler_duration_observations, 2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn kex_receives_hold_a_budget_permit_until_the_response_is_written() {
+        use crate::metrics::kex::Completion;
+        let metrics = Arc::new(crate::ServerMetrics::default());
+        let faults = crate::SessionFaults::default();
+        let memory = Arc::new(Semaphore::new(4));
+        let budget = Arc::new(Semaphore::new(1));
+        let (stop_sender, mut stop) = watch::channel(false);
+        let kex_poll = |memory: &Arc<Semaphore>| KexLongPoll {
+            poll: long_poll(&metrics, &faults, memory, RouteId::KexReceive),
+            kex: admit_kex_receive(&metrics, &budget).unwrap(),
+        };
+
+        // A delivered receive keeps its permit until its response is written,
+        // and the budget refuses a second receive meanwhile.
+        let mut outcome = kex_poll(&memory)
+            .run(std::future::pending::<()>(), &mut stop, async {
+                Ok(Vec::new())
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(budget.available_permits(), 0);
+        assert!(admit_kex_receive(&metrics, &budget).is_none());
+        let snapshot = metrics.snapshot();
+        assert_eq!((snapshot.kex.active, snapshot.kex.rejected), (1, 1));
+        assert_eq!(snapshot.rate_limited_requests, 1);
+        outcome.kex.take().unwrap().written();
+        assert_eq!(budget.available_permits(), 1);
+        assert_eq!(metrics.snapshot().kex.delivered, 1);
+        drop(outcome);
+
+        // The handler's completion is recorded only for a written response.
+        let mut outcome = kex_poll(&memory)
+            .run(std::future::pending::<()>(), &mut stop, async {
+                Err(kex::ReceiveError {
+                    status: RpcStatus::RateLimited,
+                    completion: Completion::TimedOut,
+                })
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(outcome.status, RpcStatus::RateLimited.code());
+        drop(outcome.kex.take());
+        drop(outcome);
+        assert_eq!(metrics.snapshot().kex.timed_out, 0);
+        assert_eq!(metrics.snapshot().kex.failed, 1);
+        let mut outcome = kex_poll(&memory)
+            .run(std::future::pending::<()>(), &mut stop, async {
+                Ok(Vec::new())
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        outcome.kex.take().unwrap().stopped();
+        drop(outcome);
+        assert_eq!(metrics.snapshot().kex.shutdown, 1);
+
+        // An unanswered receive releases its permit with its reason.
+        let pending = std::future::pending::<std::result::Result<Vec<u8>, kex::ReceiveError>>;
+        let outcome = kex_poll(&memory)
+            .run(std::future::ready(()), &mut stop, pending())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, Err(Unanswered::PeerReadable)));
+        stop_sender.send(true).unwrap();
+        let outcome = kex_poll(&memory)
+            .run(std::future::pending::<()>(), &mut stop, pending())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, Err(Unanswered::Stopped)));
+        let snapshot = metrics.snapshot();
+        assert_eq!((snapshot.kex.disconnected, snapshot.kex.shutdown), (1, 2));
+        assert_eq!((snapshot.kex.active, snapshot.kex.admitted), (0, 5));
+        assert_eq!(budget.available_permits(), 1);
+        assert_eq!(memory.available_permits(), 4);
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -60,7 +60,13 @@ impl ManagementServer {
         let capacity_limits = foks_server_db::CapacityResource::ALL
             .map(|resource| (resource, resource.limit(&database.database)))
             .to_vec();
-        let sso = sso_sample::SsoSampler::new(oidc_configured.then_some(database));
+        // The sampler's opener reuses the writer's KV capacity scan, so a
+        // reopen after a failed sample checks only identity and schema.
+        let sso = sso_sample::SsoSampler::new(
+            oidc_configured
+                .then(|| crate::read_pool::opener(&database, Some(&writer)))
+                .transpose()?,
+        );
         let runtime = tokio::runtime::Builder::new_current_thread()
             .thread_name("foks-server-management")
             .enable_all()

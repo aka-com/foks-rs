@@ -819,6 +819,7 @@ name = "foks-agent-proto"
 version = "0.4.0"
 dependencies = [
  "base64",
+ "foks-local-deadline",
  "foks-proto",
  "serde",
  "serde_json",
@@ -861,6 +862,7 @@ dependencies = [
  "foks-snowpack",
  "foks-verify",
  "libfuzzer-sys",
+ "serde_json",
  "sha2 0.11.0",
 ]
 
@@ -876,6 +878,14 @@ dependencies = [
  "sha2 0.11.0",
  "thiserror",
  "zeroize",
+]
+
+[[package]]
+name = "foks-local-deadline"
+version = "0.4.0"
+dependencies = [
+ "serde",
+ "thiserror",
 ]
 
 [[package]]

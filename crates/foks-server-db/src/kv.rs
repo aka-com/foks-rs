@@ -1522,6 +1522,15 @@ fn ensure_kv_tree_capacity(
     Ok(())
 }
 
+/// Whether every KV tree that fits `validated` also fits `config`, so that a
+/// capacity scan against `validated` makes one against `config` redundant.
+pub(crate) fn kv_tree_capacity_covers(validated: &crate::Config, config: &crate::Config) -> bool {
+    config.maximum_kv_directories >= validated.maximum_kv_directories
+        && config.maximum_kv_dirents >= validated.maximum_kv_dirents
+        && config.maximum_kv_node_bytes >= validated.maximum_kv_node_bytes
+        && config.maximum_kv_dirent_bytes >= validated.maximum_kv_dirent_bytes
+}
+
 pub(crate) fn validate_kv_tree_capacity(
     connection: &rusqlite::Connection,
     config: &crate::Config,

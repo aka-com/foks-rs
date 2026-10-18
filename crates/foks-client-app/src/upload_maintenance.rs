@@ -32,7 +32,11 @@ impl CheckedProfileSession<'_> {
         cursor: &mut UploadMaintenanceCursor,
         master: &[u8; 32],
     ) -> Result<AdapterMaintenanceReport> {
-        self.maintain_upload_state_until(cursor, master, Instant::now() + Duration::from_millis(50))
+        self.maintain_upload_state_until(
+            cursor,
+            master,
+            crate::test_support::maintenance_deadline(),
+        )
     }
 
     pub(crate) fn maintain_upload_state_until(
@@ -731,7 +735,11 @@ mod tests {
             let hard = HardStateStore::open(&s.paths.hard_database)?;
             let mut cursor = AdapterMaintenanceCursor::default();
             for _ in 0..80 {
-                let report = s.maintain_adapter_state(&mut cursor, master)?;
+                let report = s.maintain_adapter_state_until(
+                    &mut cursor,
+                    master,
+                    crate::test_support::maintenance_deadline(),
+                )?;
                 if hard.upload_cleanup(&id)?.unwrap().phase == UploadCleanupPhase::Complete {
                     return Ok(());
                 }

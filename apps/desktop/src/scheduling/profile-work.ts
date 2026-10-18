@@ -56,18 +56,26 @@ const newLane = (): Lane => ({
 const idle = (entries: Lane): boolean =>
   !entries.draining && !entries.foreground.length && !entries.background.length;
 /**
- * The agent answers a request within its own budget: the managed agent is
- * started with a sixty-second request timeout (`--request-timeout-seconds`
- * in `src-tauri/src/agent.rs`).
+ * The budget of each command deadline class, in milliseconds. The host runs
+ * a command under the cap of its class (`command_class` in
+ * `src-tauri/src/commands/deadline.rs`, `DeadlineClass::cap` in
+ * `crates/foks-agent-proto`), and the agent ends the request by the same
+ * deadline.
  */
-const NATIVE_REQUEST_TIMEOUT = 60_000;
+export const COMMAND_DEADLINE_CLASS_BUDGET = {
+  ordinary: 15_000,
+  bulk: 300_000,
+  pairing: 300_000,
+} as const;
 /**
- * How long queued work waits for admission. Work queued behind a request
- * that uses its whole budget has to outlast that budget plus the scheduling
- * and IPC slack around it; a wait equal to the budget expired such work at
- * the moment the queue freed.
+ * How long queued work waits for admission. Pairing commands such as
+ * accepting a device pairing run in the default lane, so work can be queued
+ * behind a command of the longest class. Such work has to outlast that
+ * budget plus the scheduling and IPC slack around it; a wait equal to the
+ * budget expired it at the moment the queue freed.
  */
-const MAX_QUEUE_WAIT = NATIVE_REQUEST_TIMEOUT + 15_000;
+export const MAX_QUEUE_WAIT =
+  Math.max(...Object.values(COMMAND_DEADLINE_CLASS_BUDGET)) + 15_000;
 const MAX_QUEUED = 256;
 const queueBusy = (message: string) =>
   Object.assign(new Error(message), {

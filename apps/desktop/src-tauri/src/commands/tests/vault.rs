@@ -1738,6 +1738,33 @@ fn download_rejects_changed_entry_identity_without_publishing_or_leaving_tempora
     }
 }
 
+#[test]
+fn a_download_file_failure_after_the_lock_is_reported_as_app_locked() {
+    for (locked, code) in [(false, "download-write"), (true, "app-locked")] {
+        let transport = Arc::new(DownloadTransport {
+            total: 3,
+            calls: Mutex::new(Vec::new()),
+        });
+        let directory = tempfile::tempdir().unwrap();
+        // The temporary file cannot be created in a missing folder.
+        let destination = directory.path().join("missing").join("download.bin");
+        let lock = crate::applock::AppLock::unlocked_for_test();
+        let interval = lock.interval_for_test();
+        if locked {
+            lock.invalidate_for_test(false);
+        }
+        let error = download_to_path(
+            transport.clone(),
+            &download_item(3),
+            &destination,
+            &interval,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, code, "locked: {locked}");
+        assert!(transport.calls.lock().unwrap().is_empty());
+    }
+}
+
 fn download_to_path(
     transport: Arc<dyn foks_desktop::AgentTransport>,
     item: &CatalogItem,

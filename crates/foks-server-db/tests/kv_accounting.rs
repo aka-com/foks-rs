@@ -238,3 +238,38 @@ fn pooled_opener_validates_initial_limits_and_rejects_replacement() {
     std::fs::write(&test.path, []).unwrap();
     assert!(matches!(opener.open(), Err(Error::UnsafeDatabasePath(_))));
 }
+
+#[test]
+fn writer_opener_reuses_the_writer_scan_only_when_it_covers_the_reader() {
+    let strict = Config {
+        maximum_kv_node_bytes: 4,
+        ..Config::default()
+    };
+    let test = common::TestDatabase::with_config(strict.clone());
+    // Equal or looser KV limits on the same file: no second scan is needed.
+    for config in [strict.clone(), Config::default()] {
+        let opener = test
+            .database
+            .read_opener(&test.path, &config)
+            .unwrap()
+            .unwrap();
+        opener.open().unwrap();
+    }
+    // Stricter limits than the writer validated need their own scan.
+    let stricter = Config {
+        maximum_kv_node_bytes: 3,
+        ..strict
+    };
+    assert!(test
+        .database
+        .read_opener(&test.path, &stricter)
+        .unwrap()
+        .is_none());
+    // A different file is not covered by this writer's scan.
+    let other = common::TestDatabase::new();
+    assert!(test
+        .database
+        .read_opener(&other.path, &Config::default())
+        .unwrap()
+        .is_none());
+}

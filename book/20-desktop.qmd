@@ -427,10 +427,15 @@ defines 1 GiB, and the code is authoritative.
 
 ## The agent's lifecycle
 
-The host launches the packaged agent with `--request-timeout-seconds 60`
-(the agent's default of 15 s is too short for a path that may raise a
-blocking macOS Keychain prompt), with standard input closed and standard
-output and error redirected to a 0600 log file. A reaper thread waits on
+The host launches the packaged agent with `--request-timeout-seconds 60`,
+with standard input closed and standard output and error redirected to a
+0600 log file. The flag does not lengthen a request: the agent bounds each
+request by the deadline it carries (see Command deadlines and the unlocked
+interval) within its class's cap, and caps an Ordinary request at the
+smaller of 15 s and the flag. The flag bounds the agent's waits that carry
+no request deadline: reading a request frame and writing its response,
+scheduled background profile work, and the compatibility HTTP client. A
+reaper thread waits on
 the child so its exit status is observed. Exit is a one-way state machine
 in the close guard, `Idle → Decision → Stopping → Finalizing`, with `Failed`
 and `ForceConfirmation` branches, and the desktop process ends only after

@@ -362,9 +362,10 @@ pub(super) async fn open_link_until(
 
 /// Hands an address [`safe_external_url`] accepted to the platform's opener
 /// (see [`crate::opener`]), which shows it in the default browser. Only the
-/// hand-off step is serialized with locking; connecting to the portal and
-/// waiting for a started launcher run outside the publication gate under
-/// worker admission.
+/// hand-off step (sending the portal call, or starting the launcher) is
+/// serialized with locking; connecting to the portal, waiting for its reply and
+/// waiting for a started launcher run outside the publication gate under worker
+/// admission.
 pub(super) async fn open_external_url(
     parsed: url::Url,
     interval: crate::applock::UnlockedInterval,

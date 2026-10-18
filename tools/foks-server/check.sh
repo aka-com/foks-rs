@@ -6,7 +6,9 @@ cd "$repository_root"
 
 packages=(
     foks-go-interop
+    foks-hosted-transport
     foks-merkle-store
+    foks-metadata-core
     foks-protocol-metadata
     foks-server-db
     foks-server

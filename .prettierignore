@@ -8,3 +8,20 @@ node_modules/
 # Test fixtures whose bytes are pinned by a manifest: reformatting one changes
 # its recorded size and hash, and the fixture tests fail on it.
 crates/*/tests/fixtures/
+
+# JSON whose exact bytes are compiled into a crate and compared or hashed:
+# the read-token wire golden (read_token/binding.json, compared with
+# canonical_bytes()) and the restricted-list policy profiles, whose bytes
+# name the policy (restricted_list/profile.rs hashes them).
+crates/foks-metadata-core/src/read_token/*.json
+crates/foks-server/src/restricted_list/profile/
+
+# The celld qualification tools keep their own formatting. Their lock and
+# profile JSON files are pinned by SHA-256 in prepare-runtime.py, and
+# tools/foks-metadata-spike/celld-directory-schema.json is compiled into
+# foks-metadata-core's schema tests.
+tools/foks-celld-guarded/
+tools/foks-celld-proof/
+tools/foks-metadata-spike/
+tools/foks-schema-cookie-probe/
+tools/foks-sqlite-policy/

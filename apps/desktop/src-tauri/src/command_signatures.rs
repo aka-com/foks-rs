@@ -43,9 +43,13 @@ const INJECTED: [&str; 8] = [
 /// Crate-defined parameter types that Tauri builds from the invocation through
 /// their `CommandArg` implementation instead of reading a payload key.
 /// Commands name them by a crate path such as `super::deadline::CommandState`,
-/// so they are matched by the last path segment from any path; a crate item
-/// of the same name is the extractor itself.
+/// so they are matched by the last path segment from any path.
+/// `crate_injected_names_bind_only_the_extractor` checks that the crate defines
+/// each name once, in [`CRATE_INJECTED_HOME`], and imports it only from there.
 const CRATE_INJECTED: [&str; 1] = ["CommandState"];
+
+/// The module, relative to `src`, that defines every [`CRATE_INJECTED`] type.
+const CRATE_INJECTED_HOME: &str = "commands/deadline.rs";
 
 /// The extractor whose construction applies `commands::deadline::command_class`.
 const DEADLINE_EXTRACTOR: &str = "CommandState";
@@ -404,6 +408,65 @@ impl<'ast> Visit<'ast> for LocalInjectedNames<'_> {
     }
 }
 
+/// Crate items named one of the [`CRATE_INJECTED`] names, and imports that bind
+/// one of those names other than from the `deadline` module, as
+/// `path: kind name`.
+struct CrateInjectedBindings<'a> {
+    path: &'a Path,
+    found: Vec<String>,
+}
+
+impl CrateInjectedBindings<'_> {
+    fn check(&mut self, kind: &str, ident: &syn::Ident) {
+        if CRATE_INJECTED.iter().any(|name| ident == name) {
+            self.found
+                .push(format!("{}: {kind} {ident}", self.path.display()));
+        }
+    }
+
+    fn check_use(&mut self, tree: &syn::UseTree, parent: Option<&syn::Ident>) {
+        match tree {
+            syn::UseTree::Path(path) => self.check_use(&path.tree, Some(&path.ident)),
+            syn::UseTree::Name(_) if parent.is_some_and(|parent| parent == "deadline") => {}
+            syn::UseTree::Name(name) => self.check("use", &name.ident),
+            syn::UseTree::Rename(rename) => self.check("use", &rename.rename),
+            syn::UseTree::Group(group) => {
+                for tree in &group.items {
+                    self.check_use(tree, parent);
+                }
+            }
+            syn::UseTree::Glob(_) => {}
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for CrateInjectedBindings<'_> {
+    fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
+        self.check("struct", &item.ident);
+    }
+
+    fn visit_item_enum(&mut self, item: &'ast syn::ItemEnum) {
+        self.check("enum", &item.ident);
+    }
+
+    fn visit_item_union(&mut self, item: &'ast syn::ItemUnion) {
+        self.check("union", &item.ident);
+    }
+
+    fn visit_item_type(&mut self, item: &'ast syn::ItemType) {
+        self.check("type", &item.ident);
+    }
+
+    fn visit_item_trait(&mut self, item: &'ast syn::ItemTrait) {
+        self.check("trait", &item.ident);
+        syn::visit::visit_item_trait(self, item);
+    }
+
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        self.check_use(&item.tree, None);
+    }
+}
+
 fn source_files(directory: &Path, files: &mut Vec<PathBuf>) {
     let entries = std::fs::read_dir(directory)
         .unwrap_or_else(|error| panic!("{} is readable: {error}", directory.display()));
@@ -576,6 +639,57 @@ fn crate_items_do_not_reuse_injected_names() {
         found.append(&mut names.found);
     }
     assert_eq!(found, Vec::<String>::new());
+}
+
+#[test]
+fn crate_injected_names_bind_only_the_extractor() {
+    // `is_injected` matches a crate-injected name from any path, so another
+    // type or import under that name would drop a payload parameter from the
+    // manifest and mark its command as deadline-checked.
+    let mut files = Vec::new();
+    source_files(&source_root(), &mut files);
+    files.sort();
+    let mut found = Vec::new();
+    for file in &files {
+        let mut bindings = CrateInjectedBindings {
+            path: file.strip_prefix(source_root()).unwrap_or(file),
+            found: Vec::new(),
+        };
+        bindings.visit_file(&parse(file));
+        found.append(&mut bindings.found);
+    }
+    let expected: Vec<String> = CRATE_INJECTED
+        .iter()
+        .map(|name| format!("{CRATE_INJECTED_HOME}: struct {name}"))
+        .collect();
+    assert_eq!(found, expected);
+}
+
+#[test]
+fn crate_injected_bindings_report_other_definitions_and_renames() {
+    let file: syn::File = syn::parse_quote! {
+        use super::deadline::CommandState;
+        use crate::commands::{deadline::CommandState as Extractor, other::CommandState};
+        use foks_agent_proto::Request as CommandState;
+        mod nested {
+            pub enum CommandState {}
+        }
+        type CommandState = u8;
+    };
+    let mut bindings = CrateInjectedBindings {
+        path: Path::new("example.rs"),
+        found: Vec::new(),
+    };
+    bindings.visit_file(&file);
+    assert_eq!(
+        bindings.found,
+        [
+            "example.rs: use CommandState",
+            "example.rs: use CommandState",
+            "example.rs: enum CommandState",
+            "example.rs: type CommandState",
+        ]
+    );
 }
 
 #[test]

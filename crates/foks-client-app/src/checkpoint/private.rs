@@ -162,13 +162,15 @@ pub(crate) fn upgrade_if_needed(root: &Path) -> Result<()> {
             Err(error) => return Err(error.into()),
         }
         let database = directory.join("hard.sqlite3");
-        // An absent or uninitialized database has no identity to enroll; the
-        // non-creating open never initializes one here.
-        let hard = match HardStateStore::open_existing(&database) {
-            Ok(hard) => hard,
-            Err(foks_client_db::Error::StateMissing) => continue,
-            Err(error) => return Err(error.into()),
-        };
+        // A profile with no database artifacts has nothing to enroll, and the
+        // upgrade must not create one. An empty database file or sidecar-only
+        // state is initialized and enrolled here: the maintenance guard makes
+        // this exclusive, and the first checked open would otherwise find an
+        // existing database without a rollback record and require a reset.
+        if !hard_state_artifacts_exist(&database)? {
+            continue;
+        }
+        let hard = HardStateStore::open(&database)?;
         let checkpoint = registry::checkpoint_for_store(&profile, &hard)?;
         let checkpoint_key = rollback_record_key(&profile.name)?;
         match manifest.get(&checkpoint_key) {
@@ -338,6 +340,61 @@ mod tests {
             assert!(!root.join(MIGRATION).exists());
             let registry = ProfileRegistry::open(&root).unwrap();
             let session = ProfileSession::open(&registry, "local").unwrap();
+            migrated
+                .with_checked_session(&session, |s| {
+                    assert_eq!(s.rollback_checkpoint()?.digest()?, expected);
+                    Ok::<_, Error>(())
+                })
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn private_v3_upgrade_initializes_and_enrolls_an_empty_or_sidecar_only_database() {
+        for sidecar_only in [false, true] {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = temporary.path().join("state");
+            let credentials =
+                ClientCredentials::initialize(&root, CredentialBackend::PrivateFile).unwrap();
+            let session = profile(&root);
+            let database = session.paths.hard_database.clone();
+            drop(session);
+            drop(credentials);
+            fs::remove_dir_all(root.join(DIRECTORY)).unwrap();
+            let mut state = inspect_state_file(&root).unwrap().unwrap();
+            state.version = STATE_CONFIG_VERSION;
+            atomic_private_write(
+                &root.join(STATE_CONFIG_FILE),
+                toml::to_string(&state).unwrap().as_bytes(),
+            )
+            .unwrap();
+            fs::create_dir_all(database.parent().unwrap()).unwrap();
+            let artifact = if sidecar_only {
+                let mut name = database.clone().into_os_string();
+                name.push("-journal");
+                PathBuf::from(name)
+            } else {
+                database.clone()
+            };
+            fs::write(&artifact, b"").unwrap();
+            assert!(matches!(
+                HardStateStore::open_existing(&database),
+                Err(foks_client_db::Error::StateMissing)
+            ));
+            let migrated = ClientCredentials::open(&root).unwrap();
+            assert_eq!(inspect_state_file(&root).unwrap().unwrap().version, VERSION);
+            assert!(!root.join(MIGRATION).exists());
+            // The upgrade initialized the database and enrolled its checkpoint;
+            // the first checked open needs no reset.
+            let registry = ProfileRegistry::open(&root).unwrap();
+            let session = ProfileSession::open(&registry, "local").unwrap();
+            let expected = registry::checkpoint_for_store(
+                session.profile(),
+                &HardStateStore::open_existing(&database).unwrap(),
+            )
+            .unwrap()
+            .digest()
+            .unwrap();
             migrated
                 .with_checked_session(&session, |s| {
                     assert_eq!(s.rollback_checkpoint()?.digest()?, expected);

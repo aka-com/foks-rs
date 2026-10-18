@@ -56,7 +56,7 @@ impl Database {
             .query_row(
                 "SELECT waitlist_id FROM waitlist_entries WHERE email = ?1 COLLATE NOCASE",
                 [email],
-                |row| row.get::<_, Vec<u8>>(0),
+                |row| row.budgeted_get::<_, Vec<u8>>(0),
             )
             .optional()?;
         if let Some(existing) = existing {
@@ -110,7 +110,7 @@ fn waitlist_entries(connection: &Connection) -> Result<Vec<WaitlistEntry>> {
     )?;
     let rows = statement.query_map([], |row| {
         Ok((
-            row.get::<_, Vec<u8>>(0)?,
+            row.budgeted_get::<_, Vec<u8>>(0)?,
             row.budgeted_get::<_, String>(1)?,
             row.budgeted_get::<_, i64>(2)?,
         ))

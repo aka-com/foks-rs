@@ -1,12 +1,13 @@
 # Weekly dependency update pull requests. scripts/test_dependency_audit.py
-# checks that every lockfile and module in the repository is listed here.
+# checks that every lockfile and module in the repository is listed here,
+# except tools/foks-celld-guarded/Cargo.lock: its graph cannot be resolved from
+# a checkout (see UNRESOLVABLE_LOCKFILES in that test).
 version: 2
 updates:
   - package-ecosystem: cargo
     directories:
       - "/"
       - "/fuzz"
-      - "/tools/foks-celld-guarded"
       - "/tools/foks-hosted-transport-check"
     schedule:
       interval: weekly

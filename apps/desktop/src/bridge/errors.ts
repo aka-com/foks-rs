@@ -34,8 +34,10 @@ export type CommandRecovery =
 /**
  * Refusals that the same request meets again until something else changes:
  * the agent's upload admission, which needs reconciliation, capacity cleanup
- * or clock repair first, and the desktop's own clock, deadline-policy and
- * lock-state checks.
+ * or clock repair first, the desktop's own clock, deadline-policy and
+ * lock-state checks, and the agent's clock read. A clock read can fail on a
+ * condition that clears without a restart, such as a file-descriptor limit,
+ * so neither side's clock failure retires the agent session.
  */
 const REFUSED_UNTIL_CHANGED = [
   'upload-expired',
@@ -48,6 +50,7 @@ const REFUSED_UNTIL_CHANGED = [
   'upload-clock-untrusted',
   'upload-future',
   'deadline-clock',
+  'deadline-clock-unavailable',
   'missing-deadline',
   'missing-deadline-policy',
   'app-lock-unavailable',
@@ -69,9 +72,9 @@ export function commandRecovery(error: CommandError): CommandRecovery {
       'protocol',
       'response-binding',
       'version-mismatch',
-      // The agent cannot read its clock, or reads a clock domain other than
-      // this process's, so no request can carry a deadline it accepts.
-      'deadline-clock-unavailable',
+      // The agent reads a clock domain (boot or time namespace) other than
+      // this process's, which does not change for the life of the agent
+      // process, so no request can carry a deadline it accepts.
       'deadline-domain-mismatch',
     ].includes(error.code)
   )
