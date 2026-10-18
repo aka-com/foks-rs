@@ -267,6 +267,32 @@ MAIN_WORK_PATHS = tuple(sorted((
     "crates/celld/guarded_node.rs", "crates/celld/guarded_node/qualification.rs",
     "crates/celld/guarded_node/tests.rs", "crates/celld/main/guarded.rs",
 )))
+# Fixed eighth-patch revision; the seven-patch component remains immutable.
+CONTENTION_BASE = "885dbeb2c8ef2371a53d2988fbe5cee383c84fb9"
+CONTENTION_PATCH = "patches/0008-node-qualifier-contention.patch"
+CONTENTION_PROFILE = "runtime/evidence/accepted-b4-main-work-contention-base/runtime-node.lock.json"
+CONTENTION_SERIES = "runtime/evidence/accepted-b4-main-work-contention-base/patches/node-series.json"
+CONTENTION_MANIFEST = "runtime/evidence/accepted-b4-main-work/prepared-inputs/source-manifest.json"
+CONTENTION_ASSETS = "runtime/evidence/accepted-b4-main-work-contention-base/assets-node-main-work.json"
+CONTENTION_BASE_IMAGES = {
+    "main_work_profile": (CONTENTION_PROFILE, "e46eb21ddee1dddc2d9cfc5604e0f101d4851439b015c3a8caefcb93bf618d5f"),
+    "main_work_series": (CONTENTION_SERIES, "ebc848f4d7c0b0fcab482ebca27ebf2cd4a7ab4b74d975b46f24979f8d1220c4"),
+    "main_work_source_manifest": (CONTENTION_MANIFEST, "9c32a11d7c027ffaf0077fd3f34318364e2316fe1bbcd7b5b2681ba634d26eae"),
+    "main_work_assets": (CONTENTION_ASSETS, "b00ca9de22b6d623d3db10d0be71e8e48ab2f7ecead3ee6d5d30707a80bda003"),
+}
+CONTENTION_PATHS = tuple(sorted((
+    "crates/celld/guarded_node.rs", "crates/celld/guarded_node/qualification.rs",
+    "crates/celld/guarded_node/tests.rs", "crates/celld/js/storage_ops.rs",
+)))
+CONTENTION_TEST_EXTENSIONS = ["guarded_execution::node::tests::b4_process_" + name for name in (
+    "advance_contention_no_action", "callbacks_and_drop_outside_locks",
+    "initial_target_does_not_rearm", "reload_request_one_shot_contract",
+    "process_layouts_and_stream_caps",
+)]
+CONTENTION_POLICY = {
+    "revision": 1, "predecessor": "accepted-main-work-seven-patch",
+    "native_test_extensions": CONTENTION_TEST_EXTENSIONS,
+}
 MAIN_WORK_BIN_TEST = MAIN_WORK + "-bin-test"
 MAIN_WORK_BIN_TESTS = ["guarded::tests::guarded_reload_main_work_fits_qualified_fixture"]
 MAIN_WORK_POLICY = {
@@ -2549,9 +2575,9 @@ def accepted_process(root):
     return load_process(root, load_pins(root), MAIN_WORK_PROFILE, MAIN_WORK_SERIES)
 
 
-def load_main_work(root, base):
+def load_main_work_predecessor(root, base, profile_path=FOUNDATION_PROFILE, series_path=FOUNDATION_SERIES):
     accepted = accepted_process(root)
-    profile = read_json(root / FOUNDATION_PROFILE)
+    profile = read_json(root / profile_path)
     closed_fields(profile, (*accepted, "accepted_b4_p2_commit"), "main-work profile")
     identity = {name: value for name, value in accepted.items() if name.startswith("accepted_")}
     identity.update(format=1, profile=MAIN_WORK, target=TARGET, accepted_b4_p2_commit=MAIN_WORK_BASE)
@@ -2577,14 +2603,14 @@ def load_main_work(root, base):
     closed_fields(tree, ("files", "payload_bytes", "inventory_sha256"), "main-work tree")
     if type(tree["files"]) is not int or tree["files"] != accepted["qualification"]["tree"]["files"] or type(tree["payload_bytes"]) is not int or not 0 < tree["payload_bytes"] <= MAXIMUM_FOUNDATION_SOURCE or not isinstance(tree["inventory_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", tree["inventory_sha256"]):
         fail("invalid main-work tree envelope")
-    main_work_series(root, profile, accepted)
+    main_work_predecessor_series(root, profile, accepted, series_path)
     return profile
 
 
-def main_work_series(root, profile, accepted=None):
+def main_work_predecessor_series(root, profile, accepted=None, series_path=FOUNDATION_SERIES):
     accepted = accepted_process(root) if accepted is None else accepted
-    checked_file(root / FOUNDATION_SERIES, profile["node_series"])
-    series = read_json(root / FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    checked_file(root / series_path, profile["node_series"])
+    series = read_json(root / series_path, MAXIMUM_FOUNDATION_SERIES)
     prefix = process_series(root, accepted, series_path=MAIN_WORK_SERIES)
     closed_fields(series, (*prefix, "accepted_b4_p2_commit"), "main-work series")
     identity = {name: value for name, value in prefix.items() if name != "patches"}
@@ -2614,6 +2640,92 @@ def main_work_series(root, profile, accepted=None):
         validate_image(entry["after"])
         exact_json(entry["before"], {name: original[path][name] for name in ("bytes", "sha256", "git_sha1")}, "main-work accepted P2 preimage")
     checked_file(root / MAIN_WORK_PATCH, selected)
+    return series
+
+
+def require_main_work_revision(profile):
+    if not isinstance(profile, dict) or profile.get("accepted_b4_main_work_commit") != CONTENTION_BASE:
+        fail("canonical main-work requires the qualifier-contention revision")
+    qualification = profile.get("qualification")
+    if not isinstance(qualification, dict) or "qualifier_contention" not in qualification:
+        fail("missing main-work qualifier-contention marker")
+    exact_json(qualification["qualifier_contention"], CONTENTION_POLICY, "main-work qualifier-contention marker")
+
+
+def accepted_main_work(root):
+    for path, checksum in CONTENTION_BASE_IMAGES.values():
+        if file_hash(root / path) != checksum:
+            fail("accepted seven-patch main-work image changed")
+    return load_main_work_predecessor(root, load_pins(root), CONTENTION_PROFILE, CONTENTION_SERIES)
+
+
+def load_main_work(root, base):
+    accepted = accepted_main_work(root)
+    profile = read_json(root / FOUNDATION_PROFILE)
+    closed_fields(profile, (*accepted, "accepted_b4_main_work_commit"), "revised main-work profile")
+    require_main_work_revision(profile)
+    identity = {name: value for name, value in accepted.items() if name.startswith("accepted_")}
+    identity.update(format=1, profile=MAIN_WORK, target=TARGET, accepted_b4_main_work_commit=CONTENTION_BASE)
+    exact_json({name: profile[name] for name in identity}, identity, "revised main-work identity")
+    closed_fields(profile["base"], (*accepted["base"], *CONTENTION_BASE_IMAGES), "revised main-work base")
+    exact_json({name: profile["base"][name] for name in accepted["base"]}, accepted["base"], "revised main-work historical base")
+    for name, (path, checksum) in CONTENTION_BASE_IMAGES.items():
+        image = profile["base"][name]
+        foundation_image(image, path)
+        if image["sha256"] != checksum:
+            fail("revised main-work accepted base changed")
+        checked_file(root / path, image)
+    exact_json(profile["pins"], base, "revised main-work inherited pins")
+    exact_json(profile["cargo_lock"], accepted["cargo_lock"], "revised main-work unchanged lock")
+    checked_file(root / "Cargo.lock", profile["cargo_lock"]["expected"])
+    foundation_image(profile["node_series"], FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    qualification = profile["qualification"]
+    closed_fields(qualification, (*accepted["qualification"], "qualifier_contention"), "revised main-work qualification")
+    changed = {"claim", "source_roster", "tree"}
+    exact_json({name: qualification[name] for name in accepted["qualification"] if name not in changed}, {name: value for name, value in accepted["qualification"].items() if name not in changed}, "revised main-work unchanged policies")
+    exact_json({name: qualification[name] for name in ("claim", "source_roster")}, {"claim": "b4-main-work-qualifier-contention-components-only", "source_roster": list(CONTENTION_PATHS)}, "revised main-work scope")
+    tree = qualification["tree"]
+    closed_fields(tree, ("files", "payload_bytes", "inventory_sha256"), "revised main-work tree")
+    if type(tree["files"]) is not int or tree["files"] != accepted["qualification"]["tree"]["files"] or type(tree["payload_bytes"]) is not int or not 0 < tree["payload_bytes"] <= MAXIMUM_FOUNDATION_SOURCE or not isinstance(tree["inventory_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", tree["inventory_sha256"]):
+        fail("invalid revised main-work tree envelope")
+    main_work_series(root, profile, accepted)
+    return profile
+
+
+def main_work_series(root, profile, accepted=None):
+    require_main_work_revision(profile)
+    accepted = accepted_main_work(root) if accepted is None else accepted
+    checked_file(root / FOUNDATION_SERIES, profile["node_series"])
+    series = read_json(root / FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    prefix = main_work_predecessor_series(root, accepted, series_path=CONTENTION_SERIES)
+    closed_fields(series, (*prefix, "accepted_b4_main_work_commit"), "revised main-work series")
+    identity = {name: value for name, value in prefix.items() if name != "patches"}
+    identity.update(accepted_b4_main_work_commit=CONTENTION_BASE)
+    exact_json({name: series[name] for name in identity}, identity, "revised main-work series identity")
+    patches = series["patches"]
+    if not isinstance(patches, list) or len(patches) != 8:
+        fail("revised main-work requires exactly eight patches")
+    exact_json(patches[:7], prefix["patches"], "revised main-work immutable seven-patch prefix")
+    selected = patches[7]
+    closed_fields(selected, ("path", "bytes", "sha256", "files"), "main-work eighth patch")
+    foundation_image({name: selected[name] for name in ("path", "bytes", "sha256")}, CONTENTION_PATCH, MAXIMUM_FOUNDATION_PATCH)
+    if sum(entry["bytes"] for entry in patches) > MAXIMUM_PROCESS_PATCHES:
+        fail("revised main-work combined patch payload exceeds unchanged allowance")
+    files = selected["files"]
+    if not isinstance(files, list) or len(files) != len(CONTENTION_PATHS):
+        fail("invalid main-work eighth-patch roster")
+    manifest = read_json(root / CONTENTION_MANIFEST)
+    original = {row["path"]: row for row in manifest["files"]}
+    if len(original) != len(manifest["files"]) or len(original) != accepted["qualification"]["tree"]["files"]:
+        fail("invalid accepted main-work source inventory")
+    for path, entry in zip(CONTENTION_PATHS, files, strict=True):
+        closed_fields(entry, ("path", "mode", "before", "after"), "main-work eighth-patch file")
+        if entry["path"] != path or entry["mode"] != "100644" or path not in original:
+            fail("main-work eighth-patch path/order/mode changed")
+        validate_image(entry["before"])
+        validate_image(entry["after"])
+        exact_json(entry["before"], {name: original[path][name] for name in ("bytes", "sha256", "git_sha1")}, "main-work accepted seven-patch preimage")
+    checked_file(root / CONTENTION_PATCH, selected)
     return series
 
 

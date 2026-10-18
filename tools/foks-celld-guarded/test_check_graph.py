@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 import check_graph as c
-from test_prepare_runtime import a2_fixture, foundation_fixture, lifetimes_fixture, frontend_fixture, observations_fixture, process_fixture, main_work_fixture, historical_pins, p
+from test_prepare_runtime import a2_fixture, foundation_fixture, lifetimes_fixture, frontend_fixture, observations_fixture, process_fixture, main_work_fixture, main_work_predecessor_validation, contention_fixture, historical_pins, p
 
 
 def fixture(mode="identity", profile=c.preparation.A1):
@@ -53,13 +53,21 @@ def add_package(metadata, name, version="1.0.0", identity=None, features=None, s
 
 
 @contextmanager
-def foundation_graph_fixture(root, mode):
+def foundation_graph_fixture(root, mode, qualifier_revision=False):
     root.parent.mkdir(parents=True, exist_ok=True)
     stage = p.stage_for_mode(mode)
     fixture_source = {p.FOUNDATION: foundation_fixture, p.LIFETIMES: lifetimes_fixture, p.FRONTEND: frontend_fixture, p.OBSERVATIONS: observations_fixture, p.PROCESS: process_fixture, p.MAIN_WORK: main_work_fixture}[stage]
+    if qualifier_revision:
+        if stage != p.MAIN_WORK:
+            raise ValueError("qualifier revision requires the main-work stage")
+        fixture_source = contention_fixture
     with fixture_source(root) as data, ExitStack() as stack:
-        for name in ("FOUNDATION_BASE_IMAGES", "FOUNDATION_LOCK_BEFORE", "LIFETIMES_BASE_IMAGES", "LIFETIMES_LOCK_SHA256", "LIFETIMES_ASSET_SHA256", "FRONTEND_BASE_IMAGES", "FRONTEND_ASSET_SHA256", "OBSERVATIONS_BASE_IMAGES", "OBSERVATIONS_ASSET_SHA256", "PROCESS_BASE_IMAGES", "PROCESS_ASSET_SHA256", "MAIN_WORK_BASE_IMAGES"):
+        for name in ("FOUNDATION_BASE_IMAGES", "FOUNDATION_LOCK_BEFORE", "LIFETIMES_BASE_IMAGES", "LIFETIMES_LOCK_SHA256", "LIFETIMES_ASSET_SHA256", "FRONTEND_BASE_IMAGES", "FRONTEND_ASSET_SHA256", "OBSERVATIONS_BASE_IMAGES", "OBSERVATIONS_ASSET_SHA256", "PROCESS_BASE_IMAGES", "PROCESS_ASSET_SHA256", "MAIN_WORK_BASE_IMAGES", "CONTENTION_BASE_IMAGES"):
             stack.enter_context(patch.object(c.preparation, name, getattr(p, name)))
+        if stage == p.MAIN_WORK and not qualifier_revision:
+            stack.enter_context(main_work_predecessor_validation(c.preparation))
+            stack.enter_context(patch.object(c, "graph_report", c.graph_report_predecessor))
+            stack.enter_context(patch.object(c, "source_paths", c.source_paths_predecessor))
         p.prepare(data["archive"], root, stage)
         (root / "Cargo.lock").write_bytes(data["expected_lock"])
         pins = c.preparation.load_pins(root, stage)
@@ -1399,6 +1407,95 @@ class MainWorkGraphTests(unittest.TestCase):
             (member / "Cargo.toml").write_text('[package]\nname="foks-hosted-transport"\n')
             expected = {repo / "Cargo.lock", member / "Cargo.toml"}
             self.assertEqual(c.frontend_transport_inputs(root, p.MAIN_WORK), expected)
+            for mode in (p.MAIN_WORK_BIN_TEST, p.MAIN_WORK + "-default", p.MAIN_WORK + "-lifecycle"):
+                self.assertEqual(c.frontend_transport_inputs(root, mode), set())
+            (member / "Cargo.toml").unlink()
+            with self.assertRaises(ValueError):
+                c.frontend_transport_inputs(root, p.MAIN_WORK)
+
+
+
+
+class QualifierContentionRevisionGraphTests(unittest.TestCase):
+    def test_revision_modes_keep_actual_targets_and_features(self):
+        for mode, contract in p.MAIN_WORK_MODES.items():
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "tools/fixture"
+                with foundation_graph_fixture(root, mode, qualifier_revision=True) as (metadata, pins, _):
+                    report = c.graph_report(metadata, pins, mode, root)
+                    self.assertEqual(report["foundation"]["celld_foks_edges"], contract["celld_foks_edges"])
+                    if mode == p.MAIN_WORK_BIN_TEST:
+                        self.assertEqual(report["node_bin_test_target"]["kind"], ["bin"])
+                        self.assertNotIn("node_test_target", report)
+                    elif mode.endswith("lifecycle"):
+                        self.assertNotIn("node_target", report)
+                    else:
+                        self.assertEqual(report["node_target"]["src_path"], str(root / "runtime/source/crates/celld/main.rs"))
+                        self.assertEqual(report["node_test_target"]["kind"], ["lib"])
+                    changed = copy.deepcopy(metadata)
+                    next(row for row in changed["resolve"]["nodes"] if row["id"] == "celld")["features"].append("unreviewed")
+                    with self.assertRaises(ValueError):
+                        c.graph_report(changed, pins, mode, root)
+
+    def test_revision_graph_binds_main_work_and_all_ancestors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tools/fixture"
+            with foundation_graph_fixture(root, p.MAIN_WORK, qualifier_revision=True) as (metadata, pins, _):
+                report = c.graph_report(metadata, pins, p.MAIN_WORK, root)["foundation"]
+                self.assertEqual(report["accepted_b4_main_work_commit"], p.CONTENTION_BASE)
+                self.assertEqual(report["accepted_b4_main_work_images"], {name: pins["foundation"]["base"][name] for name in p.CONTENTION_BASE_IMAGES})
+                self.assertEqual(report["accepted_b4_p2_commit"], p.MAIN_WORK_BASE)
+                self.assertEqual(report["accepted_b4_p1_commit"], p.PROCESS_BASE)
+                paths = set(c.source_paths(pins, p.MAIN_WORK))
+                self.assertTrue(set(c.CONTENTION_SOURCE_PATHS).issubset(paths))
+                self.assertTrue(set(c.MAIN_WORK_SOURCE_PATHS).issubset(paths))
+                self.assertTrue(set(c.PROCESS_SOURCE_PATHS).issubset(paths))
+                self.assertNotEqual(p.CONTENTION_PROFILE, p.FOUNDATION_PROFILE)
+
+    def test_revision_rejects_same_stage_old_graph_before_tool(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tools/fixture"
+            with foundation_graph_fixture(root, p.MAIN_WORK, qualifier_revision=True) as (metadata, pins, data):
+                changed = copy.deepcopy(pins)
+                changed["foundation"] = data["accepted_main_work_profile"]
+                with self.assertRaises(ValueError):
+                    c.graph_report(metadata, changed, p.MAIN_WORK, root)
+                with self.assertRaises(ValueError):
+                    c.source_paths(changed, p.MAIN_WORK)
+                for mutate in (lambda x: x.pop("accepted_b4_main_work_commit"), lambda x: x["qualification"].pop("qualifier_contention"), lambda x: x["qualification"]["qualifier_contention"].update(revision=True)):
+                    changed = copy.deepcopy(pins)
+                    mutate(changed["foundation"])
+                    with self.assertRaises(ValueError):
+                        c.graph_report(metadata, changed, p.MAIN_WORK, root)
+                evidence = root / "graph"
+                evidence.mkdir()
+                record = {"format": 1, "target": p.TARGET, "profile": p.MAIN_WORK, "mode": p.MAIN_WORK, "manifest": str(root / "Cargo.toml"), "cwd": str(root)}
+                (evidence / "evidence.json").write_text(json.dumps(record))
+                profile_path, series_path = root / p.FOUNDATION_PROFILE, root / p.FOUNDATION_SERIES
+                current_profile, current_series = profile_path.read_bytes(), series_path.read_bytes()
+                try:
+                    profile_path.write_bytes((root / p.CONTENTION_PROFILE).read_bytes())
+                    series_path.write_bytes((root / p.CONTENTION_SERIES).read_bytes())
+                    with patch.object(c.preparation, "controlled_environment") as environment, self.assertRaisesRegex(ValueError, "invalid revised main-work profile fields"):
+                        c.verify(evidence, root, p.MAIN_WORK)
+                    environment.assert_not_called()
+                finally:
+                    profile_path.write_bytes(current_profile)
+                    series_path.write_bytes(current_series)
+                self.assertEqual(profile_path.read_bytes(), current_profile)
+                self.assertEqual(series_path.read_bytes(), current_series)
+
+    def test_revision_transport_binding_only_enabled_library_lane(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tools/fixture"
+            root.mkdir(parents=True)
+            repo = root.parents[1]
+            (repo / "Cargo.toml").write_text('[workspace]\nmembers = ["crates/foks-hosted-transport"]\n')
+            (repo / "Cargo.lock").write_text("lock\n")
+            member = repo / "crates/foks-hosted-transport"
+            member.mkdir(parents=True)
+            (member / "Cargo.toml").write_text('[package]\nname="foks-hosted-transport"\n')
+            self.assertEqual(c.frontend_transport_inputs(root, p.MAIN_WORK), {repo / "Cargo.lock", member / "Cargo.toml"})
             for mode in (p.MAIN_WORK_BIN_TEST, p.MAIN_WORK + "-default", p.MAIN_WORK + "-lifecycle"):
                 self.assertEqual(c.frontend_transport_inputs(root, mode), set())
             (member / "Cargo.toml").unlink()

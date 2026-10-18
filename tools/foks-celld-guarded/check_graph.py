@@ -29,6 +29,7 @@ FRONTEND_SOURCE_PATHS = (preparation.FRONTEND_PATCH, preparation.FRONTEND_PROFIL
 OBSERVATIONS_SOURCE_PATHS = (preparation.OBSERVATIONS_PATCH, preparation.OBSERVATIONS_PROFILE, preparation.OBSERVATIONS_SERIES, preparation.OBSERVATIONS_MANIFEST, preparation.OBSERVATIONS_ASSETS, "runtime/assets-node-qualification.json")
 PROCESS_SOURCE_PATHS = (preparation.PROCESS_PATCH, preparation.PROCESS_PROFILE, preparation.PROCESS_SERIES, preparation.PROCESS_MANIFEST, preparation.PROCESS_ASSETS, "runtime/assets-node-observations.json")
 MAIN_WORK_SOURCE_PATHS = (preparation.MAIN_WORK_PATCH, preparation.MAIN_WORK_PROFILE, preparation.MAIN_WORK_SERIES, preparation.MAIN_WORK_MANIFEST, preparation.MAIN_WORK_ASSETS, "runtime/assets-node-process.json")
+CONTENTION_SOURCE_PATHS = (preparation.CONTENTION_PATCH, preparation.CONTENTION_PROFILE, preparation.CONTENTION_SERIES, preparation.CONTENTION_MANIFEST, preparation.CONTENTION_ASSETS, "runtime/assets-node-main-work.json")
 
 
 def fail(message):
@@ -94,7 +95,7 @@ def foundation_declarations(package, outer, source_root):
     return preparation.FOUNDATION_EDGES.copy()
 
 
-def graph_report(metadata, pins, mode="identity", source_root=ROOT):
+def graph_report_predecessor(metadata, pins, mode="identity", source_root=ROOT):
     if pins.get("target") != TARGET or pins.get("profile") not in (preparation.A1, preparation.A2, *preparation.NODE_STAGES):
         fail("missing or unexpected target/profile")
     preparation.selected_mode(pins, mode)
@@ -272,6 +273,20 @@ def graph_report(metadata, pins, mode="identity", source_root=ROOT):
     return report
 
 
+def graph_report(metadata, pins, mode="identity", source_root=ROOT):
+    # The archived seven-patch helper is explicit; canonical graphs never fall
+    # back to it merely because the revision marker is absent.
+    if pins.get("profile") == preparation.MAIN_WORK:
+        preparation.require_main_work_revision(pins.get("foundation"))
+    report = graph_report_predecessor(metadata, pins, mode, source_root)
+    if pins.get("profile") == preparation.MAIN_WORK:
+        report["foundation"].update(
+            accepted_b4_main_work_commit=preparation.CONTENTION_BASE,
+            accepted_b4_main_work_images={name: pins["foundation"]["base"][name] for name in preparation.CONTENTION_BASE_IMAGES},
+        )
+    return report
+
+
 def regular_files(directory):
     directory = Path(directory)
     for path in sorted(directory.rglob("*")):
@@ -309,7 +324,7 @@ def candidate_inputs(root, mode="identity"):
     return {str(path): preparation.file_hash(path) for path in sorted(paths)}
 
 
-def source_paths(pins, mode="identity"):
+def source_paths_predecessor(pins, mode="identity"):
     preparation.selected_mode(pins, mode)
     return (
         SOURCE_PATHS
@@ -322,6 +337,13 @@ def source_paths(pins, mode="identity"):
         + (MAIN_WORK_SOURCE_PATHS if pins["profile"] == preparation.MAIN_WORK else ())
         + (("node.lock.json", "run-node.py", "test_run_node.py") if mode == "node-baseline" else ())
     )
+
+
+def source_paths(pins, mode="identity"):
+    if pins.get("profile") == preparation.MAIN_WORK:
+        preparation.require_main_work_revision(pins.get("foundation"))
+    paths = source_paths_predecessor(pins, mode)
+    return paths + (CONTENTION_SOURCE_PATHS if pins.get("profile") == preparation.MAIN_WORK else ())
 
 
 def selected_inputs(metadata, reached, root, mode="identity"):

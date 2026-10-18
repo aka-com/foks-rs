@@ -1,0 +1,1469 @@
+--- a/crates/celld/guarded_node.rs
++++ b/crates/celld/guarded_node.rs
+@@ -3861,6 +3861,9 @@
+             Some(Err(error)) => return Err(error),
+             None => None,
+         };
++        // A selected capture can have waited for Q; retain the original
++        // forward deadline before entering the actual canonical mutation.
++        self.context.check_forward()?;
+         let (event, output) = {
+             let state = lock_owned(&record.state)?;
+             let activity = state
+@@ -4980,8 +4983,15 @@
+         bank.records[slot] = Some(record.clone());
+         drop(bank);
+         let context = self.inline_context(&record, slot)?;
+-        self.qualification
+-            .admit(context.qualification_identity(0, None)?, context.deadline)?;
++        let admitted = (|| {
++            self.qualification
++                .admit(context.qualification_identity(0, None)?, context.deadline)?;
++            context.check_forward()
++        })();
++        if let Err(error) = admitted {
++            context.fail();
++            return Err(error);
++        }
+         Ok(GuardedEnvelope {
+             context,
+             scope: Some(record.cell.to_owned()),
+@@ -7342,21 +7352,32 @@
+     }
+     pub async fn progress(&mut self) -> GuardedFrontendEvent {
+         std::future::poll_fn(|cx| {
+-            if let Ok(Some((index, generation))) = self.node.effects.qualification.connection_drop()
+-            {
+-                if self.connection_generations.get(index as usize) == Some(&generation) {
+-                    drop(self.connections[index as usize].take());
+-                    if self
+-                        .node
+-                        .effects
+-                        .qualification
+-                        .connection_dropped(index, generation)
+-                        .is_err()
+-                    {
++            match self.node.effects.qualification.connection_drop() {
++                Ok(Some((index, generation))) => {
++                    if self.connection_generations.get(index as usize) == Some(&generation) {
++                        drop(self.connections[index as usize].take());
++                        if self
++                            .node
++                            .effects
++                            .qualification
++                            .connection_dropped(index, generation)
++                            .is_err()
++                        {
++                            self.node.owner.fail();
++                        }
++                    } else {
+                         self.node.owner.fail();
+                     }
+-                } else {
++                }
++                Ok(None) => {}
++                Err(_) => {
+                     self.node.owner.fail();
++                    return Poll::Ready(GuardedFrontendEvent {
++                        kind: "qualification-progress",
++                        completed: self.completed,
++                        refused: self.refused,
++                        failed: true,
++                    });
+                 }
+             }
+             if let Poll::Ready(result) = self.node.effects.qualification.poll_notice(cx) {
+@@ -7570,11 +7591,18 @@
+             .node
+             .effects
+             .register_owned(owner, tenant, None, Some(guard))?;
+-        self.node.effects.qualification.bind_connection(
+-            envelope.context.qualification_identity(0, None)?,
+-            self.connection,
+-            self.connection_generation,
+-        )?;
++        let bound = (|| {
++            self.node.effects.qualification.bind_connection(
++                envelope.context.qualification_identity(0, None)?,
++                self.connection,
++                self.connection_generation,
++            )?;
++            envelope.context.check_forward()
++        })();
++        if let Err(error) = bound {
++            envelope.context.fail();
++            return Err(error);
++        }
+         envelope.context.qualification_wait(2, 0, 0).await?;
+         let wrong_owner = envelope.context.qualification_cut(21, 93, 0).await?;
+         self.route = Some(
+@@ -8195,9 +8223,11 @@
+             (id, generation, state.epoch)
+         };
+         drop(record);
+-        registry
++        let observation = registry
+             .qualification
+-            .capture_validator(case, id, epoch, generation)
++            .capture_validator(case, id, epoch, generation)?;
++        self.check_forward()?;
++        Ok(observation)
+     }
+     pub(crate) fn qualification_validator_refused(
+         &self,
+@@ -8287,12 +8317,11 @@
+             cut,
+         )?;
+         let action = self.qualification_action(checkpoint, cut, activity).await?;
+-        if !selected {
+-            return Ok(());
+-        }
+-        if action == qualification::Action::OriginalExpiry {
++        if selected && action == qualification::Action::OriginalExpiry {
+             return Err(Refusal::Expired);
+         }
++        // Selection does not renew authority. Even an unselected Forward may
++        // have waited for already-owned qualifier bookkeeping or a poll wake.
+         if matches!(self.role, JobRole::Forward(_)) {
+             self.check_forward()?;
+         }
+@@ -8414,6 +8443,8 @@
+         self.accepting.load(Ordering::Acquire)
+             && self.owner.check().is_ok()
+             && self.effects.qualification.allows_reload()
++            && self.accepting.load(Ordering::Acquire)
++            && self.owner.check().is_ok()
+     }
+     pub fn take_reload_request(&self) -> Result<Option<u64>, Refusal> {
+         self.effects.qualification.reload_request()
+@@ -8462,7 +8493,7 @@
+         process_layouts_for(
+             self.effects
+                 .qualification
+-                .main_work_bytes()
++                .main_work_bytes()?
+                 .checked_add(bytes)
+                 .ok_or(Refusal::Bounds)?,
+         )?;
+@@ -8478,10 +8509,24 @@
+ }
+ impl OwnedEffectRegistry {
+     pub(crate) fn qualification_actor_exit(&self) -> bool {
+-        self.qualification.actor_exit()
++        match self.qualification.actor_exit() {
++            Ok(exit) => exit,
++            Err(Refusal::Contended) => false,
++            Err(_) => {
++                self.process.fail();
++                true
++            }
++        }
+     }
+     pub(crate) fn qualification_release_all(&self) -> bool {
+-        self.qualification.release_all()
++        match self.qualification.release_all() {
++            Ok(release) => release,
++            Err(Refusal::Contended) => false,
++            Err(_) => {
++                self.process.fail();
++                false
++            }
++        }
+     }
+     pub(crate) fn qualification_generation_processed(&self, generation: u64) {
+         if self.qualification.process(7, generation, 0, true).is_err() {
+@@ -8510,18 +8555,29 @@
+     }
+ }
+ impl SyncDisposition {
+-    pub(crate) fn qualification_drop_reply(&self, cx: &mut Context<'_>) -> Result<bool, Refusal> {
+-        let registry = self.context.registry()?;
+-        let record = registry.record(self.context.token)?;
+-        {
+-            let state = lock_owned(&record.state)?;
+-            if state.activities[1].sequence != self.sequence {
+-                return Err(Refusal::Invalid);
+-            }
+-        }
+-        drop(record);
+-        let id = self.context.qualification_identity(1, None)?;
+-        registry.qualification.reply_poll(id, cx)
++    pub(crate) fn qualification_drop_reply(
++        &self,
++        cx: &mut Context<'_>,
++    ) -> Poll<Result<bool, Refusal>> {
++        // These scalar record observations retain H's short owned bookkeeping
++        // contract. Every record guard ends before the qualifier poll scan.
++        let observed = (|| {
++            let registry = self.context.registry()?;
++            let record = registry.record(self.context.token)?;
++            {
++                let state = lock_owned(&record.state)?;
++                if state.activities[1].sequence != self.sequence {
++                    return Err(Refusal::Invalid);
++                }
++            }
++            drop(record);
++            let id = self.context.qualification_identity(1, None)?;
++            Ok((registry, id))
++        })();
++        match observed {
++            Ok((registry, id)) => registry.qualification.reply_poll(id, cx),
++            Err(e) => Poll::Ready(Err(e)),
++        }
+     }
+ }
+ impl GuardedActivity {
+@@ -8680,7 +8736,7 @@
+ }
+ impl GuardedNode {
+     pub fn process_layouts(&self) -> Result<ProcessLayouts, Refusal> {
+-        process_layouts_for(self.effects.qualification.main_work_bytes())
++        process_layouts_for(self.effects.qualification.main_work_bytes()?)
+     }
+ }
+ 
+@@ -8722,6 +8778,9 @@
+         if action == qualification::Action::OriginalExpiry {
+             return Err(Refusal::Expired);
+         }
++        if matches!(self.role, JobRole::Forward(_)) {
++            self.check_forward()?;
++        }
+         Ok(false)
+     }
+ }
+--- a/crates/celld/guarded_node/qualification.rs
++++ b/crates/celld/guarded_node/qualification.rs
+@@ -1499,12 +1499,27 @@
+         fresh.changed.notify_all();
+         fresh
+     }
+-    fn state(&self) -> Result<std::sync::MutexGuard<'_, State>, Refusal> {
+-        self.state.try_lock().map_err(|_| Refusal::Contended)
++    // New requests do not queue behind qualifier bookkeeping. Owned metadata
++    // and poll scans have separate contracts below; poison is never contention.
++    fn try_state(&self) -> Result<std::sync::MutexGuard<'_, State>, Refusal> {
++        match self.state.try_lock() {
++            Ok(state) => Ok(state),
++            Err(std::sync::TryLockError::WouldBlock) => Err(Refusal::Contended),
++            Err(std::sync::TryLockError::Poisoned(_)) => Err(Refusal::Failed),
++        }
++    }
++    fn owned_state(&self) -> Result<std::sync::MutexGuard<'_, State>, Refusal> {
++        super::control::lock_owned(&self.state)
++    }
++    fn poll_state<'a>(
++        &'a self,
++        cx: &mut Context<'_>,
++    ) -> Poll<Result<std::sync::MutexGuard<'a, State>, Refusal>> {
++        super::poll_owned(&self.state, cx)
+     }
+     pub fn install(&self, id: u16) -> Result<(), Refusal> {
+         case(id)?;
+-        let mut s = self.state()?;
++        let mut s = self.owned_state()?;
+         if s.case != 0 {
+             return Err(Refusal::Busy);
+         }
+@@ -1512,12 +1527,12 @@
+         Ok(())
+     }
+     pub fn case_id(&self) -> Option<u16> {
+-        self.state()
++        self.try_state()
+             .ok()
+             .and_then(|s| (s.case != 0).then_some(s.case))
+     }
+     pub fn permit_begin(&self) -> Result<(), Refusal> {
+-        let s = self.state()?;
++        let s = self.try_state()?;
+         if s.stopped || s.failed {
+             return Err(Refusal::Failed);
+         }
+@@ -1527,7 +1542,10 @@
+         Ok(())
+     }
+     pub fn admit(&self, id: Identity, deadline: Instant) -> Result<(), Refusal> {
+-        let mut s = self.state()?;
++        let mut s = self.owned_state()?;
++        if Instant::now() >= deadline {
++            return Err(Refusal::Expired);
++        }
+         if s.case == 0 {
+             return Ok(());
+         }
+@@ -1547,7 +1565,7 @@
+         Ok(())
+     }
+     pub fn bind_connection(&self, id: Identity, slot: u8, generation: u64) -> Result<(), Refusal> {
+-        let mut s = self.state()?;
++        let mut s = self.owned_state()?;
+         for b in &mut s.barriers {
+             if b.identity.is_some_and(|i| i.same_invocation(id)) {
+                 if let Some(i) = b.identity.as_mut() {
+@@ -1564,6 +1582,87 @@
+             && (c.activity == 255 || id.activity == c.activity)
+             && (c.lane == 255 || id.root.lane == c.lane)
+             && (c.native == 255 || id.native == c.native)
++    }
++    // This exact predicate is shared by async polling and Condvar waiting.
++    // It never invokes or destroys a waker; wrappers publish outside the guard.
++    fn evaluate_locked(
++        s: &mut State,
++        id: Identity,
++        checkpoint: u8,
++        cut: u16,
++        incoming: &mut Option<Waker>,
++        old: &mut Option<Waker>,
++    ) -> Result<Option<Action>, Refusal> {
++        if s.journal.sealed {
++            return Ok(None);
++        }
++        if s.case == 0 {
++            return Ok(Some(Action::Continue));
++        }
++        let c = case(s.case)?;
++        if !Self::matches(c, id, checkpoint, cut) {
++            return Ok(Some(Action::Continue));
++        }
++        let Some(index) = s
++            .barriers
++            .iter()
++            .position(|b| b.identity.is_some_and(|i| i.same_invocation(id)))
++        else {
++            return Ok(Some(Action::Continue));
++        };
++        if s.barriers[index].consumed {
++            return Ok(Some(Action::Continue));
++        }
++        if s.barriers[index].entered
++            && !s.barriers[index]
++                .identity
++                .is_some_and(|v| v.same_checkpoint(id))
++        {
++            return Err(Refusal::Invalid);
++        }
++        if !s.barriers[index].entered {
++            let ordinal = s.ordinal.checked_add(1).ok_or(Refusal::Exhausted)?;
++            s.ordinal = ordinal;
++            s.barriers[index].entered = true;
++            s.barriers[index].ordinal = ordinal;
++            let mut selected = id;
++            if let Some(initial) = s.barriers[index].identity {
++                selected.connection = initial.connection;
++                selected.connection_generation = initial.connection_generation;
++            }
++            s.barriers[index].identity = Some(selected);
++            s.journal.append(CheckpointRecord::invocation(
++                c.id, checkpoint, 1, selected, ordinal,
++            ))?;
++            s.notice = true;
++        }
++        let ready = s.barriers[index].advanced
++            || matches!(
++                c.reaction,
++                Action::Continue | Action::PeerDrain | Action::PeerClose
++            )
++            || s.barriers[index].expired && c.reaction == Action::OriginalExpiry;
++        if ready {
++            let b = &mut s.barriers[index];
++            b.consumed = true;
++            let identity = b.identity.ok_or(Refusal::Invalid)?;
++            let ordinal = b.ordinal;
++            let expired = b.expired;
++            s.journal.append(CheckpointRecord::invocation(
++                c.id, checkpoint, 4, identity, ordinal,
++            ))?;
++            s.notice = true;
++            Ok(Some(if expired && c.reaction == Action::OriginalExpiry {
++                Action::OriginalExpiry
++            } else {
++                c.reaction
++            }))
++        } else {
++            if let Some(incoming) = incoming.take() {
++                *old = s.barriers[index].waker.replace(incoming);
++            }
++            Ok(None)
++        }
+     }
+     pub fn poll(
+         &self,
+@@ -1572,83 +1671,20 @@
+         cut: u16,
+         cx: &mut Context<'_>,
+     ) -> Poll<Result<Action, Refusal>> {
+-        let incoming = cx.waker().clone();
++        let mut incoming = Some(cx.waker().clone());
+         let mut old = None;
+-        let mut wakes = std::array::from_fn(|_| None);
+-        let result = (|| {
+-            let mut s = self.state()?;
+-            if s.journal.sealed {
+-                return Ok(None);
+-            }
+-            if s.case == 0 {
+-                return Ok(Some(Action::Continue));
+-            }
+-            let c = case(s.case)?;
+-            if !Self::matches(c, id, checkpoint, cut) {
+-                return Ok(Some(Action::Continue));
+-            }
+-            let Some(index) = s
+-                .barriers
+-                .iter()
+-                .position(|b| b.identity.is_some_and(|i| i.same_invocation(id)))
+-            else {
+-                return Ok(Some(Action::Continue));
++        let (result, wakes) = {
++            let mut s = match self.poll_state(cx) {
++                Poll::Pending => return Poll::Pending,
++                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
++                Poll::Ready(Ok(s)) => s,
+             };
+-            if s.barriers[index].consumed {
+-                return Ok(Some(Action::Continue));
+-            }
+-            if s.barriers[index].entered
+-                && !s.barriers[index]
+-                    .identity
+-                    .is_some_and(|v| v.same_checkpoint(id))
+-            {
+-                return Err(Refusal::Invalid);
+-            }
+-            if !s.barriers[index].entered {
+-                let ordinal = s.ordinal.checked_add(1).ok_or(Refusal::Exhausted)?;
+-                s.ordinal = ordinal;
+-                s.barriers[index].entered = true;
+-                s.barriers[index].ordinal = ordinal;
+-                let mut selected = id;
+-                if let Some(initial) = s.barriers[index].identity {
+-                    selected.connection = initial.connection;
+-                    selected.connection_generation = initial.connection_generation;
+-                }
+-                s.barriers[index].identity = Some(selected);
+-                s.journal.append(CheckpointRecord::invocation(
+-                    c.id, checkpoint, 1, selected, ordinal,
+-                ))?;
+-                s.notice = true;
+-            }
+-            let ready = s.barriers[index].advanced
+-                || matches!(
+-                    c.reaction,
+-                    Action::Continue | Action::PeerDrain | Action::PeerClose
+-                )
+-                || s.barriers[index].expired && c.reaction == Action::OriginalExpiry;
+-            let answer = if ready {
+-                let b = &mut s.barriers[index];
+-                b.consumed = true;
+-                let identity = b.identity.ok_or(Refusal::Invalid)?;
+-                let ordinal = b.ordinal;
+-                let expired = b.expired;
+-                s.journal.append(CheckpointRecord::invocation(
+-                    c.id, checkpoint, 4, identity, ordinal,
+-                ))?;
+-                s.notice = true;
+-                Ok(Some(if expired && c.reaction == Action::OriginalExpiry {
+-                    Action::OriginalExpiry
+-                } else {
+-                    c.reaction
+-                }))
+-            } else {
+-                old = s.barriers[index].waker.replace(incoming);
+-                Ok(None)
+-            };
+-            wakes = Self::take_wakes(&mut s);
+-            answer
+-        })();
++            let result =
++                Self::evaluate_locked(&mut s, id, checkpoint, cut, &mut incoming, &mut old);
++            (result, Self::take_wakes(&mut s))
++        };
+         drop(old);
++        drop(incoming);
+         self.notify(wakes);
+         match result {
+             Ok(Some(v)) => Poll::Ready(Ok(v)),
+@@ -1658,22 +1694,34 @@
+     }
+ 
+     pub fn blocking(&self, id: Identity, checkpoint: u8, cut: u16) -> Result<Action, Refusal> {
+-        let w = std::task::Waker::noop();
+-        let mut cx = Context::from_waker(w);
++        let mut s = self.owned_state()?;
+         loop {
+-            match self.poll(id, checkpoint, cut, &mut cx) {
+-                Poll::Ready(v) => return v,
+-                Poll::Pending => {
+-                    let s = self.state.lock().map_err(|_| Refusal::Failed)?;
+-                    let ready = s.barriers.iter().any(|b| {
+-                        b.identity.is_some_and(|v| v.same_invocation(id))
+-                            && (b.advanced
+-                                || b.expired
+-                                    && case(s.case)
+-                                        .is_ok_and(|c| c.reaction == Action::OriginalExpiry))
++            let mut incoming = None;
++            let mut old = None;
++            let result =
++                Self::evaluate_locked(&mut s, id, checkpoint, cut, &mut incoming, &mut old);
++            let wakes = Self::take_wakes(&mut s);
++            let publish = old.is_some() || wakes.iter().any(Option::is_some);
++            match result {
++                Ok(None) if !publish => {
++                    // Full predicate and atomic wait release use the same guard.
++                    // In particular, contention is not mistaken for a held cut.
++                    #[cfg(test)]
++                    BLOCKING_WAIT_NOTICE.with(|notice| {
++                        if let Some(sender) = notice.borrow_mut().take() {
++                            let _ = sender.try_send(());
++                        }
+                     });
+-                    if !ready {
+-                        let _guard = self.changed.wait(s).map_err(|_| Refusal::Failed)?;
++                    s = self.changed.wait(s).map_err(|_| Refusal::Failed)?;
++                }
++                result => {
++                    drop(s);
++                    drop(old);
++                    self.notify(wakes);
++                    match result {
++                        Ok(Some(action)) => return Ok(action),
++                        Err(e) => return Err(e),
++                        Ok(None) => s = self.owned_state()?,
+                     }
+                 }
+             }
+@@ -1702,89 +1750,101 @@
+         )>,
+     ) -> Result<(), Refusal> {
+         let wakes = {
+-            let mut s = self.state()?;
+-            if s.journal.sealed {
+-                return Err(Refusal::NotReady);
+-            }
+-            if let Some((process, control, accepting)) = admission {
+-                process.check_admission_scalar()?;
+-                control.check_admission_scalar()?;
+-                if !accepting.load(std::sync::atomic::Ordering::Acquire) {
+-                    return Err(Refusal::Cancelled);
+-                }
+-            }
+-            if s.case != a.case || s.stopped || s.failed || s.controls >= 64 {
+-                return Err(Refusal::Invalid);
+-            }
+-            let c = case(s.case)?;
+-            let i = s
+-                .barriers
+-                .iter()
+-                .position(|b| {
+-                    b.entered
+-                        && !b.advance_seen
+-                        && !b.consumed
+-                        && b.ordinal == a.ordinal
+-                        && b.identity.is_some_and(|id| {
+-                            id.tenant == a.tenant && id.invocation == a.invocation
+-                        })
+-                })
+-                .ok_or(Refusal::Invalid)?;
+-            if c.checkpoint != a.checkpoint
+-                || matches!(
+-                    c.reaction,
+-                    Action::CanonicalShutdownKeepNativeHold | Action::OriginalExpiry
+-                )
+-            {
+-                return Err(Refusal::Invalid);
+-            }
+-            if matches!(c.reaction, Action::ForceReload | Action::ForceReloadSwap)
+-                && (s.reload.issued || s.reload.requested)
+-            {
+-                return Err(Refusal::Busy);
+-            }
+-            s.barriers[i].advance_seen = true;
+-            s.controls = s.controls.checked_add(1).ok_or(Refusal::Exhausted)?;
+-            let id = s.barriers[i].identity.ok_or(Refusal::Invalid)?;
+-            s.journal.append(CheckpointRecord::invocation(
+-                c.id,
+-                a.checkpoint,
+-                2,
+-                id,
+-                a.ordinal,
+-            ))?;
+-            match c.reaction {
+-                Action::ForceReload | Action::ForceReloadSwap => {
+-                    if s.reload.issued || s.reload.requested {
+-                        return Err(Refusal::Busy);
+-                    }
+-                    s.reload.requested = true;
+-                }
+-                Action::ActualActorExit => s.actor_exit = true,
+-                Action::CanonicalReleaseAll => s.release_all = true,
+-                Action::CanonicalShutdownThenRelease => {}
+-                Action::CanonicalParentCancel => s.barriers[i].cancel = true,
+-                Action::DropActualReplyConsumer | Action::AbandonOwnedProducerBeforeSend => {
+-                    s.barriers[i].drop_reply = true;
+-                }
+-                Action::DropActualConnectionConsumer => {
+-                    s.barriers[i].drop_connection = true;
+-                    s.barriers[i].advanced = true
+-                }
+-                Action::DropActualEffectConsumer => {
+-                    s.barriers[i].drop_effect = true;
+-                    s.barriers[i].advanced = true
+-                }
+-                Action::CanonicalShutdownKeepNativeHold | Action::OriginalExpiry => {
+-                    return Err(Refusal::Invalid)
+-                }
+-                _ => s.barriers[i].advanced = true,
+-            };
+-            s.notice = true;
+-            Self::take_wakes(&mut s)
++            let mut s = self.try_state()?;
++            Self::advance_locked(&mut s, a, admission)?
+         };
+         self.notify(wakes);
+         Ok(())
++    }
++    // Shared exact validator and mutation. Production admission above remains
++    // one-shot try-only; the owned adapter below is test coordination only.
++    fn advance_locked(
++        s: &mut State,
++        a: Advance,
++        admission: Option<(
++            &super::control::OriginalOwner,
++            &super::control::OriginalOwner,
++            &std::sync::atomic::AtomicBool,
++        )>,
++    ) -> Result<[Option<Waker>; 5], Refusal> {
++        if s.journal.sealed {
++            return Err(Refusal::NotReady);
++        }
++        if let Some((process, control, accepting)) = admission {
++            process.check_admission_scalar()?;
++            control.check_admission_scalar()?;
++            if !accepting.load(std::sync::atomic::Ordering::Acquire) {
++                return Err(Refusal::Cancelled);
++            }
++        }
++        if s.case != a.case || s.stopped || s.failed || s.controls >= 64 {
++            return Err(Refusal::Invalid);
++        }
++        let c = case(s.case)?;
++        let i = s
++            .barriers
++            .iter()
++            .position(|b| {
++                b.entered
++                    && !b.advance_seen
++                    && !b.consumed
++                    && b.ordinal == a.ordinal
++                    && b.identity
++                        .is_some_and(|id| id.tenant == a.tenant && id.invocation == a.invocation)
++            })
++            .ok_or(Refusal::Invalid)?;
++        if c.checkpoint != a.checkpoint
++            || matches!(
++                c.reaction,
++                Action::CanonicalShutdownKeepNativeHold | Action::OriginalExpiry
++            )
++        {
++            return Err(Refusal::Invalid);
++        }
++        if matches!(c.reaction, Action::ForceReload | Action::ForceReloadSwap)
++            && (s.reload.issued || s.reload.requested)
++        {
++            return Err(Refusal::Busy);
++        }
++        s.barriers[i].advance_seen = true;
++        s.controls = s.controls.checked_add(1).ok_or(Refusal::Exhausted)?;
++        let id = s.barriers[i].identity.ok_or(Refusal::Invalid)?;
++        s.journal.append(CheckpointRecord::invocation(
++            c.id,
++            a.checkpoint,
++            2,
++            id,
++            a.ordinal,
++        ))?;
++        match c.reaction {
++            Action::ForceReload | Action::ForceReloadSwap => {
++                if s.reload.issued || s.reload.requested {
++                    return Err(Refusal::Busy);
++                }
++                s.reload.requested = true;
++            }
++            Action::ActualActorExit => s.actor_exit = true,
++            Action::CanonicalReleaseAll => s.release_all = true,
++            Action::CanonicalShutdownThenRelease => {}
++            Action::CanonicalParentCancel => s.barriers[i].cancel = true,
++            Action::DropActualReplyConsumer | Action::AbandonOwnedProducerBeforeSend => {
++                s.barriers[i].drop_reply = true;
++            }
++            Action::DropActualConnectionConsumer => {
++                s.barriers[i].drop_connection = true;
++                s.barriers[i].advanced = true
++            }
++            Action::DropActualEffectConsumer => {
++                s.barriers[i].drop_effect = true;
++                s.barriers[i].advanced = true
++            }
++            Action::CanonicalShutdownKeepNativeHold | Action::OriginalExpiry => {
++                return Err(Refusal::Invalid)
++            }
++            _ => s.barriers[i].advanced = true,
++        };
++        s.notice = true;
++        Ok(Self::take_wakes(s))
+     }
+     fn take_wakes(s: &mut State) -> [Option<Waker>; 5] {
+         let mut wakes = std::array::from_fn(|_| None);
+@@ -1812,9 +1872,10 @@
+         let incoming = cx.waker().clone();
+         let mut old = None;
+         let out = {
+-            let mut s = match self.state() {
+-                Ok(s) => s,
+-                Err(e) => return Poll::Ready(Err(e)),
++            let mut s = match self.poll_state(cx) {
++                Poll::Ready(Ok(s)) => s,
++                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
++                Poll::Pending => return Poll::Pending,
+             };
+             if s.notice {
+                 s.notice = false;
+@@ -1831,7 +1892,7 @@
+         let mut wakes = [None, None];
+         let notices;
+         {
+-            let mut s = self.state()?;
++            let mut s = self.owned_state()?;
+             if s.journal.sealed {
+                 return Ok(());
+             }
+@@ -1883,7 +1944,7 @@
+         Ok(())
+     }
+     pub fn next_deadline(&self) -> Result<Option<Instant>, Refusal> {
+-        let s = self.state()?;
++        let s = self.owned_state()?;
+         if s.case == 60 {
+             return Ok(if s.header_expired {
+                 None
+@@ -1906,7 +1967,7 @@
+             .min())
+     }
+     pub fn count(&self) -> Result<(usize, u64, bool), Refusal> {
+-        let s = self.state()?;
++        let s = self.owned_state()?;
+         Ok((
+             s.journal.len,
+             s.journal.next,
+@@ -1914,7 +1975,7 @@
+         ))
+     }
+     pub fn row(&self, index: usize) -> Result<Option<CheckpointRecord>, Refusal> {
+-        let s = self.state()?;
++        let s = self.owned_state()?;
+         Ok((index < s.journal.len).then(|| s.journal.rows[index]))
+     }
+     pub fn process(
+@@ -1924,7 +1985,7 @@
+         second: u64,
+         internal: bool,
+     ) -> Result<(), Refusal> {
+-        let mut s = self.state()?;
++        let mut s = self.owned_state()?;
+         if s.journal.sealed {
+             return Err(Refusal::NotReady);
+         }
+@@ -1985,7 +2046,7 @@
+         Ok(())
+     }
+     pub fn reload_request(&self) -> Result<Option<u64>, Refusal> {
+-        let mut s = self.state()?;
++        let mut s = self.owned_state()?;
+         if s.stopped || !s.reload.requested {
+             return Ok(None);
+         }
+@@ -1997,10 +2058,10 @@
+         Ok(Some(1))
+     }
+     pub fn processed_generation(&self) -> Result<u64, Refusal> {
+-        Ok(self.state()?.reload.processed)
++        Ok(self.owned_state()?.reload.processed)
+     }
+     pub fn drained_generation(&self) -> Result<Option<u64>, Refusal> {
+-        let s = self.state()?;
++        let s = self.owned_state()?;
+         Ok((s.case == 101 && s.reload.drained).then_some(s.reload.old))
+     }
+     pub fn shutdown(&self, mode: u8) -> Result<(), Refusal> {
+@@ -2010,7 +2071,7 @@
+         let mut wakes = [None, None];
+         let notices;
+         {
+-            let mut s = self.state()?;
++            let mut s = self.owned_state()?;
+             if s.journal.sealed {
+                 return Err(Refusal::NotReady);
+             }
+@@ -2043,7 +2104,7 @@
+         if bytes > super::GuardedNode::PROCESS_MAIN_WORK_BYTES || alignment > 16 || alignment == 0 {
+             return Err(Refusal::Bounds);
+         }
+-        let mut s = self.state()?;
++        let mut s = self.owned_state()?;
+         if s.journal.sealed {
+             return Err(Refusal::NotReady);
+         }
+@@ -2064,22 +2125,19 @@
+         self.notify(wakes);
+         Ok(())
+     }
+-    pub fn main_work_bytes(&self) -> usize {
+-        self.state()
+-            .ok()
+-            .and_then(|s| s.main_work.map(|v| v.0))
+-            .unwrap_or(0)
+-    }
+-    pub fn actor_exit(&self) -> bool {
+-        self.state().ok().is_some_and(|s| s.actor_exit)
+-    }
+-    pub fn release_all(&self) -> bool {
+-        self.state()
+-            .ok()
+-            .is_some_and(|mut s| std::mem::take(&mut s.release_all))
++    pub fn main_work_bytes(&self) -> Result<usize, Refusal> {
++        Ok(self.owned_state()?.main_work.map_or(0, |v| v.0))
++    }
++    // Opportunistic prechecks in the actor loop. The authoritative poll scan
++    // uses poll_actor_flags; these checks never queue or consume on contention.
++    pub fn actor_exit(&self) -> Result<bool, Refusal> {
++        Ok(self.try_state()?.actor_exit)
++    }
++    pub fn release_all(&self) -> Result<bool, Refusal> {
++        Ok(std::mem::take(&mut self.try_state()?.release_all))
+     }
+     pub fn connection_drop(&self) -> Result<Option<(u8, u64)>, Refusal> {
+-        let mut s = self.state()?;
++        let mut s = self.owned_state()?;
+         for b in &mut s.barriers {
+             if std::mem::take(&mut b.drop_connection) {
+                 let id = b.identity.ok_or(Refusal::Invalid)?;
+@@ -2088,8 +2146,7 @@
+         }
+         Ok(None)
+     }
+-    pub fn reply_drop(&self, id: Identity) -> Result<bool, Refusal> {
+-        let mut s = self.state()?;
++    fn reply_drop_locked(s: &mut State, id: Identity) -> Result<bool, Refusal> {
+         for b in &mut s.barriers {
+             if b.identity.is_some_and(|v| {
+                 v.same_invocation(id)
+@@ -2109,16 +2166,13 @@
+                     ordinal,
+                 ))?;
+                 s.notice = true;
+-                let wakes = Self::take_wakes(&mut s);
+-                drop(s);
+-                self.notify(wakes);
+                 return Ok(true);
+             }
+         }
+         Ok(false)
+     }
+     pub fn cancel_target(&self) -> Result<Option<Identity>, Refusal> {
+-        let mut s = self.state()?;
++        let mut s = self.owned_state()?;
+         for b in &mut s.barriers {
+             if std::mem::take(&mut b.cancel) {
+                 return Ok(b.identity);
+@@ -2150,7 +2204,7 @@
+ }
+ impl Qualification {
+     pub fn end(&self, emitted: usize) -> Result<CheckpointEnd, Refusal> {
+-        let s = self.state()?;
++        let s = self.owned_state()?;
+         if !s.journal.sealed || emitted != s.journal.len {
+             return Err(Refusal::Invalid);
+         }
+@@ -2188,13 +2242,10 @@
+         id: Identity,
+         cx: &mut Context<'_>,
+     ) -> Poll<Result<bool, Refusal>> {
+-        let s = match self.state() {
+-            Ok(s) => s,
+-            Err(Refusal::Contended) => {
+-                cx.waker().wake_by_ref();
+-                return Poll::Pending;
+-            }
+-            Err(e) => return Poll::Ready(Err(e)),
++        let s = match self.poll_state(cx) {
++            Poll::Ready(Ok(s)) => s,
++            Poll::Pending => return Poll::Pending,
++            Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+         };
+         if s.journal.sealed {
+             return Poll::Pending;
+@@ -2225,7 +2276,7 @@
+             && b.drop_effect))
+     }
+     pub fn effect_dropped(&self, id: Identity) -> Result<(), Refusal> {
+-        let mut s = self.state()?;
++        let mut s = self.owned_state()?;
+         if s.journal.sealed {
+             return Err(Refusal::NotReady);
+         }
+@@ -2337,13 +2388,13 @@
+         epoch: Option<u64>,
+         generation: Option<u64>,
+     ) -> Result<ValidatorObservation, Refusal> {
+-        let s = self.state()?;
++        let s = self.owned_state()?;
+         Self::validator_ticket(&s, expected, id, epoch, generation)
+     }
+     // Observation hint only. Never changes ordinary Route validation, including
+     // when diagnostics contend. A selected missing witness is incomplete proof.
+     pub fn route_validator_observation_hint(&self, original: RootToken) -> bool {
+-        self.state().is_ok_and(|s| {
++        self.try_state().is_ok_and(|s| {
+             s.case == 95
+                 && !s.journal.sealed
+                 && s.barriers.iter().any(|b| {
+@@ -2361,7 +2412,7 @@
+         epoch: Option<u64>,
+         generation: Option<u64>,
+     ) -> Result<Option<ValidatorObservation>, Refusal> {
+-        let s = self.state()?;
++        let s = self.owned_state()?;
+         if s.case != expected
+             || !s
+                 .barriers
+@@ -2377,7 +2428,7 @@
+         ticket: ValidatorObservation,
+         actual: Refusal,
+     ) -> Result<(), Refusal> {
+-        let mut s = self.state()?;
++        let mut s = self.owned_state()?;
+         let checked =
+             Self::validator_ticket(&s, ticket.case, ticket.id, ticket.epoch, ticket.generation)?;
+         if checked.ordinal != ticket.ordinal
+@@ -2417,7 +2468,7 @@
+         actual_is_panic: bool,
+         native_branch: bool,
+     ) -> Result<(), Refusal> {
+-        let mut s = self.state()?;
++        let mut s = self.owned_state()?;
+         if !matches!(s.case, 84 | 85 | 86 | 88)
+             || !s
+                 .barriers
+@@ -2469,7 +2520,7 @@
+         Ok(())
+     }
+     pub fn failed_cut(&self, id: Identity, checkpoint: u8) -> Result<(), Refusal> {
+-        let mut s = self.state()?;
++        let mut s = self.owned_state()?;
+         let case = s.case;
+         let ordinal = s
+             .barriers
+@@ -2489,12 +2540,12 @@
+ 
+ impl Qualification {
+     pub fn seal(&self) -> Result<usize, Refusal> {
+-        let mut s = self.state()?;
++        let mut s = self.owned_state()?;
+         s.journal.sealed = true;
+         Ok(s.journal.len)
+     }
+     pub fn selected(&self, id: Identity, checkpoint: u8, cut: u16) -> Result<bool, Refusal> {
+-        let s = self.state()?;
++        let s = self.owned_state()?;
+         Ok(s.case != 0
+             && Self::matches(case(s.case)?, id, checkpoint, cut)
+             && s.barriers
+@@ -2516,11 +2567,15 @@
+ }
+ 
+ impl Qualification {
+-    pub fn reply_poll(&self, id: Identity, cx: &mut Context<'_>) -> Result<bool, Refusal> {
++    pub fn reply_poll(&self, id: Identity, cx: &mut Context<'_>) -> Poll<Result<bool, Refusal>> {
+         let incoming = cx.waker().clone();
+         let mut old = None;
+-        {
+-            let mut s = self.state()?;
++        let (result, wakes) = {
++            let mut s = match self.poll_state(cx) {
++                Poll::Pending => return Poll::Pending,
++                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
++                Poll::Ready(Ok(s)) => s,
++            };
+             let selected = s.case != 0
+                 && case(s.case).is_ok_and(|c| {
+                     matches!(
+@@ -2537,12 +2592,15 @@
+                     old = b.sync_waker.replace(incoming);
+                 }
+             }
+-        }
++            let result = Self::reply_drop_locked(&mut s, id);
++            (result, Self::take_wakes(&mut s))
++        };
+         drop(old);
+-        self.reply_drop(id)
++        self.notify(wakes);
++        Poll::Ready(result)
+     }
+     pub fn connection_dropped(&self, slot: u8, generation: u64) -> Result<(), Refusal> {
+-        let mut s = self.state()?;
++        let mut s = self.owned_state()?;
+         let b = s
+             .barriers
+             .iter()
+@@ -2571,16 +2629,46 @@
+ 
+ impl Qualification {
+     pub fn allows_reload(&self) -> bool {
+-        self.state().is_ok_and(|s| {
++        self.owned_state().is_ok_and(|s| {
+             !s.stopped && !s.failed && !s.journal.overflow && !s.journal.sealed && s.reload.issued
+         })
+     }
+ }
+ 
+ #[cfg(test)]
++thread_local! {
++    // One scalar test notice immediately before the real atomic Condvar wait.
++    // No production field, callback, wait, or retained resource is introduced.
++    static BLOCKING_WAIT_NOTICE: std::cell::RefCell<Option<std::sync::mpsc::SyncSender<()>>> = const { std::cell::RefCell::new(None) };
++}
++#[cfg(test)]
+ impl Qualification {
++    // Only the Condvar component regression uses owned acquisition. This is
++    // not evidence that a newly submitted Advance is allowed to queue.
++    pub(super) fn advance_owned_for_test(&self, a: Advance) -> Result<(), Refusal> {
++        let wakes = {
++            let mut s = self.owned_state()?;
++            Self::advance_locked(&mut s, a, None)?
++        };
++        self.notify(wakes);
++        Ok(())
++    }
++    pub(super) fn blocking_noticed_for_test(
++        &self,
++        id: Identity,
++        checkpoint: u8,
++        cut: u16,
++        notice: std::sync::mpsc::SyncSender<()>,
++    ) -> Result<Action, Refusal> {
++        BLOCKING_WAIT_NOTICE.with(|slot| assert!(slot.borrow_mut().replace(notice).is_none()));
++        let result = self.blocking(id, checkpoint, cut);
++        BLOCKING_WAIT_NOTICE.with(|slot| {
++            slot.borrow_mut().take();
++        });
++        result
++    }
+     pub(super) fn entered_for_test(&self, index: usize) -> Result<Advance, Refusal> {
+-        let s = self.state()?;
++        let s = self.owned_state()?;
+         let b = s.barriers.get(index).ok_or(Refusal::Invalid)?;
+         let id = b.identity.ok_or(Refusal::Invalid)?;
+         if !b.entered {
+@@ -2602,7 +2690,7 @@
+ 
+ impl Qualification {
+     pub fn cancel_processed(&self, id: Identity) -> Result<(), Refusal> {
+-        let mut s = self.state()?;
++        let mut s = self.owned_state()?;
+         if s.journal.sealed {
+             return Ok(());
+         }
+@@ -2682,7 +2770,7 @@
+         connection: u8,
+         generation: u64,
+     ) -> Result<(), Refusal> {
+-        let mut s = self.state()?;
++        let mut s = self.owned_state()?;
+         if s.case != 60 || s.header_deadline.is_some() {
+             return Ok(());
+         }
+@@ -2707,13 +2795,12 @@
+ 
+ impl Qualification {
+     pub fn poll_actor_flags(&self, cx: &mut Context<'_>) -> Poll<Result<(bool, bool), Refusal>> {
+-        match self.state() {
+-            Ok(mut s) => Poll::Ready(Ok((s.actor_exit, std::mem::take(&mut s.release_all)))),
+-            Err(Refusal::Contended) => {
+-                cx.waker().wake_by_ref();
+-                Poll::Pending
+-            }
+-            Err(e) => Poll::Ready(Err(e)),
++        match self.poll_state(cx) {
++            Poll::Ready(Ok(mut s)) => {
++                Poll::Ready(Ok((s.actor_exit, std::mem::take(&mut s.release_all))))
++            }
++            Poll::Pending => Poll::Pending,
++            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+         }
+     }
+ }
+--- a/crates/celld/guarded_node/tests.rs
++++ b/crates/celld/guarded_node/tests.rs
+@@ -5505,6 +5505,41 @@
+     let mut cx = Context::from_waker(std::task::Waker::noop());
+     q.poll(id, c.checkpoint, cut, &mut cx)
+ }
++// Observe the real owned-lock WouldBlock boundary before releasing Q. The
++// operation itself keeps its actual metadata owner; no timing sleep proves it.
++fn b4_owned_qualification_wait<T: Send + 'static>(
++    q: &Arc<qualification::Qualification>,
++    operation: impl FnOnce(Arc<qualification::Qualification>) -> T + Send + 'static,
++) -> T {
++    let deadline = Instant::now() + Duration::from_secs(5);
++    let (notice_tx, notice_rx) = std::sync::mpsc::sync_channel(1);
++    let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
++    let worker_q = q.clone();
++    let (observed, worker) = q.with_guard_for_test(|| {
++        let worker = std::thread::spawn(move || {
++            let _notice = control::contention_notice(notice_tx);
++            let result = operation(worker_q);
++            let _ = result_tx.send(result);
++        });
++        let observed = notice_rx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
++        (observed, worker)
++    });
++    let result = result_rx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
++    let joined = worker.join();
++    // All actual locks are released and helpers joined before assertions.
++    assert!(observed.is_ok());
++    assert!(joined.is_ok());
++    result.unwrap()
++}
++fn b4_poison_qualification(q: &Arc<qualification::Qualification>) {
++    let worker_q = q.clone();
++    let result = std::thread::spawn(move || {
++        worker_q.with_guard_for_test(|| panic!("private qualifier poison regression"));
++    })
++    .join();
++    assert!(result.is_err());
++    drop(result); // Dispose the real panic payload after the mutex guard unwound.
++}
+ #[test]
+ fn b4_process_case_table_closed() {
+     assert_eq!(qualification::CASES.len(), 101);
+@@ -5601,7 +5636,28 @@
+         q.with_guard_for_test(|| q.advance(a)),
+         Err(Refusal::Contended)
+     );
++    assert_eq!(
++        q.with_guard_for_test(|| q.permit_begin()),
++        Err(Refusal::Contended)
++    );
++    assert_eq!(
++        q.with_guard_for_test(|| q.actor_exit()),
++        Err(Refusal::Contended)
++    );
++    assert_eq!(
++        q.with_guard_for_test(|| q.release_all()),
++        Err(Refusal::Contended)
++    );
++    assert_eq!(q.with_guard_for_test(|| q.case_id()), None);
++    assert!(!q.with_guard_for_test(|| q.route_validator_observation_hint(id.root)));
+     q.advance(a).unwrap();
++    let poisoned = Arc::new(qualification::Qualification::new());
++    poisoned.install(17).unwrap();
++    b4_poison_qualification(&poisoned);
++    assert_eq!(poisoned.permit_begin(), Err(Refusal::Failed));
++    assert_eq!(poisoned.advance(a), Err(Refusal::Failed));
++    assert_eq!(poisoned.actor_exit(), Err(Refusal::Failed));
++    assert_eq!(poisoned.release_all(), Err(Refusal::Failed));
+     let (factory, process) = fixture_factory();
+     let control = factory
+         .try_owner(OwnerRole::Control, Some(AcceptedStamp::capture().unwrap()))
+@@ -5635,6 +5691,73 @@
+         Poll::Ready(Ok(qualification::Action::Continue))
+     ));
+     assert_eq!(q.count().unwrap().0, 3);
++    let q = Arc::new(q);
++    assert!(b4_owned_qualification_wait(&q, move |q| {
++        q.admit(replacement, Instant::now() + Duration::from_secs(15))?;
++        q.bind_connection(replacement, 1, 2)
++    })
++    .is_ok());
++    let checkpoint = qualification::case(17).unwrap().checkpoint;
++    assert_eq!(
++        b4_owned_qualification_wait(&q, move |q| q.blocking(replacement, checkpoint, 0)),
++        Ok(qualification::Action::Continue)
++    );
++    assert_eq!(
++        b4_owned_qualification_wait(&q, move |q| q.blocking(id, checkpoint, 0)),
++        Ok(qualification::Action::Continue)
++    );
++    let ordinary = Arc::new(qualification::Qualification::new());
++    assert_eq!(
++        b4_owned_qualification_wait(&ordinary, move |q| q.blocking(id, checkpoint, 0)),
++        Ok(qualification::Action::Continue)
++    );
++    assert_eq!(q.count().unwrap().0, 3);
++    let expired = Instant::now();
++    assert_eq!(
++        b4_owned_qualification_wait(&q, move |q| q.admit(replacement, expired)),
++        Err(Refusal::Expired)
++    );
++    assert_eq!(q.count().unwrap().0, 3);
++
++    // Notification before the first evaluation is already visible. No
++    // advanced-only fallback predicate may strand this consumed identity.
++    let (held, held_id) = b4_process_component(17);
++    assert!(b4_process_poll(&held, held_id, 17).is_pending());
++    held.advance(held.entered_for_test(0).unwrap()).unwrap();
++    assert_eq!(
++        held.blocking(held_id, checkpoint, 0),
++        Ok(qualification::Action::HoldThenContinue)
++    );
++    assert_eq!(
++        held.blocking(held_id, checkpoint, 0),
++        Ok(qualification::Action::Continue)
++    );
++
++    // The notice is emitted under the actual predicate guard, immediately
++    // before atomic Condvar release. Advance cannot slip into a lost gap.
++    let (held, held_id) = b4_process_component(17);
++    let held = Arc::new(held);
++    assert!(b4_process_poll(&held, held_id, 17).is_pending());
++    let advance = held.entered_for_test(0).unwrap();
++    let (notice_tx, notice_rx) = std::sync::mpsc::sync_channel(1);
++    let (answer_tx, answer_rx) = std::sync::mpsc::sync_channel(1);
++    let deadline = Instant::now() + Duration::from_secs(5);
++    let worker_q = held.clone();
++    let worker = std::thread::spawn(move || {
++        let answer = worker_q.blocking_noticed_for_test(held_id, checkpoint, 0, notice_tx);
++        let _ = answer_tx.send(answer);
++    });
++    let noticed = notice_rx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
++    // The notice itself does not prove guard release. This test-only adapter
++    // waits for the actual atomic wait release, then uses the identical full
++    // Advance validator/mutation. Production try-only admission is tested above.
++    let advanced = held.advance_owned_for_test(advance);
++    let answer = answer_rx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
++    let joined = worker.join();
++    assert!(noticed.is_ok());
++    assert!(advanced.is_ok());
++    assert!(joined.is_ok());
++    assert_eq!(answer.unwrap(), Ok(qualification::Action::HoldThenContinue));
+ }
+ #[test]
+ fn b4_process_two_targets_distinct_release() {
+@@ -5850,6 +5973,138 @@
+     assert!(q.poll_notice(&mut cx).is_pending());
+     q.process(2, 0, 0, false).unwrap();
+     assert!(!probe.failed.load(Ordering::Acquire));
++    struct CountWake(std::sync::atomic::AtomicUsize);
++    impl Wake for CountWake {
++        fn wake(self: Arc<Self>) {
++            self.wake_by_ref();
++        }
++        fn wake_by_ref(self: &Arc<Self>) {
++            self.0.fetch_add(1, Ordering::SeqCst);
++        }
++    }
++    let (held, id) = b4_process_component(17);
++    let held = Arc::new(held);
++    let count = Arc::new(CountWake(std::sync::atomic::AtomicUsize::new(0)));
++    let counting = Waker::from(count.clone());
++    let mut cx = Context::from_waker(&counting);
++    let before = held.count().unwrap();
++    let pending = held.with_guard_for_test(|| {
++        [
++            held.poll(id, 5, 0, &mut cx).is_pending(),
++            held.poll_notice(&mut cx).is_pending(),
++            held.poll_actor_flags(&mut cx).is_pending(),
++            held.poll_effect_drop_ready(id, &mut cx).is_pending(),
++            held.reply_poll(id, &mut cx).is_pending(),
++        ]
++    });
++    assert!(pending.into_iter().all(|v| v));
++    assert_eq!(count.0.load(Ordering::SeqCst), 5);
++    assert_eq!(held.count().unwrap(), before);
++    assert!(held.poll(id, 5, 0, &mut cx).is_pending());
++    assert!(matches!(held.poll_notice(&mut cx), Poll::Ready(Ok(()))));
++    assert!(matches!(
++        held.poll_actor_flags(&mut cx),
++        Poll::Ready(Ok((false, false)))
++    ));
++    assert!(matches!(
++        held.poll_effect_drop_ready(id, &mut cx),
++        Poll::Ready(Ok(false))
++    ));
++    assert!(matches!(
++        held.reply_poll(id, &mut cx),
++        Poll::Ready(Ok(false))
++    ));
++    // Both selected reply-loss reactions retain their armed original intent
++    // under actual Q contention and require the complete auxiliary binding.
++    // This is selector component evidence; actual consumer Drop remains P3.
++    for case in [24, 29] {
++        let (reply, identity) = b4_process_component(case);
++        assert!(b4_process_poll(&reply, identity, case).is_pending());
++        reply.advance(reply.entered_for_test(0).unwrap()).unwrap();
++        let before = reply.count().unwrap();
++        assert!(reply
++            .with_guard_for_test(|| reply.reply_poll(identity, &mut cx))
++            .is_pending());
++        assert_eq!(reply.count().unwrap(), before);
++        let mut wrong = identity;
++        wrong.auxiliary_request += 1;
++        assert!(matches!(
++            reply.reply_poll(wrong, &mut cx),
++            Poll::Ready(Ok(false))
++        ));
++        wrong = identity;
++        wrong.auxiliary_sequence += 1;
++        assert!(matches!(
++            reply.reply_poll(wrong, &mut cx),
++            Poll::Ready(Ok(false))
++        ));
++        wrong = identity;
++        wrong.a2 += 1;
++        assert!(matches!(
++            reply.reply_poll(wrong, &mut cx),
++            Poll::Ready(Ok(false))
++        ));
++        assert_eq!(reply.count().unwrap(), before);
++        assert!(matches!(
++            reply.reply_poll(identity, &mut cx),
++            Poll::Ready(Ok(true))
++        ));
++        assert_eq!(reply.count().unwrap().0, before.0 + 1);
++        let record = serde_json::to_value(reply.row(before.0).unwrap().unwrap()).unwrap();
++        assert_eq!(record["state"], "consumer_dropped");
++        assert_eq!(record["invocation"], identity.invocation);
++        assert_eq!(record["auxiliary_request"], identity.auxiliary_request);
++        assert_eq!(record["auxiliary_sequence"], identity.auxiliary_sequence);
++        assert!(matches!(
++            reply.reply_poll(identity, &mut cx),
++            Poll::Ready(Ok(false))
++        ));
++        assert_eq!(reply.count().unwrap().0, before.0 + 1);
++    }
++    b4_poison_qualification(&held);
++    assert!(matches!(
++        held.poll(id, 5, 0, &mut cx),
++        Poll::Ready(Err(Refusal::Failed))
++    ));
++    assert!(matches!(
++        held.poll_notice(&mut cx),
++        Poll::Ready(Err(Refusal::Failed))
++    ));
++    assert!(matches!(
++        held.poll_actor_flags(&mut cx),
++        Poll::Ready(Err(Refusal::Failed))
++    ));
++    assert!(matches!(
++        held.poll_effect_drop_ready(id, &mut cx),
++        Poll::Ready(Err(Refusal::Failed))
++    ));
++    assert!(matches!(
++        held.reply_poll(id, &mut cx),
++        Poll::Ready(Err(Refusal::Failed))
++    ));
++    assert_eq!(held.blocking(id, 5, 0), Err(Refusal::Failed));
++    let fixture = b2_fixture();
++    let registry = fixture.registry().clone();
++    let skipped = registry.qualification.with_guard_for_test(|| {
++        (
++            registry.qualification_actor_exit(),
++            registry.qualification_release_all(),
++        )
++    });
++    assert_eq!(skipped, (false, false));
++    assert!(registry.process.check().is_ok());
++    let worker_registry = registry.clone();
++    let poisoned = std::thread::spawn(move || {
++        worker_registry
++            .qualification
++            .with_guard_for_test(|| panic!("actor qualifier poison"));
++    })
++    .join();
++    assert!(poisoned.is_err());
++    drop(poisoned);
++    assert!(!registry.qualification_release_all());
++    assert!(registry.process.check().is_err());
++    assert!(registry.qualification_actor_exit());
+ }
+ // Component evidence: Scalar readiness/once-only contract plus actual registered metadata task joined result retained across a deterministic second record Pending, then real OwnedActorCompletion Drop; no Worker/native success or core apply.
+ // P3 required: Exact actual joined OwnedActorCompletion identity, selected consuming Drop outside ownership locks, no matching semantic apply, original owner quarantine/retention.
+@@ -6093,6 +6348,34 @@
+     assert!(q.allows_reload());
+     q.seal().unwrap();
+     assert!(!q.allows_reload());
++    let pending = Arc::new(qualification::Qualification::new());
++    pending.install(12).unwrap();
++    pending.process(1, 1, 0, false).unwrap();
++    assert_eq!(
++        b4_owned_qualification_wait(&pending, |q| q.reload_request()),
++        Ok(Some(1))
++    );
++    assert_eq!(pending.reload_request().unwrap(), None);
++    let (cancel, id) = b4_process_component(25);
++    let cancel = Arc::new(cancel);
++    assert!(b4_process_poll(&cancel, id, 25).is_pending());
++    cancel.advance(cancel.entered_for_test(0).unwrap()).unwrap();
++    let target = b4_owned_qualification_wait(&cancel, |q| q.cancel_target())
++        .unwrap()
++        .unwrap();
++    assert!(target.same_checkpoint(id));
++    assert_eq!(cancel.cancel_target().unwrap(), None);
++    let count = cancel.count().unwrap();
++    assert_eq!(
++        b4_owned_qualification_wait(&cancel, |q| {
++            q.tick(Instant::now())?;
++            q.count()
++        }),
++        Ok(count)
++    );
++    assert!(b4_owned_qualification_wait(&cancel, |q| q.row(0))
++        .unwrap()
++        .is_some());
+ }
+ #[test]
+ fn b4_process_guarded_no_prewarm_scope() {
+@@ -6111,7 +6394,7 @@
+     let (q, id) = b4_process_component(27);
+     assert!(b4_process_poll(&q, id, 27).is_pending());
+     q.advance(q.entered_for_test(0).unwrap()).unwrap();
+-    assert!(q.actor_exit());
++    assert!(q.actor_exit().unwrap());
+     assert!(b4_process_poll(&q, id, 27).is_pending());
+     q.process(10, 3, 0, false).unwrap();
+     let row = serde_json::to_value(q.row(q.count().unwrap().0 - 1).unwrap().unwrap()).unwrap();
+@@ -6642,4 +6925,8 @@
+             + 1
+             <= 1024
+     );
+-}
++    let poisoned = Arc::new(qualification::Qualification::new());
++    poisoned.install(1).unwrap();
++    b4_poison_qualification(&poisoned);
++    assert_eq!(poisoned.main_work_bytes(), Err(Refusal::Failed));
++}
+--- a/crates/celld/js/storage_ops.rs
++++ b/crates/celld/js/storage_ops.rs
+@@ -1293,15 +1293,16 @@
+             return Poll::Ready(Err("guarded sync already completed".to_owned()));
+         }
+         match self.disposition.qualification_drop_reply(cx) {
+-            Ok(false) => {}
+-            Ok(true) => {
++            Poll::Pending => return Poll::Pending,
++            Poll::Ready(Ok(false)) => {}
++            Poll::Ready(Ok(true)) => {
+                 drop(self.origin.take());
+                 drop(self.receive.take());
+                 self.done = true;
+                 self.disposition.fail();
+                 return Poll::Ready(Err("guarded sync consumer abandoned".to_owned()));
+             }
+-            Err(_) => {
++            Poll::Ready(Err(_)) => {
+                 self.disposition.fail();
+                 drop(self.origin.take());
+                 drop(self.receive.take());

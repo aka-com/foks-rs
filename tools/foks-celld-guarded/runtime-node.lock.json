@@ -4,6 +4,7 @@
   "accepted_b1_commit": "23039e209d1b3b129a274dd65fe07f0abfdba8e0",
   "accepted_b2_commit": "d22ff3deedf0f0a87f635aec2317a87410e39110",
   "accepted_b3_commit": "9151df82364fa60177cb62f6645746ce1aff9b48",
+  "accepted_b4_main_work_commit": "885dbeb2c8ef2371a53d2988fbe5cee383c84fb9",
   "accepted_b4_p1_commit": "66090566c0ffcccc12e2d1c2bc9917f2f84019c4",
   "accepted_b4_p2_commit": "2e226249358568bd136796775378dd7cd8100651",
   "base": {
@@ -51,6 +52,26 @@
       "bytes": 71284,
       "path": "runtime/evidence/accepted-b2/prepared-inputs/source-manifest.json",
       "sha256": "b06b21c3014d4745e8ef1898a0165affd8f67026bb07962ff75188cafb5e3890"
+    },
+    "main_work_assets": {
+      "bytes": 1069,
+      "path": "runtime/evidence/accepted-b4-main-work-contention-base/assets-node-main-work.json",
+      "sha256": "b00ca9de22b6d623d3db10d0be71e8e48ab2f7ecead3ee6d5d30707a80bda003"
+    },
+    "main_work_profile": {
+      "bytes": 97683,
+      "path": "runtime/evidence/accepted-b4-main-work-contention-base/runtime-node.lock.json",
+      "sha256": "e46eb21ddee1dddc2d9cfc5604e0f101d4851439b015c3a8caefcb93bf618d5f"
+    },
+    "main_work_series": {
+      "bytes": 45292,
+      "path": "runtime/evidence/accepted-b4-main-work-contention-base/patches/node-series.json",
+      "sha256": "ebc848f4d7c0b0fcab482ebca27ebf2cd4a7ab4b74d975b46f24979f8d1220c4"
+    },
+    "main_work_source_manifest": {
+      "bytes": 72055,
+      "path": "runtime/evidence/accepted-b4-main-work/prepared-inputs/source-manifest.json",
+      "sha256": "9c32a11d7c027ffaf0077fd3f34318364e2316fe1bbcd7b5b2681ba634d26eae"
     },
     "node_profile": {
       "bytes": 35289,
@@ -132,9 +153,9 @@
   },
   "format": 1,
   "node_series": {
-    "bytes": 45292,
+    "bytes": 47749,
     "path": "patches/node-series.json",
-    "sha256": "ebc848f4d7c0b0fcab482ebca27ebf2cd4a7ab4b74d975b46f24979f8d1220c4"
+    "sha256": "e359a62dd5b388a36c06bcdd83c46e4963c67db7c631f30052a44a3a02ef3699"
   },
   "pins": {
     "build": {
@@ -309,7 +330,7 @@
   },
   "profile": "node-main-work",
   "qualification": {
-    "claim": "b4-main-work-components-only",
+    "claim": "b4-main-work-qualifier-contention-components-only",
     "deployments": {
       "fixture": {
         "prefix": "deploy/foks-guarded-node-fixture/1fdd2523a443ea95",
@@ -3036,11 +3057,22 @@
         "sha256": "132f90ed059cd55eccfa9f1e48deac799adde38e30d8ec5f3540ef0ca3d96727"
       }
     },
+    "qualifier_contention": {
+      "native_test_extensions": [
+        "guarded_execution::node::tests::b4_process_advance_contention_no_action",
+        "guarded_execution::node::tests::b4_process_callbacks_and_drop_outside_locks",
+        "guarded_execution::node::tests::b4_process_initial_target_does_not_rearm",
+        "guarded_execution::node::tests::b4_process_reload_request_one_shot_contract",
+        "guarded_execution::node::tests::b4_process_process_layouts_and_stream_caps"
+      ],
+      "predecessor": "accepted-main-work-seven-patch",
+      "revision": 1
+    },
     "source_roster": [
       "crates/celld/guarded_node.rs",
       "crates/celld/guarded_node/qualification.rs",
       "crates/celld/guarded_node/tests.rs",
-      "crates/celld/main/guarded.rs"
+      "crates/celld/js/storage_ops.rs"
     ],
     "tests": {
       "names": [
@@ -3173,8 +3205,8 @@
     },
     "tree": {
       "files": 289,
-      "inventory_sha256": "1ab55bf79e7937681ed5032afcf3a7a5c2c5d5766d47280f63f66e304e9e4769",
-      "payload_bytes": 7555472
+      "inventory_sha256": "8de1540cb2f79b4fabaf9c9c52f8b65e4787038cc1212905d82b17f2e989ccc1",
+      "payload_bytes": 7573165
     }
   },
   "target": "aarch64-apple-darwin"
