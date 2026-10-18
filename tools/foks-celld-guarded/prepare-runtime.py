@@ -293,6 +293,16 @@ CONTENTION_POLICY = {
     "revision": 1, "predecessor": "accepted-main-work-seven-patch",
     "native_test_extensions": CONTENTION_TEST_EXTENSIONS,
 }
+CONTROL_RETIREMENT_BASE = '9baecfa4b6fd487a65c3c56a1d858412f44a0d4d'
+CONTROL_RETIREMENT_PATCH = 'patches/0009-node-owned-control-retirement.patch'
+CONTROL_RETIREMENT_PROFILE = 'runtime/evidence/accepted-b4-qualifier-contention-control-base/runtime-node.lock.json'
+CONTROL_RETIREMENT_SERIES = 'runtime/evidence/accepted-b4-qualifier-contention-control-base/patches/node-series.json'
+CONTROL_RETIREMENT_MANIFEST = 'runtime/evidence/accepted-b4-qualifier-contention/prepared-inputs/source-manifest.json'
+CONTROL_RETIREMENT_ASSETS = 'runtime/evidence/accepted-b4-qualifier-contention-control-base/assets-node-main-work.json'
+CONTROL_RETIREMENT_BASE_IMAGES = {'qualifier_contention_assets': ('runtime/evidence/accepted-b4-qualifier-contention-control-base/assets-node-main-work.json', '157ca0d4852b829f85f123752df3ce5131ec7f75746dbf77a3251d9386279abe'), 'qualifier_contention_profile': ('runtime/evidence/accepted-b4-qualifier-contention-control-base/runtime-node.lock.json', 'f920530af92e46fc48c32fac0c54539bfa509388e9bb3c66e7b97cc1eff1ff29'), 'qualifier_contention_series': ('runtime/evidence/accepted-b4-qualifier-contention-control-base/patches/node-series.json', 'e359a62dd5b388a36c06bcdd83c46e4963c67db7c631f30052a44a3a02ef3699'), 'qualifier_contention_source_manifest': ('runtime/evidence/accepted-b4-qualifier-contention/prepared-inputs/source-manifest.json', '241755cc47c7c03b675991701407f6517018d4a8b8d4431f36742e7de8980b7e')}
+CONTROL_RETIREMENT_PATHS = ('crates/celld/guarded_node/control.rs', 'crates/celld/guarded_node/tests.rs')
+CONTROL_RETIREMENT_TEST_EXTENSIONS = ['guarded_execution::node::tests::b1_last_strong_and_registry_retirement_hold_role', 'guarded_execution::node::tests::b1_header_cells_are_process_owned_and_bounded']
+CONTROL_RETIREMENT_POLICY = {'native_test_extensions': ['guarded_execution::node::tests::b1_last_strong_and_registry_retirement_hold_role', 'guarded_execution::node::tests::b1_header_cells_are_process_owned_and_bounded'], 'predecessor': 'accepted-qualifier-contention-eight-patch', 'revision': 1}
 MAIN_WORK_BIN_TEST = MAIN_WORK + "-bin-test"
 MAIN_WORK_BIN_TESTS = ["guarded::tests::guarded_reload_main_work_fits_qualified_fixture"]
 MAIN_WORK_POLICY = {
@@ -2659,9 +2669,9 @@ def accepted_main_work(root):
     return load_main_work_predecessor(root, load_pins(root), CONTENTION_PROFILE, CONTENTION_SERIES)
 
 
-def load_main_work(root, base):
+def load_contention_predecessor(root, base, profile_path=FOUNDATION_PROFILE, series_path=FOUNDATION_SERIES):
     accepted = accepted_main_work(root)
-    profile = read_json(root / FOUNDATION_PROFILE)
+    profile = read_json(root / profile_path)
     closed_fields(profile, (*accepted, "accepted_b4_main_work_commit"), "revised main-work profile")
     require_main_work_revision(profile)
     identity = {name: value for name, value in accepted.items() if name.startswith("accepted_")}
@@ -2688,15 +2698,15 @@ def load_main_work(root, base):
     closed_fields(tree, ("files", "payload_bytes", "inventory_sha256"), "revised main-work tree")
     if type(tree["files"]) is not int or tree["files"] != accepted["qualification"]["tree"]["files"] or type(tree["payload_bytes"]) is not int or not 0 < tree["payload_bytes"] <= MAXIMUM_FOUNDATION_SOURCE or not isinstance(tree["inventory_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", tree["inventory_sha256"]):
         fail("invalid revised main-work tree envelope")
-    main_work_series(root, profile, accepted)
+    contention_predecessor_series(root, profile, accepted, series_path)
     return profile
 
 
-def main_work_series(root, profile, accepted=None):
+def contention_predecessor_series(root, profile, accepted=None, series_path=FOUNDATION_SERIES):
     require_main_work_revision(profile)
     accepted = accepted_main_work(root) if accepted is None else accepted
-    checked_file(root / FOUNDATION_SERIES, profile["node_series"])
-    series = read_json(root / FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    checked_file(root / series_path, profile["node_series"])
+    series = read_json(root / series_path, MAXIMUM_FOUNDATION_SERIES)
     prefix = main_work_predecessor_series(root, accepted, series_path=CONTENTION_SERIES)
     closed_fields(series, (*prefix, "accepted_b4_main_work_commit"), "revised main-work series")
     identity = {name: value for name, value in prefix.items() if name != "patches"}
@@ -2726,6 +2736,93 @@ def main_work_series(root, profile, accepted=None):
         validate_image(entry["after"])
         exact_json(entry["before"], {name: original[path][name] for name in ("bytes", "sha256", "git_sha1")}, "main-work accepted seven-patch preimage")
     checked_file(root / CONTENTION_PATCH, selected)
+    return series
+
+
+def require_control_retirement_revision(profile):
+    require_main_work_revision(profile)
+    if profile.get("accepted_b4_qualifier_contention_commit") != CONTROL_RETIREMENT_BASE:
+        fail("canonical main-work requires the Control-retirement revision")
+    qualification = profile.get("qualification")
+    if not isinstance(qualification, dict) or "control_retirement" not in qualification:
+        fail("missing main-work Control-retirement marker")
+    exact_json(qualification["control_retirement"], CONTROL_RETIREMENT_POLICY, "main-work Control-retirement marker")
+
+
+def accepted_qualifier_contention(root):
+    for path, checksum in CONTROL_RETIREMENT_BASE_IMAGES.values():
+        if file_hash(root / path) != checksum:
+            fail("accepted eight-patch qualifier-contention image changed")
+    return load_contention_predecessor(root, load_pins(root), CONTROL_RETIREMENT_PROFILE, CONTROL_RETIREMENT_SERIES)
+
+
+def load_main_work(root, base):
+    profile = read_json(root / FOUNDATION_PROFILE)
+    require_control_retirement_revision(profile)
+    accepted = accepted_qualifier_contention(root)
+    closed_fields(profile, (*accepted, "accepted_b4_qualifier_contention_commit"), "Control-retirement profile")
+    identity = {name: value for name, value in accepted.items() if name.startswith("accepted_")}
+    identity.update(format=1, profile=MAIN_WORK, target=TARGET, accepted_b4_qualifier_contention_commit=CONTROL_RETIREMENT_BASE)
+    exact_json({name: profile[name] for name in identity}, identity, "Control-retirement identity")
+    closed_fields(profile["base"], (*accepted["base"], *CONTROL_RETIREMENT_BASE_IMAGES), "Control-retirement base")
+    exact_json({name: profile["base"][name] for name in accepted["base"]}, accepted["base"], "Control-retirement historical base")
+    for name, (path, checksum) in CONTROL_RETIREMENT_BASE_IMAGES.items():
+        entry = profile["base"][name]
+        foundation_image(entry, path)
+        if entry["sha256"] != checksum:
+            fail("Control-retirement accepted base changed")
+        checked_file(root / path, entry)
+    exact_json(profile["pins"], base, "Control-retirement inherited pins")
+    exact_json(profile["cargo_lock"], accepted["cargo_lock"], "Control-retirement unchanged lock")
+    checked_file(root / "Cargo.lock", profile["cargo_lock"]["expected"])
+    foundation_image(profile["node_series"], FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    qualification = profile["qualification"]
+    closed_fields(qualification, (*accepted["qualification"], "control_retirement"), "Control-retirement qualification")
+    changed = {"claim", "source_roster", "tree"}
+    exact_json({name: qualification[name] for name in accepted["qualification"] if name not in changed}, {name: value for name, value in accepted["qualification"].items() if name not in changed}, "Control-retirement unchanged policies")
+    exact_json({name: qualification[name] for name in ("claim", "source_roster")}, {"claim": "b4-main-work-control-retirement-components-only", "source_roster": list(CONTROL_RETIREMENT_PATHS)}, "Control-retirement scope")
+    tree = qualification["tree"]
+    closed_fields(tree, ("files", "payload_bytes", "inventory_sha256"), "Control-retirement tree")
+    if type(tree["files"]) is not int or tree["files"] != accepted["qualification"]["tree"]["files"] or type(tree["payload_bytes"]) is not int or not 0 < tree["payload_bytes"] <= MAXIMUM_FOUNDATION_SOURCE or not isinstance(tree["inventory_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", tree["inventory_sha256"]):
+        fail("invalid Control-retirement tree envelope")
+    main_work_series(root, profile, accepted)
+    return profile
+
+
+def main_work_series(root, profile, accepted=None):
+    require_control_retirement_revision(profile)
+    accepted = accepted_qualifier_contention(root) if accepted is None else accepted
+    checked_file(root / FOUNDATION_SERIES, profile["node_series"])
+    series = read_json(root / FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    prefix = contention_predecessor_series(root, accepted, series_path=CONTROL_RETIREMENT_SERIES)
+    closed_fields(series, (*prefix, "accepted_b4_qualifier_contention_commit"), "Control-retirement series")
+    identity = {name: value for name, value in prefix.items() if name != "patches"}
+    identity.update(accepted_b4_qualifier_contention_commit=CONTROL_RETIREMENT_BASE)
+    exact_json({name: series[name] for name in identity}, identity, "Control-retirement series identity")
+    patches = series["patches"]
+    if not isinstance(patches, list) or len(patches) != 9:
+        fail("Control-retirement requires exactly nine patches")
+    exact_json(patches[:8], prefix["patches"], "Control-retirement immutable eight-patch prefix")
+    selected = patches[8]
+    closed_fields(selected, ("path", "bytes", "sha256", "files"), "Control-retirement ninth patch")
+    foundation_image({name: selected[name] for name in ("path", "bytes", "sha256")}, CONTROL_RETIREMENT_PATCH, MAXIMUM_FOUNDATION_PATCH)
+    if sum(entry["bytes"] for entry in patches) > MAXIMUM_PROCESS_PATCHES:
+        fail("Control-retirement combined patch payload exceeds unchanged allowance")
+    files = selected["files"]
+    if not isinstance(files, list) or len(files) != len(CONTROL_RETIREMENT_PATHS):
+        fail("invalid Control-retirement ninth-patch roster")
+    manifest = read_json(root / CONTROL_RETIREMENT_MANIFEST)
+    original = {row["path"]: row for row in manifest["files"]}
+    if len(original) != len(manifest["files"]) or len(original) != accepted["qualification"]["tree"]["files"]:
+        fail("invalid accepted qualifier-contention source inventory")
+    for path, entry in zip(CONTROL_RETIREMENT_PATHS, files, strict=True):
+        closed_fields(entry, ("path", "mode", "before", "after"), "Control-retirement ninth-patch file")
+        if entry["path"] != path or entry["mode"] != "100644" or path not in original:
+            fail("Control-retirement ninth-patch path/order/mode changed")
+        validate_image(entry["before"])
+        validate_image(entry["after"])
+        exact_json(entry["before"], {name: original[path][name] for name in ("bytes", "sha256", "git_sha1")}, "Control-retirement accepted eight-patch preimage")
+    checked_file(root / CONTROL_RETIREMENT_PATCH, selected)
     return series
 
 

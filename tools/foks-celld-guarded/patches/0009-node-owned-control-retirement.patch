@@ -1,0 +1,229 @@
+--- a/crates/celld/guarded_node/control.rs
++++ b/crates/celld/guarded_node/control.rs
+@@ -556,7 +556,7 @@
+     }
+ 
+     pub(super) fn retire_unstarted(self) -> Result<(), HeldOwner> {
+-        self.retire_owner(false)
++        self.retire_owner()
+     }
+ 
+     // This observation does not retire or release anything. After all native
+@@ -568,10 +568,10 @@
+     }
+ 
+     pub(super) fn retire_started(self, _proof: super::RetirementProof) -> Result<(), HeldOwner> {
+-        self.retire_owner(true)
+-    }
+-
+-    fn retire_owner(self, started: bool) -> Result<(), HeldOwner> {
++        self.retire_owner()
++    }
++
++    fn retire_owner(self) -> Result<(), HeldOwner> {
+         // The unstarted caller has no native resources; the started caller
+         // supplies the sealed B2 proof after actual payload/native disposal.
+         // This final guard retires only the physical Request/control owner.
+@@ -587,12 +587,10 @@
+             return self.retire_process();
+         };
+         let registry = self.registry.clone();
+-        let access = if started {
+-            lock_owned(&registry.state)
+-        } else {
+-            registry.state.try_lock().map_err(|_| Refusal::Contended)
+-        };
+-        let mut state = match access {
++        // This owner already occupies its original registry cell. Retirement
++        // is owned bookkeeping even when no native work was started; ordinary
++        // metadata contention must not become a permanent held/fenced owner.
++        let mut state = match lock_owned(&registry.state) {
+             Ok(state) => state,
+             Err(_) => return Err(HeldOwner::owner(self)),
+         };
+@@ -810,6 +808,14 @@
+         owner.control.request.clone()
+     }
+ 
++    pub(in crate::guarded_execution::node) fn with_registry_guard<R>(
++        owner: &OriginalOwner,
++        body: impl FnOnce() -> R,
++    ) -> R {
++        let _guard = owner.registry.state.lock().expect("fresh test registry");
++        body()
++    }
++
+     pub(in crate::guarded_execution::node) fn debt(owner: &OriginalOwner) -> usize {
+         owner.control.debt.load(Ordering::Acquire)
+     }
+--- a/crates/celld/guarded_node/tests.rs
++++ b/crates/celld/guarded_node/tests.rs
+@@ -37,6 +37,149 @@
+ fn retire_factory(factory: OwnerFactory, process: OriginalOwner) {
+     drop(factory);
+     retire(process);
++}
++
++// Real foundation owners only. The notice is emitted by lock_owned after an
++// actual WouldBlock; every verdict is delayed until the registry guard is
++// released and the worker is joined. No timing sleeps or admission retry.
++fn b1_owned_retirement_contends(role: OwnerRole) {
++    let (factory, process) = fixture_factory();
++    let available = component::role_available(&factory, role);
++    let owner = child(&factory, role);
++    let deadline = Instant::now() + Duration::from_secs(5);
++    let (notice_tx, notice_rx) = std::sync::mpsc::sync_channel(1);
++    let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
++    let (observed, completed, joined) = std::thread::scope(|scope| {
++        let (worker, observed) = component::with_registry_guard(&process, || {
++            let worker = scope.spawn(move || {
++                let _notice = control::contention_notice(notice_tx);
++                let result = owner.retire_unstarted();
++                let posted = done_tx.try_send(()).is_ok();
++                (result, posted)
++            });
++            let noticed = notice_rx
++                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
++                .is_ok();
++            let pending = matches!(
++                done_rx.try_recv(),
++                Err(std::sync::mpsc::TryRecvError::Empty)
++            );
++            let occupied = component::role_available(&factory, role) == available - 1;
++            let healthy = process.check().is_ok();
++            // New admission remains one-shot try-only while the same real
++            // metadata guard delays already-admitted owner cleanup.
++            let admission =
++                AcceptedStamp::capture().and_then(|stamp| factory.try_owner(role, Some(stamp)));
++            let refused = matches!(admission, Err(Refusal::Contended));
++            (worker, noticed && pending && occupied && healthy && refused)
++        });
++        let completed = done_rx
++            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
++            .is_ok();
++        let joined = worker.join();
++        (observed, completed, joined)
++    });
++    let (retired, posted) = match joined {
++        Ok((result, posted)) => (result.is_ok(), posted),
++        Err(_) => (false, false),
++    };
++    let returned = component::role_available(&factory, role) == available;
++    let healthy = process.check().is_ok();
++    let replacement = if retired && returned && healthy {
++        match AcceptedStamp::capture().and_then(|stamp| factory.try_owner(role, Some(stamp))) {
++            Ok(owner) => owner.retire_unstarted().is_ok(),
++            Err(_) => false,
++        }
++    } else {
++        false
++    };
++    if retired && replacement {
++        retire_factory(factory, process);
++    } else {
++        drop(factory);
++        drop(process);
++    }
++    assert!(observed && completed && retired && posted && returned && healthy && replacement);
++}
++
++fn b1_control_alias_stays_held() {
++    let (factory, process) = fixture_factory();
++    let owner = child(&factory, OwnerRole::Control);
++    let request = component::request(&owner);
++    let weak = Arc::downgrade(&request);
++    let held = owner.retire_unstarted();
++    let refused = held.is_err() && component::role_available(&factory, OwnerRole::Control) == 0;
++    drop(request);
++    let not_reused = matches!(
++        factory.try_owner(OwnerRole::Control, Some(AcceptedStamp::capture().unwrap())),
++        Err(Refusal::Busy)
++    );
++    let retained = weak.strong_count() != 0;
++    drop(held);
++    drop(factory);
++    drop(process);
++    let dead = weak.strong_count() == 0;
++    assert!(refused && not_reused && retained && dead);
++}
++
++fn b1_header_drop_contends() {
++    let (factory, process) = fixture_factory();
++    let lease = process
++        .acquire_header(AcceptedStamp::capture().unwrap())
++        .unwrap();
++    let before = process.observation().unwrap().occupied_headers;
++    let deadline = Instant::now() + Duration::from_secs(5);
++    let (notice_tx, notice_rx) = std::sync::mpsc::sync_channel(1);
++    let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
++    let (observed, completed, joined) = std::thread::scope(|scope| {
++        let (worker, observed) = component::with_registry_guard(&process, || {
++            let worker = scope.spawn(move || {
++                let _notice = control::contention_notice(notice_tx);
++                drop(lease);
++                done_tx.try_send(()).is_ok()
++            });
++            let noticed = notice_rx
++                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
++                .is_ok();
++            let pending = matches!(
++                done_rx.try_recv(),
++                Err(std::sync::mpsc::TryRecvError::Empty)
++            );
++            (worker, noticed && pending && process.check().is_ok())
++        });
++        let completed = done_rx
++            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
++            .is_ok();
++        (observed, completed, worker.join())
++    });
++    let returned = process.observation().map(|value| value.occupied_headers) == Ok(before - 1);
++    let healthy = process.check().is_ok();
++    let posted = joined.is_ok_and(|posted| posted);
++    retire_factory(factory, process);
++    assert!(observed && completed && posted && returned && healthy);
++}
++
++fn b1_registry_poison_stays_failed() {
++    let (factory, process) = fixture_factory();
++    let owner = child(&factory, OwnerRole::Control);
++    let lease = process
++        .acquire_header(AcceptedStamp::capture().unwrap())
++        .unwrap();
++    let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++        component::with_registry_guard(&process, || panic!("controlled owner registry poison"));
++    }));
++    // This is the real HeaderLease Drop failure path, not a simulated fail bit.
++    drop(lease);
++    let failed = process.check().is_err();
++    let held = owner.retire_unstarted();
++    let refused = held.is_err() && component::role_available(&factory, OwnerRole::Control) == 0;
++    let no_admission = factory
++        .try_owner(OwnerRole::Control, Some(AcceptedStamp::capture().unwrap()))
++        .is_err();
++    drop(held);
++    drop(factory);
++    drop(process);
++    assert!(poisoned.is_err() && failed && refused && no_admission);
+ }
+ 
+ fn installed() -> &'static Arc<GuardedNode> {
+@@ -153,6 +296,9 @@
+     assert!(weak.upgrade().is_none());
+     // This Weak can still retain Arc backing; no allocator-free claim is made.
+     drop(weak);
++    b1_owned_retirement_contends(OwnerRole::Control);
++    b1_owned_retirement_contends(OwnerRole::Invocation);
++    b1_control_alias_stays_held();
+ }
+ 
+ #[test]
+@@ -253,6 +399,8 @@
+     let owner = child(&factory, OwnerRole::Control);
+     retire(owner);
+     retire_factory(factory, process);
++    b1_header_drop_contends();
++    b1_registry_poison_stays_failed();
+ }
+ 
+ #[test]

@@ -446,7 +446,7 @@ def main_work_fixture(root, historical_validation=True):
 
 
 @contextmanager
-def contention_fixture(root):
+def contention_fixture(root, historical_validation=True):
     """One closed revision, with original synthetic seven-patch inputs archived."""
     with main_work_fixture(root, historical_validation=False) as previous:
         # The explicit predecessor context ends before any revised validation.
@@ -484,8 +484,58 @@ def contention_fixture(root):
         profile["base"].update(images)
         profile["qualification"].update(claim="b4-main-work-qualifier-contention-components-only", source_roster=list(p.CONTENTION_PATHS), tree={"files": len(final), "payload_bytes": sum(row["bytes"] for row in final), "inventory_sha256": p.digest(json.dumps(final, sort_keys=True, separators=(",", ":")).encode())}, qualifier_contention=copy.deepcopy(p.CONTENTION_POLICY))
         (root / p.FOUNDATION_PROFILE).write_text(json.dumps(profile))
-        with patch.object(p, "CONTENTION_BASE_IMAGES", hashes):
+        with patch.object(p, "CONTENTION_BASE_IMAGES", hashes), ExitStack() as validation:
+            if historical_validation:
+                validation.enter_context(contention_predecessor_validation())
             yield {**previous, "profile": profile, "series": series, "rows": final, "accepted_main_work": accepted, "accepted_main_work_profile": previous["profile"], "accepted_main_work_assets": assets}
+
+
+@contextmanager
+def contention_predecessor_validation(module=p):
+    """Explicit test-only routing of synthetic eight-patch inputs."""
+    with patch.object(module, "load_main_work", module.load_contention_predecessor), patch.object(module, "main_work_series", module.contention_predecessor_series):
+        yield
+
+
+@contextmanager
+def control_retirement_fixture(root):
+    with contention_fixture(root, historical_validation=False) as previous:
+        with contention_predecessor_validation():
+            accepted = p.prepare(previous["archive"], root, p.MAIN_WORK)
+            assets = p.prepare_assets(previous["native"], previous["binding"], root, p.MAIN_WORK)
+        preserved = root / Path(p.CONTROL_RETIREMENT_MANIFEST).parent
+        preserved.mkdir(parents=True)
+        (root / "runtime/source").rename(preserved / "source")
+        (root / "runtime/source-manifest.json").rename(root / p.CONTROL_RETIREMENT_MANIFEST)
+        for original, target in ((p.FOUNDATION_PROFILE, p.CONTROL_RETIREMENT_PROFILE), (p.FOUNDATION_SERIES, p.CONTROL_RETIREMENT_SERIES), ("runtime/assets-node-main-work.json", p.CONTROL_RETIREMENT_ASSETS)):
+            destination = root / target
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes((root / original).read_bytes())
+        (root / "runtime/assets-node-main-work.json").rename(preserved / "assets-node-main-work.json")
+        images = {name: foundation_file(root, path) for name, (path, _) in p.CONTROL_RETIREMENT_BASE_IMAGES.items()}
+        hashes = {name: (entry["path"], entry["sha256"]) for name, entry in images.items()}
+        rows = {row["path"]: dict(row) for row in accepted["files"]}
+        files, chunks = [], []
+        for name in p.CONTROL_RETIREMENT_PATHS:
+            before = (preserved / "source" / name).read_bytes()
+            after = ("owned-control-retirement " + name + "\n").encode()
+            old_lines = before.splitlines(keepends=True)
+            files.append({"path": name, "mode": "100644", "before": p.image_identity(before), "after": p.image_identity(after)})
+            chunks.append(("--- a/" + name + "\n+++ b/" + name + "\n@@ -1," + str(len(old_lines)) + " +1,1 @@\n").encode() + b"".join(b"-" + line for line in old_lines) + b"+" + after)
+            rows[name] = {"path": name, "mode": "100644", **p.image_identity(after)}
+        (root / p.CONTROL_RETIREMENT_PATCH).write_bytes(b"".join(chunks))
+        final = sorted(rows.values(), key=lambda row: row["path"])
+        series = copy.deepcopy(previous["series"])
+        series.update(accepted_b4_qualifier_contention_commit=p.CONTROL_RETIREMENT_BASE)
+        series["patches"].append({**foundation_file(root, p.CONTROL_RETIREMENT_PATCH), "files": files})
+        (root / p.FOUNDATION_SERIES).write_text(json.dumps(series))
+        profile = copy.deepcopy(previous["profile"])
+        profile.update(accepted_b4_qualifier_contention_commit=p.CONTROL_RETIREMENT_BASE, node_series=foundation_file(root, p.FOUNDATION_SERIES))
+        profile["base"].update(images)
+        profile["qualification"].update(claim="b4-main-work-control-retirement-components-only", source_roster=list(p.CONTROL_RETIREMENT_PATHS), tree={"files": len(final), "payload_bytes": sum(row["bytes"] for row in final), "inventory_sha256": p.digest(json.dumps(final, sort_keys=True, separators=(",", ":")).encode())}, control_retirement=copy.deepcopy(p.CONTROL_RETIREMENT_POLICY))
+        (root / p.FOUNDATION_PROFILE).write_text(json.dumps(profile))
+        with patch.object(p, "CONTROL_RETIREMENT_BASE_IMAGES", hashes):
+            yield {**previous, "profile": profile, "series": series, "rows": final, "accepted_contention": accepted, "accepted_contention_profile": previous["profile"], "accepted_contention_assets": assets}
 
 
 def repin_process(root, data, patch_bytes=None):
@@ -4331,6 +4381,94 @@ class QualifierContentionRevisionTests(unittest.TestCase):
             path.write_text("running 1 test\ntest " + name + " ... ignored\ntest result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s\n")
             with self.assertRaises(ValueError):
                 p.main_work_test_output(path, False)
+
+
+class ControlRetirementRevisionTests(unittest.TestCase):
+    def test_ninth_patch_preserves_exact_contention_prefix_and_tree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with control_retirement_fixture(root) as data:
+                names = (p.CONTROL_RETIREMENT_PROFILE, p.CONTROL_RETIREMENT_SERIES, p.CONTROL_RETIREMENT_MANIFEST, p.CONTROL_RETIREMENT_ASSETS, p.CONTENTION_PATCH)
+                before = {name: (root / name).read_bytes() for name in names}
+                source = p.prepare(data["archive"], root, p.MAIN_WORK)
+                self.assertEqual(source["files"], data["rows"])
+                self.assertEqual(p.verify_source(root, p.MAIN_WORK), source)
+                self.assertEqual(p.accepted_qualifier_contention(root), data["accepted_contention_profile"])
+                self.assertEqual(data["series"]["patches"][:8], json.loads(before[p.CONTROL_RETIREMENT_SERIES])["patches"])
+                old_rows = {row["path"]: row for row in data["accepted_contention"]["files"]}
+                changed = {row["path"] for row in source["files"] if row != old_rows[row["path"]]}
+                self.assertEqual(changed, set(p.CONTROL_RETIREMENT_PATHS))
+                self.assertEqual(len(source["files"]), len(old_rows))
+                self.assertTrue(set(p.CONTROL_RETIREMENT_TEST_EXTENSIONS).issubset(p.PROCESS_TESTS))
+                self.assertEqual(len(p.PROCESS_TESTS), 123)
+                pins = p.load_pins(root, p.MAIN_WORK)
+                for mode in p.MAIN_WORK_MODES:
+                    self.assertEqual(p.stage_for_mode(mode), p.MAIN_WORK)
+                    p.selected_mode(pins, mode)
+                self.assertEqual(pins["foundation"]["qualification"]["main_work"], p.MAIN_WORK_POLICY)
+                self.assertEqual(pins["foundation"]["qualification"]["qualifier_contention"], p.CONTENTION_POLICY)
+                result = p.prepare_assets(data["native"], data["binding"], root, p.MAIN_WORK)
+                self.assertEqual(result["assets"], data["accepted_contention_assets"]["assets"])
+                self.assertEqual(p.verify_assets(root, p.MAIN_WORK), result)
+                self.assertEqual({name: (root / name).read_bytes() for name in names}, before)
+
+    def test_revision_rejects_preimages_prefix_marker_roster_and_mode_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with control_retirement_fixture(root) as data:
+                profile_path, series_path = root / p.FOUNDATION_PROFILE, root / p.FOUNDATION_SERIES
+                profile_raw, series_raw = profile_path.read_bytes(), series_path.read_bytes()
+                changes = [
+                    lambda x: x.pop("accepted_b4_qualifier_contention_commit"),
+                    lambda x: x.update(accepted_b4_qualifier_contention_commit="0" * 40),
+                    lambda x: x["qualification"].pop("control_retirement"),
+                    lambda x: x["qualification"]["control_retirement"].update(revision=True),
+                    lambda x: x["qualification"]["control_retirement"].update(extra=True),
+                    lambda x: x["qualification"]["control_retirement"]["native_test_extensions"].pop(),
+                    lambda x: x["qualification"]["qualifier_contention"].update(revision=2),
+                    lambda x: x["qualification"]["source_roster"].reverse(),
+                    lambda x: x["qualification"]["main_work"].update(individual_bytes=16384),
+                    lambda x: x["qualification"]["modes"][p.MAIN_WORK]["celld_features"].append("unreviewed"),
+                    lambda x: x["base"]["qualifier_contention_assets"].update(sha256="0" * 64),
+                ]
+                try:
+                    for index, change in enumerate(changes):
+                        value = json.loads(profile_raw)
+                        change(value)
+                        profile_path.write_text(json.dumps(value))
+                        with self.subTest(profile=index), self.assertRaises(ValueError):
+                            p.load_pins(root, p.MAIN_WORK)
+                    profile_path.write_bytes(profile_raw)
+                    for index, change in enumerate((lambda x: x["patches"].pop(), lambda x: x.pop("accepted_b4_qualifier_contention_commit"), lambda x: x["patches"][7]["files"][0]["after"].update(sha256="0" * 64), lambda x: x["patches"][8]["files"][0]["before"].update(sha256="0" * 64), lambda x: x["patches"][8]["files"].reverse(), lambda x: x["patches"][8]["files"][0].update(mode="100755"), lambda x: x["patches"][8]["files"][0].update(path="crates/celld/main.rs"))):
+                        value = json.loads(series_raw)
+                        change(value)
+                        series_path.write_text(json.dumps(value))
+                        profile = json.loads(profile_raw)
+                        profile["node_series"] = foundation_file(root, p.FOUNDATION_SERIES)
+                        profile_path.write_text(json.dumps(profile))
+                        with self.subTest(series=index), self.assertRaises(ValueError):
+                            p.load_pins(root, p.MAIN_WORK)
+                    profile_path.write_bytes(profile_raw)
+                    series_path.write_bytes(series_raw)
+                    limit = sum(row["bytes"] for row in data["series"]["patches"]) - 1
+                    with patch.object(p, "MAXIMUM_PROCESS_PATCHES", limit), self.assertRaisesRegex(ValueError, "combined patch payload"):
+                        p.load_pins(root, p.MAIN_WORK)
+                    for name in (p.CONTROL_RETIREMENT_PROFILE, p.CONTROL_RETIREMENT_SERIES, p.CONTROL_RETIREMENT_MANIFEST, p.CONTROL_RETIREMENT_ASSETS):
+                        raw = (root / name).read_bytes()
+                        try:
+                            (root / name).write_bytes(raw + b" ")
+                            with self.subTest(archive=name), self.assertRaises(ValueError):
+                                p.load_pins(root, p.MAIN_WORK)
+                        finally:
+                            (root / name).write_bytes(raw)
+                    profile_path.write_bytes((root / p.CONTROL_RETIREMENT_PROFILE).read_bytes())
+                    series_path.write_bytes((root / p.CONTROL_RETIREMENT_SERIES).read_bytes())
+                    with self.assertRaisesRegex(ValueError, "Control-retirement revision"):
+                        p.load_pins(root, p.MAIN_WORK)
+                finally:
+                    profile_path.write_bytes(profile_raw)
+                    series_path.write_bytes(series_raw)
+                p.load_pins(root, p.MAIN_WORK)
 
 
 if __name__ == "__main__":
