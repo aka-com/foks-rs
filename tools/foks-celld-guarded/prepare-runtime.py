@@ -303,6 +303,18 @@ CONTROL_RETIREMENT_BASE_IMAGES = {'qualifier_contention_assets': ('runtime/evide
 CONTROL_RETIREMENT_PATHS = ('crates/celld/guarded_node/control.rs', 'crates/celld/guarded_node/tests.rs')
 CONTROL_RETIREMENT_TEST_EXTENSIONS = ['guarded_execution::node::tests::b1_last_strong_and_registry_retirement_hold_role', 'guarded_execution::node::tests::b1_header_cells_are_process_owned_and_bounded']
 CONTROL_RETIREMENT_POLICY = {'native_test_extensions': ['guarded_execution::node::tests::b1_last_strong_and_registry_retirement_hold_role', 'guarded_execution::node::tests::b1_header_cells_are_process_owned_and_bounded'], 'predecessor': 'accepted-qualifier-contention-eight-patch', 'revision': 1}
+
+RETIREMENT_DIAGNOSTICS_BASE = '3c71c49a062e74f96cdddc6c85df17eaed28ae33'
+RETIREMENT_DIAGNOSTICS_PATCH = 'patches/0010-node-retirement-diagnostics.patch'
+RETIREMENT_DIAGNOSTICS_PROFILE = 'runtime/evidence/accepted-b4-control-retirement-diagnostic-base/runtime-node.lock.json'
+RETIREMENT_DIAGNOSTICS_SERIES = 'runtime/evidence/accepted-b4-control-retirement-diagnostic-base/patches/node-series.json'
+RETIREMENT_DIAGNOSTICS_MANIFEST = 'runtime/evidence/accepted-b4-control-retirement/prepared-inputs/source-manifest.json'
+RETIREMENT_DIAGNOSTICS_ASSETS = 'runtime/evidence/accepted-b4-control-retirement-diagnostic-base/assets-node-main-work.json'
+RETIREMENT_DIAGNOSTICS_BASE_IMAGES = {'control_retirement_profile': ('runtime/evidence/accepted-b4-control-retirement-diagnostic-base/runtime-node.lock.json', 'd01a371d066051f29703b8b593adf2c16977f8e329f90d5015166bd261866354'), 'control_retirement_series': ('runtime/evidence/accepted-b4-control-retirement-diagnostic-base/patches/node-series.json', 'c4520f06e70c29998845c73cdac0db92294684dcd3e85fb322f37f5d2520682c'), 'control_retirement_assets': ('runtime/evidence/accepted-b4-control-retirement-diagnostic-base/assets-node-main-work.json', 'd89afbaec006f318297db59ebfa997a5f48b3183a8799248f328065e4ce2258b'), 'control_retirement_source_manifest': ('runtime/evidence/accepted-b4-control-retirement/prepared-inputs/source-manifest.json', 'd02cdc5e8ec53feab0451cd02393420c9fc6a5758419c0f9a9c05b802f209853')}
+RETIREMENT_DIAGNOSTICS_PATHS = ('crates/celld/guarded_node.rs', 'crates/celld/guarded_node/tests.rs', 'crates/celld/ltx_repl.rs', 'crates/celld/runtime.rs')
+RETIREMENT_DIAGNOSTICS_TEST_EXTENSIONS = ['guarded_execution::node::tests::b4_observation_failed_retirement_retains_public_guard']
+RETIREMENT_DIAGNOSTICS_POLICY = {'diagnostics': 'error-only-stderr-bounded256x2-source16', 'native_test_extensions': ['guarded_execution::node::tests::b4_observation_failed_retirement_retains_public_guard'], 'predecessor': 'accepted-control-retirement-nine-patch', 'revision': 1}
+
 MAIN_WORK_BIN_TEST = MAIN_WORK + "-bin-test"
 MAIN_WORK_BIN_TESTS = ["guarded::tests::guarded_reload_main_work_fits_qualified_fixture"]
 MAIN_WORK_POLICY = {
@@ -2756,8 +2768,8 @@ def accepted_qualifier_contention(root):
     return load_contention_predecessor(root, load_pins(root), CONTROL_RETIREMENT_PROFILE, CONTROL_RETIREMENT_SERIES)
 
 
-def load_main_work(root, base):
-    profile = read_json(root / FOUNDATION_PROFILE)
+def load_control_retirement_predecessor(root, base, profile_path=FOUNDATION_PROFILE, series_path=FOUNDATION_SERIES):
+    profile = read_json(root / profile_path)
     require_control_retirement_revision(profile)
     accepted = accepted_qualifier_contention(root)
     closed_fields(profile, (*accepted, "accepted_b4_qualifier_contention_commit"), "Control-retirement profile")
@@ -2785,15 +2797,15 @@ def load_main_work(root, base):
     closed_fields(tree, ("files", "payload_bytes", "inventory_sha256"), "Control-retirement tree")
     if type(tree["files"]) is not int or tree["files"] != accepted["qualification"]["tree"]["files"] or type(tree["payload_bytes"]) is not int or not 0 < tree["payload_bytes"] <= MAXIMUM_FOUNDATION_SOURCE or not isinstance(tree["inventory_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", tree["inventory_sha256"]):
         fail("invalid Control-retirement tree envelope")
-    main_work_series(root, profile, accepted)
+    control_retirement_predecessor_series(root, profile, accepted, series_path)
     return profile
 
 
-def main_work_series(root, profile, accepted=None):
+def control_retirement_predecessor_series(root, profile, accepted=None, series_path=FOUNDATION_SERIES):
     require_control_retirement_revision(profile)
     accepted = accepted_qualifier_contention(root) if accepted is None else accepted
-    checked_file(root / FOUNDATION_SERIES, profile["node_series"])
-    series = read_json(root / FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    checked_file(root / series_path, profile["node_series"])
+    series = read_json(root / series_path, MAXIMUM_FOUNDATION_SERIES)
     prefix = contention_predecessor_series(root, accepted, series_path=CONTROL_RETIREMENT_SERIES)
     closed_fields(series, (*prefix, "accepted_b4_qualifier_contention_commit"), "Control-retirement series")
     identity = {name: value for name, value in prefix.items() if name != "patches"}
@@ -2823,6 +2835,93 @@ def main_work_series(root, profile, accepted=None):
         validate_image(entry["after"])
         exact_json(entry["before"], {name: original[path][name] for name in ("bytes", "sha256", "git_sha1")}, "Control-retirement accepted eight-patch preimage")
     checked_file(root / CONTROL_RETIREMENT_PATCH, selected)
+    return series
+
+
+def require_retirement_diagnostics_revision(profile):
+    require_control_retirement_revision(profile)
+    if profile.get("accepted_b4_control_retirement_commit") != RETIREMENT_DIAGNOSTICS_BASE:
+        fail("canonical main-work requires the retirement-diagnostics revision")
+    qualification = profile.get("qualification")
+    if not isinstance(qualification, dict) or "retirement_diagnostics" not in qualification:
+        fail("missing main-work retirement-diagnostics marker")
+    exact_json(qualification["retirement_diagnostics"], RETIREMENT_DIAGNOSTICS_POLICY, "main-work retirement-diagnostics marker")
+
+
+def accepted_control_retirement(root):
+    for path, checksum in RETIREMENT_DIAGNOSTICS_BASE_IMAGES.values():
+        if file_hash(root / path) != checksum:
+            fail("accepted nine-patch Control-retirement image changed")
+    return load_control_retirement_predecessor(root, load_pins(root), RETIREMENT_DIAGNOSTICS_PROFILE, RETIREMENT_DIAGNOSTICS_SERIES)
+
+
+def load_main_work(root, base):
+    profile = read_json(root / FOUNDATION_PROFILE)
+    require_retirement_diagnostics_revision(profile)
+    accepted = accepted_control_retirement(root)
+    closed_fields(profile, (*accepted, "accepted_b4_control_retirement_commit"), "retirement-diagnostics profile")
+    identity = {name: value for name, value in accepted.items() if name.startswith("accepted_")}
+    identity.update(format=1, profile=MAIN_WORK, target=TARGET, accepted_b4_control_retirement_commit=RETIREMENT_DIAGNOSTICS_BASE)
+    exact_json({name: profile[name] for name in identity}, identity, "retirement-diagnostics identity")
+    closed_fields(profile["base"], (*accepted["base"], *RETIREMENT_DIAGNOSTICS_BASE_IMAGES), "retirement-diagnostics base")
+    exact_json({name: profile["base"][name] for name in accepted["base"]}, accepted["base"], "retirement-diagnostics historical base")
+    for name, (path, checksum) in RETIREMENT_DIAGNOSTICS_BASE_IMAGES.items():
+        entry = profile["base"][name]
+        foundation_image(entry, path)
+        if entry["sha256"] != checksum:
+            fail("retirement-diagnostics accepted base changed")
+        checked_file(root / path, entry)
+    exact_json(profile["pins"], base, "retirement-diagnostics inherited pins")
+    exact_json(profile["cargo_lock"], accepted["cargo_lock"], "retirement-diagnostics unchanged lock")
+    checked_file(root / "Cargo.lock", profile["cargo_lock"]["expected"])
+    foundation_image(profile["node_series"], FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    qualification = profile["qualification"]
+    closed_fields(qualification, (*accepted["qualification"], "retirement_diagnostics"), "retirement-diagnostics qualification")
+    changed = {"claim", "source_roster", "tree"}
+    exact_json({name: qualification[name] for name in accepted["qualification"] if name not in changed}, {name: value for name, value in accepted["qualification"].items() if name not in changed}, "retirement-diagnostics unchanged policies")
+    exact_json({name: qualification[name] for name in ("claim", "source_roster")}, {"claim": "b4-main-work-retirement-diagnostics-components-only", "source_roster": list(RETIREMENT_DIAGNOSTICS_PATHS)}, "retirement-diagnostics scope")
+    tree = qualification["tree"]
+    closed_fields(tree, ("files", "payload_bytes", "inventory_sha256"), "retirement-diagnostics tree")
+    if type(tree["files"]) is not int or tree["files"] != accepted["qualification"]["tree"]["files"] or type(tree["payload_bytes"]) is not int or not 0 < tree["payload_bytes"] <= MAXIMUM_FOUNDATION_SOURCE or not isinstance(tree["inventory_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", tree["inventory_sha256"]):
+        fail("invalid retirement-diagnostics tree envelope")
+    main_work_series(root, profile, accepted)
+    return profile
+
+
+def main_work_series(root, profile, accepted=None):
+    require_retirement_diagnostics_revision(profile)
+    accepted = accepted_control_retirement(root) if accepted is None else accepted
+    checked_file(root / FOUNDATION_SERIES, profile["node_series"])
+    series = read_json(root / FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    prefix = control_retirement_predecessor_series(root, accepted, series_path=RETIREMENT_DIAGNOSTICS_SERIES)
+    closed_fields(series, (*prefix, "accepted_b4_control_retirement_commit"), "retirement-diagnostics series")
+    identity = {name: value for name, value in prefix.items() if name != "patches"}
+    identity.update(accepted_b4_control_retirement_commit=RETIREMENT_DIAGNOSTICS_BASE)
+    exact_json({name: series[name] for name in identity}, identity, "retirement-diagnostics series identity")
+    patches = series["patches"]
+    if not isinstance(patches, list) or len(patches) != 10:
+        fail("retirement-diagnostics requires exactly ten patches")
+    exact_json(patches[:9], prefix["patches"], "retirement-diagnostics immutable nine-patch prefix")
+    selected = patches[9]
+    closed_fields(selected, ("path", "bytes", "sha256", "files"), "retirement-diagnostics tenth patch")
+    foundation_image({name: selected[name] for name in ("path", "bytes", "sha256")}, RETIREMENT_DIAGNOSTICS_PATCH, MAXIMUM_FOUNDATION_PATCH)
+    if sum(entry["bytes"] for entry in patches) > MAXIMUM_PROCESS_PATCHES:
+        fail("retirement-diagnostics combined patch payload exceeds unchanged allowance")
+    files = selected["files"]
+    if not isinstance(files, list) or len(files) != len(RETIREMENT_DIAGNOSTICS_PATHS):
+        fail("invalid retirement-diagnostics tenth-patch roster")
+    manifest = read_json(root / RETIREMENT_DIAGNOSTICS_MANIFEST)
+    original = {row["path"]: row for row in manifest["files"]}
+    if len(original) != len(manifest["files"]) or len(original) != accepted["qualification"]["tree"]["files"]:
+        fail("invalid accepted Control-retirement source inventory")
+    for path, entry in zip(RETIREMENT_DIAGNOSTICS_PATHS, files, strict=True):
+        closed_fields(entry, ("path", "mode", "before", "after"), "retirement-diagnostics tenth-patch file")
+        if entry["path"] != path or entry["mode"] != "100644" or path not in original:
+            fail("retirement-diagnostics tenth-patch path/order/mode changed")
+        validate_image(entry["before"])
+        validate_image(entry["after"])
+        exact_json(entry["before"], {name: original[path][name] for name in ("bytes", "sha256", "git_sha1")}, "retirement-diagnostics accepted nine-patch preimage")
+    checked_file(root / RETIREMENT_DIAGNOSTICS_PATCH, selected)
     return series
 
 

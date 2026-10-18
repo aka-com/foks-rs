@@ -1,0 +1,666 @@
+--- a/crates/celld/guarded_node.rs
++++ b/crates/celld/guarded_node.rs
+@@ -54,6 +54,195 @@
+     }
+ }
+ impl std::error::Error for Refusal {}
++
++// Failure-only stderr diagnostics. These buffers bound their destinations, not
++// arbitrary Display implementations, the tracing subscriber, total stack or RSS.
++// No diagnostic obtains an owner alias, lock, credit or issuing capability.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(crate) enum RetirementFailureStage {
++    ClaimReplica,
++    SubmitLtx,
++    Join,
++    QualificationWait17,
++    ConsumeCompletion,
++    RetirementResult,
++    SuccessObservation,
++    FinalJobCheck,
++    ValidateRoleAttachment,
++    ResolveHandle,
++    JoinHydration,
++    JoinSync,
++    JoinCompaction,
++    TransferStoppedCell,
++    SelectDisposition,
++    RebaseSync,
++    EvictSnapshot,
++    EvictPublish,
++    EvictSyncFallback,
++    PrepareLocalClose,
++    JoinLocalClose,
++    LocalCloseResult,
++    RegisterPreservedPath,
++    RemoveStoppedCell,
++    DisposeHostScratch,
++    ReleaseRegistration,
++    ReplicaRootCompletion,
++}
++impl RetirementFailureStage {
++    fn label(self) -> &'static str {
++        match self {
++            Self::ClaimReplica => "c6_claim_replica",
++            Self::SubmitLtx => "c6_submit_ltx",
++            Self::Join => "c6_join",
++            Self::QualificationWait17 => "c6_qualification_wait17",
++            Self::ConsumeCompletion => "c6_consume_completion",
++            Self::RetirementResult => "c6_retirement_result",
++            Self::SuccessObservation => "c6_success_observation",
++            Self::FinalJobCheck => "c6_final_job_check",
++            Self::ValidateRoleAttachment => "validate_role_attachment",
++            Self::ResolveHandle => "resolve_handle",
++            Self::JoinHydration => "join_hydration",
++            Self::JoinSync => "join_sync",
++            Self::JoinCompaction => "join_compaction",
++            Self::TransferStoppedCell => "transfer_stopped_cell",
++            Self::SelectDisposition => "select_disposition",
++            Self::RebaseSync => "rebase_sync",
++            Self::EvictSnapshot => "evict_snapshot",
++            Self::EvictPublish => "evict_publish",
++            Self::EvictSyncFallback => "evict_sync_fallback",
++            Self::PrepareLocalClose => "prepare_local_close",
++            Self::JoinLocalClose => "join_local_close",
++            Self::LocalCloseResult => "local_close_result",
++            Self::RegisterPreservedPath => "register_preserved_path",
++            Self::RemoveStoppedCell => "remove_stopped_cell",
++            Self::DisposeHostScratch => "dispose_host_scratch",
++            Self::ReleaseRegistration => "release_registration",
++            Self::ReplicaRootCompletion => "replica_root_completion",
++        }
++    }
++}
++struct RetirementDiagnosticText {
++    bytes: [u8; 256],
++    len: usize,
++    truncated: bool,
++    format_failed: bool,
++}
++impl RetirementDiagnosticText {
++    fn render(error: &(dyn std::error::Error + 'static)) -> Self {
++        let mut text = Self {
++            bytes: [0; 256],
++            len: 0,
++            truncated: false,
++            format_failed: false,
++        };
++        text.format_failed = std::fmt::write(&mut text, format_args!("{error}")).is_err();
++        text
++    }
++    fn as_str(&self) -> &str {
++        // write_str copies only complete UTF-8 prefixes. Diagnostics must not
++        // panic or replace the actual operation error if this invariant fails.
++        std::str::from_utf8(&self.bytes[..self.len]).unwrap_or("")
++    }
++}
++impl std::fmt::Write for RetirementDiagnosticText {
++    fn write_str(&mut self, value: &str) -> std::fmt::Result {
++        if self.truncated {
++            return Err(std::fmt::Error);
++        }
++        let available = self.bytes.len() - self.len;
++        let mut count = value.len().min(available);
++        while !value.is_char_boundary(count) {
++            count -= 1;
++        }
++        self.bytes[self.len..self.len + count].copy_from_slice(&value.as_bytes()[..count]);
++        self.len += count;
++        if count != value.len() {
++            self.truncated = true;
++            // Stop a cooperative formatter at the first overflow; do not
++            // continue traversing discarded text or an unbounded error chain.
++            return Err(std::fmt::Error);
++        }
++        Ok(())
++    }
++}
++struct RetirementFailureDiagnostic {
++    original: RetirementDiagnosticText,
++    source_tail: RetirementDiagnosticText,
++    source_hops: u8,
++    source_depth_limited: bool,
++}
++impl RetirementFailureDiagnostic {
++    fn capture(error: &(dyn std::error::Error + 'static)) -> Self {
++        let mut tail = error;
++        let mut hops = 0;
++        let mut limited = true;
++        for _ in 0..16 {
++            match tail.source() {
++                Some(next) => {
++                    tail = next;
++                    hops += 1;
++                }
++                None => {
++                    limited = false;
++                    break;
++                }
++            }
++        }
++        Self {
++            original: RetirementDiagnosticText::render(error),
++            source_tail: RetirementDiagnosticText::render(tail),
++            source_hops: hops,
++            source_depth_limited: limited,
++        }
++    }
++}
++pub(crate) trait RetirementDiagnosticError {
++    fn diagnostic_error(&self) -> &(dyn std::error::Error + 'static);
++}
++impl RetirementDiagnosticError for Refusal {
++    fn diagnostic_error(&self) -> &(dyn std::error::Error + 'static) {
++        self
++    }
++}
++impl RetirementDiagnosticError for anyhow::Error {
++    fn diagnostic_error(&self) -> &(dyn std::error::Error + 'static) {
++        self.as_ref()
++    }
++}
++fn inspect_retirement_result<T, E: RetirementDiagnosticError>(
++    result: Result<T, E>,
++    emit: impl FnOnce(RetirementFailureDiagnostic),
++) -> Result<T, E> {
++    if let Err(error) = &result {
++        emit(RetirementFailureDiagnostic::capture(
++            error.diagnostic_error(),
++        ));
++    }
++    result
++}
++pub(crate) fn retirement_stage_result<T, E: RetirementDiagnosticError>(
++    context: &JobContext,
++    stage: RetirementFailureStage,
++    result: Result<T, E>,
++) -> Result<T, E> {
++    inspect_retirement_result(result, |diagnostic| {
++        tracing::error!(
++            event = "guarded_retirement_refused",
++            stage = stage.label(),
++            root = ?context.root_token(),
++            job_role = ?context.role(),
++            original = diagnostic.original.as_str(),
++            source_tail = diagnostic.source_tail.as_str(),
++            original_truncated = diagnostic.original.truncated,
++            source_truncated = diagnostic.source_tail.truncated,
++            original_format_failed = diagnostic.original.format_failed,
++            source_format_failed = diagnostic.source_tail.format_failed,
++            source_hops = diagnostic.source_hops,
++            source_depth_limited = diagnostic.source_depth_limited,
++            "actual guarded retirement operation refused"
++        );
++    })
++}
+ 
+ pub struct GuardedNode {
+     policy: DescriptorPolicy,
+--- a/crates/celld/guarded_node/tests.rs
++++ b/crates/celld/guarded_node/tests.rs
+@@ -5349,6 +5349,222 @@
+ }
+ #[test]
+ fn b4_observation_failed_retirement_retains_public_guard() {
++    // Diagnostic primitives only: this does not inject a native C6 failure or
++    // prove a production retirement stage. The original owner-retention proof
++    // below remains unchanged, and real process attribution is still required.
++    #[derive(Debug)]
++    struct Message(String);
++    impl std::fmt::Display for Message {
++        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++            f.write_str(&self.0)
++        }
++    }
++    impl std::error::Error for Message {}
++    for text in [String::new(), "actual failure".to_owned(), "a".repeat(256)] {
++        let message = Message(text.clone());
++        let formatted = RetirementDiagnosticText::render(&message);
++        assert_eq!(formatted.as_str(), text);
++        assert!(!formatted.truncated && !formatted.format_failed);
++    }
++    for text in [
++        "a".repeat(257),
++        "é".repeat(200),
++        "😀".repeat(100),
++        "a".repeat(255) + "é",
++    ] {
++        let message = Message(text);
++        let formatted = RetirementDiagnosticText::render(&message);
++        assert!(formatted.len <= 256 && formatted.truncated && formatted.format_failed);
++        assert!(std::str::from_utf8(&formatted.bytes[..formatted.len]).is_ok());
++        assert!(message.0.starts_with(formatted.as_str()));
++    }
++    #[derive(Debug)]
++    struct Cooperative(Arc<std::sync::atomic::AtomicUsize>);
++    impl std::fmt::Display for Cooperative {
++        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++            for _ in 0..1024 {
++                self.0.fetch_add(1, Ordering::SeqCst);
++                f.write_str("xx")?;
++            }
++            Ok(())
++        }
++    }
++    impl std::error::Error for Cooperative {}
++    let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
++    let formatted = RetirementDiagnosticText::render(&Cooperative(writes.clone()));
++    assert!(formatted.truncated && formatted.format_failed);
++    assert_eq!(writes.load(Ordering::SeqCst), 129); // stop at first overflowing write
++    #[derive(Debug)]
++    struct BrokenFormat;
++    impl std::fmt::Display for BrokenFormat {
++        fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++            Err(std::fmt::Error)
++        }
++    }
++    impl std::error::Error for BrokenFormat {}
++    let formatted = RetirementDiagnosticText::render(&BrokenFormat);
++    assert!(formatted.format_failed && !formatted.truncated && formatted.as_str().is_empty());
++
++    #[derive(Debug)]
++    struct Chain {
++        text: &'static str,
++        next: Option<Box<Chain>>,
++        calls: Arc<std::sync::atomic::AtomicUsize>,
++    }
++    impl std::fmt::Display for Chain {
++        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++            f.write_str(self.text)
++        }
++    }
++    impl std::error::Error for Chain {
++        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
++            self.calls.fetch_add(1, Ordering::SeqCst);
++            self.next
++                .as_deref()
++                .map(|next| next as &(dyn std::error::Error + 'static))
++        }
++    }
++    for depth in [1usize, 3, 16, 17, 20] {
++        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
++        let mut chain = Chain {
++            text: "leaf",
++            next: None,
++            calls: calls.clone(),
++        };
++        for _ in 1..depth {
++            chain = Chain {
++                text: "layer",
++                next: Some(Box::new(chain)),
++                calls: calls.clone(),
++            };
++        }
++        let diagnostic = RetirementFailureDiagnostic::capture(&chain);
++        assert_eq!(calls.load(Ordering::SeqCst), depth.min(16));
++        assert_eq!(diagnostic.source_hops as usize, (depth - 1).min(16));
++        assert_eq!(diagnostic.source_depth_limited, depth > 16);
++        assert_eq!(
++            diagnostic.source_tail.as_str(),
++            if depth > 17 { "layer" } else { "leaf" }
++        );
++    }
++    #[derive(Debug)]
++    struct Cycle(Arc<std::sync::atomic::AtomicUsize>);
++    impl std::fmt::Display for Cycle {
++        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++            f.write_str("cycle")
++        }
++    }
++    impl std::error::Error for Cycle {
++        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
++            self.0.fetch_add(1, Ordering::SeqCst);
++            Some(self)
++        }
++    }
++    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
++    let diagnostic = RetirementFailureDiagnostic::capture(&Cycle(calls.clone()));
++    assert_eq!(calls.load(Ordering::SeqCst), 16);
++    assert_eq!(diagnostic.source_hops, 16);
++    assert!(diagnostic.source_depth_limited);
++    assert_eq!(diagnostic.source_tail.as_str(), "cycle");
++
++    #[derive(Debug)]
++    struct OriginalError {
++        identity: Box<u64>,
++        drops: Arc<std::sync::atomic::AtomicUsize>,
++    }
++    impl std::fmt::Display for OriginalError {
++        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++            f.write_str("original non-clone error")
++        }
++    }
++    impl std::error::Error for OriginalError {}
++    impl RetirementDiagnosticError for OriginalError {
++        fn diagnostic_error(&self) -> &(dyn std::error::Error + 'static) {
++            self
++        }
++    }
++    impl Drop for OriginalError {
++        fn drop(&mut self) {
++            self.drops.fetch_add(1, Ordering::SeqCst);
++        }
++    }
++    let success = Box::new(42u64);
++    let success_identity = success.as_ref() as *const u64;
++    let success =
++        inspect_retirement_result::<_, Refusal>(Ok(success), |_| panic!("Ok emitted failure"))
++            .unwrap();
++    assert_eq!(success.as_ref() as *const u64, success_identity);
++    let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
++    let error = OriginalError {
++        identity: Box::new(73),
++        drops: drops.clone(),
++    };
++    let original_identity = error.identity.as_ref() as *const u64;
++    let mut emissions = 0;
++    let error = inspect_retirement_result::<(), _>(Err(error), |diagnostic| {
++        emissions += 1;
++        assert_eq!(diagnostic.original.as_str(), "original non-clone error");
++        assert_eq!(diagnostic.source_tail.as_str(), "original non-clone error");
++        assert!(!diagnostic.source_depth_limited);
++    })
++    .unwrap_err();
++    assert_eq!(emissions, 1);
++    assert_eq!(error.identity.as_ref() as *const u64, original_identity);
++    assert_eq!(drops.load(Ordering::SeqCst), 0);
++    drop(error);
++    assert_eq!(drops.load(Ordering::SeqCst), 1);
++    let original_anyhow =
++        anyhow::Error::new(Message("leaf preserved".to_owned())).context("outer preserved");
++    let original_display = original_anyhow.to_string(); // test-owned comparison only
++    let returned = inspect_retirement_result::<(), _>(Err(original_anyhow), |diagnostic| {
++        assert_eq!(diagnostic.original.as_str(), "outer preserved");
++        assert_eq!(diagnostic.source_tail.as_str(), "leaf preserved");
++        assert!(!diagnostic.source_depth_limited);
++    })
++    .unwrap_err();
++    assert_eq!(returned.to_string(), original_display);
++    assert_eq!(
++        returned.downcast_ref::<Message>().unwrap().0,
++        "leaf preserved"
++    );
++    let stages = [
++        RetirementFailureStage::ClaimReplica,
++        RetirementFailureStage::SubmitLtx,
++        RetirementFailureStage::Join,
++        RetirementFailureStage::QualificationWait17,
++        RetirementFailureStage::ConsumeCompletion,
++        RetirementFailureStage::RetirementResult,
++        RetirementFailureStage::SuccessObservation,
++        RetirementFailureStage::FinalJobCheck,
++        RetirementFailureStage::ValidateRoleAttachment,
++        RetirementFailureStage::ResolveHandle,
++        RetirementFailureStage::JoinHydration,
++        RetirementFailureStage::JoinSync,
++        RetirementFailureStage::JoinCompaction,
++        RetirementFailureStage::TransferStoppedCell,
++        RetirementFailureStage::SelectDisposition,
++        RetirementFailureStage::RebaseSync,
++        RetirementFailureStage::EvictSnapshot,
++        RetirementFailureStage::EvictPublish,
++        RetirementFailureStage::EvictSyncFallback,
++        RetirementFailureStage::PrepareLocalClose,
++        RetirementFailureStage::JoinLocalClose,
++        RetirementFailureStage::LocalCloseResult,
++        RetirementFailureStage::RegisterPreservedPath,
++        RetirementFailureStage::RemoveStoppedCell,
++        RetirementFailureStage::DisposeHostScratch,
++        RetirementFailureStage::ReleaseRegistration,
++        RetirementFailureStage::ReplicaRootCompletion,
++    ];
++    let mut labels: Vec<_> = stages
++        .into_iter()
++        .map(RetirementFailureStage::label)
++        .collect();
++    labels.sort_unstable();
++    labels.dedup();
++    assert_eq!(labels.len(), 27);
++    assert!(labels.iter().all(|label| label.len() <= 32));
++
+     let node = b3_local_node();
+     let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+     let guard =
+--- a/crates/celld/ltx_repl.rs
++++ b/crates/celld/ltx_repl.rs
+@@ -5885,7 +5885,8 @@
+     use super::*;
+     use crate::engine_api::StopMode;
+     use crate::guarded_execution::node::{
+-        CleanupLane, ForwardLane, JobContext, JobRole, NativeKind, Refusal, ReplicaRole, RootToken,
++        retirement_stage_result, CleanupLane, ForwardLane, JobContext, JobRole, NativeKind,
++        Refusal, ReplicaRole, RetirementFailureStage, RootToken,
+     };
+     use std::alloc::Layout;
+     use std::io;
+@@ -6698,6 +6699,13 @@
+         role: ReplicaRole,
+         result: anyhow::Result<()>,
+     ) -> LtxRootCompletion {
++        // Preserve the actual source error before the existing closed result
++        // deliberately flattens it. This runs after the job returned, outside guards.
++        let result = retirement_stage_result(
++            context,
++            RetirementFailureStage::ReplicaRootCompletion,
++            result,
++        );
+         let result = result.map_err(|error| {
+             let reason = if error.is::<crate::replication::EvictionAbandoned>() {
+                 Refusal::Cancelled
+@@ -7518,12 +7526,15 @@
+             context: &JobContext,
+             attachment: &EpochAttachment,
+             mode: StopMode,
++            stage: &mut RetirementFailureStage,
+         ) -> anyhow::Result<()> {
++            *stage = RetirementFailureStage::ValidateRoleAttachment;
+             context.require_role(JobRole::Cleanup(CleanupLane::Retirement))?;
+             attachment.validate(context)?;
+             if attachment.0.orphaned_registration.load(Ordering::Acquire) {
+                 return Err(refusal(context, Refusal::Failed).into());
+             }
++            *stage = RetirementFailureStage::ResolveHandle;
+             let handle = self.guarded_handle(context, attachment)?;
+             attachment.0.stop_forward();
+             if let Some(hydration) = &handle.hydration {
+@@ -7535,6 +7546,12 @@
+                 ReplicaRole::Sync,
+                 ReplicaRole::Compaction,
+             ] {
++                *stage = match role {
++                    ReplicaRole::Hydration => RetirementFailureStage::JoinHydration,
++                    ReplicaRole::Sync => RetirementFailureStage::JoinSync,
++                    ReplicaRole::Compaction => RetirementFailureStage::JoinCompaction,
++                    ReplicaRole::Retirement => RetirementFailureStage::ValidateRoleAttachment,
++                };
+                 let joined = context.stop_replica(role, attachment)?.await?;
+                 let mut outcome = Err(Refusal::Invalid);
+                 joined.consume_ltx(|completion| {
+@@ -7564,6 +7581,7 @@
+             }
+             // Move the exact resident into the stopped map under close
+             // exclusion. No ordinary close path is allowed to consume it.
++            *stage = RetirementFailureStage::TransferStoppedCell;
+             context.charge_owned(context.cell().len().checked_mul(2).ok_or(Refusal::Bounds)?)?;
+             let key = (context.cell().to_owned(), attachment.0.epoch);
+             let transferred = (|| {
+@@ -7587,10 +7605,12 @@
+             })();
+             transferred.map_err(|reason| refusal(context, reason))?;
+             let mut resource = None;
++            *stage = RetirementFailureStage::SelectDisposition;
+             let disposition = match &mode {
+                 StopMode::CloseInPlace => LocalDisposition::Keep,
+                 StopMode::Discard => LocalDisposition::Remove,
+                 StopMode::Rebase => {
++                    *stage = RetirementFailureStage::RebaseSync;
+                     if !sync_owned(context, attachment, &handle, &mut resource).await? {
+                         return Err(refusal(context, Refusal::Failed).into());
+                     }
+@@ -7609,6 +7629,7 @@
+                     if abandon.as_ref().is_some_and(|signal| signal.requested()) {
+                         return Err(abandoned());
+                     }
++                    *stage = RetirementFailureStage::EvictSnapshot;
+                     let budget =
+                         usize::try_from(self.snapshot_budget_bytes.load(Ordering::Relaxed))
+                             .unwrap_or(usize::MAX);
+@@ -7630,6 +7651,7 @@
+                     }
+                     let mut durable = false;
+                     if let Some(snapshot) = snapshot {
++                        *stage = RetirementFailureStage::EvictPublish;
+                         let publish = async {
+                             let info = handle
+                                 .client
+@@ -7669,6 +7691,7 @@
+                             handle.snapshot_declined.store(true, Ordering::Relaxed);
+                         }
+                     }
++                    *stage = RetirementFailureStage::EvictSyncFallback;
+                     if !durable
+                         && (!sync_owned(context, attachment, &handle, &mut resource).await?
+                             || !handle.client.0.has_any_object().await?)
+@@ -7684,6 +7707,7 @@
+             };
+             // Bound the epoch's decimal path and all direct sibling copies
+             // before allocating the first owned path for this native job.
++            *stage = RetirementFailureStage::PrepareLocalClose;
+             let path_bytes = self
+                 .watch
+                 .as_os_str()
+@@ -7704,14 +7728,17 @@
+                     disposition,
+                 },
+             )?;
++            *stage = RetirementFailureStage::JoinLocalClose;
+             let mut slot =
+                 native(context, attachment.clone(), NativeKind::LocalClose, slot).await?;
++            *stage = RetirementFailureStage::LocalCloseResult;
+             let preserved = match std::mem::replace(&mut slot.output, NativeOutput::Empty) {
+                 NativeOutput::Close(result) => result?,
+                 _ => return Err(refusal(context, Refusal::Invalid).into()),
+             };
+             drop(slot);
+             drop(resource);
++            *stage = RetirementFailureStage::RegisterPreservedPath;
+             if let Some(path) = preserved {
+                 self.preserved
+                     .lock()
+@@ -7723,6 +7750,7 @@
+                 attachment.0.epoch,
+                 percell_coverage(&handle),
+             );
++            *stage = RetirementFailureStage::RemoveStoppedCell;
+             let removed = (|| {
+                 let mut stopped = lock(&self.stopped_cells)?;
+                 if Arc::strong_count(&handle) != 2
+@@ -7737,6 +7765,7 @@
+             // The actual Cell/Db/VFS owner is disposed only outside its map.
+             drop(removed.map_err(|reason| refusal(context, reason))?);
+             drop(handle);
++            *stage = RetirementFailureStage::DisposeHostScratch;
+             let scratch = lock(&attachment.0.host_scratch)
+                 .map_err(|reason| refusal(context, reason))?
+                 .take();
+@@ -7751,6 +7780,7 @@
+             }
+             // Actual native jobs/results and Cell resources have been disposed.
+             // Release registration exclusion only at this final proven cut.
++            *stage = RetirementFailureStage::ReleaseRegistration;
+             let released = (|| {
+                 let mut registration = lock(&attachment.0.registration)?;
+                 if registration.current.is_some() || registration.guarded_epochs == 0 {
+@@ -7783,7 +7813,13 @@
+             attachment: EpochAttachment,
+             mode: StopMode,
+         ) -> LtxRootCompletion {
+-            let result = self.retire_guarded(&context, &attachment, mode).await;
++            let mut stage = RetirementFailureStage::ValidateRoleAttachment;
++            let result = self
++                .retire_guarded(&context, &attachment, mode, &mut stage)
++                .await;
++            // The inner future has returned and all of its guards are gone.
++            // Keep this exact stage/error before root_completion flattens it.
++            let result = retirement_stage_result(&context, stage, result);
+             root_completion(&context, attachment, ReplicaRole::Retirement, result)
+         }
+     }
+--- a/crates/celld/runtime.rs
++++ b/crates/celld/runtime.rs
+@@ -3800,8 +3800,9 @@
+ mod guarded_node_runtime {
+     use super::*;
+     use crate::guarded_execution::node::{
+-        CleanupLane, ForwardLane, JobContext, JobRole, NativeKind, QualificationAction, Refusal,
+-        RootToken, RuntimeWitness, ValidatorObservation,
++        retirement_stage_result, CleanupLane, ForwardLane, JobContext, JobRole, NativeKind,
++        QualificationAction, Refusal, RetirementFailureStage, RootToken, RuntimeWitness,
++        ValidatorObservation,
+     };
+     use crate::ltx_repl::{EpochAttachment, GuardedActivation, GuardedProof};
+     use celld_logic::wake::AlarmSnapshot;
+@@ -5415,9 +5416,13 @@
+             }
+             // C6 owns storage background joins, final capture/publication,
+             // managed close and VFS unregister after the actual Worker drop.
+-            let permit = context.claim_replica(
+-                crate::guarded_execution::node::ReplicaRole::Retirement,
+-                &attachment,
++            let permit = retirement_stage_result(
++                context,
++                RetirementFailureStage::ClaimReplica,
++                context.claim_replica(
++                    crate::guarded_execution::node::ReplicaRole::Retirement,
++                    &attachment,
++                ),
+             )?;
+             let cleanup = permit.context().clone();
+             let work = LocalRetirementWork {
+@@ -5425,15 +5430,38 @@
+                 attachment: attachment.clone(),
+                 mode,
+             };
+-            let joined = permit.submit_ltx(move |cleanup| work.run(cleanup))?.await?;
+-            cleanup.qualification_wait(17, 0, 0).await?;
++            let wait = retirement_stage_result(
++                &cleanup,
++                RetirementFailureStage::SubmitLtx,
++                permit.submit_ltx(move |cleanup| work.run(cleanup)),
++            )?;
++            let joined =
++                retirement_stage_result(&cleanup, RetirementFailureStage::Join, wait.await)?;
++            retirement_stage_result(
++                &cleanup,
++                RetirementFailureStage::QualificationWait17,
++                cleanup.qualification_wait(17, 0, 0).await,
++            )?;
+             let mut result = Err(Refusal::Invalid);
+-            joined.consume_ltx(|completion| {
+-                result = completion.retirement_result(&cleanup, &attachment);
+-            })?;
+-            result?;
+-            context.observe_event(crate::guarded_execution::node::ObservationEvent::C6Succeeded)?;
+-            context.check_job()?;
++            retirement_stage_result(
++                &cleanup,
++                RetirementFailureStage::ConsumeCompletion,
++                joined.consume_ltx(|completion| {
++                    result = completion.retirement_result(&cleanup, &attachment);
++                }),
++            )?;
++            retirement_stage_result(&cleanup, RetirementFailureStage::RetirementResult, result)?;
++            retirement_stage_result(
++                context,
++                RetirementFailureStage::SuccessObservation,
++                context
++                    .observe_event(crate::guarded_execution::node::ObservationEvent::C6Succeeded),
++            )?;
++            retirement_stage_result(
++                context,
++                RetirementFailureStage::FinalJobCheck,
++                context.check_job(),
++            )?;
+             Ok(())
+         }
+ 

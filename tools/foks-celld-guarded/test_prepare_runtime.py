@@ -100,6 +100,171 @@ def repin_patch(root, pins, series, data):
     save_pins(root, pins)
 
 
+# Only synthetic fixture construction uses this scope. Mutation/assertion calls
+# below the fixture helpers always see the original production validators.
+FIXTURE_ANCESTORS = (
+    "accepted_foundation", "accepted_lifetimes", "accepted_frontend",
+    "accepted_observations", "accepted_process", "accepted_main_work",
+    "accepted_qualifier_contention", "accepted_control_retirement",
+)
+
+
+FIXTURE_METADATA_PREFIXES = (
+    "LIFETIMES", "FRONTEND", "OBSERVATIONS", "PROCESS", "MAIN_WORK",
+    "CONTENTION", "CONTROL_RETIREMENT", "RETIREMENT_DIAGNOSTICS",
+)
+FIXTURE_PATCH_CONSTANTS = (
+    "PATCH_PATH", "FOUNDATION_PATCH", "LIFETIMES_PATCH", "FRONTEND_PATCH",
+    "OBSERVATIONS_PATCH", "PROCESS_PATCH", "MAIN_WORK_PATCH", "CONTENTION_PATCH",
+    "CONTROL_RETIREMENT_PATCH",
+)
+
+
+def fixture_metadata_paths(module):
+    """Positive read-role union of the eight accepted_* metadata validators."""
+    names = {"runtime.lock.json", "patches/series.json", "Cargo.lock"}
+    for prefix in ("FOUNDATION", *FIXTURE_METADATA_PREFIXES):
+        names.update(path for path, _ in getattr(module, prefix + "_BASE_IMAGES").values())
+    for prefix in FIXTURE_METADATA_PREFIXES:
+        names.update(getattr(module, prefix + suffix) for suffix in ("_PROFILE", "_SERIES"))
+    names.update(getattr(module, name) for name in FIXTURE_PATCH_CONSTANTS)
+    names.update(getattr(module, prefix + "_MANIFEST")
+                 for prefix in ("MAIN_WORK", "CONTENTION", "CONTROL_RETIREMENT"))
+    return tuple(sorted(module.relative_name(name) for name in names))
+
+
+def fixture_input_snapshot(root, payload, module=p):
+    """Stat fixed consumed metadata only; never walk source or output trees."""
+    root = Path(root).resolve()
+    entries = []
+    total = 0
+    parents = {}
+
+    def ancestors(name):
+        result = []
+        relative = Path()
+        for part in Path(name).parts[:-1]:
+            relative = relative / part
+            key = str(relative)
+            if key not in parents:
+                try:
+                    info = (root / relative).lstat()
+                except FileNotFoundError:
+                    parents[key] = None
+                else:
+                    if info.st_mode & 0o170000 != 0o040000:
+                        raise ValueError("fixture cache input ancestor is aliased or special")
+                    # Output creation can change a shared parent's mtime/nlink.
+                    # Its inode/type/permissions must still identify the same path.
+                    parents[key] = (info.st_dev, info.st_ino, info.st_mode)
+            if parents[key] is None:
+                return None
+            result.append((key, parents[key]))
+        return tuple(result)
+
+    names = fixture_metadata_paths(module)
+    if len(names) > 4096:
+        raise ValueError("fixture cache input inventory bound")
+    for name in names:
+        path = root / name
+        parent_identity = ancestors(name)
+        try:
+            info = None if parent_identity is None else path.lstat()
+        except FileNotFoundError:
+            info = None
+        if info is None:
+            # A later runtime/output directory does not change an absent role.
+            entries.append((name, None, None, None))
+            continue
+        if info.st_mode & 0o170000 != 0o100000 or info.st_nlink != 1:
+            raise ValueError("fixture cache input is aliased or special")
+        identity = (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+                    info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        total += info.st_size
+        if total > 16 * 1024 * 1024:
+            raise ValueError("fixture cache input inventory bound")
+        digest = None
+        if payload:
+            with path.open("rb") as stream:
+                raw = stream.read(info.st_size + 1)
+            after = path.lstat()
+            if len(raw) != info.st_size or identity != (after.st_dev, after.st_ino,
+                    after.st_mode, after.st_nlink, after.st_size,
+                    after.st_mtime_ns, after.st_ctime_ns):
+                raise ValueError("fixture cache input changed during capture")
+            digest = hashlib.sha256(raw).hexdigest()
+        entries.append((name, identity, parent_identity, digest))
+    return tuple(entries)
+
+
+def fixture_policy_snapshot(module):
+    return copy.deepcopy({name: value for name, value in vars(module).items()
+        if name.endswith(("_BASE_IMAGES", "_ASSET_SHA256", "_LOCK_BEFORE", "_LOCK_SHA256", "_ASSETS"))})
+
+
+@contextmanager
+def fixture_ancestor_cache(root, module=p):
+    """One operation only; restore before returning to a fixture or test body."""
+    root = Path(root).resolve()
+    if root == ROOT.resolve() or root == Path(module.ROOT).resolve():
+        raise ValueError("fixture cache requires a temporary fixture root")
+    info = root.lstat()
+    root_identity = (info.st_dev, info.st_ino)
+    initial = fixture_input_snapshot(root, True, module)
+    identities = tuple((name, identity, parents, None) for name, identity, parents, _ in initial)
+    policy = fixture_policy_snapshot(module)
+    namespace = json.dumps(policy, sort_keys=True, separators=(",", ":"))
+    fingerprint = hashlib.sha256(repr(initial).encode()).hexdigest()
+    original = {name: getattr(module, name) for name in FIXTURE_ANCESTORS}
+    results = {}
+    counters = {"validated": 0, "hits": 0}
+
+    def unchanged(candidate=root):
+        candidate = Path(candidate).resolve()
+        candidate_info = candidate.lstat()
+        if candidate != root or (candidate_info.st_dev, candidate_info.st_ino) != root_identity:
+            raise ValueError("fixture cache root changed")
+        if fixture_policy_snapshot(module) != policy or fixture_input_snapshot(root, False, module) != identities:
+            raise ValueError("fixture cache immutable inputs changed")
+
+    def wrapper(name):
+        def accepted(candidate):
+            unchanged(candidate)
+            key = (id(module), name, str(root), root_identity, fingerprint, namespace)
+            if key not in results:
+                result = original[name](candidate)
+                unchanged(candidate)
+                results[key] = copy.deepcopy(result)
+                counters["validated"] += 1
+            else:
+                counters["hits"] += 1
+            return copy.deepcopy(results[key])
+        return accepted
+
+    try:
+        with ExitStack() as stack:
+            for name in FIXTURE_ANCESTORS:
+                stack.enter_context(patch.object(module, name, wrapper(name)))
+            yield counters
+    finally:
+        # ExitStack has restored functions even when the operation raised.
+        if any(getattr(module, name) is not value for name, value in original.items()):
+            raise ValueError("fixture cache validator restoration failed")
+        unchanged()
+        if fixture_input_snapshot(root, True, module) != initial:
+            raise ValueError("fixture cache immutable payload changed")
+
+
+def fixture_prepare(archive, root, stage=None):
+    with fixture_ancestor_cache(root):
+        return p.prepare(archive, root, stage)
+
+
+def fixture_prepare_assets(archive, binding, root, stage=None):
+    with fixture_ancestor_cache(root):
+        return p.prepare_assets(archive, binding, root, stage)
+
+
 def a2_fixture(root, additional_contents=None):
     contents = {
         "Cargo.toml": b'[workspace]\nmembers = ["crates/celld"]\n',
@@ -159,8 +324,8 @@ def foundation_fixture(root, additional_contents=None):
     for key, path in (("archive", native), ("binding", binding)):
         pins["v8"][key].update(bytes=path.stat().st_size, sha256=p.file_hash(path))
     save_pins(root, pins)
-    accepted = p.prepare(archive, root)
-    p.prepare_assets(native, binding, root)
+    accepted = fixture_prepare(archive, root)
+    fixture_prepare_assets(native, binding, root)
     preserved = root / Path(p.FOUNDATION_MANIFEST).parent
     preserved.mkdir(parents=True)
     (root / "runtime/source").rename(preserved / "source")
@@ -211,8 +376,8 @@ def lifetimes_fixture(root, additional_contents=None):
     extra.update(additional_contents or {})
     with foundation_fixture(root, extra) as previous:
         (root / "Cargo.lock").write_bytes(previous["expected_lock"])
-        accepted = p.prepare(previous["archive"], root, p.FOUNDATION)
-        assets = p.prepare_assets(previous["native"], previous["binding"], root, p.FOUNDATION)
+        accepted = fixture_prepare(previous["archive"], root, p.FOUNDATION)
+        assets = fixture_prepare_assets(previous["native"], previous["binding"], root, p.FOUNDATION)
         preserved = root / Path(p.LIFETIMES_MANIFEST).parent
         preserved.mkdir(parents=True)
         (root / "runtime/source").rename(preserved / "source")
@@ -261,8 +426,8 @@ def frontend_fixture(root):
     old_paths = set(p.PATCH_PATHS) | set(p.FOUNDATION_PATHS) | set(p.LIFETIMES_PATHS)
     extra = {name: ("upstream " + name + "\n").encode() for name in p.FRONTEND_PATHS if name not in old_paths and name not in p.FRONTEND_ADDITIONS}
     with lifetimes_fixture(root, extra) as previous:
-        accepted = p.prepare(previous["archive"], root, p.LIFETIMES)
-        assets = p.prepare_assets(previous["native"], previous["binding"], root, p.LIFETIMES)
+        accepted = fixture_prepare(previous["archive"], root, p.LIFETIMES)
+        assets = fixture_prepare_assets(previous["native"], previous["binding"], root, p.LIFETIMES)
         preserved = root / Path(p.FRONTEND_MANIFEST).parent
         preserved.mkdir(parents=True)
         (root / "runtime/source").rename(preserved / "source")
@@ -311,8 +476,8 @@ def repin_frontend(root, data, patch_bytes=None):
 def observations_fixture(root):
     """Five explicit patches; B3 profile, source and assets remain historical."""
     with frontend_fixture(root) as previous:
-        accepted = p.prepare(previous["archive"], root, p.FRONTEND)
-        assets = p.prepare_assets(previous["native"], previous["binding"], root, p.FRONTEND)
+        accepted = fixture_prepare(previous["archive"], root, p.FRONTEND)
+        assets = fixture_prepare_assets(previous["native"], previous["binding"], root, p.FRONTEND)
         preserved = root / Path(p.OBSERVATIONS_MANIFEST).parent
         preserved.mkdir(parents=True)
         (root / "runtime/source").rename(preserved / "source")
@@ -359,8 +524,8 @@ def repin_observations(root, data, patch_bytes=None):
 def process_fixture(root):
     """Six closed patches with an immutable P1 source/profile/receipt prefix."""
     with observations_fixture(root) as previous:
-        accepted = p.prepare(previous["archive"], root, p.OBSERVATIONS)
-        assets = p.prepare_assets(previous["native"], previous["binding"], root, p.OBSERVATIONS)
+        accepted = fixture_prepare(previous["archive"], root, p.OBSERVATIONS)
+        assets = fixture_prepare_assets(previous["native"], previous["binding"], root, p.OBSERVATIONS)
         preserved = root / Path(p.PROCESS_MANIFEST).parent
         preserved.mkdir(parents=True)
         (root / "runtime/source").rename(preserved / "source")
@@ -407,8 +572,8 @@ def main_work_predecessor_validation(module=p):
 def main_work_fixture(root, historical_validation=True):
     """Append four replacements to a preserved, exact synthetic P2 prefix."""
     with process_fixture(root) as previous:
-        accepted = p.prepare(previous["archive"], root, p.PROCESS)
-        assets = p.prepare_assets(previous["native"], previous["binding"], root, p.PROCESS)
+        accepted = fixture_prepare(previous["archive"], root, p.PROCESS)
+        assets = fixture_prepare_assets(previous["native"], previous["binding"], root, p.PROCESS)
         preserved = root / Path(p.MAIN_WORK_MANIFEST).parent
         preserved.mkdir(parents=True)
         (root / "runtime/source").rename(preserved / "source")
@@ -451,8 +616,8 @@ def contention_fixture(root, historical_validation=True):
     with main_work_fixture(root, historical_validation=False) as previous:
         # The explicit predecessor context ends before any revised validation.
         with main_work_predecessor_validation():
-            accepted = p.prepare(previous["archive"], root, p.MAIN_WORK)
-            assets = p.prepare_assets(previous["native"], previous["binding"], root, p.MAIN_WORK)
+            accepted = fixture_prepare(previous["archive"], root, p.MAIN_WORK)
+            assets = fixture_prepare_assets(previous["native"], previous["binding"], root, p.MAIN_WORK)
         preserved = root / Path(p.CONTENTION_MANIFEST).parent
         preserved.mkdir(parents=True)
         (root / "runtime/source").rename(preserved / "source")
@@ -498,11 +663,11 @@ def contention_predecessor_validation(module=p):
 
 
 @contextmanager
-def control_retirement_fixture(root):
+def control_retirement_fixture(root, historical_validation=True):
     with contention_fixture(root, historical_validation=False) as previous:
         with contention_predecessor_validation():
-            accepted = p.prepare(previous["archive"], root, p.MAIN_WORK)
-            assets = p.prepare_assets(previous["native"], previous["binding"], root, p.MAIN_WORK)
+            accepted = fixture_prepare(previous["archive"], root, p.MAIN_WORK)
+            assets = fixture_prepare_assets(previous["native"], previous["binding"], root, p.MAIN_WORK)
         preserved = root / Path(p.CONTROL_RETIREMENT_MANIFEST).parent
         preserved.mkdir(parents=True)
         (root / "runtime/source").rename(preserved / "source")
@@ -534,8 +699,58 @@ def control_retirement_fixture(root):
         profile["base"].update(images)
         profile["qualification"].update(claim="b4-main-work-control-retirement-components-only", source_roster=list(p.CONTROL_RETIREMENT_PATHS), tree={"files": len(final), "payload_bytes": sum(row["bytes"] for row in final), "inventory_sha256": p.digest(json.dumps(final, sort_keys=True, separators=(",", ":")).encode())}, control_retirement=copy.deepcopy(p.CONTROL_RETIREMENT_POLICY))
         (root / p.FOUNDATION_PROFILE).write_text(json.dumps(profile))
-        with patch.object(p, "CONTROL_RETIREMENT_BASE_IMAGES", hashes):
+        with patch.object(p, "CONTROL_RETIREMENT_BASE_IMAGES", hashes), ExitStack() as validation:
+            if historical_validation:
+                validation.enter_context(control_retirement_predecessor_validation())
             yield {**previous, "profile": profile, "series": series, "rows": final, "accepted_contention": accepted, "accepted_contention_profile": previous["profile"], "accepted_contention_assets": assets}
+
+
+@contextmanager
+def control_retirement_predecessor_validation(module=p):
+    """Fixture-only routing to the strict nine-patch predecessor."""
+    with patch.object(module, "load_main_work", module.load_control_retirement_predecessor), patch.object(module, "main_work_series", module.control_retirement_predecessor_series):
+        yield
+
+
+@contextmanager
+def retirement_diagnostics_fixture(root):
+    with control_retirement_fixture(root, historical_validation=False) as previous:
+        with control_retirement_predecessor_validation():
+            accepted = fixture_prepare(previous["archive"], root, p.MAIN_WORK)
+            assets = fixture_prepare_assets(previous["native"], previous["binding"], root, p.MAIN_WORK)
+        preserved = root / Path(p.RETIREMENT_DIAGNOSTICS_MANIFEST).parent
+        preserved.mkdir(parents=True)
+        (root / "runtime/source").rename(preserved / "source")
+        (root / "runtime/source-manifest.json").rename(root / p.RETIREMENT_DIAGNOSTICS_MANIFEST)
+        for original, target in ((p.FOUNDATION_PROFILE, p.RETIREMENT_DIAGNOSTICS_PROFILE), (p.FOUNDATION_SERIES, p.RETIREMENT_DIAGNOSTICS_SERIES), ("runtime/assets-node-main-work.json", p.RETIREMENT_DIAGNOSTICS_ASSETS)):
+            destination = root / target
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes((root / original).read_bytes())
+        (root / "runtime/assets-node-main-work.json").rename(preserved / "assets-node-main-work.json")
+        images = {name: foundation_file(root, path) for name, (path, _) in p.RETIREMENT_DIAGNOSTICS_BASE_IMAGES.items()}
+        hashes = {name: (entry["path"], entry["sha256"]) for name, entry in images.items()}
+        rows = {row["path"]: dict(row) for row in accepted["files"]}
+        files, chunks = [], []
+        for name in p.RETIREMENT_DIAGNOSTICS_PATHS:
+            before = (preserved / "source" / name).read_bytes()
+            after = ("retirement-diagnostic " + name + "\n").encode()
+            old_lines = before.splitlines(keepends=True)
+            files.append({"path": name, "mode": "100644", "before": p.image_identity(before), "after": p.image_identity(after)})
+            chunks.append(("--- a/" + name + "\n+++ b/" + name + "\n@@ -1," + str(len(old_lines)) + " +1,1 @@\n").encode() + b"".join(b"-" + line for line in old_lines) + b"+" + after)
+            rows[name] = {"path": name, "mode": "100644", **p.image_identity(after)}
+        (root / p.RETIREMENT_DIAGNOSTICS_PATCH).write_bytes(b"".join(chunks))
+        final = sorted(rows.values(), key=lambda row: row["path"])
+        series = copy.deepcopy(previous["series"])
+        series.update(accepted_b4_control_retirement_commit=p.RETIREMENT_DIAGNOSTICS_BASE)
+        series["patches"].append({**foundation_file(root, p.RETIREMENT_DIAGNOSTICS_PATCH), "files": files})
+        (root / p.FOUNDATION_SERIES).write_text(json.dumps(series))
+        profile = copy.deepcopy(previous["profile"])
+        profile.update(accepted_b4_control_retirement_commit=p.RETIREMENT_DIAGNOSTICS_BASE, node_series=foundation_file(root, p.FOUNDATION_SERIES))
+        profile["base"].update(images)
+        profile["qualification"].update(claim="b4-main-work-retirement-diagnostics-components-only", source_roster=list(p.RETIREMENT_DIAGNOSTICS_PATHS), tree={"files": len(final), "payload_bytes": sum(row["bytes"] for row in final), "inventory_sha256": p.digest(json.dumps(final, sort_keys=True, separators=(",", ":")).encode())}, retirement_diagnostics=copy.deepcopy(p.RETIREMENT_DIAGNOSTICS_POLICY))
+        (root / p.FOUNDATION_PROFILE).write_text(json.dumps(profile))
+        with patch.object(p, "RETIREMENT_DIAGNOSTICS_BASE_IMAGES", hashes):
+            yield {**previous, "profile": profile, "series": series, "rows": final, "accepted_control": accepted, "accepted_control_profile": previous["profile"], "accepted_control_assets": assets}
 
 
 def repin_process(root, data, patch_bytes=None):
@@ -4468,6 +4683,145 @@ class ControlRetirementRevisionTests(unittest.TestCase):
                 finally:
                     profile_path.write_bytes(profile_raw)
                     series_path.write_bytes(series_raw)
+                p.load_pins(root, p.MAIN_WORK)
+
+
+def assert_fixture_cache_contract(case):
+    """Deterministic helper checks; no native/process qualification claim."""
+    originals = {name: getattr(p, name) for name in FIXTURE_ANCESTORS}
+    prepare, assets = p.prepare, p.prepare_assets
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        payload = root / "runtime.lock.json"
+        payload.write_bytes(b"immutable fixture input\n")
+        (root / "patches").mkdir()
+        (root / "graph").mkdir()
+        graph_output = root / "graph/result.json"
+        graph_output.write_bytes(b"legitimate graph output\n")
+        calls = []
+
+        def validated(candidate):
+            calls.append(candidate)
+            return {"nested": ["original"]}
+
+        with patch.object(p, "accepted_foundation", validated):
+            with fixture_ancestor_cache(root) as counters:
+                first = p.accepted_foundation(root)
+                first["nested"].append("caller mutation")
+                graph_output.write_bytes(b"changed unconsumed graph output\n")
+                case.assertEqual(p.accepted_foundation(root), {"nested": ["original"]})
+                case.assertEqual(counters, {"validated": 1, "hits": 1})
+                case.assertEqual(calls, [root])
+                with tempfile.TemporaryDirectory() as other, case.assertRaisesRegex(ValueError, "root changed"):
+                    p.accepted_foundation(Path(other))
+            case.assertIs(p.accepted_foundation, validated)
+            with case.assertRaisesRegex(RuntimeError, "controlled fixture exception"):
+                with fixture_ancestor_cache(root):
+                    p.accepted_foundation(root)
+                    raise RuntimeError("controlled fixture exception")
+            case.assertIs(p.accepted_foundation, validated)
+            try:
+                with case.assertRaisesRegex(ValueError, "immutable inputs changed"):
+                    with fixture_ancestor_cache(root):
+                        p.accepted_foundation(root)
+                        payload.write_bytes(b"changed immutable fixture input\n")
+                        p.accepted_foundation(root)
+            finally:
+                payload.write_bytes(b"immutable fixture input\n")
+            case.assertIs(p.accepted_foundation, validated)
+        for name, original in originals.items():
+            case.assertIs(getattr(p, name), original)
+        case.assertIs(p.prepare, prepare)
+        case.assertIs(p.prepare_assets, assets)
+
+
+class RetirementDiagnosticsRevisionTests(unittest.TestCase):
+    def test_tenth_patch_preserves_nine_prefix_tree_and_modes(self):
+        assert_fixture_cache_contract(self)
+        originals = {name: getattr(p, name) for name in FIXTURE_ANCESTORS}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with retirement_diagnostics_fixture(root) as data:
+                for name, original in originals.items():
+                    self.assertIs(getattr(p, name), original)
+                names = (p.RETIREMENT_DIAGNOSTICS_PROFILE, p.RETIREMENT_DIAGNOSTICS_SERIES,
+                         p.RETIREMENT_DIAGNOSTICS_MANIFEST, p.RETIREMENT_DIAGNOSTICS_ASSETS, p.CONTROL_RETIREMENT_PATCH)
+                before = {name: (root / name).read_bytes() for name in names}
+                source = p.prepare(data["archive"], root, p.MAIN_WORK)
+                self.assertEqual(source["files"], data["rows"])
+                self.assertEqual(p.verify_source(root, p.MAIN_WORK), source)
+                self.assertEqual(p.accepted_control_retirement(root), data["accepted_control_profile"])
+                self.assertEqual(data["series"]["patches"][:9], json.loads(before[p.RETIREMENT_DIAGNOSTICS_SERIES])["patches"])
+                old_rows = {row["path"]: row for row in data["accepted_control"]["files"]}
+                self.assertEqual({row["path"] for row in source["files"] if row != old_rows[row["path"]]}, set(p.RETIREMENT_DIAGNOSTICS_PATHS))
+                self.assertEqual(len(source["files"]), len(old_rows))
+                self.assertEqual(len(p.PROCESS_TESTS), 123)
+                self.assertTrue(set(p.RETIREMENT_DIAGNOSTICS_TEST_EXTENSIONS).issubset(p.PROCESS_TESTS))
+                pins = p.load_pins(root, p.MAIN_WORK)
+                for mode in p.MAIN_WORK_MODES:
+                    self.assertEqual(p.stage_for_mode(mode), p.MAIN_WORK)
+                    p.selected_mode(pins, mode)
+                self.assertEqual(pins["foundation"]["qualification"]["control_retirement"], p.CONTROL_RETIREMENT_POLICY)
+                result = p.prepare_assets(data["native"], data["binding"], root, p.MAIN_WORK)
+                self.assertEqual(result["assets"], data["accepted_control_assets"]["assets"])
+                self.assertEqual(p.verify_assets(root, p.MAIN_WORK), result)
+                self.assertEqual({name: (root / name).read_bytes() for name in names}, before)
+
+    def test_revision_rejects_marker_prefix_preimages_and_archived_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with retirement_diagnostics_fixture(root) as data:
+                profile_path, series_path = root / p.FOUNDATION_PROFILE, root / p.FOUNDATION_SERIES
+                profile_raw, series_raw = profile_path.read_bytes(), series_path.read_bytes()
+                try:
+                    changes = [lambda x: x.pop("accepted_b4_control_retirement_commit"),
+                        lambda x: x.update(accepted_b4_control_retirement_commit="0" * 40),
+                        lambda x: x["qualification"].pop("retirement_diagnostics"),
+                        lambda x: x["qualification"]["retirement_diagnostics"].update(revision=True),
+                        lambda x: x["qualification"]["retirement_diagnostics"].update(extra=True),
+                        lambda x: x["qualification"]["retirement_diagnostics"]["native_test_extensions"].clear(),
+                        lambda x: x["qualification"]["control_retirement"].update(revision=True),
+                        lambda x: x["qualification"]["source_roster"].reverse(),
+                        lambda x: x["qualification"]["main_work"].update(individual_bytes=16384),
+                        lambda x: x["base"]["control_retirement_assets"].update(sha256="0" * 64)]
+                    for index, change in enumerate(changes):
+                        value = json.loads(profile_raw); change(value)
+                        profile_path.write_text(json.dumps(value))
+                        with self.subTest(profile=index), self.assertRaises(ValueError):
+                            p.load_pins(root, p.MAIN_WORK)
+                    profile_path.write_bytes(profile_raw)
+                    for index, change in enumerate((lambda x: x["patches"].pop(),
+                            lambda x: x.pop("accepted_b4_control_retirement_commit"),
+                            lambda x: x["patches"][8]["files"][0]["after"].update(sha256="0" * 64),
+                            lambda x: x["patches"][9]["files"][0]["before"].update(sha256="0" * 64),
+                            lambda x: x["patches"][9]["files"].reverse(),
+                            lambda x: x["patches"][9]["files"][0].update(mode="100755"),
+                            lambda x: x["patches"][9]["files"][0].update(path="crates/celld/main.rs"))):
+                        value = json.loads(series_raw); change(value)
+                        series_path.write_text(json.dumps(value))
+                        profile = json.loads(profile_raw)
+                        profile["node_series"] = foundation_file(root, p.FOUNDATION_SERIES)
+                        profile_path.write_text(json.dumps(profile))
+                        with self.subTest(series=index), self.assertRaises(ValueError):
+                            p.load_pins(root, p.MAIN_WORK)
+                    profile_path.write_bytes(profile_raw); series_path.write_bytes(series_raw)
+                    with patch.object(p, "MAXIMUM_PROCESS_PATCHES", sum(row["bytes"] for row in data["series"]["patches"]) - 1), self.assertRaisesRegex(ValueError, "combined patch payload"):
+                        p.load_pins(root, p.MAIN_WORK)
+                    for name in (p.RETIREMENT_DIAGNOSTICS_PROFILE, p.RETIREMENT_DIAGNOSTICS_SERIES,
+                                 p.RETIREMENT_DIAGNOSTICS_MANIFEST, p.RETIREMENT_DIAGNOSTICS_ASSETS):
+                        raw = (root / name).read_bytes()
+                        try:
+                            (root / name).write_bytes(raw + b" ")
+                            with self.subTest(archive=name), self.assertRaises(ValueError):
+                                p.load_pins(root, p.MAIN_WORK)
+                        finally:
+                            (root / name).write_bytes(raw)
+                    profile_path.write_bytes((root / p.RETIREMENT_DIAGNOSTICS_PROFILE).read_bytes())
+                    series_path.write_bytes((root / p.RETIREMENT_DIAGNOSTICS_SERIES).read_bytes())
+                    with self.assertRaisesRegex(ValueError, "retirement-diagnostics revision"):
+                        p.load_pins(root, p.MAIN_WORK)
+                finally:
+                    profile_path.write_bytes(profile_raw); series_path.write_bytes(series_raw)
                 p.load_pins(root, p.MAIN_WORK)
 
 

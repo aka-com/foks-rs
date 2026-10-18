@@ -29,6 +29,7 @@ FRONTEND_SOURCE_PATHS = (preparation.FRONTEND_PATCH, preparation.FRONTEND_PROFIL
 OBSERVATIONS_SOURCE_PATHS = (preparation.OBSERVATIONS_PATCH, preparation.OBSERVATIONS_PROFILE, preparation.OBSERVATIONS_SERIES, preparation.OBSERVATIONS_MANIFEST, preparation.OBSERVATIONS_ASSETS, "runtime/assets-node-qualification.json")
 PROCESS_SOURCE_PATHS = (preparation.PROCESS_PATCH, preparation.PROCESS_PROFILE, preparation.PROCESS_SERIES, preparation.PROCESS_MANIFEST, preparation.PROCESS_ASSETS, "runtime/assets-node-observations.json")
 MAIN_WORK_SOURCE_PATHS = (preparation.MAIN_WORK_PATCH, preparation.MAIN_WORK_PROFILE, preparation.MAIN_WORK_SERIES, preparation.MAIN_WORK_MANIFEST, preparation.MAIN_WORK_ASSETS, "runtime/assets-node-process.json")
+RETIREMENT_DIAGNOSTICS_SOURCE_PATHS = (preparation.RETIREMENT_DIAGNOSTICS_PATCH, preparation.RETIREMENT_DIAGNOSTICS_PROFILE, preparation.RETIREMENT_DIAGNOSTICS_SERIES, preparation.RETIREMENT_DIAGNOSTICS_MANIFEST, preparation.RETIREMENT_DIAGNOSTICS_ASSETS)
 CONTROL_RETIREMENT_SOURCE_PATHS = (preparation.CONTROL_RETIREMENT_PATCH, preparation.CONTROL_RETIREMENT_PROFILE, preparation.CONTROL_RETIREMENT_SERIES, preparation.CONTROL_RETIREMENT_MANIFEST, preparation.CONTROL_RETIREMENT_ASSETS)
 CONTENTION_SOURCE_PATHS = (preparation.CONTENTION_PATCH, preparation.CONTENTION_PROFILE, preparation.CONTENTION_SERIES, preparation.CONTENTION_MANIFEST, preparation.CONTENTION_ASSETS, "runtime/assets-node-main-work.json")
 
@@ -288,7 +289,7 @@ def graph_report_contention_predecessor(metadata, pins, mode="identity", source_
     return report
 
 
-def graph_report(metadata, pins, mode="identity", source_root=ROOT):
+def graph_report_control_retirement_predecessor(metadata, pins, mode="identity", source_root=ROOT):
     if pins.get("profile") == preparation.MAIN_WORK:
         preparation.require_control_retirement_revision(pins.get("foundation"))
     report = graph_report_contention_predecessor(metadata, pins, mode, source_root)
@@ -296,6 +297,18 @@ def graph_report(metadata, pins, mode="identity", source_root=ROOT):
         report["foundation"].update(
             accepted_b4_qualifier_contention_commit=preparation.CONTROL_RETIREMENT_BASE,
             accepted_b4_qualifier_contention_images={name: pins["foundation"]["base"][name] for name in preparation.CONTROL_RETIREMENT_BASE_IMAGES},
+        )
+    return report
+
+
+def graph_report(metadata, pins, mode="identity", source_root=ROOT):
+    if pins.get("profile") == preparation.MAIN_WORK:
+        preparation.require_retirement_diagnostics_revision(pins.get("foundation"))
+    report = graph_report_control_retirement_predecessor(metadata, pins, mode, source_root)
+    if pins.get("profile") == preparation.MAIN_WORK:
+        report["foundation"].update(
+            accepted_b4_control_retirement_commit=preparation.RETIREMENT_DIAGNOSTICS_BASE,
+            accepted_b4_control_retirement_images={name: pins["foundation"]["base"][name] for name in preparation.RETIREMENT_DIAGNOSTICS_BASE_IMAGES},
         )
     return report
 
@@ -359,11 +372,18 @@ def source_paths_contention_predecessor(pins, mode="identity"):
     return paths + (CONTENTION_SOURCE_PATHS if pins.get("profile") == preparation.MAIN_WORK else ())
 
 
-def source_paths(pins, mode="identity"):
+def source_paths_control_retirement_predecessor(pins, mode="identity"):
     if pins.get("profile") == preparation.MAIN_WORK:
         preparation.require_control_retirement_revision(pins.get("foundation"))
     paths = source_paths_contention_predecessor(pins, mode)
     return paths + (CONTROL_RETIREMENT_SOURCE_PATHS if pins.get("profile") == preparation.MAIN_WORK else ())
+
+
+def source_paths(pins, mode="identity"):
+    if pins.get("profile") == preparation.MAIN_WORK:
+        preparation.require_retirement_diagnostics_revision(pins.get("foundation"))
+    paths = source_paths_control_retirement_predecessor(pins, mode)
+    return paths + (RETIREMENT_DIAGNOSTICS_SOURCE_PATHS if pins.get("profile") == preparation.MAIN_WORK else ())
 
 
 def selected_inputs(metadata, reached, root, mode="identity"):

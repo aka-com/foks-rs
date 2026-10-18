@@ -4,11 +4,32 @@
   "accepted_b1_commit": "23039e209d1b3b129a274dd65fe07f0abfdba8e0",
   "accepted_b2_commit": "d22ff3deedf0f0a87f635aec2317a87410e39110",
   "accepted_b3_commit": "9151df82364fa60177cb62f6645746ce1aff9b48",
+  "accepted_b4_control_retirement_commit": "3c71c49a062e74f96cdddc6c85df17eaed28ae33",
   "accepted_b4_main_work_commit": "885dbeb2c8ef2371a53d2988fbe5cee383c84fb9",
   "accepted_b4_p1_commit": "66090566c0ffcccc12e2d1c2bc9917f2f84019c4",
   "accepted_b4_p2_commit": "2e226249358568bd136796775378dd7cd8100651",
   "accepted_b4_qualifier_contention_commit": "9baecfa4b6fd487a65c3c56a1d858412f44a0d4d",
   "base": {
+    "control_retirement_assets": {
+      "bytes": 1069,
+      "path": "runtime/evidence/accepted-b4-control-retirement-diagnostic-base/assets-node-main-work.json",
+      "sha256": "d89afbaec006f318297db59ebfa997a5f48b3183a8799248f328065e4ce2258b"
+    },
+    "control_retirement_profile": {
+      "bytes": 100681,
+      "path": "runtime/evidence/accepted-b4-control-retirement-diagnostic-base/runtime-node.lock.json",
+      "sha256": "d01a371d066051f29703b8b593adf2c16977f8e329f90d5015166bd261866354"
+    },
+    "control_retirement_series": {
+      "bytes": 49136,
+      "path": "runtime/evidence/accepted-b4-control-retirement-diagnostic-base/patches/node-series.json",
+      "sha256": "c4520f06e70c29998845c73cdac0db92294684dcd3e85fb322f37f5d2520682c"
+    },
+    "control_retirement_source_manifest": {
+      "bytes": 72055,
+      "path": "runtime/evidence/accepted-b4-control-retirement/prepared-inputs/source-manifest.json",
+      "sha256": "d02cdc5e8ec53feab0451cd02393420c9fc6a5758419c0f9a9c05b802f209853"
+    },
     "foundation_profile": {
       "bytes": 13181,
       "path": "runtime/evidence/accepted-b1/runtime-node.lock.json",
@@ -174,9 +195,9 @@
   },
   "format": 1,
   "node_series": {
-    "bytes": 49136,
+    "bytes": 51583,
     "path": "patches/node-series.json",
-    "sha256": "c4520f06e70c29998845c73cdac0db92294684dcd3e85fb322f37f5d2520682c"
+    "sha256": "51aca67939930c1fbf7faa7a6f18b6364c90b4bc916666ddf16e77c474a62afa"
   },
   "pins": {
     "build": {
@@ -351,7 +372,7 @@
   },
   "profile": "node-main-work",
   "qualification": {
-    "claim": "b4-main-work-control-retirement-components-only",
+    "claim": "b4-main-work-retirement-diagnostics-components-only",
     "control_retirement": {
       "native_test_extensions": [
         "guarded_execution::node::tests::b1_last_strong_and_registry_retirement_hold_role",
@@ -3097,9 +3118,19 @@
       "predecessor": "accepted-main-work-seven-patch",
       "revision": 1
     },
+    "retirement_diagnostics": {
+      "diagnostics": "error-only-stderr-bounded256x2-source16",
+      "native_test_extensions": [
+        "guarded_execution::node::tests::b4_observation_failed_retirement_retains_public_guard"
+      ],
+      "predecessor": "accepted-control-retirement-nine-patch",
+      "revision": 1
+    },
     "source_roster": [
-      "crates/celld/guarded_node/control.rs",
-      "crates/celld/guarded_node/tests.rs"
+      "crates/celld/guarded_node.rs",
+      "crates/celld/guarded_node/tests.rs",
+      "crates/celld/ltx_repl.rs",
+      "crates/celld/runtime.rs"
     ],
     "tests": {
       "names": [
@@ -3232,8 +3263,8 @@
     },
     "tree": {
       "files": 289,
-      "inventory_sha256": "fd27a1ef8a778857552e3e509852f9b314cb51f6afe5ff9f1792c830a26a62ef",
-      "payload_bytes": 7579927
+      "inventory_sha256": "754511b54847eea8e8d70efbeada36bc31a45f58f0b93e28e3eff335c9820671",
+      "payload_bytes": 7598745
     }
   },
   "target": "aarch64-apple-darwin"

@@ -4,6 +4,7 @@
   "accepted_b1_commit": "23039e209d1b3b129a274dd65fe07f0abfdba8e0",
   "accepted_b2_commit": "d22ff3deedf0f0a87f635aec2317a87410e39110",
   "accepted_b3_commit": "9151df82364fa60177cb62f6645746ce1aff9b48",
+  "accepted_b4_control_retirement_commit": "3c71c49a062e74f96cdddc6c85df17eaed28ae33",
   "accepted_b4_main_work_commit": "885dbeb2c8ef2371a53d2988fbe5cee383c84fb9",
   "accepted_b4_p1_commit": "66090566c0ffcccc12e2d1c2bc9917f2f84019c4",
   "accepted_b4_p2_commit": "2e226249358568bd136796775378dd7cd8100651",
@@ -1297,6 +1298,69 @@
       ],
       "path": "patches/0009-node-owned-control-retirement.patch",
       "sha256": "2b5c60510ec40a8fb43cac6b542f0c53406ab4d91811af52f9bc1db2ba55aeff"
+    },
+    {
+      "bytes": 28005,
+      "files": [
+        {
+          "after": {
+            "bytes": 320871,
+            "git_sha1": "953ffa092e41072218495e6876efe5f90fab85df",
+            "sha256": "026111487191e3bfe8e388595f562889b50b47e45e6215cbde2add9d3bb68df6"
+          },
+          "before": {
+            "bytes": 314109,
+            "git_sha1": "d3e9d9fdad4dc302528b6995bfb114aa0637bfe0",
+            "sha256": "148c45968dba113cd4a5d1abb564d46ae9912e925889d946368472bb63cbcbd6"
+          },
+          "mode": "100644",
+          "path": "crates/celld/guarded_node.rs"
+        },
+        {
+          "after": {
+            "bytes": 291247,
+            "git_sha1": "fa1ea88020aaf57d07729cf356195a4f05e46854",
+            "sha256": "db74bd4d53e2726c7e6b133ad97866c387c36b049cba100a5701f96726ef7ed7"
+          },
+          "before": {
+            "bytes": 282470,
+            "git_sha1": "5cc63190eca2e6d8e8ab18f46a8bf30a566a3e6e",
+            "sha256": "05a6e8cc5335ba49c665fe028b0d0a3e4b558d45013cc8a6f354a40116e2995e"
+          },
+          "mode": "100644",
+          "path": "crates/celld/guarded_node/tests.rs"
+        },
+        {
+          "after": {
+            "bytes": 384161,
+            "git_sha1": "bfcc2939b98015f1f1cba40610bb94e5bbef07ae",
+            "sha256": "6bc2c1ce6b6c73f6024fec504c0986d89d22c9911adcdb37c1e86b636fe09218"
+          },
+          "before": {
+            "bytes": 381996,
+            "git_sha1": "d1cd8ff47e5bd373332d97c42bcad78e20a03d09",
+            "sha256": "f74e3627c90b32d0f386e4032deeefd8da7d951c7a45c21374123244d3205e16"
+          },
+          "mode": "100644",
+          "path": "crates/celld/ltx_repl.rs"
+        },
+        {
+          "after": {
+            "bytes": 216274,
+            "git_sha1": "a741896d8cc96841ceae0546bfe2d66e138d92d6",
+            "sha256": "4d06f0f01c02e35f1a2004560dd9ec4c88f33a032844fcf43557cd7faa4f7df1"
+          },
+          "before": {
+            "bytes": 215160,
+            "git_sha1": "8b3ce1fabc04f9027ac45e48f25e58933e038def",
+            "sha256": "d5156932086babed131eb6a6a8f6d2d8134f74d5bd3ce6087554b7dbfae7ba97"
+          },
+          "mode": "100644",
+          "path": "crates/celld/runtime.rs"
+        }
+      ],
+      "path": "patches/0010-node-retirement-diagnostics.patch",
+      "sha256": "b4a80d694c53456e6b5269e6464f9a9ebeb07c602e16be5f542506f1eb8c390e"
     }
   ],
   "profile": "node-main-work"

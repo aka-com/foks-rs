@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 import check_graph as c
-from test_prepare_runtime import a2_fixture, foundation_fixture, lifetimes_fixture, frontend_fixture, observations_fixture, process_fixture, main_work_fixture, main_work_predecessor_validation, contention_fixture, contention_predecessor_validation, control_retirement_fixture, historical_pins, p
+from test_prepare_runtime import a2_fixture, foundation_fixture, lifetimes_fixture, frontend_fixture, observations_fixture, process_fixture, main_work_fixture, main_work_predecessor_validation, contention_fixture, contention_predecessor_validation, control_retirement_fixture, control_retirement_predecessor_validation, retirement_diagnostics_fixture, fixture_prepare, historical_pins, p
 
 
 def fixture(mode="identity", profile=c.preparation.A1):
@@ -53,7 +53,7 @@ def add_package(metadata, name, version="1.0.0", identity=None, features=None, s
 
 
 @contextmanager
-def foundation_graph_fixture(root, mode, qualifier_revision=False, control_retirement_revision=False):
+def foundation_graph_fixture(root, mode, qualifier_revision=False, control_retirement_revision=False, diagnostics_revision=False):
     root.parent.mkdir(parents=True, exist_ok=True)
     stage = p.stage_for_mode(mode)
     fixture_source = {p.FOUNDATION: foundation_fixture, p.LIFETIMES: lifetimes_fixture, p.FRONTEND: frontend_fixture, p.OBSERVATIONS: observations_fixture, p.PROCESS: process_fixture, p.MAIN_WORK: main_work_fixture}[stage]
@@ -65,10 +65,14 @@ def foundation_graph_fixture(root, mode, qualifier_revision=False, control_retir
         if stage != p.MAIN_WORK or qualifier_revision:
             raise ValueError("Control revision requires only the main-work Control selector")
         fixture_source = control_retirement_fixture
+    if diagnostics_revision:
+        if stage != p.MAIN_WORK or qualifier_revision or control_retirement_revision:
+            raise ValueError("diagnostics require only the main-work diagnostic selector")
+        fixture_source = retirement_diagnostics_fixture
     with fixture_source(root) as data, ExitStack() as stack:
-        for name in ("FOUNDATION_BASE_IMAGES", "FOUNDATION_LOCK_BEFORE", "LIFETIMES_BASE_IMAGES", "LIFETIMES_LOCK_SHA256", "LIFETIMES_ASSET_SHA256", "FRONTEND_BASE_IMAGES", "FRONTEND_ASSET_SHA256", "OBSERVATIONS_BASE_IMAGES", "OBSERVATIONS_ASSET_SHA256", "PROCESS_BASE_IMAGES", "PROCESS_ASSET_SHA256", "MAIN_WORK_BASE_IMAGES", "CONTENTION_BASE_IMAGES", "CONTROL_RETIREMENT_BASE_IMAGES"):
+        for name in ("FOUNDATION_BASE_IMAGES", "FOUNDATION_LOCK_BEFORE", "LIFETIMES_BASE_IMAGES", "LIFETIMES_LOCK_SHA256", "LIFETIMES_ASSET_SHA256", "FRONTEND_BASE_IMAGES", "FRONTEND_ASSET_SHA256", "OBSERVATIONS_BASE_IMAGES", "OBSERVATIONS_ASSET_SHA256", "PROCESS_BASE_IMAGES", "PROCESS_ASSET_SHA256", "MAIN_WORK_BASE_IMAGES", "CONTENTION_BASE_IMAGES", "CONTROL_RETIREMENT_BASE_IMAGES", "RETIREMENT_DIAGNOSTICS_BASE_IMAGES"):
             stack.enter_context(patch.object(c.preparation, name, getattr(p, name)))
-        if stage == p.MAIN_WORK and not qualifier_revision and not control_retirement_revision:
+        if stage == p.MAIN_WORK and not qualifier_revision and not control_retirement_revision and not diagnostics_revision:
             stack.enter_context(main_work_predecessor_validation(c.preparation))
             stack.enter_context(patch.object(c, "graph_report", c.graph_report_predecessor))
             stack.enter_context(patch.object(c, "source_paths", c.source_paths_predecessor))
@@ -76,7 +80,11 @@ def foundation_graph_fixture(root, mode, qualifier_revision=False, control_retir
             stack.enter_context(contention_predecessor_validation(c.preparation))
             stack.enter_context(patch.object(c, "graph_report", c.graph_report_contention_predecessor))
             stack.enter_context(patch.object(c, "source_paths", c.source_paths_contention_predecessor))
-        p.prepare(data["archive"], root, stage)
+        elif stage == p.MAIN_WORK and control_retirement_revision:
+            stack.enter_context(control_retirement_predecessor_validation(c.preparation))
+            stack.enter_context(patch.object(c, "graph_report", c.graph_report_control_retirement_predecessor))
+            stack.enter_context(patch.object(c, "source_paths", c.source_paths_control_retirement_predecessor))
+        fixture_prepare(data["archive"], root, stage)
         (root / "Cargo.lock").write_bytes(data["expected_lock"])
         pins = c.preparation.load_pins(root, stage)
         metadata, _ = fixture("lifecycle" if mode.endswith("lifecycle") else "identity", p.A2)
@@ -1575,6 +1583,88 @@ class ControlRetirementRevisionGraphTests(unittest.TestCase):
                 finally:
                     profile_path.write_bytes(current_profile)
                     series_path.write_bytes(current_series)
+                self.assertEqual(profile_path.read_bytes(), current_profile)
+                self.assertEqual(series_path.read_bytes(), current_series)
+
+
+def retirement_diagnostics_mode_metadata(metadata, mode):
+    """Reuse one fully prepared synthetic source; vary only actual graph mode data."""
+    metadata = copy.deepcopy(metadata)
+    contract = p.MAIN_WORK_MODES[mode]
+    root = next(row for row in metadata["resolve"]["nodes"] if row["id"] == c.FIXTURE)
+    root["features"] = contract["root_features"].copy()
+    root["deps"] = [row for row in root["deps"] if row["pkg"] != "tokio"]
+    if contract["direct_root_tokio"]:
+        edge(metadata, c.FIXTURE, "tokio")
+    celld = next(row for row in metadata["resolve"]["nodes"] if row["id"] == "celld")
+    celld["features"] = contract["celld_features"].copy()
+    celld["deps"] = [row for row in celld["deps"] if not row["pkg"].startswith("foks-")]
+    for child in contract["celld_foks_edges"]:
+        edge(metadata, "celld", child)
+    return metadata
+
+
+class RetirementDiagnosticsRevisionGraphTests(unittest.TestCase):
+    def test_diagnostics_graph_preserves_four_modes_and_nine_patch_ancestry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tools/fixture"
+            with foundation_graph_fixture(root, p.MAIN_WORK, diagnostics_revision=True) as (metadata, pins, _):
+                for mode, contract in p.MAIN_WORK_MODES.items():
+                    with self.subTest(mode=mode):
+                        selected = retirement_diagnostics_mode_metadata(metadata, mode)
+                        report = c.graph_report(selected, pins, mode, root)
+                        foundation = report["foundation"]
+                        self.assertEqual(foundation["accepted_b4_control_retirement_commit"], p.RETIREMENT_DIAGNOSTICS_BASE)
+                        self.assertEqual(foundation["accepted_b4_control_retirement_images"], {name: pins["foundation"]["base"][name] for name in p.RETIREMENT_DIAGNOSTICS_BASE_IMAGES})
+                        self.assertEqual(foundation["accepted_b4_qualifier_contention_commit"], p.CONTROL_RETIREMENT_BASE)
+                        self.assertEqual(foundation["celld_foks_edges"], contract["celld_foks_edges"])
+                        paths = c.source_paths(pins, mode)
+                        self.assertTrue(set(c.RETIREMENT_DIAGNOSTICS_SOURCE_PATHS).issubset(paths))
+                        self.assertTrue(set(c.CONTROL_RETIREMENT_SOURCE_PATHS).issubset(paths))
+                        self.assertEqual(paths.count("runtime/assets-node-main-work.json"), 1)
+                        if mode == p.MAIN_WORK_BIN_TEST:
+                            self.assertEqual(report["node_bin_test_target"]["kind"], ["bin"])
+                            self.assertNotIn("node_test_target", report)
+                        elif mode.endswith("lifecycle"):
+                            self.assertNotIn("node_target", report)
+                        else:
+                            self.assertEqual(report["node_target"]["src_path"], str(root / "runtime/source/crates/celld/main.rs"))
+                        changed = copy.deepcopy(selected)
+                        next(row for row in changed["resolve"]["nodes"] if row["id"] == "celld")["features"].append("unreviewed")
+                        with self.assertRaises(ValueError):
+                            c.graph_report(changed, pins, mode, root)
+
+    def test_diagnostics_refuses_canonical_old_nine_or_missing_marker_before_tools(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tools/fixture"
+            with foundation_graph_fixture(root, p.MAIN_WORK, diagnostics_revision=True) as (metadata, pins, data):
+                variants = [copy.deepcopy(pins) for _ in range(3)]
+                variants[0]["foundation"] = data["accepted_control_profile"]
+                variants[1]["foundation"]["qualification"].pop("retirement_diagnostics")
+                variants[2]["foundation"]["qualification"]["retirement_diagnostics"].update(revision=True)
+                for changed in variants:
+                    with self.assertRaises(ValueError):
+                        c.graph_report(metadata, changed, p.MAIN_WORK, root)
+                    with self.assertRaises(ValueError):
+                        c.source_paths(changed, p.MAIN_WORK)
+                evidence = root / "graph"; evidence.mkdir()
+                (evidence / "evidence.json").write_text(json.dumps({"format": 1, "target": p.TARGET, "profile": p.MAIN_WORK, "mode": p.MAIN_WORK, "manifest": str(root / "Cargo.toml"), "cwd": str(root)}))
+                profile_path, series_path = root / p.FOUNDATION_PROFILE, root / p.FOUNDATION_SERIES
+                current_profile, current_series = profile_path.read_bytes(), series_path.read_bytes()
+                try:
+                    for old9 in (True, False):
+                        if old9:
+                            profile_path.write_bytes((root / p.RETIREMENT_DIAGNOSTICS_PROFILE).read_bytes())
+                            series_path.write_bytes((root / p.RETIREMENT_DIAGNOSTICS_SERIES).read_bytes())
+                        else:
+                            markerless = json.loads(current_profile)
+                            markerless["qualification"].pop("retirement_diagnostics")
+                            profile_path.write_text(json.dumps(markerless)); series_path.write_bytes(current_series)
+                        with self.subTest(old9=old9), patch.object(c.preparation, "controlled_environment") as environment, self.assertRaisesRegex(ValueError, "retirement-diagnostics"):
+                            c.verify(evidence, root, p.MAIN_WORK)
+                        environment.assert_not_called()
+                finally:
+                    profile_path.write_bytes(current_profile); series_path.write_bytes(current_series)
                 self.assertEqual(profile_path.read_bytes(), current_profile)
                 self.assertEqual(series_path.read_bytes(), current_series)
 
