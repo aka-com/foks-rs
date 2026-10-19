@@ -4,12 +4,33 @@
   "accepted_b1_commit": "23039e209d1b3b129a274dd65fe07f0abfdba8e0",
   "accepted_b2_commit": "d22ff3deedf0f0a87f635aec2317a87410e39110",
   "accepted_b3_commit": "9151df82364fa60177cb62f6645746ce1aff9b48",
+  "accepted_b4_background_retirement_commit": "3a7beb84c04f89551c3cb6ebea183873502447b2",
   "accepted_b4_control_retirement_commit": "3c71c49a062e74f96cdddc6c85df17eaed28ae33",
   "accepted_b4_main_work_commit": "885dbeb2c8ef2371a53d2988fbe5cee383c84fb9",
   "accepted_b4_p1_commit": "66090566c0ffcccc12e2d1c2bc9917f2f84019c4",
   "accepted_b4_p2_commit": "2e226249358568bd136796775378dd7cd8100651",
   "accepted_b4_qualifier_contention_commit": "9baecfa4b6fd487a65c3c56a1d858412f44a0d4d",
   "base": {
+    "background_retirement_assets": {
+      "bytes": 1069,
+      "path": "runtime/evidence/accepted-b4-background-retirement-scheduler-base/assets-node-main-work.json",
+      "sha256": "087bc4f882c4164ba91b2628b9c8010949d8fa0fb83612337a13e6bdcfdbffdc"
+    },
+    "background_retirement_profile": {
+      "bytes": 102371,
+      "path": "runtime/evidence/accepted-b4-background-retirement-scheduler-base/runtime-node.lock.json",
+      "sha256": "26dc22c3be3d9efdcb5098fb4b5b79619818a2983a4669873efd9e231f77d142"
+    },
+    "background_retirement_series": {
+      "bytes": 51583,
+      "path": "runtime/evidence/accepted-b4-background-retirement-scheduler-base/patches/node-series.json",
+      "sha256": "5030d1c588f2d79f845969eb4f2e12edfa496be2700d4ee274ea67be23632bc1"
+    },
+    "background_retirement_source_manifest": {
+      "bytes": 72055,
+      "path": "runtime/evidence/accepted-b4-background-retirement-scheduler-base/source-manifest.json",
+      "sha256": "f13301d769b8d79b59124aef62c3138efd05eed2c4265797fa5367deeffcc6af"
+    },
     "control_retirement_assets": {
       "bytes": 1069,
       "path": "runtime/evidence/accepted-b4-control-retirement-diagnostic-base/assets-node-main-work.json",
@@ -195,9 +216,9 @@
   },
   "format": 1,
   "node_series": {
-    "bytes": 51583,
+    "bytes": 52401,
     "path": "patches/node-series.json",
-    "sha256": "5030d1c588f2d79f845969eb4f2e12edfa496be2700d4ee274ea67be23632bc1"
+    "sha256": "4550e7bd911691d5c0c7d50acdb782aa0e42cd3aaa819f18ac0f3387ad919d35"
   },
   "pins": {
     "build": {
@@ -372,7 +393,7 @@
   },
   "profile": "node-main-work",
   "qualification": {
-    "claim": "b4-main-work-background-retirement-components-only",
+    "claim": "b4-main-work-turn-scheduler-components-only",
     "control_retirement": {
       "native_test_extensions": [
         "guarded_execution::node::tests::b1_last_strong_and_registry_retirement_hold_role",
@@ -3129,10 +3150,7 @@
       "revision": 2
     },
     "source_roster": [
-      "crates/celld/guarded_node.rs",
-      "crates/celld/guarded_node/tests.rs",
-      "crates/celld/ltx_repl.rs",
-      "crates/celld/runtime.rs"
+      "crates/celld/pool.rs"
     ],
     "tests": {
       "names": [
@@ -3265,8 +3283,25 @@
     },
     "tree": {
       "files": 289,
-      "inventory_sha256": "21f11af8ddf1450d85b7ece1357c898686ce9ee21475d1b36bcb2fa30157d2a9",
-      "payload_bytes": 7643083
+      "inventory_sha256": "b47ac7390a968fe478552af115bce681f8e7cc25f43412daf00f6f2583566a4e",
+      "payload_bytes": 7658052
+    },
+    "turn_scheduler": {
+      "binary": "same-verified-celld-library-artifact",
+      "network": "deny-all",
+      "predecessor": "accepted-background-retirement-ten-patch",
+      "revision": 1,
+      "test_prefix": "pool::turn_scheduler_tests::",
+      "tests": [
+        "pool::turn_scheduler_tests::notified_cancel_allows_new_waiter",
+        "pool::turn_scheduler_tests::notified_cancel_promotes_queued_successor",
+        "pool::turn_scheduler_tests::queued_cancel_before_notification",
+        "pool::turn_scheduler_tests::successful_handoff_has_one_owner",
+        "pool::turn_scheduler_tests::round_robin_survives_cancellation",
+        "pool::turn_scheduler_tests::repeated_handoff_cancellation",
+        "pool::turn_scheduler_tests::ticket_exhaustion_precedes_registration"
+      ],
+      "threads": 1
     }
   },
   "target": "aarch64-apple-darwin"

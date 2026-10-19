@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 import check_graph as c
-from test_prepare_runtime import a2_fixture, foundation_fixture, lifetimes_fixture, frontend_fixture, observations_fixture, process_fixture, main_work_fixture, main_work_predecessor_validation, contention_fixture, contention_predecessor_validation, control_retirement_fixture, control_retirement_predecessor_validation, retirement_diagnostics_fixture, fixture_prepare, historical_pins, p
+from test_prepare_runtime import a2_fixture, foundation_fixture, lifetimes_fixture, frontend_fixture, observations_fixture, process_fixture, main_work_fixture, main_work_predecessor_validation, contention_fixture, contention_predecessor_validation, control_retirement_fixture, control_retirement_predecessor_validation, retirement_diagnostics_fixture, retirement_diagnostics_predecessor_validation, turn_scheduler_fixture, fixture_prepare, historical_pins, p
 
 
 def fixture(mode="identity", profile=c.preparation.A1):
@@ -53,7 +53,7 @@ def add_package(metadata, name, version="1.0.0", identity=None, features=None, s
 
 
 @contextmanager
-def foundation_graph_fixture(root, mode, qualifier_revision=False, control_retirement_revision=False, diagnostics_revision=False):
+def foundation_graph_fixture(root, mode, qualifier_revision=False, control_retirement_revision=False, diagnostics_revision=False, scheduler_revision=False):
     root.parent.mkdir(parents=True, exist_ok=True)
     stage = p.stage_for_mode(mode)
     fixture_source = {p.FOUNDATION: foundation_fixture, p.LIFETIMES: lifetimes_fixture, p.FRONTEND: frontend_fixture, p.OBSERVATIONS: observations_fixture, p.PROCESS: process_fixture, p.MAIN_WORK: main_work_fixture}[stage]
@@ -69,10 +69,14 @@ def foundation_graph_fixture(root, mode, qualifier_revision=False, control_retir
         if stage != p.MAIN_WORK or qualifier_revision or control_retirement_revision:
             raise ValueError("diagnostics require only the main-work diagnostic selector")
         fixture_source = retirement_diagnostics_fixture
+    if scheduler_revision:
+        if stage != p.MAIN_WORK or qualifier_revision or control_retirement_revision or diagnostics_revision:
+            raise ValueError("scheduler requires only the main-work scheduler selector")
+        fixture_source = turn_scheduler_fixture
     with fixture_source(root) as data, ExitStack() as stack:
-        for name in ("FOUNDATION_BASE_IMAGES", "FOUNDATION_LOCK_BEFORE", "LIFETIMES_BASE_IMAGES", "LIFETIMES_LOCK_SHA256", "LIFETIMES_ASSET_SHA256", "FRONTEND_BASE_IMAGES", "FRONTEND_ASSET_SHA256", "OBSERVATIONS_BASE_IMAGES", "OBSERVATIONS_ASSET_SHA256", "PROCESS_BASE_IMAGES", "PROCESS_ASSET_SHA256", "MAIN_WORK_BASE_IMAGES", "CONTENTION_BASE_IMAGES", "CONTROL_RETIREMENT_BASE_IMAGES", "RETIREMENT_DIAGNOSTICS_BASE_IMAGES"):
+        for name in ("FOUNDATION_BASE_IMAGES", "FOUNDATION_LOCK_BEFORE", "LIFETIMES_BASE_IMAGES", "LIFETIMES_LOCK_SHA256", "LIFETIMES_ASSET_SHA256", "FRONTEND_BASE_IMAGES", "FRONTEND_ASSET_SHA256", "OBSERVATIONS_BASE_IMAGES", "OBSERVATIONS_ASSET_SHA256", "PROCESS_BASE_IMAGES", "PROCESS_ASSET_SHA256", "MAIN_WORK_BASE_IMAGES", "CONTENTION_BASE_IMAGES", "CONTROL_RETIREMENT_BASE_IMAGES", "RETIREMENT_DIAGNOSTICS_BASE_IMAGES", "TURN_SCHEDULER_BASE_IMAGES"):
             stack.enter_context(patch.object(c.preparation, name, getattr(p, name)))
-        if stage == p.MAIN_WORK and not qualifier_revision and not control_retirement_revision and not diagnostics_revision:
+        if stage == p.MAIN_WORK and not qualifier_revision and not control_retirement_revision and not diagnostics_revision and not scheduler_revision:
             stack.enter_context(main_work_predecessor_validation(c.preparation))
             stack.enter_context(patch.object(c, "graph_report", c.graph_report_predecessor))
             stack.enter_context(patch.object(c, "source_paths", c.source_paths_predecessor))
@@ -84,6 +88,10 @@ def foundation_graph_fixture(root, mode, qualifier_revision=False, control_retir
             stack.enter_context(control_retirement_predecessor_validation(c.preparation))
             stack.enter_context(patch.object(c, "graph_report", c.graph_report_control_retirement_predecessor))
             stack.enter_context(patch.object(c, "source_paths", c.source_paths_control_retirement_predecessor))
+        elif stage == p.MAIN_WORK and diagnostics_revision:
+            stack.enter_context(retirement_diagnostics_predecessor_validation(c.preparation))
+            stack.enter_context(patch.object(c, "graph_report", c.graph_report_retirement_diagnostics_predecessor))
+            stack.enter_context(patch.object(c, "source_paths", c.source_paths_retirement_diagnostics_predecessor))
         fixture_prepare(data["archive"], root, stage)
         (root / "Cargo.lock").write_bytes(data["expected_lock"])
         pins = c.preparation.load_pins(root, stage)
@@ -1678,6 +1686,56 @@ class RetirementDiagnosticsRevisionGraphTests(unittest.TestCase):
                     profile_path.write_bytes(current_profile); series_path.write_bytes(current_series)
                 self.assertEqual(profile_path.read_bytes(), current_profile)
                 self.assertEqual(series_path.read_bytes(), current_series)
+
+
+class TurnSchedulerRevisionGraphTests(unittest.TestCase):
+    def test_scheduler_preserves_four_graph_modes_and_freezes_new_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tools/fixture"
+            with foundation_graph_fixture(root, p.MAIN_WORK, scheduler_revision=True) as (metadata, pins, data):
+                for mode, contract in p.MAIN_WORK_MODES.items():
+                    with self.subTest(mode=mode):
+                        selected = retirement_diagnostics_mode_metadata(metadata, mode)
+                        report = c.graph_report(selected, pins, mode, root)
+                        self.assertEqual(report["foundation"]["accepted_b4_background_retirement_commit"], p.TURN_SCHEDULER_BASE)
+                        self.assertEqual(report["foundation"]["turn_scheduler"], p.TURN_SCHEDULER_POLICY)
+                        self.assertEqual(report["foundation"]["celld_foks_edges"], contract["celld_foks_edges"])
+                        paths = c.source_paths(pins, mode)
+                        self.assertTrue(set(c.TURN_SCHEDULER_SOURCE_PATHS).issubset(paths))
+                        self.assertTrue(set(c.RETIREMENT_DIAGNOSTICS_SOURCE_PATHS).issubset(paths))
+                        self.assertEqual(paths.count(p.TURN_SCHEDULER_PATCH), 1)
+                        self.assertEqual(paths.count("runtime/assets-node-main-work.json"), 1)
+                        changed = copy.deepcopy(selected)
+                        next(row for row in changed["resolve"]["nodes"] if row["id"] == "celld")["features"].append("unreviewed")
+                        with self.assertRaises(ValueError):
+                            c.graph_report(changed, pins, mode, root)
+
+    def test_scheduler_refuses_old_ten_and_missing_or_invalid_marker_before_tools(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tools/fixture"
+            with foundation_graph_fixture(root, p.MAIN_WORK, scheduler_revision=True) as (metadata, pins, data):
+                variants = [copy.deepcopy(pins) for _ in range(4)]
+                variants[0]["foundation"] = data["accepted_background_profile"]
+                variants[1]["foundation"]["qualification"].pop("turn_scheduler")
+                variants[2]["foundation"]["qualification"]["turn_scheduler"].update(revision=True)
+                variants[3]["foundation"]["qualification"]["turn_scheduler"].update(test_prefix=p.FRONTEND_TEST_PREFIX)
+                for changed in variants:
+                    with self.assertRaises(ValueError):
+                        c.graph_report(metadata, changed, p.MAIN_WORK, root)
+                    with self.assertRaises(ValueError):
+                        c.source_paths(changed, p.MAIN_WORK)
+                evidence = root / "graph"; evidence.mkdir()
+                (evidence / "evidence.json").write_text(json.dumps({"format": 1, "target": p.TARGET, "profile": p.MAIN_WORK, "mode": p.MAIN_WORK, "manifest": str(root / "Cargo.toml"), "cwd": str(root)}))
+                profile_path, series_path = root / p.FOUNDATION_PROFILE, root / p.FOUNDATION_SERIES
+                current_profile, current_series = profile_path.read_bytes(), series_path.read_bytes()
+                try:
+                    for changed in variants:
+                        profile_path.write_text(json.dumps(changed["foundation"]))
+                        with patch.object(c.preparation, "controlled_environment") as environment, self.assertRaisesRegex(ValueError, "turn-scheduler"):
+                            c.verify(evidence, root, p.MAIN_WORK)
+                        environment.assert_not_called()
+                finally:
+                    profile_path.write_bytes(current_profile); series_path.write_bytes(current_series)
 
 
 if __name__ == "__main__":

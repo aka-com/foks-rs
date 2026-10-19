@@ -106,22 +106,23 @@ FIXTURE_ANCESTORS = (
     "accepted_foundation", "accepted_lifetimes", "accepted_frontend",
     "accepted_observations", "accepted_process", "accepted_main_work",
     "accepted_qualifier_contention", "accepted_control_retirement",
+    "accepted_background_retirement",
 )
 
 
 FIXTURE_METADATA_PREFIXES = (
     "LIFETIMES", "FRONTEND", "OBSERVATIONS", "PROCESS", "MAIN_WORK",
-    "CONTENTION", "CONTROL_RETIREMENT", "RETIREMENT_DIAGNOSTICS",
+    "CONTENTION", "CONTROL_RETIREMENT", "RETIREMENT_DIAGNOSTICS", "TURN_SCHEDULER",
 )
 FIXTURE_PATCH_CONSTANTS = (
     "PATCH_PATH", "FOUNDATION_PATCH", "LIFETIMES_PATCH", "FRONTEND_PATCH",
     "OBSERVATIONS_PATCH", "PROCESS_PATCH", "MAIN_WORK_PATCH", "CONTENTION_PATCH",
-    "CONTROL_RETIREMENT_PATCH",
+    "CONTROL_RETIREMENT_PATCH", "RETIREMENT_DIAGNOSTICS_PATCH",
 )
 
 
 def fixture_metadata_paths(module):
-    """Positive read-role union of the eight accepted_* metadata validators."""
+    """Positive read-role union of the accepted_* metadata validators."""
     names = {"runtime.lock.json", "patches/series.json", "Cargo.lock"}
     for prefix in ("FOUNDATION", *FIXTURE_METADATA_PREFIXES):
         names.update(path for path, _ in getattr(module, prefix + "_BASE_IMAGES").values())
@@ -129,7 +130,7 @@ def fixture_metadata_paths(module):
         names.update(getattr(module, prefix + suffix) for suffix in ("_PROFILE", "_SERIES"))
     names.update(getattr(module, name) for name in FIXTURE_PATCH_CONSTANTS)
     names.update(getattr(module, prefix + "_MANIFEST")
-                 for prefix in ("MAIN_WORK", "CONTENTION", "CONTROL_RETIREMENT"))
+                 for prefix in ("MAIN_WORK", "CONTENTION", "CONTROL_RETIREMENT", "RETIREMENT_DIAGNOSTICS"))
     return tuple(sorted(module.relative_name(name) for name in names))
 
 
@@ -713,7 +714,7 @@ def control_retirement_predecessor_validation(module=p):
 
 
 @contextmanager
-def retirement_diagnostics_fixture(root):
+def retirement_diagnostics_fixture(root, historical_validation=True):
     with control_retirement_fixture(root, historical_validation=False) as previous:
         with control_retirement_predecessor_validation():
             accepted = fixture_prepare(previous["archive"], root, p.MAIN_WORK)
@@ -749,8 +750,57 @@ def retirement_diagnostics_fixture(root):
         profile["base"].update(images)
         profile["qualification"].update(claim="b4-main-work-background-retirement-components-only", source_roster=list(p.RETIREMENT_DIAGNOSTICS_PATHS), tree={"files": len(final), "payload_bytes": sum(row["bytes"] for row in final), "inventory_sha256": p.digest(json.dumps(final, sort_keys=True, separators=(",", ":")).encode())}, retirement_diagnostics=copy.deepcopy(p.RETIREMENT_DIAGNOSTICS_POLICY))
         (root / p.FOUNDATION_PROFILE).write_text(json.dumps(profile))
-        with patch.object(p, "RETIREMENT_DIAGNOSTICS_BASE_IMAGES", hashes):
+        with patch.object(p, "RETIREMENT_DIAGNOSTICS_BASE_IMAGES", hashes), ExitStack() as validation:
+            if historical_validation:
+                validation.enter_context(retirement_diagnostics_predecessor_validation())
             yield {**previous, "profile": profile, "series": series, "rows": final, "accepted_control": accepted, "accepted_control_profile": previous["profile"], "accepted_control_assets": assets}
+
+
+@contextmanager
+def retirement_diagnostics_predecessor_validation(module=p):
+    """Fixture-only routing to the strict accepted ten-patch predecessor."""
+    with patch.object(module, "load_main_work", module.load_retirement_diagnostics_predecessor), patch.object(module, "main_work_series", module.retirement_diagnostics_predecessor_series):
+        yield
+
+
+@contextmanager
+def turn_scheduler_fixture(root):
+    with retirement_diagnostics_fixture(root, historical_validation=False) as previous:
+        with retirement_diagnostics_predecessor_validation():
+            accepted = fixture_prepare(previous["archive"], root, p.MAIN_WORK)
+            assets = fixture_prepare_assets(previous["native"], previous["binding"], root, p.MAIN_WORK)
+        preserved = root / Path(p.TURN_SCHEDULER_MANIFEST).parent
+        preserved.mkdir(parents=True)
+        (root / "runtime/source").rename(preserved / "source")
+        (root / "runtime/source-manifest.json").rename(root / p.TURN_SCHEDULER_MANIFEST)
+        for original, target in ((p.FOUNDATION_PROFILE, p.TURN_SCHEDULER_PROFILE), (p.FOUNDATION_SERIES, p.TURN_SCHEDULER_SERIES), ("runtime/assets-node-main-work.json", p.TURN_SCHEDULER_ASSETS)):
+            destination = root / target
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes((root / original).read_bytes())
+        (root / "runtime/assets-node-main-work.json").unlink()
+        images = {name: foundation_file(root, path) for name, (path, _) in p.TURN_SCHEDULER_BASE_IMAGES.items()}
+        hashes = {name: (entry["path"], entry["sha256"]) for name, entry in images.items()}
+        rows = {row["path"]: dict(row) for row in accepted["files"]}
+        name = p.TURN_SCHEDULER_PATHS[0]
+        before = (preserved / "source" / name).read_bytes()
+        after = b"cancellation-owned turn scheduler\n"
+        old_lines = before.splitlines(keepends=True)
+        entry = {"path": name, "mode": "100644", "before": p.image_identity(before), "after": p.image_identity(after)}
+        patch_bytes = ("--- a/" + name + "\n+++ b/" + name + "\n@@ -1," + str(len(old_lines)) + " +1,1 @@\n").encode() + b"".join(b"-" + line for line in old_lines) + b"+" + after
+        (root / p.TURN_SCHEDULER_PATCH).write_bytes(patch_bytes)
+        rows[name] = {"path": name, "mode": "100644", **p.image_identity(after)}
+        final = sorted(rows.values(), key=lambda row: row["path"])
+        series = copy.deepcopy(previous["series"])
+        series.update(accepted_b4_background_retirement_commit=p.TURN_SCHEDULER_BASE)
+        series["patches"].append({**foundation_file(root, p.TURN_SCHEDULER_PATCH), "files": [entry]})
+        (root / p.FOUNDATION_SERIES).write_text(json.dumps(series))
+        profile = copy.deepcopy(previous["profile"])
+        profile.update(accepted_b4_background_retirement_commit=p.TURN_SCHEDULER_BASE, node_series=foundation_file(root, p.FOUNDATION_SERIES))
+        profile["base"].update(images)
+        profile["qualification"].update(claim="b4-main-work-turn-scheduler-components-only", source_roster=list(p.TURN_SCHEDULER_PATHS), tree={"files": len(final), "payload_bytes": sum(row["bytes"] for row in final), "inventory_sha256": p.digest(json.dumps(final, sort_keys=True, separators=(",", ":")).encode())}, turn_scheduler=copy.deepcopy(p.TURN_SCHEDULER_POLICY))
+        (root / p.FOUNDATION_PROFILE).write_text(json.dumps(profile))
+        with patch.object(p, "TURN_SCHEDULER_BASE_IMAGES", hashes):
+            yield {**previous, "profile": profile, "series": series, "rows": final, "accepted_background": accepted, "accepted_background_profile": previous["profile"], "accepted_background_assets": assets}
 
 
 def repin_process(root, data, patch_bytes=None):
@@ -4832,6 +4882,151 @@ class RetirementDiagnosticsRevisionTests(unittest.TestCase):
                 finally:
                     profile_path.write_bytes(profile_raw); series_path.write_bytes(series_raw)
                 p.load_pins(root, p.MAIN_WORK)
+
+
+class TurnSchedulerRevisionTests(unittest.TestCase):
+    def test_eleventh_patch_preserves_ten_prefix_tree_policies_and_old_caps(self):
+        assert_fixture_cache_contract(self)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with turn_scheduler_fixture(root) as data:
+                retained = {path: (root / path).read_bytes() for path, _ in p.TURN_SCHEDULER_BASE_IMAGES.values()}
+                source = p.prepare(data["archive"], root, p.MAIN_WORK)
+                self.assertEqual(source["files"], data["rows"])
+                self.assertEqual(p.verify_source(root, p.MAIN_WORK), source)
+                self.assertEqual(p.accepted_background_retirement(root), data["accepted_background_profile"])
+                self.assertEqual(data["series"]["patches"][:10], json.loads(retained[p.TURN_SCHEDULER_SERIES])["patches"])
+                original = {row["path"]: row for row in data["accepted_background"]["files"]}
+                self.assertEqual({row["path"] for row in source["files"] if row != original[row["path"]]}, set(p.TURN_SCHEDULER_PATHS))
+                self.assertEqual(len(source["files"]), len(original))
+                self.assertEqual(len(p.PROCESS_TESTS), 123)
+                self.assertEqual(len(p.TURN_SCHEDULER_TESTS), 7)
+                self.assertTrue(set(p.TURN_SCHEDULER_TESTS).isdisjoint(p.PROCESS_TESTS))
+                self.assertEqual(p.MAXIMUM_PROCESS_PATCHES, 1536 * 1024)
+                self.assertEqual(p.MAXIMUM_FOUNDATION_PATCH, 512 * 1024)
+                self.assertEqual(p.MAXIMUM_RETIREMENT_REV2_PATCHES, 1617920)
+                self.assertIs(type(p.MAXIMUM_TURN_SCHEDULER_PATCHES), int)
+                pins = p.load_pins(root, p.MAIN_WORK)
+                for mode in p.MAIN_WORK_MODES:
+                    p.selected_mode(pins, mode)
+                self.assertEqual(pins["foundation"]["qualification"]["retirement_diagnostics"], p.RETIREMENT_DIAGNOSTICS_POLICY)
+                result = p.prepare_assets(data["native"], data["binding"], root, p.MAIN_WORK)
+                self.assertEqual(result["assets"], data["accepted_background_assets"]["assets"])
+                self.assertEqual({path: (root / path).read_bytes() for path in retained}, retained)
+
+    def test_successor_rejects_stale_markers_prefix_pool_identity_and_bounds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with turn_scheduler_fixture(root) as data:
+                profile_path, series_path = root / p.FOUNDATION_PROFILE, root / p.FOUNDATION_SERIES
+                profile_raw, series_raw = profile_path.read_bytes(), series_path.read_bytes()
+                try:
+                    changes = (
+                        lambda x: x.pop("accepted_b4_background_retirement_commit"),
+                        lambda x: x["qualification"].pop("turn_scheduler"),
+                        lambda x: x["qualification"]["turn_scheduler"].update(revision=True),
+                        lambda x: x["qualification"]["turn_scheduler"].update(revision=0),
+                        lambda x: x["qualification"]["turn_scheduler"].update(test_prefix=p.FRONTEND_TEST_PREFIX),
+                        lambda x: x["qualification"]["turn_scheduler"]["tests"].pop(),
+                        lambda x: x["qualification"]["turn_scheduler"].update(network="loopback"),
+                        lambda x: x["qualification"]["turn_scheduler"].update(extra=True),
+                        lambda x: x["qualification"]["retirement_diagnostics"].update(revision=1),
+                    )
+                    for change in changes:
+                        value = json.loads(profile_raw); change(value)
+                        profile_path.write_text(json.dumps(value))
+                        with self.assertRaises(ValueError):
+                            p.load_pins(root, p.MAIN_WORK)
+                    profile_path.write_bytes(profile_raw)
+                    changes = (
+                        lambda x: x["patches"].pop(),
+                        lambda x: x["patches"].append(copy.deepcopy(x["patches"][-1])),
+                        lambda x: x["patches"][9]["files"][0]["after"].update(sha256="0" * 64),
+                        lambda x: x["patches"][10]["files"][0]["before"].update(sha256="0" * 64),
+                        lambda x: x["patches"][10]["files"][0].update(path="crates/celld/runtime.rs"),
+                        lambda x: x["patches"][10]["files"][0].update(mode="100755"),
+                        lambda x: x["patches"][10]["files"].append(copy.deepcopy(x["patches"][10]["files"][0])),
+                    )
+                    for change in changes:
+                        value = json.loads(series_raw); change(value)
+                        series_path.write_text(json.dumps(value))
+                        profile = json.loads(profile_raw); profile["node_series"] = foundation_file(root, p.FOUNDATION_SERIES)
+                        profile_path.write_text(json.dumps(profile))
+                        with self.assertRaises(ValueError):
+                            p.load_pins(root, p.MAIN_WORK)
+                    profile_path.write_bytes(profile_raw); series_path.write_bytes(series_raw)
+                    total = sum(row["bytes"] for row in data["series"]["patches"])
+                    with patch.object(p, "MAXIMUM_TURN_SCHEDULER_PATCHES", total):
+                        p.load_pins(root, p.MAIN_WORK)
+                    for bound in (total - 1, None, True):
+                        with patch.object(p, "MAXIMUM_TURN_SCHEDULER_PATCHES", bound), self.assertRaisesRegex(ValueError, "successor envelope"):
+                            p.load_pins(root, p.MAIN_WORK)
+                    prefix_total = total - data["series"]["patches"][10]["bytes"]
+                    with patch.object(p, "MAXIMUM_RETIREMENT_REV2_PATCHES", prefix_total - 1), self.assertRaisesRegex(ValueError, "revision2 allowance"):
+                        p.load_pins(root, p.MAIN_WORK)
+                    for path, _ in p.TURN_SCHEDULER_BASE_IMAGES.values():
+                        raw = (root / path).read_bytes()
+                        try:
+                            (root / path).write_bytes(raw + b" ")
+                            with self.assertRaises(ValueError):
+                                p.load_pins(root, p.MAIN_WORK)
+                        finally:
+                            (root / path).write_bytes(raw)
+                finally:
+                    profile_path.write_bytes(profile_raw); series_path.write_bytes(series_raw)
+                p.load_pins(root, p.MAIN_WORK)
+
+    def test_seven_test_roster_refuses_missing_extra_duplicate_and_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "output"
+            names = p.TURN_SCHEDULER_TESTS
+            for listing in (True, False):
+                raw = FrontendTests.render_test_output(names, listing)
+                path.write_text(raw)
+                self.assertEqual(p.component_test_output(path, listing, names), names)
+                variants = [raw.replace(names[0], "unreviewed::test", 1), raw.replace(names[0], names[1], 1), raw.replace(names[0] + (": test" if listing else " ... ok"), "", 1)]
+                if not listing:
+                    variants.append(raw.replace(" ... ok", " ... ignored", 1))
+                for changed in variants:
+                    path.write_text(changed)
+                    with self.assertRaises(ValueError):
+                        p.component_test_output(path, listing, names)
+
+    def test_scheduler_lane_reuses_binary_owner_limits_and_deny_all_network(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); evidence = root / "evidence"; evidence.mkdir()
+            binary = root / "celld-libtest"; binary.write_bytes(b"compiled test artifact")
+            descriptor = {"path": str(binary), "bytes": binary.stat().st_size, "sha256": p.file_hash(binary)}
+            # This helper is fed a validated profile by run_frontend_components.
+            profile = json.loads((ROOT / p.FOUNDATION_PROFILE).read_bytes())
+            profile.update(accepted_b4_background_retirement_commit=p.TURN_SCHEDULER_BASE)
+            profile["qualification"]["turn_scheduler"] = copy.deepcopy(p.TURN_SCHEDULER_POLICY)
+            pins = {"profile": p.MAIN_WORK, "foundation": profile, "build": {"timeout_seconds": 1800}}
+            slot, calls = object(), []
+            environment = {"HOME": "/fixture"}
+            def owned(argv, cwd, env, outdir, name, selected_slot, timeout, monitor):
+                calls.append(name)
+                self.assertEqual(list(map(str, argv)), ["DENY-ALL", str(binary), p.TURN_SCHEDULER_TEST_PREFIX, "--list" if name.endswith("list") else "--test-threads=1"])
+                self.assertEqual((cwd, env, outdir, timeout), (root, environment, evidence, 1800))
+                self.assertIs(selected_slot, slot)
+                output = evidence / (name + ".stdout")
+                output.write_text(FrontendTests.render_test_output(p.TURN_SCHEDULER_TESTS, name.endswith("list")))
+                return {"stdout_sha256": p.file_hash(output), "cleanup_established": True}
+            with patch.object(p, "run_owned", side_effect=owned), patch.object(p, "network_command", side_effect=lambda argv: ["DENY-ALL", *argv]), patch.object(p, "choose_frontend_ports") as ports:
+                focused = {"binary": descriptor}
+                p.run_turn_scheduler_components(focused, root, pins, environment, evidence, slot)
+                ports.assert_not_called()
+            self.assertEqual(calls, ["scheduler-list", "scheduler-run"])
+            self.assertEqual(focused["scheduler_tests"]["binary"], descriptor)
+            self.assertEqual(focused["scheduler_tests"]["names"], p.TURN_SCHEDULER_TESTS)
+            def replaced(*args):
+                result = owned(*args)
+                binary.write_bytes(b"replaced executable")
+                return result
+            calls.clear()
+            with patch.object(p, "run_owned", side_effect=replaced), patch.object(p, "network_command", side_effect=lambda argv: ["DENY-ALL", *argv]), self.assertRaises(ValueError):
+                p.run_turn_scheduler_components({"binary": descriptor}, root, pins, environment, evidence, slot)
+            self.assertEqual(calls, ["scheduler-list"])
 
 
 if __name__ == "__main__":

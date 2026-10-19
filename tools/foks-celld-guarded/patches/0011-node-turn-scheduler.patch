@@ -1,0 +1,428 @@
+--- a/crates/celld/pool.rs
++++ b/crates/celld/pool.rs
+@@ -69,12 +69,13 @@
+ 
+ #[derive(Default)]
+ struct TurnSchedule {
+-    current: Option<TurnLane>,
++    current: Option<(TurnLane, u64)>,
+     ready: std::collections::VecDeque<TurnLane>,
+     waiting: std::collections::HashMap<
+         TurnLane,
+-        std::collections::VecDeque<tokio::sync::oneshot::Sender<()>>,
++        std::collections::VecDeque<(u64, tokio::sync::oneshot::Sender<()>)>,
+     >,
++    next_ticket: u64,
+ }
+ 
+ #[derive(Default)]
+@@ -82,36 +83,73 @@
+     schedule: Mutex<TurnSchedule>,
+ }
+ 
+-struct TurnPermit<'a>(&'a TurnScheduler);
++// The same ticket owns its queue entry, its notified grant, and its active turn.
++// It exists before the first await, including the notified-but-not-repolled gap.
++struct TurnPermit<'a>(&'a TurnScheduler, u64);
+ 
+ impl TurnScheduler {
+     async fn acquire(&self, lane: TurnLane) -> TurnPermit<'_> {
++        let permit;
+         let receive = {
+             let mut schedule = self.schedule.lock().expect("turn scheduler poisoned");
+-            if schedule.current.is_none() {
+-                schedule.current = Some(lane);
++            let ticket = schedule.next_ticket;
++            schedule.next_ticket = ticket
++                .checked_add(1)
++                .expect("turn scheduler ticket space exhausted");
++            let receive = if schedule.current.is_none() {
++                schedule.current = Some((lane, ticket));
+                 None
+             } else {
+                 let (send, receive) = tokio::sync::oneshot::channel();
+-                if !schedule.waiting.contains_key(&lane) && schedule.current.as_ref() != Some(&lane)
++                if !schedule.waiting.contains_key(&lane)
++                    && schedule.current.as_ref().map(|(current, _)| current) != Some(&lane)
+                 {
+                     schedule.ready.push_back(lane.clone());
+                 }
+-                schedule.waiting.entry(lane).or_default().push_back(send);
++                schedule
++                    .waiting
++                    .entry(lane)
++                    .or_default()
++                    .push_back((ticket, send));
+                 Some(receive)
+-            }
++            };
++            // Registration and permit construction cannot be cancelled between
++            // polls. On unwind the inner lock drops before this outer permit.
++            permit = TurnPermit(self, ticket);
++            receive
+         };
+         if let Some(receive) = receive {
+-            // Cancellation leaves a closed sender in this lane. `release`
+-            // skips it, so a dropped waiter cannot strand the active token.
+-            let _ = receive.await;
+-        }
+-        TurnPermit(self)
+-    }
+-
+-    fn release(&self) {
++            receive
++                .await
++                .expect("queued turn scheduler notification dropped");
++        }
++        permit
++    }
++
++    fn release(&self, ticket: u64) {
+         let mut schedule = self.schedule.lock().expect("turn scheduler poisoned");
+-        let current = schedule
++        if schedule.current.as_ref().map(|(_, current)| *current) != Some(ticket) {
++            // Cancel only this queued ticket. Retain preserves every surviving
++            // lane's FIFO and removes an emptied lane without allocating.
++            let mut removed = false;
++            schedule.waiting.retain(|_, waiters| {
++                if !removed {
++                    if let Some(index) = waiters.iter().position(|(queued, _)| *queued == ticket) {
++                        waiters.remove(index);
++                        removed = true;
++                    }
++                }
++                !waiters.is_empty()
++            });
++            if removed {
++                let TurnSchedule { ready, waiting, .. } = &mut *schedule;
++                ready.retain(|lane| waiting.contains_key(lane));
++            }
++            // A failed send may already have skipped this ticket while its
++            // cancelled receiver was dropping. It never owns another grant.
++            return;
++        }
++        let (current, _) = schedule
+             .current
+             .take()
+             .expect("a released turn scheduler has a current lane");
+@@ -123,7 +161,7 @@
+             schedule.ready.push_back(current);
+         }
+         while let Some(lane) = schedule.ready.pop_front() {
+-            let (send, keep_lane) = {
++            let ((next_ticket, send), keep_lane) = {
+                 let waiters = schedule
+                     .waiting
+                     .get_mut(&lane)
+@@ -133,10 +171,14 @@
+             if !keep_lane {
+                 schedule.waiting.remove(&lane);
+             }
++            schedule.current = Some((lane, next_ticket));
+             if send.send(()).is_ok() {
+-                schedule.current = Some(lane);
+                 return;
+             }
++            let (lane, _) = schedule
++                .current
++                .take()
++                .expect("failed turn handoff has a lane");
+             if keep_lane {
+                 schedule.ready.push_back(lane);
+             }
+@@ -146,7 +188,7 @@
+ 
+ impl Drop for TurnPermit<'_> {
+     fn drop(&mut self) {
+-        self.0.release();
++        self.0.release(self.1);
+     }
+ }
+ 
+@@ -970,3 +1012,286 @@
+     assert_send_sync::<Slot>();
+     assert_send_sync::<Affiliation>();
+ };
++#[cfg(test)]
++mod turn_scheduler_tests {
++    use super::{TurnLane, TurnScheduler};
++    use std::future::Future;
++    use std::task::{Context, Poll, Waker};
++
++    #[test]
++    fn notified_cancel_allows_new_waiter() {
++        let scheduler = TurnScheduler::default();
++        let mut context = Context::from_waker(Waker::noop());
++        let mut a = Box::pin(scheduler.acquire(TurnLane::Cell("a".into())));
++        let held = match a.as_mut().poll(&mut context) {
++            Poll::Ready(permit) => permit,
++            Poll::Pending => panic!("idle turn scheduler did not grant the first waiter"),
++        };
++        let mut b = Box::pin(scheduler.acquire(TurnLane::Cell("b".into())));
++        assert!(b.as_mut().poll(&mut context).is_pending());
++
++        // Hand off to B, then destroy its future before it can receive the
++        // notification and return its permit. Dropping a Pin<&mut _> would
++        // not cancel the future; B is an owned pinned box deliberately.
++        drop(held);
++        drop(b);
++
++        let mut c = Box::pin(scheduler.acquire(TurnLane::Cell("c".into())));
++        assert!(
++            c.as_mut().poll(&mut context).is_ready(),
++            "cancelled notified waiter stranded the turn scheduler"
++        );
++    }
++
++    fn ready<F: Future>(future: std::pin::Pin<&mut F>, context: &mut Context<'_>) -> F::Output {
++        match future.poll(context) {
++            Poll::Ready(value) => value,
++            Poll::Pending => panic!("expected the selected turn waiter to be ready"),
++        }
++    }
++
++    fn assert_idle(scheduler: &TurnScheduler) {
++        let schedule = scheduler.schedule.lock().unwrap();
++        assert!(schedule.current.is_none());
++        assert!(schedule.ready.is_empty());
++        assert!(schedule.waiting.is_empty());
++    }
++
++    #[test]
++    fn notified_cancel_promotes_queued_successor() {
++        let scheduler = TurnScheduler::default();
++        let mut context = Context::from_waker(Waker::noop());
++        let mut a = Box::pin(scheduler.acquire(TurnLane::Cell("a".into())));
++        let held = ready(a.as_mut(), &mut context);
++        let mut b = Box::pin(scheduler.acquire(TurnLane::Cell("b".into())));
++        let mut c = Box::pin(scheduler.acquire(TurnLane::Cell("c".into())));
++        assert!(b.as_mut().poll(&mut context).is_pending());
++        assert!(c.as_mut().poll(&mut context).is_pending());
++        drop(held);
++        drop(b);
++        let held = ready(c.as_mut(), &mut context);
++        let mut d = Box::pin(scheduler.acquire(TurnLane::Cell("d".into())));
++        assert!(d.as_mut().poll(&mut context).is_pending());
++        drop(held);
++        drop(ready(d.as_mut(), &mut context));
++        assert_idle(&scheduler);
++    }
++
++    #[test]
++    fn queued_cancel_before_notification() {
++        let scheduler = TurnScheduler::default();
++        let mut context = Context::from_waker(Waker::noop());
++        let mut a = Box::pin(scheduler.acquire(TurnLane::Cell("a".into())));
++        let held = ready(a.as_mut(), &mut context);
++        let mut b1 = Box::pin(scheduler.acquire(TurnLane::Cell("b".into())));
++        let mut b2 = Box::pin(scheduler.acquire(TurnLane::Cell("b".into())));
++        let mut c = Box::pin(scheduler.acquire(TurnLane::Cell("c".into())));
++        assert!(b1.as_mut().poll(&mut context).is_pending());
++        assert!(b2.as_mut().poll(&mut context).is_pending());
++        assert!(c.as_mut().poll(&mut context).is_pending());
++        drop(b1);
++        assert!(b2.as_mut().poll(&mut context).is_pending());
++        assert!(c.as_mut().poll(&mut context).is_pending());
++        drop(held);
++        let held = ready(b2.as_mut(), &mut context);
++        assert!(c.as_mut().poll(&mut context).is_pending());
++        drop(held);
++        drop(ready(c.as_mut(), &mut context));
++        assert_idle(&scheduler);
++    }
++
++    #[test]
++    fn successful_handoff_has_one_owner() {
++        let scheduler = TurnScheduler::default();
++        let mut context = Context::from_waker(Waker::noop());
++        let mut a = Box::pin(scheduler.acquire(TurnLane::Stateless));
++        let held = ready(a.as_mut(), &mut context);
++        let mut b = Box::pin(scheduler.acquire(TurnLane::Cell("b".into())));
++        assert!(b.as_mut().poll(&mut context).is_pending());
++        drop(held);
++        let held = ready(b.as_mut(), &mut context);
++        let mut c = Box::pin(scheduler.acquire(TurnLane::Stateless));
++        assert!(c.as_mut().poll(&mut context).is_pending());
++        drop(held);
++        drop(ready(c.as_mut(), &mut context));
++        assert_idle(&scheduler);
++        report_layouts();
++    }
++
++    #[test]
++    fn round_robin_survives_cancellation() {
++        let scheduler = TurnScheduler::default();
++        let mut context = Context::from_waker(Waker::noop());
++        let mut a0 = Box::pin(scheduler.acquire(TurnLane::Cell("a".into())));
++        let a0_held = ready(a0.as_mut(), &mut context);
++        let mut a1 = Box::pin(scheduler.acquire(TurnLane::Cell("a".into())));
++        let mut a2 = Box::pin(scheduler.acquire(TurnLane::Cell("a".into())));
++        let mut b1 = Box::pin(scheduler.acquire(TurnLane::Cell("b".into())));
++        let mut b2 = Box::pin(scheduler.acquire(TurnLane::Cell("b".into())));
++        let mut cancelled = Box::pin(scheduler.acquire(TurnLane::Cell("cancelled".into())));
++        let mut c1 = Box::pin(scheduler.acquire(TurnLane::Cell("c".into())));
++        assert!(a1.as_mut().poll(&mut context).is_pending());
++        assert!(a2.as_mut().poll(&mut context).is_pending());
++        assert!(b1.as_mut().poll(&mut context).is_pending());
++        assert!(b2.as_mut().poll(&mut context).is_pending());
++        assert!(cancelled.as_mut().poll(&mut context).is_pending());
++        assert!(c1.as_mut().poll(&mut context).is_pending());
++        // Remove the ready lane between B and C, then one queued A follower.
++        drop(cancelled);
++        drop(a0_held);
++        let b1_held = ready(b1.as_mut(), &mut context);
++        drop(a1);
++        assert!(c1.as_mut().poll(&mut context).is_pending());
++        assert!(a2.as_mut().poll(&mut context).is_pending());
++        assert!(b2.as_mut().poll(&mut context).is_pending());
++        drop(b1_held);
++        let c1_held = ready(c1.as_mut(), &mut context);
++        assert!(a2.as_mut().poll(&mut context).is_pending());
++        assert!(b2.as_mut().poll(&mut context).is_pending());
++        drop(c1_held);
++        let a2_held = ready(a2.as_mut(), &mut context);
++        assert!(b2.as_mut().poll(&mut context).is_pending());
++        drop(a2_held);
++        drop(ready(b2.as_mut(), &mut context));
++        assert_idle(&scheduler);
++    }
++
++    #[test]
++    fn repeated_handoff_cancellation() {
++        let scheduler = TurnScheduler::default();
++        let mut context = Context::from_waker(Waker::noop());
++        for cycle in 0..64u64 {
++            let mut a = Box::pin(scheduler.acquire(TurnLane::Stateless));
++            let held = ready(a.as_mut(), &mut context);
++            let mut b = Box::pin(scheduler.acquire(TurnLane::Cell("b".into())));
++            let mut c = Box::pin(scheduler.acquire(TurnLane::Stateless));
++            assert!(b.as_mut().poll(&mut context).is_pending());
++            assert!(c.as_mut().poll(&mut context).is_pending());
++            drop(held);
++            drop(b);
++            drop(ready(c.as_mut(), &mut context));
++            assert_idle(&scheduler);
++            assert_eq!(
++                scheduler.schedule.lock().unwrap().next_ticket,
++                (cycle + 1) * 3
++            );
++        }
++    }
++
++    #[test]
++    fn ticket_exhaustion_precedes_registration() {
++        let scheduler = TurnScheduler::default();
++        scheduler.schedule.lock().unwrap().next_ticket = u64::MAX - 1;
++        let mut context = Context::from_waker(Waker::noop());
++        let mut last = Box::pin(scheduler.acquire(TurnLane::Stateless));
++        let held = ready(last.as_mut(), &mut context);
++        assert_eq!(held.1, u64::MAX - 1);
++        drop(held);
++        drop(last);
++        assert_idle(&scheduler);
++        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++            let mut exhausted = Box::pin(scheduler.acquire(TurnLane::Stateless));
++            let _ = exhausted.as_mut().poll(&mut context);
++        }));
++        let panic = result.expect_err("ticket exhaustion must fail closed");
++        let reason = panic
++            .downcast_ref::<&str>()
++            .copied()
++            .or_else(|| panic.downcast_ref::<String>().map(String::as_str));
++        assert_eq!(reason, Some("turn scheduler ticket space exhausted"));
++        // No live permit attempts a second lock during this intentional panic.
++        // Observe the poisoned state only here; production stays fail-closed.
++        let schedule = match scheduler.schedule.lock() {
++            Err(poisoned) => poisoned.into_inner(),
++            Ok(_) => panic!("ticket exhaustion must poison the scheduler"),
++        };
++        assert_eq!(schedule.next_ticket, u64::MAX);
++        assert!(schedule.current.is_none());
++        assert!(schedule.ready.is_empty());
++        assert!(schedule.waiting.is_empty());
++    }
++
++    fn report_layouts() {
++        use std::collections::{HashMap, VecDeque};
++        use std::mem::{align_of, size_of, size_of_val};
++        use std::sync::Mutex;
++        use tokio::sync::oneshot::Sender;
++        #[derive(Default)]
++        struct BaselineTurnSchedule {
++            current: Option<TurnLane>,
++            ready: VecDeque<TurnLane>,
++            waiting: HashMap<TurnLane, VecDeque<Sender<()>>>,
++        }
++        #[derive(Default)]
++        struct BaselineTurnScheduler {
++            schedule: Mutex<BaselineTurnSchedule>,
++        }
++        struct BaselineTurnPermit<'a>(&'a BaselineTurnScheduler);
++        impl Drop for BaselineTurnPermit<'_> {
++            fn drop(&mut self) {
++                // This mirror is measured, never polled or used for admission.
++                let _ = self.0;
++            }
++        }
++        impl BaselineTurnScheduler {
++            async fn acquire(&self, lane: TurnLane) -> BaselineTurnPermit<'_> {
++                let receive = {
++                    let mut schedule = self.schedule.lock().expect("turn scheduler poisoned");
++                    if schedule.current.is_none() {
++                        schedule.current = Some(lane);
++                        None
++                    } else {
++                        let (send, receive) = tokio::sync::oneshot::channel();
++                        if !schedule.waiting.contains_key(&lane)
++                            && schedule.current.as_ref() != Some(&lane)
++                        {
++                            schedule.ready.push_back(lane.clone());
++                        }
++                        schedule.waiting.entry(lane).or_default().push_back(send);
++                        Some(receive)
++                    }
++                };
++                if let Some(receive) = receive {
++                    // Cancellation leaves a closed sender in this lane. `release`
++                    // skips it, so a dropped waiter cannot strand the active token.
++                    let _ = receive.await;
++                }
++                BaselineTurnPermit(self)
++            }
++        }
++        let before = BaselineTurnScheduler::default();
++        let after = TurnScheduler::default();
++        let before_future = before.acquire(TurnLane::Stateless);
++        let after_future = after.acquire(TurnLane::Stateless);
++        // These compare the concrete layouts on the compiler/target under test.
++        // Guarded constructor tests enforce the existing component budgets;
++        // no future-size or process-cap increase is introduced here.
++        assert_eq!(
++            size_of::<super::TurnPermit<'_>>(),
++            size_of::<&TurnScheduler>() + size_of::<u64>()
++        );
++        assert!(
++            size_of::<(u64, Sender<()>)>()
++                <= size_of::<Sender<()>>() + size_of::<u64>() + align_of::<(u64, Sender<()>)>()
++        );
++        assert!(
++            size_of::<super::TurnSchedule>()
++                <= size_of::<BaselineTurnSchedule>()
++                    + 2 * size_of::<u64>()
++                    + align_of::<super::TurnSchedule>()
++        );
++        eprintln!(
++            "turn_scheduler_layout schedule_before={} schedule_after={} current_before={} current_after={} queued_before={} queued_after={} permit_before={} permit_after={} acquire_future_before={} acquire_future_after={} scheduler_before={} scheduler_after={} slot_after={}",
++            size_of::<BaselineTurnSchedule>(), size_of::<super::TurnSchedule>(),
++            size_of::<Option<TurnLane>>(), size_of::<Option<(TurnLane, u64)>>(),
++            size_of::<Sender<()>>(), size_of::<(u64, Sender<()>)>(),
++            size_of::<BaselineTurnPermit<'_>>(), size_of::<super::TurnPermit<'_>>(),
++            size_of_val(&before_future), size_of_val(&after_future),
++            size_of::<BaselineTurnScheduler>(), size_of::<TurnScheduler>(), size_of::<super::Slot>(),
++        );
++        drop(before_future);
++        drop(after_future);
++        assert_idle(&after);
++        assert!(before.schedule.lock().unwrap().current.is_none());
++    }
++}

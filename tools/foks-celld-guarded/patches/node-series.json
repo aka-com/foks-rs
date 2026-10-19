@@ -4,6 +4,7 @@
   "accepted_b1_commit": "23039e209d1b3b129a274dd65fe07f0abfdba8e0",
   "accepted_b2_commit": "d22ff3deedf0f0a87f635aec2317a87410e39110",
   "accepted_b3_commit": "9151df82364fa60177cb62f6645746ce1aff9b48",
+  "accepted_b4_background_retirement_commit": "3a7beb84c04f89551c3cb6ebea183873502447b2",
   "accepted_b4_control_retirement_commit": "3c71c49a062e74f96cdddc6c85df17eaed28ae33",
   "accepted_b4_main_work_commit": "885dbeb2c8ef2371a53d2988fbe5cee383c84fb9",
   "accepted_b4_p1_commit": "66090566c0ffcccc12e2d1c2bc9917f2f84019c4",
@@ -1361,6 +1362,27 @@
       ],
       "path": "patches/0010-node-retirement-diagnostics.patch",
       "sha256": "02a810b1faf01af037ec9a42b69afdd9dacb4e166a37d7a130cb5c844ed5a26d"
+    },
+    {
+      "bytes": 18720,
+      "files": [
+        {
+          "after": {
+            "bytes": 54039,
+            "git_sha1": "8273a00774a3298dac994d0d418e9adfc7252746",
+            "sha256": "3913e9bf5dbe147259ee71df97d5d7b10265a20cf3d33f6d9e5759fe621fa29d"
+          },
+          "before": {
+            "bytes": 39070,
+            "git_sha1": "2cc343250eae07368039eddec110a241a44876e5",
+            "sha256": "3551fc9c7a60c99c508e6129a5d700ee490a21ed214c3d22d29452ca7ad404c7"
+          },
+          "mode": "100644",
+          "path": "crates/celld/pool.rs"
+        }
+      ],
+      "path": "patches/0011-node-turn-scheduler.patch",
+      "sha256": "8520441e67ee1520f6ed19a500e096ad83f561530fab899e9016ca23e057e2e2"
     }
   ],
   "profile": "node-main-work"

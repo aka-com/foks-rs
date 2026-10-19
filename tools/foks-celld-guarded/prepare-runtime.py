@@ -318,6 +318,37 @@ RETIREMENT_DIAGNOSTICS_PATHS = ('crates/celld/guarded_node.rs', 'crates/celld/gu
 RETIREMENT_DIAGNOSTICS_TEST_EXTENSIONS = ['guarded_execution::node::tests::b4_observation_failed_retirement_retains_public_guard', 'guarded_execution::node::tests::b2_compaction_cancel_keeps_native_result_owned', 'guarded_execution::node::tests::b2_original_deadline_denies_new_work_but_allows_reserved_cleanup']
 RETIREMENT_DIAGNOSTICS_POLICY = {'diagnostics': 'error-only-stderr-bounded256x2-source16', 'native_test_extensions': RETIREMENT_DIAGNOSTICS_TEST_EXTENSIONS, 'predecessor': 'accepted-control-retirement-nine-patch', 'revision': 2}
 
+
+# The accepted ten-patch retirement profile is immutable. The successor adds
+# one independently bounded pool.rs patch; no prior envelope is enlarged.
+TURN_SCHEDULER_BASE = '3a7beb84c04f89551c3cb6ebea183873502447b2'
+TURN_SCHEDULER_PATCH = 'patches/0011-node-turn-scheduler.patch'
+TURN_SCHEDULER_PROFILE = 'runtime/evidence/accepted-b4-background-retirement-scheduler-base/runtime-node.lock.json'
+TURN_SCHEDULER_SERIES = 'runtime/evidence/accepted-b4-background-retirement-scheduler-base/patches/node-series.json'
+TURN_SCHEDULER_MANIFEST = 'runtime/evidence/accepted-b4-background-retirement-scheduler-base/source-manifest.json'
+TURN_SCHEDULER_ASSETS = 'runtime/evidence/accepted-b4-background-retirement-scheduler-base/assets-node-main-work.json'
+TURN_SCHEDULER_BASE_IMAGES = {'background_retirement_profile': ('runtime/evidence/accepted-b4-background-retirement-scheduler-base/runtime-node.lock.json', '26dc22c3be3d9efdcb5098fb4b5b79619818a2983a4669873efd9e231f77d142'), 'background_retirement_series': ('runtime/evidence/accepted-b4-background-retirement-scheduler-base/patches/node-series.json', '5030d1c588f2d79f845969eb4f2e12edfa496be2700d4ee274ea67be23632bc1'), 'background_retirement_source_manifest': ('runtime/evidence/accepted-b4-background-retirement-scheduler-base/source-manifest.json', 'f13301d769b8d79b59124aef62c3138efd05eed2c4265797fa5367deeffcc6af'), 'background_retirement_assets': ('runtime/evidence/accepted-b4-background-retirement-scheduler-base/assets-node-main-work.json', '087bc4f882c4164ba91b2628b9c8010949d8fa0fb83612337a13e6bdcfdbffdc')}
+TURN_SCHEDULER_PATHS = ('crates/celld/pool.rs',)
+TURN_SCHEDULER_TEST_PREFIX = 'pool::turn_scheduler_tests::'
+TURN_SCHEDULER_TESTS = [TURN_SCHEDULER_TEST_PREFIX + name for name in (
+    'notified_cancel_allows_new_waiter',
+    'notified_cancel_promotes_queued_successor',
+    'queued_cancel_before_notification',
+    'successful_handoff_has_one_owner',
+    'round_robin_survives_cancellation',
+    'repeated_handoff_cancellation',
+    'ticket_exhaustion_precedes_registration',
+)]
+TURN_SCHEDULER_POLICY = {
+    'revision': 1, 'predecessor': 'accepted-background-retirement-ten-patch',
+    'test_prefix': TURN_SCHEDULER_TEST_PREFIX, 'tests': TURN_SCHEDULER_TESTS,
+    'threads': 1, 'network': 'deny-all',
+    'binary': 'same-verified-celld-library-artifact',
+}
+# Fatal until the reviewed patch byte count is bound: exactly 1616273 + B.
+# This is NOT derived from a candidate's self-declared descriptor.
+MAXIMUM_TURN_SCHEDULER_PATCHES = 1634993
+
 MAIN_WORK_BIN_TEST = MAIN_WORK + "-bin-test"
 MAIN_WORK_BIN_TESTS = ["guarded::tests::guarded_reload_main_work_fits_qualified_fixture"]
 MAIN_WORK_POLICY = {
@@ -2858,8 +2889,8 @@ def accepted_control_retirement(root):
     return load_control_retirement_predecessor(root, load_pins(root), RETIREMENT_DIAGNOSTICS_PROFILE, RETIREMENT_DIAGNOSTICS_SERIES)
 
 
-def load_main_work(root, base):
-    profile = read_json(root / FOUNDATION_PROFILE)
+def load_retirement_diagnostics_predecessor(root, base, profile_path=FOUNDATION_PROFILE, series_path=FOUNDATION_SERIES):
+    profile = read_json(root / profile_path)
     require_retirement_diagnostics_revision(profile)
     accepted = accepted_control_retirement(root)
     closed_fields(profile, (*accepted, "accepted_b4_control_retirement_commit"), "retirement-diagnostics profile")
@@ -2887,15 +2918,15 @@ def load_main_work(root, base):
     closed_fields(tree, ("files", "payload_bytes", "inventory_sha256"), "retirement-diagnostics tree")
     if type(tree["files"]) is not int or tree["files"] != accepted["qualification"]["tree"]["files"] or type(tree["payload_bytes"]) is not int or not 0 < tree["payload_bytes"] <= MAXIMUM_FOUNDATION_SOURCE or not isinstance(tree["inventory_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", tree["inventory_sha256"]):
         fail("invalid retirement-diagnostics tree envelope")
-    main_work_series(root, profile, accepted)
+    retirement_diagnostics_predecessor_series(root, profile, accepted, series_path)
     return profile
 
 
-def main_work_series(root, profile, accepted=None):
+def retirement_diagnostics_predecessor_series(root, profile, accepted=None, series_path=FOUNDATION_SERIES):
     require_retirement_diagnostics_revision(profile)
     accepted = accepted_control_retirement(root) if accepted is None else accepted
-    checked_file(root / FOUNDATION_SERIES, profile["node_series"])
-    series = read_json(root / FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    checked_file(root / series_path, profile["node_series"])
+    series = read_json(root / series_path, MAXIMUM_FOUNDATION_SERIES)
     prefix = control_retirement_predecessor_series(root, accepted, series_path=RETIREMENT_DIAGNOSTICS_SERIES)
     closed_fields(series, (*prefix, "accepted_b4_control_retirement_commit"), "retirement-diagnostics series")
     identity = {name: value for name, value in prefix.items() if name != "patches"}
@@ -2925,6 +2956,95 @@ def main_work_series(root, profile, accepted=None):
         validate_image(entry["after"])
         exact_json(entry["before"], {name: original[path][name] for name in ("bytes", "sha256", "git_sha1")}, "retirement-diagnostics accepted nine-patch preimage")
     checked_file(root / RETIREMENT_DIAGNOSTICS_PATCH, selected)
+    return series
+
+
+def require_turn_scheduler_revision(profile):
+    require_retirement_diagnostics_revision(profile)
+    if profile.get("accepted_b4_background_retirement_commit") != TURN_SCHEDULER_BASE:
+        fail("canonical main-work requires the turn-scheduler revision")
+    qualification = profile.get("qualification")
+    if not isinstance(qualification, dict) or "turn_scheduler" not in qualification:
+        fail("missing main-work turn-scheduler marker")
+    exact_json(qualification["turn_scheduler"], TURN_SCHEDULER_POLICY, "main-work turn-scheduler marker")
+
+
+def accepted_background_retirement(root):
+    for path, checksum in TURN_SCHEDULER_BASE_IMAGES.values():
+        if file_hash(root / path) != checksum:
+            fail("accepted ten-patch background-retirement image changed")
+    return load_retirement_diagnostics_predecessor(root, load_pins(root), TURN_SCHEDULER_PROFILE, TURN_SCHEDULER_SERIES)
+
+
+def load_main_work(root, base):
+    profile = read_json(root / FOUNDATION_PROFILE)
+    require_turn_scheduler_revision(profile)
+    accepted = accepted_background_retirement(root)
+    closed_fields(profile, (*accepted, "accepted_b4_background_retirement_commit"), "turn-scheduler profile")
+    identity = {name: value for name, value in accepted.items() if name.startswith("accepted_")}
+    identity.update(format=1, profile=MAIN_WORK, target=TARGET, accepted_b4_background_retirement_commit=TURN_SCHEDULER_BASE)
+    exact_json({name: profile[name] for name in identity}, identity, "turn-scheduler identity")
+    closed_fields(profile["base"], (*accepted["base"], *TURN_SCHEDULER_BASE_IMAGES), "turn-scheduler base")
+    exact_json({name: profile["base"][name] for name in accepted["base"]}, accepted["base"], "turn-scheduler historical base")
+    for name, (path, checksum) in TURN_SCHEDULER_BASE_IMAGES.items():
+        entry = profile["base"][name]
+        foundation_image(entry, path)
+        if entry["sha256"] != checksum:
+            fail("turn-scheduler accepted base changed")
+        checked_file(root / path, entry)
+    exact_json(profile["pins"], base, "turn-scheduler inherited pins")
+    exact_json(profile["cargo_lock"], accepted["cargo_lock"], "turn-scheduler unchanged lock")
+    checked_file(root / "Cargo.lock", profile["cargo_lock"]["expected"])
+    foundation_image(profile["node_series"], FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    qualification = profile["qualification"]
+    closed_fields(qualification, (*accepted["qualification"], "turn_scheduler"), "turn-scheduler qualification")
+    changed = {"claim", "source_roster", "tree"}
+    exact_json({name: qualification[name] for name in accepted["qualification"] if name not in changed}, {name: value for name, value in accepted["qualification"].items() if name not in changed}, "turn-scheduler unchanged policies")
+    exact_json({name: qualification[name] for name in ("claim", "source_roster")}, {"claim": "b4-main-work-turn-scheduler-components-only", "source_roster": list(TURN_SCHEDULER_PATHS)}, "turn-scheduler scope")
+    tree = qualification["tree"]
+    closed_fields(tree, ("files", "payload_bytes", "inventory_sha256"), "turn-scheduler tree")
+    if type(tree["files"]) is not int or tree["files"] != accepted["qualification"]["tree"]["files"] or type(tree["payload_bytes"]) is not int or not 0 < tree["payload_bytes"] <= MAXIMUM_FOUNDATION_SOURCE or not isinstance(tree["inventory_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", tree["inventory_sha256"]):
+        fail("invalid turn-scheduler tree envelope")
+    main_work_series(root, profile, accepted)
+    return profile
+
+
+def main_work_series(root, profile, accepted=None):
+    require_turn_scheduler_revision(profile)
+    accepted = accepted_background_retirement(root) if accepted is None else accepted
+    checked_file(root / FOUNDATION_SERIES, profile["node_series"])
+    series = read_json(root / FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    prefix = retirement_diagnostics_predecessor_series(root, accepted, series_path=TURN_SCHEDULER_SERIES)
+    closed_fields(series, (*prefix, "accepted_b4_background_retirement_commit"), "turn-scheduler series")
+    identity = {name: value for name, value in prefix.items() if name != "patches"}
+    identity.update(accepted_b4_background_retirement_commit=TURN_SCHEDULER_BASE)
+    exact_json({name: series[name] for name in identity}, identity, "turn-scheduler series identity")
+    patches = series["patches"]
+    if not isinstance(patches, list) or len(patches) != 11:
+        fail("turn-scheduler requires exactly eleven patches")
+    exact_json(patches[:10], prefix["patches"], "turn-scheduler immutable ten-patch prefix")
+    selected = patches[10]
+    closed_fields(selected, ("path", "bytes", "sha256", "files"), "turn-scheduler eleventh patch")
+    foundation_image({name: selected[name] for name in ("path", "bytes", "sha256")}, TURN_SCHEDULER_PATCH, MAXIMUM_FOUNDATION_PATCH)
+    # The predecessor above independently enforces its unchanged revision-2 cap.
+    if type(MAXIMUM_TURN_SCHEDULER_PATCHES) is not int or sum(entry["bytes"] for entry in patches) > MAXIMUM_TURN_SCHEDULER_PATCHES:
+        fail("turn-scheduler combined patch payload exceeds reviewed successor envelope")
+    files = selected["files"]
+    if not isinstance(files, list) or len(files) != 1:
+        fail("invalid turn-scheduler eleventh-patch roster")
+    manifest = read_json(root / TURN_SCHEDULER_MANIFEST)
+    original = {row["path"]: row for row in manifest["files"]}
+    if len(original) != len(manifest["files"]) or len(original) != accepted["qualification"]["tree"]["files"]:
+        fail("invalid accepted background-retirement source inventory")
+    entry = files[0]
+    path = TURN_SCHEDULER_PATHS[0]
+    closed_fields(entry, ("path", "mode", "before", "after"), "turn-scheduler eleventh-patch file")
+    if entry["path"] != path or entry["mode"] != "100644" or path not in original:
+        fail("turn-scheduler eleventh-patch path/mode changed")
+    validate_image(entry["before"])
+    validate_image(entry["after"])
+    exact_json(entry["before"], {name: original[path][name] for name in ("bytes", "sha256", "git_sha1")}, "turn-scheduler accepted ten-patch preimage")
+    checked_file(root / TURN_SCHEDULER_PATCH, selected)
     return series
 
 
@@ -5189,6 +5309,28 @@ def run_frontend_components(focused, root, toolchain, pins, graph, environment, 
                 fail("frontend transport test output changed after owned command")
             component_test_output(path, action == "list", names)
     checked_file(binary, focused["binary"])
+    if stage == MAIN_WORK:
+        run_turn_scheduler_components(focused, root, pins, environment, directory, slot)
+
+
+def run_turn_scheduler_components(focused, root, pins, environment, directory, slot):
+    """Seven scheduler regressions on the already compiled and verified library."""
+    if pins["profile"] != MAIN_WORK:
+        fail("turn-scheduler tests require main-work")
+    require_turn_scheduler_revision(pins.get("foundation"))
+    binary = Path(focused["binary"]["path"])
+    result = {"names": TURN_SCHEDULER_TESTS.copy(), "prefix": TURN_SCHEDULER_TEST_PREFIX,
+              "threads": 1, "network": "deny-all", "binary": dict(focused["binary"])}
+    focused["scheduler_tests"] = result
+    for action, flag in (("list", "--list"), ("run", "--test-threads=1")):
+        checked_file(binary, focused["binary"])
+        name = "scheduler-" + action
+        result[action] = run_owned(network_command([binary, TURN_SCHEDULER_TEST_PREFIX, flag]), root, environment, directory, name, slot, pins["build"]["timeout_seconds"], lambda: resource_refusal(root))
+        checked_file(binary, focused["binary"])
+        output = directory / (name + ".stdout")
+        if file_hash(output) != result[action]["stdout_sha256"]:
+            fail("turn-scheduler output changed after owned command")
+        component_test_output(output, action == "list", TURN_SCHEDULER_TESTS)
 
 
 def run_main_work_binary_tests(receipt, root, pins, graph, environment, directory, slot):
