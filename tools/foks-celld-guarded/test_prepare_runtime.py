@@ -106,18 +106,18 @@ FIXTURE_ANCESTORS = (
     "accepted_foundation", "accepted_lifetimes", "accepted_frontend",
     "accepted_observations", "accepted_process", "accepted_main_work",
     "accepted_qualifier_contention", "accepted_control_retirement",
-    "accepted_background_retirement",
+    "accepted_background_retirement", "accepted_turn_scheduler",
 )
 
 
 FIXTURE_METADATA_PREFIXES = (
     "LIFETIMES", "FRONTEND", "OBSERVATIONS", "PROCESS", "MAIN_WORK",
-    "CONTENTION", "CONTROL_RETIREMENT", "RETIREMENT_DIAGNOSTICS", "TURN_SCHEDULER",
+    "CONTENTION", "CONTROL_RETIREMENT", "RETIREMENT_DIAGNOSTICS", "TURN_SCHEDULER", "PARENT_CANCEL",
 )
 FIXTURE_PATCH_CONSTANTS = (
     "PATCH_PATH", "FOUNDATION_PATCH", "LIFETIMES_PATCH", "FRONTEND_PATCH",
     "OBSERVATIONS_PATCH", "PROCESS_PATCH", "MAIN_WORK_PATCH", "CONTENTION_PATCH",
-    "CONTROL_RETIREMENT_PATCH", "RETIREMENT_DIAGNOSTICS_PATCH",
+    "CONTROL_RETIREMENT_PATCH", "RETIREMENT_DIAGNOSTICS_PATCH", "TURN_SCHEDULER_PATCH",
 )
 
 
@@ -565,7 +565,7 @@ def process_fixture(root):
 @contextmanager
 def main_work_predecessor_validation(module=p):
     """Test-only routing of synthetic seven-patch inputs to preserved validators."""
-    with patch.object(module, "load_main_work", module.load_main_work_predecessor), patch.object(module, "main_work_series", module.main_work_predecessor_series):
+    with patch.object(module, "load_main_work", module.load_main_work_predecessor), patch.object(module, "main_work_series", module.main_work_predecessor_series), patch.object(module, "MAIN_WORK_TESTS", module.PROCESS_TESTS):
         yield
 
 
@@ -659,7 +659,7 @@ def contention_fixture(root, historical_validation=True):
 @contextmanager
 def contention_predecessor_validation(module=p):
     """Explicit test-only routing of synthetic eight-patch inputs."""
-    with patch.object(module, "load_main_work", module.load_contention_predecessor), patch.object(module, "main_work_series", module.contention_predecessor_series):
+    with patch.object(module, "load_main_work", module.load_contention_predecessor), patch.object(module, "main_work_series", module.contention_predecessor_series), patch.object(module, "MAIN_WORK_TESTS", module.PROCESS_TESTS):
         yield
 
 
@@ -709,7 +709,7 @@ def control_retirement_fixture(root, historical_validation=True):
 @contextmanager
 def control_retirement_predecessor_validation(module=p):
     """Fixture-only routing to the strict nine-patch predecessor."""
-    with patch.object(module, "load_main_work", module.load_control_retirement_predecessor), patch.object(module, "main_work_series", module.control_retirement_predecessor_series):
+    with patch.object(module, "load_main_work", module.load_control_retirement_predecessor), patch.object(module, "main_work_series", module.control_retirement_predecessor_series), patch.object(module, "MAIN_WORK_TESTS", module.PROCESS_TESTS):
         yield
 
 
@@ -759,12 +759,12 @@ def retirement_diagnostics_fixture(root, historical_validation=True):
 @contextmanager
 def retirement_diagnostics_predecessor_validation(module=p):
     """Fixture-only routing to the strict accepted ten-patch predecessor."""
-    with patch.object(module, "load_main_work", module.load_retirement_diagnostics_predecessor), patch.object(module, "main_work_series", module.retirement_diagnostics_predecessor_series):
+    with patch.object(module, "load_main_work", module.load_retirement_diagnostics_predecessor), patch.object(module, "main_work_series", module.retirement_diagnostics_predecessor_series), patch.object(module, "MAIN_WORK_TESTS", module.PROCESS_TESTS):
         yield
 
 
 @contextmanager
-def turn_scheduler_fixture(root):
+def turn_scheduler_fixture(root, historical_validation=True):
     with retirement_diagnostics_fixture(root, historical_validation=False) as previous:
         with retirement_diagnostics_predecessor_validation():
             accepted = fixture_prepare(previous["archive"], root, p.MAIN_WORK)
@@ -799,7 +799,9 @@ def turn_scheduler_fixture(root):
         profile["base"].update(images)
         profile["qualification"].update(claim="b4-main-work-turn-scheduler-components-only", source_roster=list(p.TURN_SCHEDULER_PATHS), tree={"files": len(final), "payload_bytes": sum(row["bytes"] for row in final), "inventory_sha256": p.digest(json.dumps(final, sort_keys=True, separators=(",", ":")).encode())}, turn_scheduler=copy.deepcopy(p.TURN_SCHEDULER_POLICY))
         (root / p.FOUNDATION_PROFILE).write_text(json.dumps(profile))
-        with patch.object(p, "TURN_SCHEDULER_BASE_IMAGES", hashes):
+        with patch.object(p, "TURN_SCHEDULER_BASE_IMAGES", hashes), ExitStack() as validation:
+            if historical_validation:
+                validation.enter_context(turn_scheduler_predecessor_validation())
             yield {**previous, "profile": profile, "series": series, "rows": final, "accepted_background": accepted, "accepted_background_profile": previous["profile"], "accepted_background_assets": assets}
 
 
@@ -4636,10 +4638,11 @@ class QualifierContentionRevisionTests(unittest.TestCase):
             path = root / "tests.stdout"
             names = p.PROCESS_TESTS
             path.write_text("\n".join(name + ": test" for name in names) + "\n123 tests, 0 benchmarks\n")
-            self.assertEqual(p.foundation_test_output(path, True, p.MAIN_WORK), names)
-            path.write_text(path.read_text().replace(names[0] + ": test\n", ""))
-            with self.assertRaises(ValueError):
-                p.foundation_test_output(path, True, p.MAIN_WORK)
+            with patch.object(p, "MAIN_WORK_TESTS", p.PROCESS_TESTS):
+                self.assertEqual(p.foundation_test_output(path, True, p.MAIN_WORK), names)
+                path.write_text(path.read_text().replace(names[0] + ": test\n", ""))
+                with self.assertRaises(ValueError):
+                    p.foundation_test_output(path, True, p.MAIN_WORK)
             name = p.MAIN_WORK_BIN_TESTS[0]
             path.write_text(name + ": test\n1 test, 0 benchmarks\n")
             self.assertEqual(p.main_work_test_output(path, True), [name])
@@ -5027,6 +5030,227 @@ class TurnSchedulerRevisionTests(unittest.TestCase):
             with patch.object(p, "run_owned", side_effect=replaced), patch.object(p, "network_command", side_effect=lambda argv: ["DENY-ALL", *argv]), self.assertRaises(ValueError):
                 p.run_turn_scheduler_components({"binary": descriptor}, root, pins, environment, evidence, slot)
             self.assertEqual(calls, ["scheduler-list"])
+
+
+@contextmanager
+def turn_scheduler_predecessor_validation(module=p):
+    """Strict historical eleven-patch validation and original 123-test output."""
+    with patch.object(module, "load_main_work", module.load_turn_scheduler_predecessor), patch.object(module, "main_work_series", module.turn_scheduler_predecessor_series), patch.object(module, "MAIN_WORK_TESTS", module.PROCESS_TESTS):
+        yield
+
+
+@contextmanager
+def parent_cancel_fixture(root):
+    """Append exactly two source replacements to a preserved scheduler fixture."""
+    with turn_scheduler_fixture(root, historical_validation=False) as previous:
+        with turn_scheduler_predecessor_validation():
+            accepted = fixture_prepare(previous["archive"], root, p.MAIN_WORK)
+            assets = fixture_prepare_assets(previous["native"], previous["binding"], root, p.MAIN_WORK)
+        preserved = root / Path(p.PARENT_CANCEL_MANIFEST).parent
+        preserved.mkdir(parents=True)
+        (root / "runtime/source").rename(preserved / "source")
+        (root / "runtime/source-manifest.json").rename(root / p.PARENT_CANCEL_MANIFEST)
+        for original, target in ((p.FOUNDATION_PROFILE, p.PARENT_CANCEL_PROFILE), (p.FOUNDATION_SERIES, p.PARENT_CANCEL_SERIES), ("runtime/assets-node-main-work.json", p.PARENT_CANCEL_ASSETS)):
+            destination = root / target
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes((root / original).read_bytes())
+        (root / "runtime/assets-node-main-work.json").unlink()
+        images = {name: foundation_file(root, path) for name, (path, _) in p.PARENT_CANCEL_BASE_IMAGES.items()}
+        hashes = {name: (entry["path"], entry["sha256"]) for name, entry in images.items()}
+        rows = {row["path"]: dict(row) for row in accepted["files"]}
+        files, chunks = [], []
+        for name in p.PARENT_CANCEL_PATHS:
+            before = (preserved / "source" / name).read_bytes()
+            after = ("parent-cancellation " + name + "\n").encode()
+            old_lines = before.splitlines(keepends=True)
+            files.append({"path": name, "mode": "100644", "before": p.image_identity(before), "after": p.image_identity(after)})
+            chunks.append(("--- a/" + name + "\n+++ b/" + name + "\n@@ -1," + str(len(old_lines)) + " +1,1 @@\n").encode() + b"".join(b"-" + line for line in old_lines) + b"+" + after)
+            rows[name] = {"path": name, "mode": "100644", **p.image_identity(after)}
+        (root / p.PARENT_CANCEL_PATCH).write_bytes(b"".join(chunks))
+        final = sorted(rows.values(), key=lambda row: row["path"])
+        series = copy.deepcopy(previous["series"])
+        series.update(accepted_b4_turn_scheduler_commit=p.PARENT_CANCEL_BASE)
+        series["patches"].append({**foundation_file(root, p.PARENT_CANCEL_PATCH), "files": files})
+        (root / p.FOUNDATION_SERIES).write_text(json.dumps(series))
+        profile = copy.deepcopy(previous["profile"])
+        profile.update(accepted_b4_turn_scheduler_commit=p.PARENT_CANCEL_BASE, node_series=foundation_file(root, p.FOUNDATION_SERIES))
+        profile["base"].update(images)
+        profile["qualification"].update(claim="b4-main-work-parent-cancel-components-only", source_roster=list(p.PARENT_CANCEL_PATHS), tree={"files": len(final), "payload_bytes": sum(row["bytes"] for row in final), "inventory_sha256": p.digest(json.dumps(final, sort_keys=True, separators=(",", ":")).encode())}, tests={"prefix": p.FRONTEND_TEST_PREFIX, "names": p.MAIN_WORK_TESTS.copy(), "threads": 1})
+        (root / p.FOUNDATION_PROFILE).write_text(json.dumps(profile))
+        with patch.object(p, "PARENT_CANCEL_BASE_IMAGES", hashes):
+            yield {**previous, "profile": profile, "series": series, "rows": final, "accepted_scheduler": accepted, "accepted_scheduler_profile": previous["profile"], "accepted_scheduler_assets": assets}
+
+
+class ParentCancelRevisionTests(unittest.TestCase):
+    def test_twelfth_patch_preserves_eleven_prefix_tree_and_policies(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with parent_cancel_fixture(root) as data:
+                retained = {path: (root / path).read_bytes() for path, _ in p.PARENT_CANCEL_BASE_IMAGES.values()}
+                source = fixture_prepare(data["archive"], root, p.MAIN_WORK)
+                self.assertEqual(source["files"], data["rows"])
+                with fixture_ancestor_cache(root):
+                    self.assertEqual(p.verify_source(root, p.MAIN_WORK), source)
+                    self.assertEqual(p.accepted_turn_scheduler(root), data["accepted_scheduler_profile"])
+                self.assertEqual(data["series"]["patches"][:11], json.loads(retained[p.PARENT_CANCEL_SERIES])["patches"])
+                original = {row["path"]: row for row in data["accepted_scheduler"]["files"]}
+                self.assertEqual({row["path"] for row in source["files"] if row != original[row["path"]]}, set(p.PARENT_CANCEL_PATHS))
+                self.assertEqual(len(source["files"]), len(original))
+                self.assertEqual(p.MAXIMUM_FOUNDATION_PATCH, 524288)
+                self.assertEqual(p.MAXIMUM_RETIREMENT_REV2_PATCHES, 1617920)
+                self.assertEqual(p.MAXIMUM_TURN_SCHEDULER_PATCHES, 1634993)
+                self.assertIs(type(p.MAXIMUM_PARENT_CANCEL_PATCHES), int)
+                with fixture_ancestor_cache(root):
+                    pins = p.load_pins(root, p.MAIN_WORK)
+                for mode in p.MAIN_WORK_MODES:
+                    p.selected_mode(pins, mode)
+                self.assertEqual(pins["foundation"]["qualification"]["turn_scheduler"], p.TURN_SCHEDULER_POLICY)
+                # Well-shaped but wrong postimages/tree digests reach actual
+                # reconstruction verification, not only metadata syntax checks.
+                profile_path, series_path = root / p.FOUNDATION_PROFILE, root / p.FOUNDATION_SERIES
+                profile_raw, series_raw = profile_path.read_bytes(), series_path.read_bytes()
+                try:
+                    changed = json.loads(profile_raw)
+                    changed["qualification"]["tree"]["inventory_sha256"] = "0" * 64
+                    profile_path.write_text(json.dumps(changed))
+                    with fixture_ancestor_cache(root), self.assertRaises(ValueError):
+                        p.verify_source(root, p.MAIN_WORK)
+                    changed_series = json.loads(series_raw)
+                    changed_series["patches"][11]["files"][0]["after"]["sha256"] = "0" * 64
+                    series_path.write_text(json.dumps(changed_series))
+                    changed = json.loads(profile_raw)
+                    changed["node_series"] = foundation_file(root, p.FOUNDATION_SERIES)
+                    profile_path.write_text(json.dumps(changed))
+                    with fixture_ancestor_cache(root), self.assertRaises(ValueError):
+                        p.verify_source(root, p.MAIN_WORK)
+                finally:
+                    profile_path.write_bytes(profile_raw); series_path.write_bytes(series_raw)
+                result = fixture_prepare_assets(data["native"], data["binding"], root, p.MAIN_WORK)
+                self.assertEqual(result["assets"], data["accepted_scheduler_assets"]["assets"])
+                self.assertEqual({path: (root / path).read_bytes() for path in retained}, retained)
+
+    def test_successor_rejects_ancestry_preimages_roster_and_bounds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with parent_cancel_fixture(root) as data:
+                profile_path, series_path = root / p.FOUNDATION_PROFILE, root / p.FOUNDATION_SERIES
+                profile_raw, series_raw = profile_path.read_bytes(), series_path.read_bytes()
+                def validate():
+                    with fixture_ancestor_cache(root):
+                        return p.load_pins(root, p.MAIN_WORK)
+                try:
+                    changes = (
+                        lambda x: x.pop("accepted_b4_turn_scheduler_commit"),
+                        lambda x: x.update(accepted_b4_turn_scheduler_commit=True),
+                        lambda x: x.update(accepted_b4_turn_scheduler_commit="0" * 40),
+                        lambda x: x["qualification"]["tests"]["names"].pop(),
+                        lambda x: x["qualification"]["tests"].update(threads=True),
+                        lambda x: x["qualification"]["source_roster"].reverse(),
+                        lambda x: x["qualification"]["tree"].update(files=True),
+                        lambda x: x["qualification"]["tree"].update(inventory_sha256="invalid"),
+                    )
+                    for change in changes:
+                        value = json.loads(profile_raw); change(value)
+                        profile_path.write_text(json.dumps(value))
+                        with self.assertRaises(ValueError):
+                            validate()
+                    profile_path.write_bytes(profile_raw)
+                    changes = (
+                        lambda x: x["patches"].pop(),
+                        lambda x: x["patches"].append(copy.deepcopy(x["patches"][-1])),
+                        lambda x: x["patches"][10]["files"][0]["after"].update(sha256="0" * 64),
+                        lambda x: x["patches"][11]["files"][0]["before"].update(sha256="0" * 64),
+                        lambda x: x["patches"][11]["files"][0]["after"].update(bytes=True),
+                        lambda x: x["patches"][11]["files"][0].update(path="crates/celld/runtime.rs"),
+                        lambda x: x["patches"][11]["files"][0].update(mode="100755"),
+                        lambda x: x["patches"][11]["files"].pop(),
+                        lambda x: x["patches"][11]["files"].append(copy.deepcopy(x["patches"][11]["files"][0])),
+                        lambda x: x["patches"][11]["files"].__setitem__(1, copy.deepcopy(x["patches"][11]["files"][0])),
+                    )
+                    for change in changes:
+                        value = json.loads(series_raw); change(value)
+                        series_path.write_text(json.dumps(value))
+                        profile = json.loads(profile_raw); profile["node_series"] = foundation_file(root, p.FOUNDATION_SERIES)
+                        profile_path.write_text(json.dumps(profile))
+                        with self.assertRaises(ValueError):
+                            validate()
+                    profile_path.write_bytes(profile_raw); series_path.write_bytes(series_raw)
+                    total = sum(row["bytes"] for row in data["series"]["patches"])
+                    with patch.object(p, "MAXIMUM_PARENT_CANCEL_PATCHES", total):
+                        validate()
+                    for bound in (total - 1, None, True):
+                        with patch.object(p, "MAXIMUM_PARENT_CANCEL_PATCHES", bound), self.assertRaises(ValueError):
+                            validate()
+                    prefix_total = total - data["series"]["patches"][11]["bytes"]
+                    with patch.object(p, "MAXIMUM_TURN_SCHEDULER_PATCHES", prefix_total - 1), self.assertRaises(ValueError):
+                        validate()
+                    for path in [*(path for path, _ in p.PARENT_CANCEL_BASE_IMAGES.values()), p.TURN_SCHEDULER_PATCH, p.PARENT_CANCEL_PATCH]:
+                        raw = (root / path).read_bytes()
+                        try:
+                            (root / path).write_bytes(raw + b" ")
+                            with self.assertRaises(ValueError):
+                                validate()
+                        finally:
+                            (root / path).write_bytes(raw)
+                finally:
+                    profile_path.write_bytes(profile_raw); series_path.write_bytes(series_raw)
+                validate()
+
+    def test_current129_and_historical123_rosters_are_distinct_and_exact(self):
+        self.assertEqual(len(p.PROCESS_TESTS), 123)
+        self.assertEqual(len(p.MAIN_WORK_TESTS), 129)
+        self.assertEqual(p.MAIN_WORK_TESTS[:123], p.PROCESS_TESTS)
+        self.assertEqual(p.MAIN_WORK_TESTS[123:], p.PARENT_CANCEL_TESTS)
+        self.assertEqual(len(set(p.PARENT_CANCEL_TESTS)), 6)
+        self.assertTrue(set(p.PROCESS_TESTS).isdisjoint(p.PARENT_CANCEL_TESTS))
+        self.assertTrue(set(p.MAIN_WORK_TESTS).isdisjoint(p.TURN_SCHEDULER_TESTS))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "output"
+            for historical in (False, True):
+                with ExitStack() as stack:
+                    if historical:
+                        stack.enter_context(turn_scheduler_predecessor_validation())
+                    names = p.PROCESS_TESTS if historical else p.MAIN_WORK_TESTS
+                    for listing in (True, False):
+                        raw = FrontendTests.render_test_output(names, listing)
+                        path.write_text(raw)
+                        self.assertEqual(p.foundation_test_output(path, listing, p.MAIN_WORK), names)
+                        variants = [raw.replace(names[0], "unreviewed::test", 1), raw.replace(names[0], names[1], 1), raw.replace(names[0] + (": test" if listing else " ... ok"), "", 1)]
+                        if not listing:
+                            variants.append(raw.replace(" ... ok", " ... ignored", 1))
+                        other = p.PROCESS_TESTS + p.PARENT_CANCEL_TESTS if historical else p.PROCESS_TESTS
+                        variants.append(FrontendTests.render_test_output(other, listing))
+                        for changed in variants:
+                            path.write_text(changed)
+                            with self.assertRaises(ValueError):
+                                p.foundation_test_output(path, listing, p.MAIN_WORK)
+
+    def test_fixture_cache_tracks_consumed_scheduler_and_parent_cancel_images(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with parent_cancel_fixture(root):
+                expected = {p.TURN_SCHEDULER_PATCH, *(path for path, _ in p.PARENT_CANCEL_BASE_IMAGES.values())}
+                self.assertTrue(expected.issubset(fixture_metadata_paths(p)))
+                original = p.accepted_turn_scheduler
+                with fixture_ancestor_cache(root) as counters:
+                    first = p.accepted_turn_scheduler(root)
+                    before = counters["hits"]
+                    self.assertEqual(p.accepted_turn_scheduler(root), first)
+                    self.assertGreater(counters["hits"], before)
+                self.assertIs(p.accepted_turn_scheduler, original)
+                for name in sorted(expected):
+                    path = root / name; raw = path.read_bytes()
+                    try:
+                        with self.subTest(path=name), self.assertRaisesRegex(ValueError, "immutable inputs changed"):
+                            with fixture_ancestor_cache(root):
+                                p.accepted_turn_scheduler(root)
+                                path.write_bytes(raw + b" ")
+                                p.accepted_turn_scheduler(root)
+                    finally:
+                        path.write_bytes(raw)
+                    self.assertIs(p.accepted_turn_scheduler, original)
+                with fixture_ancestor_cache(root):
+                    p.accepted_turn_scheduler(root)
 
 
 if __name__ == "__main__":

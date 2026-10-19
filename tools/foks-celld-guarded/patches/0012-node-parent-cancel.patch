@@ -1,0 +1,599 @@
+--- a/crates/celld/guarded_node.rs
++++ b/crates/celld/guarded_node.rs
+@@ -3922,14 +3922,23 @@
+     }
+     pub(crate) fn processed(mut self, core: &celld_logic::State) {
+         let result = (|| {
++            // Cleanup remains allowed after forward failure, but the original
++            // foundation slot/generation must still identify this invocation.
++            self.context.check_identity()?;
+             let registry = self.context.registry()?;
+             let record = registry.record(self.context.token)?;
+             let mut wake = None;
+             let mut state = lock_owned(&record.state)?;
+-            let control = &mut state.controls[self.kind.index()];
++            let control = &state.controls[self.kind.index()];
+             if !control.delivered || control.processed || control.request != self.request {
+                 return Err(Refusal::Invalid);
+             }
++            let cancellation = if self.kind == ActorControlKind::Cancel {
++                Some(self.context.prepare_cancel_locked(&record, &mut state)?)
++            } else {
++                None
++            };
++            let control = &mut state.controls[self.kind.index()];
+             control.processed = true;
+             control.delivered = false;
+             if matches!(
+@@ -3964,6 +3973,9 @@
+             drop(record);
+             if let Some(wake) = wake {
+                 wake.wake();
++            }
++            if let Some(cancellation) = cancellation {
++                self.context.complete_cancel(&registry, cancellation)?;
+             }
+             registry.observe_inactive(core);
+             Ok(())
+@@ -4587,6 +4599,7 @@
+         let record = registry.record(self.context.token)?;
+         let mut wake = None;
+         let mut abandon = None;
++        let mut cancellation = None;
+         let mut state = lock_owned(&record.state)?;
+         match (self.operation, effect) {
+             (InlineKind::Complete, Effect::Complete { request, result }) => {
+@@ -4695,13 +4708,7 @@
+                 {
+                     return Err(Refusal::Invalid);
+                 }
+-                state.cancel_requested = true;
+-                state.observation.mark(ObservationEvent::CancelProcessed)?;
+-                state.roots[ForwardLane::Driver as usize].cancel = true;
+-                if let Some(runtime) = &state.runtime {
+-                    runtime.cancel();
+-                }
+-                record.control.fail();
++                cancellation = Some(self.context.prepare_cancel_locked(&record, &mut state)?);
+             }
+             (InlineKind::Abandon, Effect::AbandonEvictionStop { cell, op }) => {
+                 let root = &state.roots[JobRole::Cleanup(CleanupLane::Stop).index()];
+@@ -4721,8 +4728,6 @@
+             }
+             _ => return Err(Refusal::Invalid),
+         }
+-        let cancellation =
+-            (self.operation == InlineKind::Cancel).then(|| record.cancellation.clone());
+         drop(state);
+         drop(record);
+         if let Some(wake) = wake {
+@@ -4732,12 +4737,7 @@
+             abandon.request();
+         }
+         if let Some(cancellation) = cancellation {
+-            cancellation.send_replace(true);
+-            drop(cancellation);
+-            registry
+-                .qualification
+-                .cancel_processed(self.context.qualification_identity(0, None)?)?;
+-            registry.start_cancel_if_needed(&self.context)?;
++            self.context.complete_cancel(&registry, cancellation)?;
+         }
+         self.consumed = true;
+         Ok(())
+@@ -6673,6 +6673,40 @@
+             return Err(Refusal::Invalid);
+         }
+         Ok(snapshot.alarm)
++    }
++}
++
++impl JobContext {
++    // Both callers validate the full original context before taking this lock.
++    // Capture the exact invocation while the record is guarded, before failing
++    // forward admission. A core output gate may still pin the cancelled request.
++    fn prepare_cancel_locked(
++        &self,
++        record: &InvocationRecord,
++        state: &mut InvocationState,
++    ) -> Result<(tokio::sync::watch::Sender<bool>, qualification::Identity), Refusal> {
++        let (identity, _) = self.qualification_snapshot_locked(record, state, 0, None)?;
++        state.observation.mark(ObservationEvent::CancelProcessed)?;
++        state.cancel_requested = true;
++        state.roots[ForwardLane::Driver as usize].cancel = true;
++        if let Some(runtime) = &state.runtime {
++            runtime.cancel();
++        }
++        record.control.fail();
++        Ok((record.cancellation.clone(), identity))
++    }
++    // Watch/qualifier callbacks may re-enter the bank. No record or bank guard
++    // may cross this boundary; notify cancellation before resuming held work.
++    fn complete_cancel(
++        &self,
++        registry: &Arc<OwnedEffectRegistry>,
++        cancellation: (tokio::sync::watch::Sender<bool>, qualification::Identity),
++    ) -> Result<(), Refusal> {
++        let (sender, identity) = cancellation;
++        sender.send_replace(true);
++        drop(sender);
++        registry.qualification.cancel_processed(identity)?;
++        registry.start_cancel_if_needed(self)
+     }
+ }
+ 
+--- a/crates/celld/guarded_node/tests.rs
++++ b/crates/celld/guarded_node/tests.rs
+@@ -7668,3 +7668,472 @@
+         Ok(held)
+     }
+ }
++
++// Component regression for the canonical parent-control completion boundary.
++// The resident core uses the existing component host results. The Driver is a
++// real registered finite task, joined/disposed before this selected qualifier
++// barrier; no resident native Worker, running sync task, or native join is
++// claimed. The original invocation and reserved auxiliary origin remain owned.
++#[test]
++fn b4_parent_cancel_completes_original_invocation() {
++    crate::actor::guarded_test_runtime().block_on(async {
++        let mut fixture = b2_fixture();
++        let mut core = State::new("node", model_config(false));
++        on_event(
++            &mut core,
++            Event::GenerationChanged {
++                generation: 1,
++                now_mono_ms: 0,
++                max_age_ms: 1000,
++                eager_classes: vec![],
++            },
++        );
++        let admission = fixture.begin_core_for_test(0).unwrap();
++        let request = fixture.primary_request(0);
++        let effects = on_event(&mut core, admission.into_event(0));
++        let epoch = activate_from_effects(&mut core, fixture.cell(0), request, 1, effects);
++        let activation = fixture.claim_cas_for_component(0, epoch).unwrap();
++        activation.context().bind_generation(1).unwrap();
++        let completed = Arc::new(Mutex::new(None));
++        let captured = completed.clone();
++        fixture
++            .run_component(
++                0,
++                JobRole::Forward(ForwardLane::Driver),
++                move |context| async move {
++                    let origin = b2_sync_origin(&context, b2_ticket(epoch, 17))?;
++                    *captured.lock().unwrap() = Some((context, origin));
++                    Ok(())
++                },
++            )
++            .await
++            .unwrap();
++        let (driver, origin) = completed.lock().unwrap().take().unwrap();
++        let registry = fixture.registry();
++        let record = registry.record(driver.token).unwrap();
++        {
++            let state = record.state.lock().unwrap();
++            assert!(state.roots[ForwardLane::Driver as usize].disposed());
++            assert!(state.runtime.is_none());
++        }
++        let cancellation = record.cancellation.subscribe();
++        let inline = b2_inline(&fixture, 0);
++        assert!(!*cancellation.borrow());
++        assert!(inline.check_forward().is_ok());
++        let q = &registry.qualification;
++        q.install(25).unwrap();
++        let id = driver.qualification_identity(1, None).unwrap();
++        q.admit(id, driver.original_deadline()).unwrap();
++        assert_eq!(id.root.lane, ForwardLane::Driver as u8);
++        assert_eq!(id.auxiliary_request, fixture.auxiliary_request(0));
++        assert!(b4_process_poll(q, id, 25).is_pending());
++        q.advance(q.entered_for_test(0).unwrap()).unwrap();
++        assert!(b4_process_poll(q, id, 25).is_pending());
++        let target = q.cancel_target().unwrap().unwrap();
++        assert_eq!(target.root, driver.token);
++        let target_record = registry.record(target.root).unwrap();
++        let original = registry
++            .inline_context(&target_record, target.root.slot as usize)
++            .unwrap();
++        registry
++            .schedule_control(&original, ActorControlKind::Cancel, None)
++            .unwrap();
++        let mut cx = Context::from_waker(std::task::Waker::noop());
++        let control = match registry.poll_actor(&mut cx) {
++            Poll::Ready(GuardedActorInput::Control(control)) => control,
++            _ => panic!("scheduled parent cancel must be delivered"),
++        };
++        assert!(matches!(control.kind(), ActorControlKind::Cancel));
++        assert_eq!(control.request(), request);
++        assert!(!*cancellation.borrow());
++        assert!(b4_process_poll(q, id, 25).is_pending());
++        let effects = on_event(
++            &mut core,
++            Event::Cancel {
++                request: control.request(),
++            },
++        );
++        assert!(!effects
++            .iter()
++            .any(|effect| matches!(effect, Effect::CancelCellActivity { .. })));
++        control.processed(&core);
++        // This is the first assertion of cancellation, and the exact expected
++        // baseline failure. Delivery/Advance alone must never satisfy it.
++        assert!(
++            *cancellation.borrow(),
++            "processed parent cancel left original invocation uncancelled"
++        );
++        assert!(inline.check_forward().is_err());
++        {
++            let state = record.state.lock().unwrap();
++            assert!(state.cancel_requested);
++            assert_ne!(
++                state.observation.seen & (1u64 << ObservationEvent::CancelProcessed as usize),
++                0
++            );
++            assert_eq!(
++                state.observation.seen & (1u64 << ObservationEvent::BankFree as usize),
++                0
++            );
++            assert_ne!(state.observation.phase, ObservationPhase::Free as u8);
++        }
++        assert!(Arc::ptr_eq(
++            &registry.record(driver.token).unwrap(),
++            &record
++        ));
++        assert!(matches!(
++            b4_process_poll(q, id, 25),
++            Poll::Ready(Ok(qualification::Action::CanonicalParentCancel))
++        ));
++        let count = q.count().unwrap().0;
++        let continued = serde_json::to_value(q.row(count - 1).unwrap().unwrap()).unwrap();
++        assert_eq!(continued["state"], "continued");
++        assert_eq!(continued["invocation"], id.invocation);
++        assert_eq!(continued["root_sequence"], id.root.sequence);
++        // The unsubmitted component activation and auxiliary origin remain
++        // explicitly retained; dropping them supplies no fabricated Free proof.
++        drop(origin);
++        drop(activation);
++    });
++}
++
++// These helpers retain the Stage A component boundary: real original owners
++// and core transitions, with a finite registered Driver actually joined before
++// cancellation. Live native Driver cleanup is covered by the runtime/process
++// suites, not by pretending a Terminal component result is a native Driver.
++async fn b4_parent_cancel_setup_slot(
++    fixture: &mut lifetimes::ActorFixture,
++    slot: usize,
++    existing: Option<State>,
++) -> (State, ActorJobPermit, JobContext, OwnedGateOrigin) {
++    let mut core = if let Some(core) = existing {
++        core
++    } else {
++        let mut core = State::new("node", model_config(false));
++        on_event(
++            &mut core,
++            Event::GenerationChanged {
++                generation: 1,
++                now_mono_ms: 0,
++                max_age_ms: 1000,
++                eager_classes: vec![],
++            },
++        );
++        core
++    };
++    let admission = fixture.begin_core_for_test(slot).unwrap();
++    let request = fixture.primary_request(slot);
++    let effects = on_event(&mut core, admission.into_event(0));
++    let epoch = activate_from_effects(&mut core, fixture.cell(slot), request, 1, effects);
++    let activation = fixture.claim_cas_for_component(slot, epoch).unwrap();
++    activation.context().bind_generation(1).unwrap();
++    let completed = Arc::new(Mutex::new(None));
++    let captured = completed.clone();
++    fixture
++        .run_component(
++            slot,
++            JobRole::Forward(ForwardLane::Driver),
++            move |context| async move {
++                let origin = b2_sync_origin(&context, b2_ticket(epoch, 17))?;
++                *captured.lock().unwrap() = Some((context, origin));
++                Ok(())
++            },
++        )
++        .await
++        .unwrap();
++    let (driver, origin) = completed.lock().unwrap().take().unwrap();
++    assert!(b2_record(fixture, slot).state.lock().unwrap().roots
++        [ForwardLane::Driver as usize]
++        .disposed());
++    (core, activation, driver, origin)
++}
++fn b4_parent_cancel_hold(
++    fixture: &lifetimes::ActorFixture,
++    driver: &JobContext,
++) -> qualification::Identity {
++    let q = &fixture.registry().qualification;
++    q.install(25).unwrap();
++    let id = driver.qualification_identity(1, None).unwrap();
++    q.admit(id, driver.original_deadline()).unwrap();
++    assert!(b4_process_poll(q, id, 25).is_pending());
++    q.advance(q.entered_for_test(0).unwrap()).unwrap();
++    assert!(b4_process_poll(q, id, 25).is_pending());
++    assert_eq!(q.cancel_target().unwrap().unwrap().root, driver.token);
++    id
++}
++fn b4_parent_cancel_delivered(
++    fixture: &lifetimes::ActorFixture,
++    slot: usize,
++) -> ActorControl {
++    fixture
++        .registry()
++        .schedule_control(&b2_inline(fixture, slot), ActorControlKind::Cancel, None)
++        .unwrap();
++    let mut cx = Context::from_waker(std::task::Waker::noop());
++    match fixture.registry().poll_actor(&mut cx) {
++        Poll::Ready(GuardedActorInput::Control(control)) => {
++            assert!(matches!(control.kind(), ActorControlKind::Cancel));
++            assert_eq!(control.request(), fixture.primary_request(slot));
++            control
++        }
++        _ => panic!("actual scheduled parent cancel must be delivered"),
++    }
++}
++fn b4_parent_cancel_core(core: &mut State, control: &ActorControl) {
++    let effects = on_event(core, Event::Cancel { request: control.request() });
++    assert!(!effects
++        .iter()
++        .any(|effect| matches!(effect, Effect::CancelCellActivity { .. })));
++}
++fn b4_parent_cancel_seen(record: &InvocationRecord) -> bool {
++    record.state.lock().unwrap().observation.seen
++        & (1u64 << ObservationEvent::CancelProcessed as usize)
++        != 0
++}
++
++#[test]
++fn b4_parent_cancel_completes_gate_pinned_request() {
++    crate::actor::guarded_test_runtime().block_on(async {
++        let mut fixture = b2_fixture();
++        let (mut core, _activation, driver, _origin) =
++            b4_parent_cancel_setup_slot(&mut fixture, 0, None).await;
++        let record = b2_record(&fixture, 0);
++        let watch = record.cancellation.subscribe();
++        let request = fixture.primary_request(0);
++        let proof = hold_output(&mut core, request, driver.epoch().unwrap());
++        assert!(proof > 0);
++        let id = b4_parent_cancel_hold(&fixture, &driver);
++        let control = b4_parent_cancel_delivered(&fixture, 0);
++        b4_parent_cancel_core(&mut core, &control);
++        assert!(!core.request_inactive(request), "real output gate must retain the request");
++        control.processed(&core);
++        assert!(*watch.borrow());
++        assert!(b2_inline(&fixture, 0).check_forward().is_err());
++        assert!(b4_parent_cancel_seen(&record));
++        assert!(!core.request_inactive(request));
++        assert!(core.validate().is_ok());
++        assert!(matches!(
++            b4_process_poll(&fixture.registry().qualification, id, 25),
++            Poll::Ready(Ok(qualification::Action::CanonicalParentCancel))
++        ));
++        assert_eq!(record.state.lock().unwrap().observation.seen
++            & ((1u64 << ObservationEvent::PrimaryDurableSuccess as usize)
++                | (1u64 << ObservationEvent::BankFree as usize)), 0);
++        // No durable/ownership event, ActivityFinished, or unpin is fabricated.
++    });
++}
++
++#[test]
++fn b4_parent_and_inline_cancel_are_idempotent() {
++    crate::actor::guarded_test_runtime().block_on(async {
++        let mut fixture = b2_fixture();
++        let (mut core, _activation, _driver, _origin) =
++            b4_parent_cancel_setup_slot(&mut fixture, 0, None).await;
++        let record = b2_record(&fixture, 0);
++        let watch = record.cancellation.subscribe();
++        let control = b4_parent_cancel_delivered(&fixture, 0);
++        b4_parent_cancel_core(&mut core, &control);
++        control.processed(&core);
++        assert!(*watch.borrow() && b4_parent_cancel_seen(&record));
++        let before = {
++            let owner = record.owner.lock().unwrap();
++            owner
++                .as_ref()
++                .expect("retained original invocation owner")
++                .observation()
++                .unwrap()
++        };
++        let (ordinal, seen, tail, cleanup_sequence) = {
++            let state = record.state.lock().unwrap();
++            let cleanup = &state.roots[JobRole::Cleanup(CleanupLane::Cancel).index()];
++            assert!(cleanup.state == RootState::Empty);
++            assert!(state.controls[ActorControlKind::Cancel.index()].charged);
++            (state.observation.ordinal, state.observation.seen,
++                state.observation.tail, cleanup.sequence)
++        };
++        fixture.cancel(0).unwrap();
++        let mut cx = Context::from_waker(std::task::Waker::noop());
++        assert!(fixture.registry().poll_actor(&mut cx).is_pending());
++        let effects = on_event(&mut core, Event::ReleaseAll);
++        let mut delivered = 0;
++        for effect in effects {
++            if matches!(effect, Effect::CancelCellActivity { .. }) {
++                match fixture.registry().claim_actor(&effect) {
++                    ActorClaim::Inline(permit) => permit.deliver(effect).unwrap(),
++                    _ => panic!("actual release cancellation must retain its original owner"),
++                }
++                delivered += 1;
++            }
++        }
++        assert_eq!(delivered, 1);
++        let after = {
++            let owner = record.owner.lock().unwrap();
++            owner
++                .as_ref()
++                .expect("retained original invocation owner")
++                .observation()
++                .unwrap()
++        };
++        assert_eq!(before.cleanup_tasks_used, after.cleanup_tasks_used);
++        assert_eq!(before.cleanup_controls_used, after.cleanup_controls_used);
++        assert_eq!(before.debt, after.debt);
++        let state = record.state.lock().unwrap();
++        let cleanup = &state.roots[JobRole::Cleanup(CleanupLane::Cancel).index()];
++        assert!(cleanup.state == RootState::Empty);
++        assert_eq!(cleanup.sequence, cleanup_sequence);
++        assert_eq!(state.observation.ordinal, ordinal);
++        assert_eq!(state.observation.seen, seen);
++        assert_eq!(state.observation.tail, tail);
++        assert!(state.controls[ActorControlKind::Cancel.index()].processed);
++        assert!(!state.controls[ActorControlKind::Cancel.index()].pending);
++        assert!(!state.controls[ActorControlKind::Cancel.index()].delivered);
++        // The real finite Driver was already disposed, so no C7 task is needed.
++        // This proves no new credit/root here, not native live-driver disposal.
++    });
++}
++
++#[test]
++fn b4_parent_cancel_rejects_invalid_delivery_identity() {
++    crate::actor::guarded_test_runtime().block_on(async {
++        for field in 0..9 {
++            let mut fixture = b2_fixture();
++            let (mut core, _activation, driver, _origin) =
++                b4_parent_cancel_setup_slot(&mut fixture, 0, None).await;
++            let record = b2_record(&fixture, 0);
++            let foreign = b2_record(&fixture, 1);
++            let watch = record.cancellation.subscribe();
++            let foreign_watch = foreign.cancellation.subscribe();
++            let id = b4_parent_cancel_hold(&fixture, &driver);
++            let mut control = b4_parent_cancel_delivered(&fixture, 0);
++            b4_parent_cancel_core(&mut core, &control);
++            match field {
++                0 => control.request += 1,
++                1 => control.context.request += 1,
++                2 => control.context.deadline += Duration::from_millis(1),
++                3 => control.context.control = b2_inline(&fixture, 1).control,
++                4 => control.context.token.invocation += 1,
++                5 => control.context.token.slot = 1,
++                6 => record.state.lock().unwrap().controls[0].delivered = false,
++                7 => record.state.lock().unwrap().controls[0].processed = true,
++                8 => control.context.cell = fixture.cell(1),
++                _ => unreachable!(),
++            }
++            control.processed(&core);
++            assert!(!*watch.borrow(), "invalid field {field} cancelled the original");
++            assert!(!*foreign_watch.borrow());
++            assert!(!b4_parent_cancel_seen(&record));
++            assert!(!b4_parent_cancel_seen(&foreign));
++            assert!(b4_process_poll(&fixture.registry().qualification, id, 25).is_pending());
++            assert!(Arc::ptr_eq(&b2_record(&fixture, 0), &record));
++            assert!(Arc::ptr_eq(&b2_record(&fixture, 1), &foreign));
++            for retained in [&record, &foreign] {
++                let state = retained.state.lock().unwrap();
++                assert_eq!(state.observation.seen
++                    & ((1u64 << ObservationEvent::BankFree as usize)
++                        | (1u64 << ObservationEvent::PublicGuardDropped as usize)), 0);
++                assert_ne!(state.observation.phase, ObservationPhase::Free as u8);
++            }
++            // A forged presented owner can itself be failed by context.fail().
++            // It must not receive cancellation/watch/qualifier or release credit.
++        }
++    });
++}
++
++#[test]
++fn b4_parent_cancel_isolates_original_invocations() {
++    crate::actor::guarded_test_runtime().block_on(async {
++        let mut fixture = b2_fixture();
++        let (first_core, _first_activation, driver, _first_origin) =
++            b4_parent_cancel_setup_slot(&mut fixture, 0, None).await;
++        // Both original invocations use the same real actor core. A separate
++        // core would incorrectly classify the other request as inactive.
++        let (mut core, _second_activation, second_driver, _second_origin) =
++            b4_parent_cancel_setup_slot(&mut fixture, 1, Some(first_core)).await;
++        let first = b2_record(&fixture, 0);
++        let second = b2_record(&fixture, 1);
++        let first_watch = first.cancellation.subscribe();
++        let second_watch = second.cancellation.subscribe();
++        let second_id = second_driver.qualification_identity(1, None).unwrap();
++        let before = serde_json::to_value(second.state.lock().unwrap().observation).unwrap();
++        let id = b4_parent_cancel_hold(&fixture, &driver);
++        let control = b4_parent_cancel_delivered(&fixture, 0);
++        b4_parent_cancel_core(&mut core, &control);
++        control.processed(&core);
++        assert!(*first_watch.borrow());
++        assert!(b4_parent_cancel_seen(&first));
++        assert!(!*second_watch.borrow());
++        assert!(!b4_parent_cancel_seen(&second));
++        assert!(b2_inline(&fixture, 1).check_forward().is_ok());
++        assert!(!core.request_inactive(fixture.primary_request(1)));
++        assert_eq!(second_driver.qualification_identity(1, None).unwrap().root, second_id.root);
++        assert_eq!(serde_json::to_value(second.state.lock().unwrap().observation).unwrap(), before);
++        assert!(matches!(
++            b4_process_poll(&fixture.registry().qualification, id, 25),
++            Poll::Ready(Ok(qualification::Action::CanonicalParentCancel))
++        ));
++    });
++}
++
++#[test]
++fn b4_parent_cancel_notifies_after_unlock() {
++    crate::actor::guarded_test_runtime().block_on(async {
++        let mut fixture = b2_fixture();
++        let (mut core, _activation, driver, _origin) =
++            b4_parent_cancel_setup_slot(&mut fixture, 0, None).await;
++        let registry = fixture.registry();
++        let record = b2_record(&fixture, 0);
++        let id = b4_parent_cancel_hold(&fixture, &driver);
++        let control = b4_parent_cancel_delivered(&fixture, 0);
++        struct CancelNotice {
++            registry: Arc<OwnedEffectRegistry>,
++            record: Arc<InvocationRecord>,
++            observed: AtomicBool,
++            valid: AtomicBool,
++        }
++        impl std::task::Wake for CancelNotice {
++            fn wake(self: Arc<Self>) { self.wake_by_ref(); }
++            fn wake_by_ref(self: &Arc<Self>) {
++                let watch = *self.record.cancellation.borrow();
++                let record_unlocked = match self.record.state.try_lock() {
++                    Ok(state) => state.cancel_requested && state.controls[0].processed,
++                    Err(_) => false,
++                };
++                let bank_unlocked = self.registry.bank.try_lock().is_ok();
++                let qualifier_unlocked = self.registry.qualification.case_id() == Some(25);
++                self.valid.fetch_and(watch && record_unlocked && bank_unlocked && qualifier_unlocked,
++                    Ordering::SeqCst);
++                self.observed.store(true, Ordering::SeqCst);
++            }
++        }
++        let make_notice = || Arc::new(CancelNotice {
++            registry: registry.clone(), record: record.clone(),
++            observed: AtomicBool::new(false), valid: AtomicBool::new(true),
++        });
++        let watch_notice = make_notice();
++        let qualifier_notice = make_notice();
++        let mut watch = record.cancellation.subscribe();
++        let mut changed = std::pin::pin!(watch.changed());
++        let watch_waker = Waker::from(watch_notice.clone());
++        let mut watch_cx = Context::from_waker(&watch_waker);
++        assert!(changed.as_mut().poll(&mut watch_cx).is_pending());
++        let qualifier_waker = Waker::from(qualifier_notice.clone());
++        let mut qualifier_cx = Context::from_waker(&qualifier_waker);
++        assert!(registry.qualification.poll(id, 5, 0, &mut qualifier_cx).is_pending());
++        assert!(!watch_notice.observed.load(Ordering::SeqCst));
++        assert!(!qualifier_notice.observed.load(Ordering::SeqCst));
++        b4_parent_cancel_core(&mut core, &control);
++        control.processed(&core);
++        assert!(watch_notice.observed.load(Ordering::SeqCst));
++        assert!(watch_notice.valid.load(Ordering::SeqCst));
++        assert!(qualifier_notice.observed.load(Ordering::SeqCst));
++        assert!(qualifier_notice.valid.load(Ordering::SeqCst));
++        assert!(matches!(changed.as_mut().poll(&mut watch_cx), Poll::Ready(Ok(()))));
++        assert!(matches!(
++            registry.qualification.poll(id, 5, 0, &mut qualifier_cx),
++            Poll::Ready(Ok(qualification::Action::CanonicalParentCancel))
++        ));
++        assert_eq!(record.state.lock().unwrap().observation.seen
++            & ((1u64 << ObservationEvent::BankFree as usize)
++                | (1u64 << ObservationEvent::PublicGuardDropped as usize)), 0);
++    });
++}

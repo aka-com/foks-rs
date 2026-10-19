@@ -10,6 +10,7 @@
   "accepted_b4_p1_commit": "66090566c0ffcccc12e2d1c2bc9917f2f84019c4",
   "accepted_b4_p2_commit": "2e226249358568bd136796775378dd7cd8100651",
   "accepted_b4_qualifier_contention_commit": "9baecfa4b6fd487a65c3c56a1d858412f44a0d4d",
+  "accepted_b4_turn_scheduler_commit": "47a505e9e56e7f32bfe2d9b92498f6fb3c0c634d",
   "base": {
     "background_retirement_assets": {
       "bytes": 1069,
@@ -190,6 +191,26 @@
       "bytes": 70180,
       "path": "runtime/evidence/accepted-a3a/prepared-inputs/source-manifest.json",
       "sha256": "0b618d7be50b44d5a8eeecbbab851ef0e3c3c9b2de64c5e33afbc6f9259489c5"
+    },
+    "turn_scheduler_assets": {
+      "bytes": 1069,
+      "path": "runtime/evidence/accepted-b4-turn-scheduler-parent-cancel-base/assets-node-main-work.json",
+      "sha256": "00165b4997652df4d2dadfbf92defe323024df2c4aad9427ec41ee351c4e3fa2"
+    },
+    "turn_scheduler_profile": {
+      "bytes": 104192,
+      "path": "runtime/evidence/accepted-b4-turn-scheduler-parent-cancel-base/runtime-node.lock.json",
+      "sha256": "fcb00664b952adf0d6e026fa97c54debde6040fde8c03c9e08036c77fc832772"
+    },
+    "turn_scheduler_series": {
+      "bytes": 52401,
+      "path": "runtime/evidence/accepted-b4-turn-scheduler-parent-cancel-base/patches/node-series.json",
+      "sha256": "4550e7bd911691d5c0c7d50acdb782aa0e42cd3aaa819f18ac0f3387ad919d35"
+    },
+    "turn_scheduler_source_manifest": {
+      "bytes": 72055,
+      "path": "runtime/evidence/accepted-b4-turn-scheduler-parent-cancel-base/source-manifest.json",
+      "sha256": "ba4dae940c2a6476363e7eca007af6dfea8927a6cc1aff6600b0f3b8cda742fa"
     }
   },
   "cargo_lock": {
@@ -216,9 +237,9 @@
   },
   "format": 1,
   "node_series": {
-    "bytes": 52401,
+    "bytes": 53766,
     "path": "patches/node-series.json",
-    "sha256": "4550e7bd911691d5c0c7d50acdb782aa0e42cd3aaa819f18ac0f3387ad919d35"
+    "sha256": "eb989fd6c8725a418fc6b42d87390969a1671ded83e5d563d0195800ff6ab0da"
   },
   "pins": {
     "build": {
@@ -393,7 +414,7 @@
   },
   "profile": "node-main-work",
   "qualification": {
-    "claim": "b4-main-work-turn-scheduler-components-only",
+    "claim": "b4-main-work-parent-cancel-components-only",
     "control_retirement": {
       "native_test_extensions": [
         "guarded_execution::node::tests::b1_last_strong_and_registry_retirement_hold_role",
@@ -3150,7 +3171,8 @@
       "revision": 2
     },
     "source_roster": [
-      "crates/celld/pool.rs"
+      "crates/celld/guarded_node.rs",
+      "crates/celld/guarded_node/tests.rs"
     ],
     "tests": {
       "names": [
@@ -3276,15 +3298,21 @@
         "guarded_execution::node::tests::b4_process_binding_zero_generation_before_pin",
         "guarded_execution::node::tests::b4_process_binding_missing_required_generation",
         "guarded_execution::node::tests::b4_process_binding_drained_generation_state_and_selector",
-        "guarded_execution::node::tests::b4_process_process_layouts_and_stream_caps"
+        "guarded_execution::node::tests::b4_process_process_layouts_and_stream_caps",
+        "guarded_execution::node::tests::b4_parent_cancel_completes_original_invocation",
+        "guarded_execution::node::tests::b4_parent_cancel_completes_gate_pinned_request",
+        "guarded_execution::node::tests::b4_parent_and_inline_cancel_are_idempotent",
+        "guarded_execution::node::tests::b4_parent_cancel_rejects_invalid_delivery_identity",
+        "guarded_execution::node::tests::b4_parent_cancel_isolates_original_invocations",
+        "guarded_execution::node::tests::b4_parent_cancel_notifies_after_unlock"
       ],
       "prefix": "guarded_execution::node::tests::",
       "threads": 1
     },
     "tree": {
       "files": 289,
-      "inventory_sha256": "b47ac7390a968fe478552af115bce681f8e7cc25f43412daf00f6f2583566a4e",
-      "payload_bytes": 7658052
+      "inventory_sha256": "f2ffb72d4cc6cdfddf9cf5a890f23b03abdc7831b3c2ef13ed54c488fd74d0d6",
+      "payload_bytes": 7681568
     },
     "turn_scheduler": {
       "binary": "same-verified-celld-library-artifact",

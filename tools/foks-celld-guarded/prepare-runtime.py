@@ -349,6 +349,18 @@ TURN_SCHEDULER_POLICY = {
 # This is NOT derived from a candidate's self-declared descriptor.
 MAXIMUM_TURN_SCHEDULER_PATCHES = 1634993
 
+# The accepted eleven-patch scheduler profile remains a strict predecessor.
+PARENT_CANCEL_BASE = '47a505e9e56e7f32bfe2d9b92498f6fb3c0c634d'
+PARENT_CANCEL_PATCH = 'patches/0012-node-parent-cancel.patch'
+PARENT_CANCEL_PROFILE = 'runtime/evidence/accepted-b4-turn-scheduler-parent-cancel-base/runtime-node.lock.json'
+PARENT_CANCEL_SERIES = 'runtime/evidence/accepted-b4-turn-scheduler-parent-cancel-base/patches/node-series.json'
+PARENT_CANCEL_MANIFEST = 'runtime/evidence/accepted-b4-turn-scheduler-parent-cancel-base/source-manifest.json'
+PARENT_CANCEL_ASSETS = 'runtime/evidence/accepted-b4-turn-scheduler-parent-cancel-base/assets-node-main-work.json'
+PARENT_CANCEL_BASE_IMAGES = {'turn_scheduler_profile': ('runtime/evidence/accepted-b4-turn-scheduler-parent-cancel-base/runtime-node.lock.json', 'fcb00664b952adf0d6e026fa97c54debde6040fde8c03c9e08036c77fc832772'), 'turn_scheduler_series': ('runtime/evidence/accepted-b4-turn-scheduler-parent-cancel-base/patches/node-series.json', '4550e7bd911691d5c0c7d50acdb782aa0e42cd3aaa819f18ac0f3387ad919d35'), 'turn_scheduler_source_manifest': ('runtime/evidence/accepted-b4-turn-scheduler-parent-cancel-base/source-manifest.json', 'ba4dae940c2a6476363e7eca007af6dfea8927a6cc1aff6600b0f3b8cda742fa'), 'turn_scheduler_assets': ('runtime/evidence/accepted-b4-turn-scheduler-parent-cancel-base/assets-node-main-work.json', '00165b4997652df4d2dadfbf92defe323024df2c4aad9427ec41ee351c4e3fa2')}
+PARENT_CANCEL_PATHS = ('crates/celld/guarded_node.rs', 'crates/celld/guarded_node/tests.rs')
+# Exact reviewed eleven-patch payload plus the 27,740-byte cancellation patch.
+MAXIMUM_PARENT_CANCEL_PATCHES = 1662733
+
 MAIN_WORK_BIN_TEST = MAIN_WORK + "-bin-test"
 MAIN_WORK_BIN_TESTS = ["guarded::tests::guarded_reload_main_work_fits_qualified_fixture"]
 MAIN_WORK_POLICY = {
@@ -439,6 +451,16 @@ PROCESS_TESTS = OBSERVATIONS_TESTS + [FRONTEND_TEST_PREFIX + name for name in ('
  'b4_process_binding_missing_required_generation',
  'b4_process_binding_drained_generation_state_and_selector',
  'b4_process_process_layouts_and_stream_caps')]
+# Current main-work alone extends the immutable historical process roster.
+PARENT_CANCEL_TESTS = [FRONTEND_TEST_PREFIX + name for name in (
+    'b4_parent_cancel_completes_original_invocation',
+    'b4_parent_cancel_completes_gate_pinned_request',
+    'b4_parent_and_inline_cancel_are_idempotent',
+    'b4_parent_cancel_rejects_invalid_delivery_identity',
+    'b4_parent_cancel_isolates_original_invocations',
+    'b4_parent_cancel_notifies_after_unlock',
+)]
+MAIN_WORK_TESTS = PROCESS_TESTS + PARENT_CANCEL_TESTS
 PROCESS_CONTRACT = {'advance_reply': {'bytes': 32,
                    'exact_echo': ['tenant', 'checkpoint', 'invocation', 'control_ordinal', 'case'],
                    'magic': 'FOKSGA02',
@@ -2976,8 +2998,8 @@ def accepted_background_retirement(root):
     return load_retirement_diagnostics_predecessor(root, load_pins(root), TURN_SCHEDULER_PROFILE, TURN_SCHEDULER_SERIES)
 
 
-def load_main_work(root, base):
-    profile = read_json(root / FOUNDATION_PROFILE)
+def load_turn_scheduler_predecessor(root, base, profile_path=FOUNDATION_PROFILE, series_path=FOUNDATION_SERIES):
+    profile = read_json(root / profile_path)
     require_turn_scheduler_revision(profile)
     accepted = accepted_background_retirement(root)
     closed_fields(profile, (*accepted, "accepted_b4_background_retirement_commit"), "turn-scheduler profile")
@@ -3005,15 +3027,15 @@ def load_main_work(root, base):
     closed_fields(tree, ("files", "payload_bytes", "inventory_sha256"), "turn-scheduler tree")
     if type(tree["files"]) is not int or tree["files"] != accepted["qualification"]["tree"]["files"] or type(tree["payload_bytes"]) is not int or not 0 < tree["payload_bytes"] <= MAXIMUM_FOUNDATION_SOURCE or not isinstance(tree["inventory_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", tree["inventory_sha256"]):
         fail("invalid turn-scheduler tree envelope")
-    main_work_series(root, profile, accepted)
+    turn_scheduler_predecessor_series(root, profile, accepted, series_path)
     return profile
 
 
-def main_work_series(root, profile, accepted=None):
+def turn_scheduler_predecessor_series(root, profile, accepted=None, series_path=FOUNDATION_SERIES):
     require_turn_scheduler_revision(profile)
     accepted = accepted_background_retirement(root) if accepted is None else accepted
-    checked_file(root / FOUNDATION_SERIES, profile["node_series"])
-    series = read_json(root / FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    checked_file(root / series_path, profile["node_series"])
+    series = read_json(root / series_path, MAXIMUM_FOUNDATION_SERIES)
     prefix = retirement_diagnostics_predecessor_series(root, accepted, series_path=TURN_SCHEDULER_SERIES)
     closed_fields(series, (*prefix, "accepted_b4_background_retirement_commit"), "turn-scheduler series")
     identity = {name: value for name, value in prefix.items() if name != "patches"}
@@ -3045,6 +3067,95 @@ def main_work_series(root, profile, accepted=None):
     validate_image(entry["after"])
     exact_json(entry["before"], {name: original[path][name] for name in ("bytes", "sha256", "git_sha1")}, "turn-scheduler accepted ten-patch preimage")
     checked_file(root / TURN_SCHEDULER_PATCH, selected)
+    return series
+
+
+def require_parent_cancel_revision(profile):
+    require_turn_scheduler_revision(profile)
+    if profile.get("accepted_b4_turn_scheduler_commit") != PARENT_CANCEL_BASE:
+        fail("canonical main-work requires the parent-cancel revision")
+    qualification = profile["qualification"]
+    exact_json({name: qualification.get(name) for name in ("claim", "source_roster", "tests")}, {
+        "claim": "b4-main-work-parent-cancel-components-only",
+        "source_roster": list(PARENT_CANCEL_PATHS),
+        "tests": {"prefix": FRONTEND_TEST_PREFIX, "names": MAIN_WORK_TESTS, "threads": 1},
+    }, "parent-cancel scope and test inventory")
+
+
+def accepted_turn_scheduler(root):
+    for path, checksum in PARENT_CANCEL_BASE_IMAGES.values():
+        if file_hash(root / path) != checksum:
+            fail("accepted eleven-patch turn-scheduler image changed")
+    return load_turn_scheduler_predecessor(root, load_pins(root), PARENT_CANCEL_PROFILE, PARENT_CANCEL_SERIES)
+
+
+def load_main_work(root, base):
+    profile = read_json(root / FOUNDATION_PROFILE)
+    require_parent_cancel_revision(profile)
+    accepted = accepted_turn_scheduler(root)
+    closed_fields(profile, (*accepted, "accepted_b4_turn_scheduler_commit"), "parent-cancel profile")
+    identity = {name: value for name, value in accepted.items() if name.startswith("accepted_")}
+    identity.update(format=1, profile=MAIN_WORK, target=TARGET, accepted_b4_turn_scheduler_commit=PARENT_CANCEL_BASE)
+    exact_json({name: profile[name] for name in identity}, identity, "parent-cancel identity")
+    closed_fields(profile["base"], (*accepted["base"], *PARENT_CANCEL_BASE_IMAGES), "parent-cancel base")
+    exact_json({name: profile["base"][name] for name in accepted["base"]}, accepted["base"], "parent-cancel historical base")
+    for name, (path, checksum) in PARENT_CANCEL_BASE_IMAGES.items():
+        entry = profile["base"][name]
+        foundation_image(entry, path)
+        if entry["sha256"] != checksum:
+            fail("parent-cancel accepted base changed")
+        checked_file(root / path, entry)
+    exact_json(profile["pins"], base, "parent-cancel inherited pins")
+    exact_json(profile["cargo_lock"], accepted["cargo_lock"], "parent-cancel unchanged lock")
+    checked_file(root / "Cargo.lock", profile["cargo_lock"]["expected"])
+    foundation_image(profile["node_series"], FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    qualification = profile["qualification"]
+    closed_fields(qualification, accepted["qualification"], "parent-cancel qualification")
+    changed = {"claim", "source_roster", "tree", "tests"}
+    exact_json({name: qualification[name] for name in accepted["qualification"] if name not in changed}, {name: value for name, value in accepted["qualification"].items() if name not in changed}, "parent-cancel unchanged policies")
+    tree = qualification["tree"]
+    closed_fields(tree, ("files", "payload_bytes", "inventory_sha256"), "parent-cancel tree")
+    if type(tree["files"]) is not int or tree["files"] != accepted["qualification"]["tree"]["files"] or type(tree["payload_bytes"]) is not int or not 0 < tree["payload_bytes"] <= MAXIMUM_FOUNDATION_SOURCE or not isinstance(tree["inventory_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", tree["inventory_sha256"]):
+        fail("invalid parent-cancel tree envelope")
+    main_work_series(root, profile, accepted)
+    return profile
+
+
+def main_work_series(root, profile, accepted=None):
+    require_parent_cancel_revision(profile)
+    accepted = accepted_turn_scheduler(root) if accepted is None else accepted
+    checked_file(root / FOUNDATION_SERIES, profile["node_series"])
+    series = read_json(root / FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    prefix = turn_scheduler_predecessor_series(root, accepted, series_path=PARENT_CANCEL_SERIES)
+    closed_fields(series, (*prefix, "accepted_b4_turn_scheduler_commit"), "parent-cancel series")
+    identity = {name: value for name, value in prefix.items() if name != "patches"}
+    identity.update(accepted_b4_turn_scheduler_commit=PARENT_CANCEL_BASE)
+    exact_json({name: series[name] for name in identity}, identity, "parent-cancel series identity")
+    patches = series["patches"]
+    if not isinstance(patches, list) or len(patches) != 12:
+        fail("parent-cancel requires exactly twelve patches")
+    exact_json(patches[:11], prefix["patches"], "parent-cancel immutable eleven-patch prefix")
+    selected = patches[11]
+    closed_fields(selected, ("path", "bytes", "sha256", "files"), "parent-cancel twelfth patch")
+    foundation_image({name: selected[name] for name in ("path", "bytes", "sha256")}, PARENT_CANCEL_PATCH, MAXIMUM_FOUNDATION_PATCH)
+    # The predecessor above retains its independently enforced scheduler cap.
+    if type(MAXIMUM_PARENT_CANCEL_PATCHES) is not int or sum(entry["bytes"] for entry in patches) > MAXIMUM_PARENT_CANCEL_PATCHES:
+        fail("parent-cancel combined patch payload exceeds reviewed successor envelope")
+    files = selected["files"]
+    if not isinstance(files, list) or len(files) != len(PARENT_CANCEL_PATHS):
+        fail("invalid parent-cancel twelfth-patch roster")
+    manifest = read_json(root / PARENT_CANCEL_MANIFEST)
+    original = {row["path"]: row for row in manifest["files"]}
+    if len(original) != len(manifest["files"]) or len(original) != accepted["qualification"]["tree"]["files"]:
+        fail("invalid accepted turn-scheduler source inventory")
+    for path, entry in zip(PARENT_CANCEL_PATHS, files, strict=True):
+        closed_fields(entry, ("path", "mode", "before", "after"), "parent-cancel twelfth-patch file")
+        if entry["path"] != path or entry["mode"] != "100644" or path not in original:
+            fail("parent-cancel twelfth-patch path/order/mode changed")
+        validate_image(entry["before"])
+        validate_image(entry["after"])
+        exact_json(entry["before"], {name: original[path][name] for name in ("bytes", "sha256", "git_sha1")}, "parent-cancel accepted eleven-patch preimage")
+    checked_file(root / PARENT_CANCEL_PATCH, selected)
     return series
 
 
@@ -4911,7 +5022,7 @@ def main_work_test_output(path, listing):
 def foundation_test_output(path, listing, stage=FOUNDATION):
     if stage not in NODE_STAGES:
         fail("unsupported component test stage")
-    expected = {FOUNDATION: FOUNDATION_TESTS, LIFETIMES: LIFETIMES_TESTS, FRONTEND: FRONTEND_TESTS, OBSERVATIONS: OBSERVATIONS_TESTS, PROCESS: PROCESS_TESTS, MAIN_WORK: PROCESS_TESTS}[stage]
+    expected = {FOUNDATION: FOUNDATION_TESTS, LIFETIMES: LIFETIMES_TESTS, FRONTEND: FRONTEND_TESTS, OBSERVATIONS: OBSERVATIONS_TESTS, PROCESS: PROCESS_TESTS, MAIN_WORK: MAIN_WORK_TESTS}[stage]
     return component_test_output(path, listing, expected)
 
 
@@ -5407,7 +5518,7 @@ def build_foundation(graph_directory, root, mode):
                     receipt["probes"][name] = {"command": command, "output": foundation_probe_output(directory, name, mode)}
                     checked_file(binary, receipt["binary"])
                 if mode == stage:
-                    focused = {"prefix": FOUNDATION_TEST_PREFIX if stage == FOUNDATION else LIFETIMES_TEST_PREFIX, "names": {FOUNDATION: FOUNDATION_TESTS, LIFETIMES: LIFETIMES_TESTS, FRONTEND: FRONTEND_TESTS, OBSERVATIONS: OBSERVATIONS_TESTS, PROCESS: PROCESS_TESTS, MAIN_WORK: PROCESS_TESTS}[stage], "threads": 1}
+                    focused = {"prefix": FOUNDATION_TEST_PREFIX if stage == FOUNDATION else LIFETIMES_TEST_PREFIX, "names": {FOUNDATION: FOUNDATION_TESTS, LIFETIMES: LIFETIMES_TESTS, FRONTEND: FRONTEND_TESTS, OBSERVATIONS: OBSERVATIONS_TESTS, PROCESS: PROCESS_TESTS, MAIN_WORK: MAIN_WORK_TESTS}[stage], "threads": 1}
                     receipt["focused_tests"] = focused
                     if stage in (FRONTEND, OBSERVATIONS, PROCESS, MAIN_WORK):
                         run_frontend_components(focused, root, toolchain, pins, graph, environment, directory, slot)
