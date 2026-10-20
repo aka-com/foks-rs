@@ -10,9 +10,9 @@ use std::path::PathBuf;
 use clap::Parser as _;
 use foks_agent_client::AgentClient;
 use foks_agent_proto::{
-    AccountStoreRef, CredentialBackend, FederationRole, KvEntryMetadata, KvRole, KvStoreRef,
-    KvUploadHeader, Operation, ProfileProtocol, ProfileTrust, ResponseResult, SecretString,
-    TeamKind, TeamRole, TeamStoreRef, YubiRetryConfiguration,
+    AccountStoreRef, CredentialBackend, DeadlineClass, FederationRole, KvEntryMetadata, KvRole,
+    KvStoreRef, KvUploadHeader, Operation, ProfileProtocol, ProfileTrust, ResponseResult,
+    SecretString, TeamKind, TeamRole, TeamStoreRef, YubiRetryConfiguration,
 };
 use foks_desktop::ops::groups::{self, LocalTeam};
 use foks_desktop::ops::{self, accounts};
@@ -497,12 +497,6 @@ fn main() {
 
 fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     let started = std::time::Instant::now();
-    let original = started
-        .checked_add(std::time::Duration::from_secs(
-            arguments.request_timeout_seconds,
-        ))
-        .ok_or("invalid request deadline")?;
-    let deadline = foks_local_deadline::Deadline::capture(original)?;
     struct PendingCall(Option<BackendCall>);
     impl Drop for PendingCall {
         fn drop(&mut self) {
@@ -512,10 +506,13 @@ fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let mut call = PendingCall(Some(backend_call_for_command(arguments.command)?));
+    let (budget, deadline) = call_deadline(
+        started,
+        std::time::Duration::from_secs(arguments.request_timeout_seconds),
+        call.0.as_ref().expect("owned backend call"),
+    )?;
     let mut client = AgentClient::new(arguments.agent_socket);
-    client.set_timeout(std::time::Duration::from_secs(
-        arguments.request_timeout_seconds,
-    ))?;
+    client.set_timeout(budget)?;
     let client = client.with_local_deadline(deadline.clone())?;
     let response = match call.0.take().expect("owned backend call") {
         BackendCall::Operation(operation) => client.call(operation)?,
@@ -556,6 +553,35 @@ enum BackendCall {
         header: KvUploadHeader,
         source: File,
     },
+}
+impl BackendCall {
+    fn deadline_class(&self) -> DeadlineClass {
+        match self {
+            Self::Operation(operation) => operation.deadline_class(),
+            Self::Upload { .. } => DeadlineClass::Bulk,
+        }
+    }
+}
+
+/// The budget and process deadline of one backend command, both counted
+/// from `started`. `--request-timeout-seconds` can only lower the 15 s cap
+/// of an ordinary request; a pairing, bulk or chat-poll request has the cap
+/// of its class, as the Tauri desktop derives it. The agent client caps
+/// every call at its class cap in any case.
+fn call_deadline(
+    started: std::time::Instant,
+    request_timeout: std::time::Duration,
+    call: &BackendCall,
+) -> Result<(std::time::Duration, foks_local_deadline::Deadline), Box<dyn std::error::Error>> {
+    let class = call.deadline_class();
+    let budget = match class {
+        DeadlineClass::Ordinary => request_timeout.min(class.cap()),
+        DeadlineClass::Pairing | DeadlineClass::Bulk | DeadlineClass::ChatPoll => class.cap(),
+    };
+    let original = started
+        .checked_add(budget)
+        .ok_or("invalid request deadline")?;
+    Ok((budget, foks_local_deadline::Deadline::capture(original)?))
 }
 
 fn parse_dirent_id(value: &str) -> Result<[u8; 16], Box<dyn std::error::Error>> {
@@ -1499,6 +1525,49 @@ mod tests {
     use std::os::unix::fs::{symlink, PermissionsExt as _};
 
     use super::*;
+
+    /// The request timeout bounds ordinary commands only. A pairing command
+    /// keeps the five-minute pairing budget, which the agent needs to leave
+    /// its completion margin after the relay waits.
+    #[test]
+    fn pairing_commands_keep_their_class_budget_under_the_request_timeout() {
+        let directory = tempfile::tempdir().unwrap();
+        let phrase = directory.path().join("pairing-phrase");
+        std::fs::write(
+            &phrase,
+            "cage 32 advice 4 letter 128 avoid 16 acoustic 2 doctor 64 amount\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&phrase, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let timeout = std::time::Duration::from_secs(15);
+        let started = std::time::Instant::now();
+        let accept = backend_call_for_command(Command::DevicePairAccept {
+            profile: "work".to_owned(),
+            target_alias: "paired".to_owned(),
+            phrase_file: phrase,
+            device_name: "New device".to_owned(),
+        })
+        .unwrap();
+        let (budget, deadline) = call_deadline(started, timeout, &accept).unwrap();
+        assert_eq!(budget, DeadlineClass::Pairing.cap());
+        assert!(deadline.instant() >= started + DeadlineClass::Pairing.cap());
+        let status = backend_call_for_command(Command::Status).unwrap();
+        let (budget, deadline) = call_deadline(started, timeout, &status).unwrap();
+        assert_eq!(budget, timeout);
+        assert!(deadline.instant() <= started + timeout);
+        // The flag only lowers the ordinary cap and leaves class caps alone.
+        let short = std::time::Duration::from_secs(5);
+        assert_eq!(call_deadline(started, short, &status).unwrap().0, short);
+        let long = std::time::Duration::from_secs(60);
+        assert_eq!(
+            call_deadline(started, long, &status).unwrap().0,
+            DeadlineClass::Ordinary.cap()
+        );
+        assert_eq!(
+            call_deadline(started, long, &accept).unwrap().0,
+            DeadlineClass::Pairing.cap()
+        );
+    }
 
     #[test]
     fn backend_passphrase_files_are_private_bounded_and_not_symlinks() {

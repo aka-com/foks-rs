@@ -83,6 +83,8 @@ client at `tools/list` time instead of at first failure.
 | Catalog or roster rows per page | 1,000 |
 | Active calls | 4 |
 | Queued calls | 16 |
+| Wait for an active-call slot | 15 s |
+| Call deadline, from when it holds a slot | 5 min for `put`, 15 s for every other tool |
 | Stalled stdout timeout | 30 s |
 
 Concurrency is a semaphore of four permits; each backend call runs on a
@@ -113,7 +115,11 @@ usable by the agent (initialized, provisioned, and unlocked through the
 ordinary client); MCP never asks for the credentials that would make it
 so. If the agent is not running, the CLI starts the packaged sibling
 executable found next to itself, never a shell command or an executable
-named by a tool call.
+named by a tool call. Startup (probing a running agent, then launching
+one) may take 5 seconds, and binding the account then has 5 seconds of
+its own, both within the command's 15-second budget, so a slow start
+does not leave binding too little time to wait out another front end's
+work on the profile.
 
 ## Idempotency keys
 
@@ -206,7 +212,8 @@ that status from local state, without contacting the server, so the check
 stays available offline. The repair is deliberately not an MCP tool, so an
 assistant cannot vouch for the clock it is being judged by: a person
 confirms the computer's current time in the desktop app's account
-settings, or with the two-step `foks-rs retention reanchor` command. Both
+settings (for this clock only), or with the two-step
+`foks-rs retention reanchor` command. Both
 send the agent a preview, which returns a digest of the displayed clock
 state, and then a confirmation carrying that digest. The agent pairs the
 confirmed time with its own monotonic reading at confirmation, so it
@@ -226,6 +233,13 @@ reading and the boot identifier, but each keeps its own anchor and rejection
 watermark (`kv_adapter_clocks` and `kv_upload_clocks`), and a repair of one
 leaves the other unchanged. The status and repair requests name the clock:
 `--domain adapter` (the default) or `--domain upload` on the CLI commands.
+The desktop app repairs only the adapter clock; an untrusted upload clock
+is repaired with the CLI.
+Only a write that needs a resumable upload identity consults the upload
+clock. A file write without an explicit upload handle claims an identity
+only once its first 4 MiB chunk shows a large file; a small file is
+written inline, takes no receipt row and is not refused by an untrusted
+upload clock.
 
 Cancellation is honored but does not undo remote work; a cancelled request
 answers "check mutation status before retrying." An interrupted upload may

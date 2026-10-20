@@ -773,3 +773,149 @@ fn injected_upload_clock_survives_core_completion_and_maintenance_without_reanch
         foks_client::upload_time_sample().unwrap().process_id
     );
 }
+
+/// An implicit put that turns out to be inline has nothing to resume. It
+/// takes no receipt row, so small writes cannot fill the profile's receipt
+/// budget, and it does not consult the receipt clock, so a stepped wall clock
+/// refuses only writes that need a resumable identity.
+#[test]
+fn implicit_inline_put_takes_no_receipt_row_and_ignores_the_receipt_clock() {
+    use std::sync::{Arc, Mutex};
+    struct Clock(Mutex<foks_client_db::AdapterTimeSample>);
+    impl crate::AdapterClock for Clock {
+        fn sample(&self) -> Result<foks_client_db::AdapterTimeSample> {
+            Ok(*self.0.lock().unwrap())
+        }
+    }
+    fn reserved_rows(database: &std::path::Path) -> i64 {
+        rusqlite::Connection::open(database)
+            .unwrap()
+            .query_row(
+                "SELECT reserved_rows FROM kv_upload_receipt_limits WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+    let f = AccountFixture::start();
+    f.run(|s, v, k| s.create_account("me", "uploadinline", "laptop", "", "", None, v, k));
+    let wall = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let clock = Arc::new(Clock(Mutex::new(foks_client_db::AdapterTimeSample {
+        process_id: [92; 16],
+        boot_id: None,
+        wall_seconds: wall,
+        monotonic_seconds: 0,
+    })));
+    let session = ProfileSession::open(&f.registry, "local")
+        .unwrap()
+        .with_adapter_clock(clock.clone());
+    f.credentials
+        .with_checked_session(&session, |s| {
+            let master = f.credentials.master_key()?;
+            let mut store = foks_keystore::EncryptedFileSecretStore::open(
+                &s.paths.credential_store,
+                derive_vault_key(&master),
+            )?;
+            let mut vault = AccountVault::new(&mut store);
+            // A large write anchors the upload clock and takes one row.
+            s.put_kv_file(
+                "me",
+                "/large",
+                &mut Cursor::new(vec![7; 3000]),
+                false,
+                false,
+                &mut vault,
+                &master,
+            )?;
+            let rows = reserved_rows(&s.paths.hard_database);
+            assert_eq!(s.list_kv_uploads("me", &mut vault)?.len(), 1);
+            for index in 0..3 {
+                s.put_kv_file(
+                    "me",
+                    &format!("/small-{index}"),
+                    &mut Cursor::new(b"tiny".to_vec()),
+                    false,
+                    false,
+                    &mut vault,
+                    &master,
+                )?;
+            }
+            assert_eq!(reserved_rows(&s.paths.hard_database), rows);
+            assert_eq!(s.list_kv_uploads("me", &mut vault)?.len(), 1);
+            // A wall clock stepped by an hour is outside the admission skew.
+            *clock.0.lock().unwrap() = foks_client_db::AdapterTimeSample {
+                process_id: [92; 16],
+                boot_id: None,
+                wall_seconds: wall + 3600,
+                monotonic_seconds: 1,
+            };
+            s.put_kv_file(
+                "me",
+                "/small-after-step",
+                &mut Cursor::new(b"still saved".to_vec()),
+                false,
+                false,
+                &mut vault,
+                &master,
+            )?;
+            let refused = s
+                .put_kv_file(
+                    "me",
+                    "/large-after-step",
+                    &mut Cursor::new(vec![8; 3000]),
+                    false,
+                    false,
+                    &mut vault,
+                    &master,
+                )
+                .unwrap_err();
+            assert!(
+                format!("{refused:?}").contains("UploadClockUntrusted"),
+                "{refused:?}"
+            );
+            assert_eq!(reserved_rows(&s.paths.hard_database), rows);
+            Ok::<_, Error>(())
+        })
+        .unwrap();
+    assert_eq!(
+        f.run(|s, v, _| s.read_kv_file("me", "/small-after-step", v)),
+        b"still saved"
+    );
+}
+
+/// A publication the server definitely rejected is reported as such, and
+/// Resume publishes the retained content again instead of refusing forever.
+#[test]
+fn rejected_publication_is_reported_and_resume_publishes_again() {
+    let f = AccountFixture::start();
+    f.run(|s, v, k| s.create_account("me", "uploadrejected", "laptop", "", "", None, v, k));
+    let id = handle(&f, 41);
+    let original = vec![0x41; 3000];
+    f.run(|s, v, k| {
+        foks_client::reject_next_namespace_put_for_test();
+        assert!(s
+            .put_kv_file_identified(
+                "me",
+                "/rejected.bin",
+                &mut Cursor::new(&original),
+                id,
+                false,
+                false,
+                v,
+                k,
+            )
+            .is_err());
+        let uploads = s.list_kv_uploads("me", v)?;
+        assert_eq!(uploads[0].state, "publication-rejected");
+        Ok(())
+    });
+    let done = f.run(|s, v, k| s.resume_kv_upload("me", id, v, k));
+    assert_eq!(done.state, "completed");
+    assert_eq!(
+        f.run(|s, v, _| s.read_kv_file("me", "/rejected.bin", v)),
+        original
+    );
+}

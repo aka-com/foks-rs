@@ -681,12 +681,27 @@ impl KvWriteSession<'_> {
             });
         }
         let mut hard = HardStateStore::open(&database)?;
-        let op = hard.upload(&id)?.ok_or(invalid("upload not recorded"))?;
+        let mut op = hard.upload(&id)?.ok_or(invalid("upload not recorded"))?;
         if op.host_id != self.host.host_id.as_bytes()
             || op.uid != self.actor_uid
             || op.party_id != self.party.party.as_bytes()
         {
             return Err(invalid("upload belongs to another account or store"));
+        }
+        // A definitely rejected publication changed nothing remotely. Resume
+        // publishes again from the content-complete path, which re-syncs and
+        // re-validates the manifest's destination before a fresh namespace
+        // mutation; a destination that changed refuses there.
+        if op.state == UploadState::Publishing {
+            if let Some(child) = op.namespace_child {
+                if hard
+                    .mutation(&child)?
+                    .is_some_and(|mutation| mutation.state == MutationState::Rejected)
+                {
+                    hard.retry_upload_namespace(&id)?;
+                    op = hard.upload(&id)?.ok_or(invalid("upload disappeared"))?;
+                }
+            }
         }
         if matches!(
             op.state,

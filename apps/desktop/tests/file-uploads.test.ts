@@ -64,3 +64,10 @@ test('generation-bound handles and bounded summary pages preserve cursor identit
     decodeFileUpload({ ...upload, upload_id: id.toUpperCase() }),
   );
 });
+
+test('a rejected publication decodes as its own state', () => {
+  assert.equal(
+    decodeFileUpload({ ...upload, state: 'publication-rejected' }).state,
+    'publication-rejected',
+  );
+});

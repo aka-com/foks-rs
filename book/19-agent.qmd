@@ -123,7 +123,15 @@ client operation onto a worker thread under a semaphore.
 | Chat poll timeout | 60 s |
 | Device pairing budget | 5 min, with 45 s reserved for completion |
 | Ownership re-check | every 5 s |
-| Retention pass | every 60 s |
+| Retention pass | 1 s for profile admission and session opens, then a 50 ms work slice; every 250 ms while work remains, else every 60 s |
+
+`RetentionStatus` (`foks-rs retention status`) reports the retention
+counters, the number of profiles whose latest pass failed
+(`failing_profiles`) and the most recent of those failures as a redacted
+kind (`deadline`, `keystore`, `database`, `io` or `other`) with its age
+(`latest_failure`). A profile's failure is cleared by its next successful
+pass. The profile name and error text go only to the agent's log, at most
+once every 10 minutes for the same profile and error.
 
 Above the worker semaphores sits *profile admission*, a queue of scopes
 in which reads may share a profile, mutations hold it exclusively, and
@@ -154,10 +162,18 @@ client. The 60 seconds the desktop passes therefore lengthen those waits
 only; an ordinary desktop request still ends after at most 15 seconds.
 
 When an operation *does* exceed its deadline after starting, the agent
-closes the connection with the message that the deadline was exceeded and
-the connection was closed because completion is ambiguous. Closing is the
-honest signal: the caller cannot be told "it failed," because the
-mutation may have applied, and cannot be told "it succeeded." The
+answers `DeadlineExceeded` with the message that the deadline was exceeded
+and the connection was closed because completion is ambiguous, then closes
+the connection. Closing is the honest signal: the caller cannot be told
+"it failed," because the mutation may have applied, and cannot be told
+"it succeeded." That answer exists only once the request's deadline has
+passed, so it is written under its own 2-second budget rather than the
+request's; a refusal of work that never started is not, because its client
+has already given up. The same applies to a chat poll, a streaming upload
+(including one waiting on its worker to take the next chunk), a profile
+reconciliation and a lease refresh that reach their deadline. A result that
+completes but finds its deadline passed when it is written is erased and
+answered the same way, since its client may already have given up on it. The
 surviving blocking work keeps its worker permit until it exits, so a slow
 operation still counts against capacity. Cancellation is propagated into
 the synchronous network client, which polls its deadline and cancellation

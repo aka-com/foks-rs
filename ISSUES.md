@@ -188,6 +188,21 @@ Required resolution:
   and authority checks as collection, and release their ledger rows; or keep
   them charged and document how to remove them by hand.
 
+## Desktop repair of the upload receipt clock
+
+**Priority: low.** The desktop app's account settings repair only the adapter
+receipt clock (`ReceiptClockDomain::Adapter` in
+`apps/desktop/src-tauri/src/commands/account_conveniences.rs`). When the upload
+receipt clock is untrusted, large file writes that need a resumable upload
+identity are refused, and the only repair is
+`foks-rs retention reanchor --domain upload`; the agent's error names that
+command.
+
+Required resolution:
+
+- Offer the upload-clock status and the preview-then-confirm repair in the
+  desktop app, as for the adapter clock.
+
 ## Existing disclosed limitations
 
 These are real product or verification limits, but the reviewed plans already

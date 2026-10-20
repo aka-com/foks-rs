@@ -18,10 +18,15 @@ pub struct KvUploadReport {
     pub version: Option<u64>,
 }
 impl KvUploadReport {
-    fn from_operation(op: &UploadOperation, handle: UploadHandle) -> Self {
-        Self {
+    fn from_operation(
+        hard: &HardStateStore,
+        op: &UploadOperation,
+        handle: UploadHandle,
+    ) -> Result<Self> {
+        let state = report_state(hard, &op.id, op.state)?;
+        Ok(Self {
             upload_id: handle.to_string(),
-            state: upload_state(op.state),
+            state,
             prepared_chunks: op.chunk_count,
             acknowledged_chunks: op.acknowledged_chunks,
             plaintext_bytes: op.plaintext_bytes,
@@ -32,8 +37,24 @@ impl KvUploadReport {
             )
             .then(|| hex(&op.file_id)),
             version: op.receipt_version,
+        })
+    }
+}
+/// The reported state of an upload. A publication the server definitely
+/// rejected is reported as `publication-rejected` rather than `publishing`:
+/// nothing is being checked, and Resume publishes it again.
+fn report_state(hard: &HardStateStore, id: &[u8; 16], state: UploadState) -> Result<&'static str> {
+    if state == UploadState::Publishing {
+        if let Some(child) = hard.upload(id)?.and_then(|op| op.namespace_child) {
+            if hard
+                .mutation(&child)?
+                .is_some_and(|mutation| mutation.state == foks_client_db::MutationState::Rejected)
+            {
+                return Ok("publication-rejected");
+            }
         }
     }
+    Ok(upload_state(state))
 }
 fn upload_state(state: UploadState) -> &'static str {
     match state {
@@ -51,10 +72,11 @@ fn upload_state(state: UploadState) -> &'static str {
     }
 }
 impl KvUploadReport {
-    fn from_summary(op: &foks_client_db::UploadSummary) -> Self {
-        Self {
+    fn from_summary(hard: &HardStateStore, op: &foks_client_db::UploadSummary) -> Result<Self> {
+        let state = report_state(hard, &op.internal_id, op.state)?;
+        Ok(Self {
             upload_id: op.handle.to_string(),
-            state: upload_state(op.state),
+            state,
             prepared_chunks: op.chunk_count,
             acknowledged_chunks: op.acknowledged_chunks,
             plaintext_bytes: op.plaintext_bytes,
@@ -65,7 +87,7 @@ impl KvUploadReport {
             )
             .then(|| hex(&op.file_id)),
             version: op.receipt_version,
-        }
+        })
     }
 }
 #[derive(Clone, Debug, Serialize)]
@@ -139,7 +161,7 @@ impl CheckedProfileSession<'_> {
             let op = hard
                 .upload(&existing.internal_id)?
                 .ok_or(Error::InvalidConfig("upload disappeared"))?;
-            return Ok(KvUploadReport::from_operation(&op, handle));
+            return KvUploadReport::from_operation(&hard, &op, handle);
         }
         let registration = hard.register_upload_intent(
             handle,
@@ -152,7 +174,7 @@ impl CheckedProfileSession<'_> {
             .upload(&registration.internal_id)?
             .ok_or(Error::InvalidConfig("upload disappeared"))?;
         self.publish_upload_checkpoint()?;
-        Ok(KvUploadReport::from_operation(&op, handle))
+        KvUploadReport::from_operation(&hard, &op, handle)
     }
 
     pub(super) fn claim_upload(
@@ -201,7 +223,7 @@ impl CheckedProfileSession<'_> {
         let op = hard
             .upload(&id)?
             .ok_or(Error::InvalidConfig("upload disappeared"))?;
-        Ok(KvUploadReport::from_operation(&op, registration.handle))
+        KvUploadReport::from_operation(&hard, &op, registration.handle)
     }
 
     pub(crate) fn finish_upload_adapter(&self, id: [u8; 16], master: &[u8; 32]) -> Result<()> {
@@ -267,7 +289,8 @@ impl CheckedProfileSession<'_> {
             .map(entity_id_from_hex)
             .transpose()?
             .unwrap_or_else(|| account.credential.uid.clone());
-        let page = HardStateStore::open(&self.paths.hard_database)?.upload_summaries_page(
+        let hard = HardStateStore::open(&self.paths.hard_database)?;
+        let page = hard.upload_summaries_page(
             UploadScope {
                 host_id: host.host_id().as_bytes(),
                 uid: account.credential.uid.as_bytes(),
@@ -280,8 +303,8 @@ impl CheckedProfileSession<'_> {
             uploads: page
                 .items
                 .iter()
-                .map(KvUploadReport::from_summary)
-                .collect(),
+                .map(|item| KvUploadReport::from_summary(&hard, item))
+                .collect::<Result<_>>()?,
             next: page.next,
             capacity: self.kv_upload_capacity()?,
         })

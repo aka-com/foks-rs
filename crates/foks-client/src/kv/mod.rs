@@ -21,6 +21,8 @@ pub use uploads::{
     claim_file_upload, cleanup_file_upload_records, upload_time_sample, verified_file_upload,
     ClaimedFileUpload, KvUploadReceipt, KvUploadResult,
 };
+#[cfg(feature = "test-support")]
+pub use write::reject_next_namespace_put_for_test;
 
 // FOKS v0.1.9 applies the same limits to both sides of the large-file
 // protocol. Keep them in one place so a file accepted by the writer can

@@ -32,13 +32,18 @@ pub fn run(state: &Path, command: McpCommand) -> Result<(), Box<dyn std::error::
         McpCommand::Team(args) => (ToolSet::Team, args),
     };
     // Starting an agent is entry-point policy; the SDK adapter only uses authenticated IPC.
-    let startup = super::deadline::current()?.shorten(Instant::now() + Duration::from_secs(5))?;
-    ensure_agent_with_deadline(state, &startup)?;
-    let backend = AgentBackend::connect_with_deadline(
-        &state.join("foks-rs.sock"),
-        args.profile,
-        args.account_alias,
-        &startup,
+    let backend = start_then_bind(
+        &super::deadline::current()?,
+        |startup| ensure_agent_with_deadline(state, startup),
+        |binding| {
+            AgentBackend::connect_with_deadline(
+                &state.join("foks-rs.sock"),
+                args.profile,
+                args.account_alias,
+                binding,
+            )
+            .map_err(Into::into)
+        },
     )?;
     super::deadline::pause()?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -49,6 +54,24 @@ pub fn run(state: &Path, command: McpCommand) -> Result<(), Box<dyn std::error::
     let result = runtime.block_on(foks_mcp::serve_stdio(backend, set, args.read_only));
     runtime.shutdown_timeout(Duration::from_secs(2));
     result
+}
+
+/// How long agent startup (the running-agent probe, then a launch) may take,
+/// and separately how long account binding may then take, both inside the
+/// command's own deadline. Binding waits behind another front end's profile
+/// work, so it must not inherit only what a slow startup left.
+const STARTUP_WINDOW: Duration = Duration::from_secs(5);
+const BIND_WINDOW: Duration = Duration::from_secs(5);
+
+/// Runs agent startup under its own window, then account binding under a
+/// window taken when binding begins.
+fn start_then_bind<T>(
+    command: &foks_local_deadline::Deadline,
+    start: impl FnOnce(&foks_local_deadline::Deadline) -> Result<(), Box<dyn std::error::Error>>,
+    bind: impl FnOnce(&foks_local_deadline::Deadline) -> Result<T, Box<dyn std::error::Error>>,
+) -> Result<T, Box<dyn std::error::Error>> {
+    start(&command.shorten(Instant::now() + STARTUP_WINDOW)?)?;
+    bind(&command.shorten(Instant::now() + BIND_WINDOW)?)
 }
 
 /// What a Hello finds at the agent socket.
@@ -303,6 +326,30 @@ mod tests {
 
     fn scope() -> crate::deadline::CommandScope {
         crate::deadline::CommandScope::enter(Duration::from_secs(15)).unwrap()
+    }
+
+    /// Binding gets its full window after a slow startup instead of what
+    /// startup left of a shared one.
+    #[test]
+    fn account_binding_window_starts_after_agent_startup() {
+        let _scope = scope();
+        let command = crate::deadline::current().unwrap();
+        let slow_startup = Duration::from_millis(1500);
+        let remaining = start_then_bind(
+            &command,
+            |startup| {
+                assert!(startup.instant() <= Instant::now() + STARTUP_WINDOW);
+                std::thread::sleep(slow_startup);
+                Ok(())
+            },
+            |binding| Ok(binding.instant().saturating_duration_since(Instant::now())),
+        )
+        .unwrap();
+        assert!(
+            remaining > BIND_WINDOW - Duration::from_millis(500),
+            "binding had {remaining:?}"
+        );
+        assert!(remaining <= BIND_WINDOW);
     }
 
     #[test]
