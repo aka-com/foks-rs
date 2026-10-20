@@ -1,6 +1,8 @@
 mod checkpoint;
 mod expiry;
+pub(crate) mod kex;
 pub use expiry::{ExpiryKind, ExpiryMetricsSnapshot};
+pub use kex::KexMetricsSnapshot;
 pub(crate) mod realtime;
 pub use realtime::{FanoutMetricsSnapshot, RealtimeMetricsSnapshot, ReconcileMetricsSnapshot};
 
@@ -49,6 +51,7 @@ pub struct ServerMetricsSnapshot {
     pub checkpoint: CheckpointMetricsSnapshot,
     pub expiry: ExpiryMetricsSnapshot,
     pub realtime: RealtimeMetricsSnapshot,
+    pub kex: KexMetricsSnapshot,
     pub admin_cleanup_attempts: u64,
     pub admin_cleanup_failures: u64,
     pub admin_reclaimed_records: u64,
@@ -91,6 +94,7 @@ pub struct ServerMetrics {
     checkpoint: checkpoint::CheckpointMetrics,
     expiry: expiry::ExpiryMetrics,
     pub(crate) realtime: realtime::RealtimeMetrics,
+    pub(crate) kex: kex::KexMetrics,
     admin_cleanup_attempts: AtomicU64,
     admin_cleanup_failures: AtomicU64,
     admin_reclaimed_records: AtomicU64,
@@ -157,6 +161,7 @@ impl ServerMetrics {
             checkpoint: self.checkpoint.snapshot(),
             expiry: self.expiry.snapshot(),
             realtime: self.realtime.snapshot(),
+            kex: self.kex.snapshot(),
             admin_cleanup_attempts: self.admin_cleanup_attempts.load(Ordering::Relaxed),
             admin_cleanup_failures: self.admin_cleanup_failures.load(Ordering::Relaxed),
             admin_reclaimed_records: self.admin_reclaimed_records.load(Ordering::Relaxed),

@@ -432,6 +432,34 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
     expiry_prometheus(&mut output, &metrics.expiry);
     checkpoint_prometheus(&mut output, &metrics.checkpoint);
     realtime_prometheus(&mut output, &metrics.realtime);
+    {
+        use std::fmt::Write as _;
+        let kex = metrics.kex;
+        let _ = writeln!(
+            output,
+            "# TYPE foks_kex_active_polls gauge\nfoks_kex_active_polls {}",
+            kex.active
+        );
+        for (name, value) in [("admitted", kex.admitted), ("rejected", kex.rejected)] {
+            let _ = writeln!(
+                output,
+                "# TYPE foks_kex_{name}_total counter\nfoks_kex_{name}_total {value}"
+            );
+        }
+        let _ = writeln!(output, "# TYPE foks_kex_completed_total counter");
+        for (reason, value) in [
+            ("delivered", kex.delivered),
+            ("timeout", kex.timed_out),
+            ("disconnected", kex.disconnected),
+            ("shutdown", kex.shutdown),
+            ("failed", kex.failed),
+        ] {
+            let _ = writeln!(
+                output,
+                "foks_kex_completed_total{{reason=\"{reason}\"}} {value}"
+            );
+        }
+    }
     // Independent read snapshot; metrics never enqueue a policy mutation.
     let sample = (|| -> crate::Result<Option<foks_server_db::SsoRolloutStatus>> {
         let db = foks_server_db::ReadDatabase::open(database_path, Default::default())?;

@@ -611,6 +611,7 @@ pub enum TestProfile {
     TightIo,
     ProductionBenchmark,
     RealtimePollCapacity,
+    KexPollCapacity,
     RealtimeSingleReader,
     StorageShutdown,
     RateLimited,
@@ -654,6 +655,7 @@ impl TestProfile {
             | Self::TightIo
             | Self::ProductionBenchmark
             | Self::RealtimePollCapacity
+            | Self::KexPollCapacity
             | Self::RealtimeSingleReader
             | Self::StorageShutdown
             | Self::RateLimited
@@ -683,7 +685,9 @@ impl TestProfile {
             } else {
                 16
             },
-            maximum_active_connections: if matches!(self, Self::ProductionBenchmark) {
+            maximum_active_connections: if matches!(self, Self::KexPollCapacity) {
+                4
+            } else if matches!(self, Self::ProductionBenchmark) {
                 128
             } else {
                 64

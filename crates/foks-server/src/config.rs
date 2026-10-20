@@ -55,6 +55,9 @@ pub struct SessionLimits {
     pub worker_threads: usize,
     pub maximum_read_connections: usize,
     pub maximum_active_connections: usize,
+    /// Outstanding anonymous KEX receives. Effective capacity is capped at half
+    /// the active connection limit; one active connection admits no receives.
+    pub maximum_kex_receive_polls: usize,
     pub maximum_pending_connections: usize,
     pub maximum_in_flight_requests: usize,
     pub io_timeout: Duration,
@@ -73,6 +76,7 @@ impl Default for SessionLimits {
             worker_threads: 4,
             maximum_read_connections: 32,
             maximum_active_connections: 256,
+            maximum_kex_receive_polls: 32,
             maximum_pending_connections: 32,
             maximum_in_flight_requests: 64,
             io_timeout: Duration::from_secs(15),
@@ -82,6 +86,11 @@ impl Default for SessionLimits {
 }
 
 impl SessionLimits {
+    pub(crate) fn kex_receive_capacity(self) -> usize {
+        self.maximum_kex_receive_polls
+            .min(self.maximum_active_connections / 2)
+    }
+
     pub(crate) fn validate(self) -> crate::Result<()> {
         let Some(maximum_frame_memory) = self.maximum_frame_bytes.checked_mul(2) else {
             return Err(crate::Error::Config(
@@ -107,6 +116,7 @@ impl SessionLimits {
             || self.maximum_pending_connections == 0
             || self.maximum_in_flight_requests < 2
             || self.maximum_active_connections > tokio::sync::Semaphore::MAX_PERMITS
+            || self.maximum_kex_receive_polls > tokio::sync::Semaphore::MAX_PERMITS
             || self.maximum_in_flight_requests > tokio::sync::Semaphore::MAX_PERMITS
             || self.io_timeout.is_zero()
             || self.request_timeout.is_zero()
@@ -141,6 +151,41 @@ pub(crate) fn validate_vhost_management_host(value: &str) -> crate::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kex_capacity_reserves_ordinary_connections_for_small_configurations() {
+        let defaults = SessionLimits::default();
+        assert_eq!(defaults.kex_receive_capacity(), 32);
+        for (connections, expected) in [(1, 0), (2, 1), (3, 1), (4, 2), (64, 32)] {
+            let limits = SessionLimits {
+                maximum_active_connections: connections,
+                ..defaults
+            };
+            assert_eq!(limits.kex_receive_capacity(), expected);
+        }
+        assert_eq!(
+            SessionLimits {
+                maximum_kex_receive_polls: 1,
+                ..defaults
+            }
+            .kex_receive_capacity(),
+            1
+        );
+        assert_eq!(
+            SessionLimits {
+                maximum_kex_receive_polls: 0,
+                ..defaults
+            }
+            .kex_receive_capacity(),
+            0
+        );
+        assert!(SessionLimits {
+            maximum_kex_receive_polls: tokio::sync::Semaphore::MAX_PERMITS + 1,
+            ..defaults
+        }
+        .validate()
+        .is_err());
+    }
 
     #[test]
     fn semaphore_limits_are_rejected_before_runtime_construction() {

@@ -49,7 +49,8 @@ pub use error::{Error, Result};
 pub use fault::{SessionFaultPoint, SessionFaults};
 pub use metrics::{
     CheckpointMetricsSnapshot, ExpiryKind, ExpiryMetricsSnapshot, FanoutMetricsSnapshot,
-    RealtimeMetricsSnapshot, ReconcileMetricsSnapshot, ServerMetrics, ServerMetricsSnapshot,
+    KexMetricsSnapshot, RealtimeMetricsSnapshot, ReconcileMetricsSnapshot, ServerMetrics,
+    ServerMetricsSnapshot,
 };
 pub use net::{start, RunningServer, ServerAddresses};
 pub use rate_limit::RateLimitConfig;
