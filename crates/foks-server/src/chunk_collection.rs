@@ -30,6 +30,7 @@ pub fn collect_chunk_store(
     let writer = crate::DatabaseWriterGuard::acquire(path.as_ref())?;
     let _storage =
         crate::storage_lease::StorageLease::with_store(path.as_ref(), Some(store), true)?;
+    store.remove_stale_temporaries()?;
     let mut db = writer.open_database(config)?;
     crate::chunk_binding::initialize_offline(&mut db, store, &_storage)?;
     let qualified = store.supports_collection()

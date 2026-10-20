@@ -42,6 +42,7 @@ pub fn inventory_chunk_store(
     }
     let guard = crate::DatabaseWriterGuard::acquire(path.as_ref())?;
     let source = crate::storage_lease::StorageLease::with_store(path.as_ref(), Some(store), false)?;
+    store.remove_stale_temporaries()?;
     let mut db = guard.open_database(config)?;
     crate::chunk_binding::initialize_offline(&mut db, store, &source)?;
     let mut checkpoint = db.begin_chunk_inventory(restart)?;

@@ -693,7 +693,10 @@ an installation bound before authority identities were recorded, and every S3
 store, is report-only, because the termination of late S3 PUT retries is not
 qualified. It never deletes unknown objects (those it did not publish and
 record with a digest), objects with an unresolved or retrying publication
-attempt, or objects of another namespace.
+attempt, or objects of another namespace. Both commands also remove
+temporary files (named `_foks_tmp-*`) that a filesystem write interrupted by a
+process kill left in the directory; such files are never recorded or charged
+as objects.
 
 Once collection has run, a copy of the SQLite database whose external
 chunks were not hydrated is not a backup: its references can name objects
