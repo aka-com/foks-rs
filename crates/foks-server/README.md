@@ -402,7 +402,12 @@ A KEX receive can stay open for up to an hour. At most
 `maximum_active_connections`, are outstanding at once across all
 connections; a receive over that limit is refused at once with status 1012
 and is not queued, so receives cannot hold every connection of the public
-listener.
+listener. One source can hold at most an eighth of that budget (4 of the
+default 32, and at least one), so that a single address cannot take every
+pairing slot for an hour; a receive over its source's share is refused the
+same way. Both refusals are counted in `foks_kex_rejected_total` and
+`foks_admission_rejected_total{reason="kex_receive_polls"}`. Loopback peers
+and `trusted_sources` are exempt from the per-source share.
 
 The public KEX relay holds at most 4,096 pairing packets or 32 MiB of them,
 each for up to two hours, and refuses a send at either bound with status 1012.

@@ -58,6 +58,10 @@ pub(crate) struct ServerData {
     account_realtime_polls: Arc<crate::rate_limit::KeyedLimit<Vec<u8>>>,
     /// Outstanding anonymous KEX receives, across all connections.
     kex_polling: Arc<Semaphore>,
+    /// Outstanding KEX receives per source, so that one source cannot hold
+    /// the whole `kex_polling` budget. Loopback peers and trusted sources
+    /// are exempt.
+    kex_polling_sources: Arc<crate::rate_limit::KeyedLimit<crate::rate_limit::SourceKey>>,
     request_memory: Arc<Semaphore>,
     small_request_memory: Arc<Semaphore>,
     memory: Arc<super::memory::Pools>,
@@ -173,6 +177,9 @@ impl ServerData {
                 config.limits.maximum_realtime_polls_per_account,
             )),
             kex_polling: Arc::new(Semaphore::new(config.limits.kex_receive_capacity())),
+            kex_polling_sources: Arc::new(crate::rate_limit::KeyedLimit::new(
+                kex_receive_source_share(config.limits.kex_receive_capacity()),
+            )),
             request_memory: Arc::new(Semaphore::new(config.limits.maximum_request_memory_bytes)),
             small_request_memory: Arc::new(Semaphore::new(
                 config.limits.maximum_control_memory_bytes,
@@ -495,10 +502,11 @@ pub(crate) async fn serve(
                 }
                 let pending = match call.route.id {
                     RouteId::KexReceive => {
-                        let (poll, kex) = match service_data.kex_long_poll(
+                        let (poll, kex, kex_source) = match service_data.kex_long_poll(
                             call.route,
                             sequence,
                             request_memory,
+                            peer_ip,
                         ) {
                             Ok(admitted) => admitted,
                             Err(request_memory) => {
@@ -513,6 +521,7 @@ pub(crate) async fn serve(
                             sequence,
                             family,
                             kex: Some(kex),
+                            kex_source,
                             _request_timer: request_timer,
                             future: Box::pin(async move {
                                 let mut completion = None;
@@ -902,6 +911,8 @@ struct RequestOutcome {
 /// skipped write, is recorded as failed.
 struct KexReceive {
     poll: crate::metrics::kex::Poll,
+    /// The receive's slot of its source's share, released with the permit.
+    _source: KexSourcePermit,
     /// `None` when the handler did not run, after an armed fault.
     completion: Option<crate::metrics::kex::Completion>,
 }
@@ -1059,6 +1070,8 @@ struct PendingPoll<'a> {
     /// metrics. It is held outside the handler, so that a receive dropped
     /// unanswered is recorded with the reason it was dropped.
     kex: Option<crate::metrics::kex::Poll>,
+    /// A KEX receive's slot of its source's share of the budget.
+    kex_source: KexSourcePermit,
     /// Observes the request's duration, through its response write.
     _request_timer: crate::metrics::RequestTimer,
     future: PollFuture<'a>,
@@ -1079,6 +1092,7 @@ impl<'a> PendingPoll<'a> {
             sequence,
             family,
             kex: None,
+            kex_source: None,
             _request_timer: request_timer,
             future: Box::pin(async move {
                 Ok(PolledOutcome {
@@ -1158,6 +1172,7 @@ impl<'a> PendingPolls<'a> {
         if let Some(kex) = poll.kex {
             outcome.kex = Some(KexReceive {
                 poll: kex,
+                _source: poll.kex_source,
                 completion: polled.kex_completion,
             });
         }
@@ -1173,19 +1188,46 @@ impl Drop for PendingPolls<'_> {
     }
 }
 
-/// Takes a permit of the KEX receive budget `polls`, or counts the rejection.
-/// The budget never queues, so receives cannot hold every ordinary
-/// connection.
+/// The KEX receives one source can hold at once: an eighth of the global
+/// budget, and at least one.
+fn kex_receive_source_share(capacity: usize) -> usize {
+    (capacity / 8).max(1)
+}
+
+/// A source's slot of the per-source KEX receive share; `None` for an exempt
+/// source.
+type KexSourcePermit = Option<crate::rate_limit::KeyedPermit<crate::rate_limit::SourceKey>>;
+
+/// Takes a slot of `source`'s share of the KEX receive budget, then a permit
+/// of the global budget `polls`, or counts the rejection under
+/// `KexReceivePolls`. The budget never queues, so receives cannot hold every
+/// ordinary connection, and one source cannot hold all of it.
 fn admit_kex_receive(
     metrics: &Arc<crate::ServerMetrics>,
     polls: &Arc<Semaphore>,
-) -> Option<crate::metrics::kex::Poll> {
+    sources: &Arc<crate::rate_limit::KeyedLimit<crate::rate_limit::SourceKey>>,
+    source: Option<crate::rate_limit::SourceKey>,
+) -> Option<(crate::metrics::kex::Poll, KexSourcePermit)> {
+    let source = match source {
+        Some(source) => {
+            let Some(permit) = sources.try_acquire(source) else {
+                metrics.kex.rejected();
+                metrics.request_rate_limited(crate::AdmissionRejection::KexReceivePolls);
+                return None;
+            };
+            Some(permit)
+        }
+        None => None,
+    };
     let Ok(permit) = Arc::clone(polls).try_acquire_owned() else {
         metrics.kex.rejected();
         metrics.request_rate_limited(crate::AdmissionRejection::KexReceivePolls);
         return None;
     };
-    Some(crate::metrics::kex::Poll::new(Arc::clone(metrics), permit))
+    Some((
+        crate::metrics::kex::Poll::new(Arc::clone(metrics), permit),
+        source,
+    ))
 }
 
 pub(crate) use foks_hosted_transport::framing::read_frame_ingress;
@@ -1279,21 +1321,32 @@ impl ServerData {
         }
     }
 
-    /// A KEX receive long poll and its permit of the global KEX receive
-    /// budget. A Go-compatible receive can stay open for an hour, so it
-    /// needs a permit. Without a free permit the rejection is counted and the
-    /// request memory is returned for the `RateLimited` response.
+    /// A KEX receive long poll, its permit of the global KEX receive budget
+    /// and its slot of the peer source's share. A Go-compatible receive can
+    /// stay open for an hour, so it needs both. Without either the rejection
+    /// is counted and the request memory is returned for the `RateLimited`
+    /// response.
+    #[allow(clippy::type_complexity)]
     fn kex_long_poll(
         &self,
         route: &'static RouteSpec,
         sequence: u64,
         request_memory: Arc<super::memory::Request>,
-    ) -> std::result::Result<(LongPoll<'_>, crate::metrics::kex::Poll), Arc<super::memory::Request>>
-    {
-        let Some(kex) = admit_kex_receive(&self.metrics, &self.kex_polling) else {
+        peer_ip: std::net::IpAddr,
+    ) -> std::result::Result<
+        (LongPoll<'_>, crate::metrics::kex::Poll, KexSourcePermit),
+        Arc<super::memory::Request>,
+    > {
+        let source = self.rate_limiter.config().limited_source(peer_ip);
+        let Some((kex, source)) = admit_kex_receive(
+            &self.metrics,
+            &self.kex_polling,
+            &self.kex_polling_sources,
+            source,
+        ) else {
             return Err(request_memory);
         };
-        Ok((self.long_poll(route, sequence, request_memory), kex))
+        Ok((self.long_poll(route, sequence, request_memory), kex, source))
     }
 
     fn should_disconnect(
@@ -1531,7 +1584,17 @@ mod tests {
         PendingPoll {
             sequence,
             family: "Kex",
-            kex: Some(admit_kex_receive(metrics, budget).unwrap()),
+            kex: Some(
+                admit_kex_receive(
+                    metrics,
+                    budget,
+                    &Arc::new(crate::rate_limit::KeyedLimit::new(1)),
+                    None,
+                )
+                .unwrap()
+                .0,
+            ),
+            kex_source: None,
             _request_timer: crate::ServerMetrics::request_timer(Arc::clone(metrics)),
             future: Box::pin(async move {
                 let mut completion = None;
@@ -1554,6 +1617,47 @@ mod tests {
                 })
             }),
         }
+    }
+
+    #[test]
+    fn one_source_holds_at_most_its_share_of_kex_receives() {
+        let metrics = Arc::new(crate::ServerMetrics::default());
+        let capacity = 16;
+        let budget = Arc::new(Semaphore::new(capacity));
+        let share = kex_receive_source_share(capacity);
+        assert_eq!(share, 2);
+        assert_eq!(kex_receive_source_share(4), 1);
+        let sources = Arc::new(crate::rate_limit::KeyedLimit::new(share));
+        let config = crate::RateLimitConfig::default();
+        let first = config.limited_source("192.0.2.1".parse().unwrap());
+        let second = config.limited_source("2001:db8::1".parse().unwrap());
+        let admit = |source| admit_kex_receive(&metrics, &budget, &sources, source);
+        let held = [admit(first).unwrap(), admit(first).unwrap()];
+        // The first source is at its share; another source and exempt peers
+        // are still admitted.
+        assert!(admit(first).is_none());
+        let other = admit(second).unwrap();
+        assert!(config
+            .limited_source("127.0.0.1".parse().unwrap())
+            .is_none());
+        let exempt = [
+            admit(None).unwrap(),
+            admit(None).unwrap(),
+            admit(None).unwrap(),
+        ];
+        assert_eq!(budget.available_permits(), capacity - 6);
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.kex.rejected, 1);
+        assert_eq!(
+            snapshot.admission_rejections[crate::AdmissionRejection::KexReceivePolls as usize],
+            1
+        );
+        // A refusal by the source share takes no global permit, and a
+        // released receive returns the source's slot.
+        drop(held);
+        assert!(admit(first).is_some());
+        drop((other, exempt));
+        assert_eq!(budget.available_permits(), capacity);
     }
 
     #[tokio::test(flavor = "current_thread")]
