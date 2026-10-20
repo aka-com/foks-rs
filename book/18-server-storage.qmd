@@ -266,7 +266,10 @@ least-recently-used cache capped at 4,096 sources; when a new source
 arrives at capacity, the bucket used longest ago is evicted. An evicted
 source that returns gets a full bucket, which is a small leniency in
 exchange for a hard memory bound. A request that exceeds its bucket gets
-status 1012 and the connection is closed.
+status 1012 at the request's own sequence number, and the connection is
+closed. The server reads the call body first to learn that number: both the
+Go and the Rust client number calls per connection, so a refusal at any
+other sequence would not match the pending call.
 
 Token buckets limit the rate of new work, not how much a source holds at
 once. A source within its connection burst could otherwise open every

@@ -330,22 +330,13 @@ pub(crate) async fn serve(
             }
             Ok(Err(error)) => return Err(error.into()),
         };
-        if !service_data.rate_limiter.allow_request(peer_ip) {
-            if service_data.proof_enabled() {
-                return Ok(());
-            }
-            service_data.metrics.request_started();
-            let _request_timer =
-                crate::ServerMetrics::request_timer(Arc::clone(&service_data.metrics));
-            service_data
-                .metrics
-                .request_rate_limited(crate::AdmissionRejection::RequestRate);
-            let memory = service_data.memory.request(None);
-            let response = memory.sync(|| encode_status_response_at(&RpcStatus::RateLimited, 0))?;
-            write_response_until(&mut stream, &response, deadline, limits.io_timeout).await?;
-            service_data
-                .metrics
-                .response_completed(crate::metrics::UNROUTED, STATUS_RATE_LIMIT_ERROR);
+        // A request over its source's bucket is still read, within the frame
+        // limit and the request memory budget, so that its refusal carries
+        // the call's own sequence number. Go and Rust clients number calls
+        // per connection, so a refusal at any other sequence would not match
+        // the pending call.
+        let request_allowed = service_data.rate_limiter.allow_request(peer_ip);
+        if !request_allowed && service_data.proof_enabled() {
             return Ok(());
         }
         let read = tokio::select! {
@@ -390,11 +381,31 @@ pub(crate) async fn serve(
             // NOTIFY and CANCEL control messages are never answered by
             // go-snowpack-rpc. Discard the frame and keep the connection open
             // instead of treating the unexpected method type as fatal.
+            // A control frame over the request bucket has no sequence to
+            // answer at, so the connection closes without a response.
+            foks_rpc::InboundMessage::Control if !request_allowed => return Ok(()),
             foks_rpc::InboundMessage::Control => {
                 drop(request_memory);
                 continue;
             }
         };
+        if !request_allowed {
+            service_data.metrics.request_started();
+            let _request_timer =
+                crate::ServerMetrics::request_timer(Arc::clone(&service_data.metrics));
+            service_data
+                .metrics
+                .request_rate_limited(crate::AdmissionRejection::RequestRate);
+            let sequence = call.sequence();
+            drop(call);
+            let response = request_memory
+                .sync(|| encode_status_response_at(&RpcStatus::RateLimited, sequence))?;
+            write_response_until(&mut stream, &response, deadline, limits.io_timeout).await?;
+            service_data
+                .metrics
+                .response_completed(crate::metrics::UNROUTED, STATUS_RATE_LIMIT_ERROR);
+            return Ok(());
+        }
         service_data.metrics.request_started();
         let _request_timer = crate::ServerMetrics::request_timer(Arc::clone(&service_data.metrics));
         let sequence = call.sequence();

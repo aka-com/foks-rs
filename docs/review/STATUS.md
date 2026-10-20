@@ -175,7 +175,7 @@ chat-backend-capacity-refusals-become-uncertain ([finding](findings/chat-backend
 
 Follow-ups:
 
-- STATUS_RATE_LIMIT_ERROR (1059) is not added to definite_rejection. The per-IP limiter refuses at sequence 0 before it reads the call body, and execute_bounded and the poll semaphore also return 1059. Treating 1059 as a definite rejection needs a check that no FOKS-RS or Go path returns it after a realtime commit.
+- STATUS_RATE_LIMIT_ERROR (1012) is not added to definite_rejection. The per-source request limiter refuses at the call's sequence number (it refused at sequence 0 before r2-compat-rate-limit-refusal-sequence-zero), and execute_bounded and the poll semaphore also return 1012. Treating 1012 as a definite rejection needs a check that no FOKS-RS or Go path returns it after a realtime commit.
 - These remaining realtime mutation refusals still map to 12001: the channel-metadata size check in rt_create_channel (Capacity("realtime channel metadata")) and the stored-size checks in messages.rs ("realtime message", "realtime channel activity"). The verifier rated the stored-size checks effectively unreachable because proto validation already bounds them; they could become 1030 or 1060 later.
 - Optional extras from the recommendation are not done: a client- or desktop-side warning before creating at the channel cap, a user-initiated 'retry exact' for Uncertain sends, and a conformance test for fanout above 1,024 members (it needs a non-default maximum_team_members; the fanout case is covered at the foks-server-db level).
 

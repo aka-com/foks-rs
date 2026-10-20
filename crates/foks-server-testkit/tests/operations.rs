@@ -255,11 +255,13 @@ fn request_rate_limit_returns_typed_status_and_counts_rejection() {
         foks_rpc::read_void_response(&mut connection, DEFAULT_MAX_FRAME_LENGTH, 0),
         Err(RpcError::RemoteStatus { code: 1020, .. })
     ));
-    let request = foks_rpc::encode_load_user_chain_request(&[1; 33], 0).unwrap();
+    // Clients number calls per connection, so the refusal of the third call
+    // must carry that call's sequence number, not 0.
+    let request = foks_rpc::encode_get_host_id_request_at(2).unwrap();
     connection.write_all(&request).unwrap();
     connection.flush().unwrap();
     assert!(matches!(
-        foks_rpc::read_void_response(&mut connection, DEFAULT_MAX_FRAME_LENGTH, 0),
+        foks_rpc::read_response(&mut connection, DEFAULT_MAX_FRAME_LENGTH, 2),
         Err(RpcError::RemoteStatus { code: 1012, .. })
     ));
     assert_eq!(server.metrics().rate_limited_requests, 1);

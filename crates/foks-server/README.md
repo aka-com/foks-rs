@@ -326,9 +326,11 @@ tracking memory. A source is one IPv4 address, or one IPv6 prefix of
 new bucket by choosing another address within its prefix. An IPv4-mapped IPv6
 peer is its IPv4 source. The `[rate_limits]` table or the `serve` flags set
 the refill rates, bursts, prefix length and maximum tracked source count. A
-connection whose bucket is empty is closed without a response; a framed
-request that exceeds its bucket receives FOKS status 1012 and the connection
-closes.
+connection whose bucket is empty is closed without a response. A framed
+request that exceeds its bucket is still read, within the frame and request
+memory limits, and receives FOKS status 1012 at the request's own sequence
+number; the connection then closes. A control frame (NOTIFY or CANCEL) over
+the bucket has no sequence number and closes the connection unanswered.
 
 Each listener also limits the connections one source holds at once, queued
 or active, to `maximum_connections_per_source`, so that one source cannot
