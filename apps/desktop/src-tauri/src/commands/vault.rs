@@ -1029,25 +1029,38 @@ pub(super) fn upload_file(
 }
 
 /// What a failed upload's message says about its handle. The desktop issues
-/// the handle before the stream starts, and the agent records it only once
-/// it has admitted the upload, so the agent's refusals before admission
-/// (missing KV capability, an invalid request, a busy worker pool or
-/// profile) leave nothing for the Uploads list to show. A lost agent
-/// connection does not say whether the agent recorded the handle.
+/// the handle before the stream starts, and the agent records it only in
+/// `register_upload_intent`, after its admission, capability, credential,
+/// clock and capacity checks; refusals there leave nothing for the Uploads
+/// list to show. The hint is therefore given only for failures that can
+/// follow registration: an ambiguous outcome, a deadline or cancellation, a
+/// conflict, a full spool or an existing handle with another intent, and the
+/// server failures of the upload itself (the agent does no network work
+/// before it registers the handle). A lost agent connection and a busy
+/// profile lock can come before or after registration, so their hint says
+/// that the agent may have recorded the handle.
 pub(super) fn upload_handle_hint(error: &AgentError, id: &str) -> Option<String> {
-    if !error.ambiguous
-        && matches!(
-            error.code.as_str(),
-            "capability-denied" | "invalid-request" | "busy" | "profile-busy"
-        )
-    {
-        return None;
+    const RECORDED: &[&str] = &[
+        "ambiguous",
+        "deadline-exceeded",
+        "cancelled",
+        "conflict",
+        "already-exists",
+        "upload-spool-full",
+        "upload-identity-conflict",
+        "server-unavailable",
+        "rate-limited",
+        "quota-exceeded",
+        "operation-failed",
+    ];
+    const UNCERTAIN: &[&str] = &["agent-lost", "profile-busy"];
+    let code = error.code.as_str();
+    if UNCERTAIN.contains(&code) {
+        return Some(format!(
+            "If the agent recorded upload handle {id} before the failure, open Uploads to inspect or resume prepared content."
+        ));
     }
-    Some(if error.code == "agent-lost" {
-        format!(
-            "If the agent recorded upload handle {id} before the connection was lost, open Uploads to inspect or resume prepared content."
-        )
-    } else {
+    (error.ambiguous || RECORDED.contains(&code)).then(|| {
         format!("Upload handle: {id}. Open Uploads to inspect or resume prepared content.")
     })
 }

@@ -542,10 +542,14 @@ failed one unless the host refused it before asking the agent, since the
 host discards the store's listed items before that call.
 
 A failed `import_dropped_file` or `replace_dropped_file` names the upload
-handle the host issued and points to Uploads, except when the agent refused
-the upload before recording the handle (`capability-denied`,
-`invalid-request`, `busy`, `profile-busy`); after a lost agent connection the
-message says that the agent may have recorded it.
+handle the host issued and points to Uploads only after failures that can
+follow the agent's registration of the handle: an ambiguous outcome,
+`deadline-exceeded`, `cancelled`, `conflict`, `upload-spool-full`,
+`upload-identity-conflict` and the server failures of the upload itself.
+Refusals before registration (capability, credential, clock and capacity
+checks, invalid requests, a busy worker pool) name no handle; after a lost
+agent connection or a busy profile lock the message says that the agent may
+have recorded it.
 
 Every command that reaches the agent runs under a deadline from its entry in
 `command_class` (`src-tauri/src/commands/deadline.rs`); a command with no

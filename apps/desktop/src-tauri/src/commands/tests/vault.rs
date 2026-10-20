@@ -1261,7 +1261,26 @@ fn only_failures_after_upload_admission_point_to_the_uploads_list() {
             "invalid-request",
         ),
         (|| protocol_error(ErrorCode::Busy), "busy"),
-        (|| protocol_error(ErrorCode::ProfileBusy), "profile-busy"),
+        (
+            || protocol_error(ErrorCode::CredentialsRequired),
+            "credentials-required",
+        ),
+        (
+            || protocol_error(ErrorCode::ReauthenticationRequired),
+            "reauthentication-required",
+        ),
+        (
+            || protocol_error(ErrorCode::UploadClockUntrusted),
+            "upload-clock-untrusted",
+        ),
+        (
+            || protocol_error(ErrorCode::UploadPendingFull),
+            "upload-pending-full",
+        ),
+        (
+            || protocol_error(ErrorCode::UploadRetentionFull),
+            "upload-retention-full",
+        ),
     ] {
         let error = upload(refusal);
         assert_eq!(error.code, code);
@@ -1297,6 +1316,16 @@ fn only_failures_after_upload_admission_point_to_the_uploads_list() {
             error.message
         );
     }
+    // A busy profile lock can come before or after registration.
+    let error = upload(|| protocol_error(ErrorCode::ProfileBusy));
+    assert_eq!(error.code, "profile-busy");
+    assert!(
+        error
+            .message
+            .contains("If the agent recorded upload handle "),
+        "{}",
+        error.message
+    );
 }
 
 pub(super) struct ResizeDuringUpload {
