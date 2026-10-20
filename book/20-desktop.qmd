@@ -780,7 +780,10 @@ else its user name; a `/` or `%` in it is percent-encoded as the Files list
 decodes it, and a second login with the same name in the same folder, or a
 login named like a folder other logins of the file are written in, takes a
 ` (2)` suffix. A folder or group column becomes folders below the chosen
-destination, without the `Root` group KeePassXC writes in every row. A
+destination, without the `Root` group KeePassXC writes in every row; a row
+whose folder names more than 32 folders, or more than 1,024 bytes of them,
+is skipped with that reason, and the host stops reading such a cell at the
+first folder past either bound. A
 LastPass secure note (website `http://sn`) is left out, and when a URL
 column lists several comma-separated URLs, as Bitwarden writes them, the
 first is the website and the others are kept as notes.
