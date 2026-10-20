@@ -65,7 +65,7 @@ pub use metrics::{
     ServerMetrics, ServerMetricsSnapshot,
 };
 pub use net::{start, AcceptErrorKind, RunningServer, ServerAddresses};
-pub use rate_limit::RateLimitConfig;
+pub use rate_limit::{RateLimitConfig, SourcePrefix};
 pub use standalone::{
     backup_standalone_installation, backup_standalone_installation_with_chunk_store,
     restore_backup, start_standalone, BackupArtifacts, BackupSchedule, RunningStandaloneServer,

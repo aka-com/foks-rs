@@ -2,9 +2,15 @@ use foks_client::{
     NewSoftwareDeviceSecrets, NoPassphraseConfigured, SoftwareDeviceProvisionRequest,
     UserPukRotation,
 };
-use foks_proto::{Role, SecretSeed};
+use foks_proto::{
+    Role, RtAppId, RtGetInboxVersionArgument, RtInboxKey, RtPollInbox, RtPollInboxArgument,
+    SecretSeed,
+};
+use foks_rpc::RealtimeRequest;
 use foks_server_testkit::TestAccountSpec;
+use std::io::Write as _;
 
+use crate::authorization::MAX_RESPONSE;
 use crate::support::Fixture;
 
 #[test]
@@ -56,5 +62,57 @@ pub(crate) fn provisioning_success() {
     assert_eq!(
         revoked.verified.shared_key(Role::OWNER).unwrap().generation,
         2
+    );
+
+    // The revoked device's certificate still chains to the client CA and is
+    // within its validity, so TLS accepts it. As on a go-foks host, each
+    // authenticated request on that connection, bounded or realtime poll,
+    // is answered with AUTH_ERROR at its sequence and the connection stays
+    // open.
+    let mut tls = crate::authorization::authenticated_stream(&fixture, &created.credential);
+    let inbox_version = RealtimeRequest::GetInboxVersion(RtGetInboxVersionArgument {
+        key: RtInboxKey { app: RtAppId::Chat },
+    });
+    let poll = RealtimeRequest::PollInbox(RtPollInboxArgument {
+        poll: RtPollInbox {
+            app: RtAppId::Chat,
+            since: 0,
+            timeout_milliseconds: 200,
+        },
+    });
+    for (sequence, request) in [&inbox_version, &poll, &inbox_version]
+        .into_iter()
+        .enumerate()
+    {
+        let sequence = sequence as u64;
+        tls.write_all(&request.encode_at(sequence).unwrap())
+            .unwrap();
+        tls.flush().unwrap();
+        let error = foks_rpc::read_response(&mut tls, MAX_RESPONSE, sequence).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                foks_rpc::Error::RemoteStatus {
+                    code: foks_rpc::STATUS_AUTH_ERROR,
+                    ..
+                }
+            ),
+            "request {sequence}: {error:?}"
+        );
+    }
+    let error = fixture
+        .client
+        .foks()
+        .host_config(fixture.host(), &created.credential)
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
+                code: foks_rpc::STATUS_AUTH_ERROR,
+                ..
+            })
+        ),
+        "{error:?}"
     );
 }

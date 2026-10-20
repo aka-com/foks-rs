@@ -130,8 +130,10 @@ queued behind a slow one records a time after the slow one finished.
 
 **A job whose request has timed out is skipped.** Each request has one
 deadline, the request timeout (30 s by default) after the first byte of its frame. Body
-reading, the handler, reader checkout, queued writes, external chunk transfers
-and the response write all consume it. The session stops waiting for the
+reading, the handler, reader checkout, queued writes and external chunk
+transfers all consume it; the response write of a completed request gets a
+fresh allowance of the I/O timeout (15 s), so finished work is not discarded
+because the deadline ran short. The session stops waiting for the
 handler at the deadline and closes the connection without a response, and the
 client treats the outcome as ambiguous. The handler runs inside a thread-local
 deadline scope, and `WriterHandle::call` records the scope's deadline with the
@@ -212,16 +214,18 @@ mechanism differs by resource.
 | Writer queue | 64 pending jobs | `try_send` fails; status 1012 |
 | Reader pool | 32 connections | `Error::ReaderPool`; status 1012 |
 | Listener admission queue | 32 pending connections | `try_send` fails; connection dropped |
-| Active sessions per listener | 256 | accept loop waits for a permit |
-| Connections per source per listener | 32, loopback exempt | connection dropped |
+| Active sessions per listener | 256, including idle sessions for up to 330 s | accepted connections wait in the 32-entry queue; dropped when it is full |
+| Connections per source per listener | 32 (0 = unlimited); loopback and `trusted_sources` exempt | connection dropped |
 | Request handlers (shared) | 64 blocking permits | `try_acquire_owned` fails; status 1012 |
+| Pending long polls per connection | 4 | status 1012 at the call's sequence; the connection stays open |
 | Realtime inbox polls | 8 per account; 256 in total (the authenticated listener's sessions) | status 1012 |
 | Realtime poll state reads | 16 readers (half the reader pool) | reads wait for a permit |
-| KEX receives | 32, at most half the active sessions | status 1012, not queued |
+| KEX receives | 32, at most half the active sessions; 8 (a quarter) per source, loopback and `trusted_sources` exempt | status 1012, not queued |
 | Request memory | 64 MiB, 2 × frame length reserved per frame; frames up to 4 KiB use a separate 1 MiB budget | frames wait for permits |
-| Working and response memory | 512 MiB and 128 MiB, charged by the codec, SQL results and chunk transfers | status 1012, or the connection closes once a handler may have written |
+| Working and response memory | 512 MiB and 128 MiB, charged by the codec, SQL results and chunk transfers | status 1012 during decoding or on a read-only route; on a route that may write, the connection closes unanswered |
 | Frame size | 16 MiB | rejected before allocation |
 | Request deadline | 30 s from the first frame byte | connection closed; a write still queued is skipped |
+| Idle time between requests | 330 s with no long poll pending (`idle_timeout_seconds`); reads and writes inside a frame have 15 s | connection closed |
 | I/O timeout | 15 s | connection closed |
 
 Handlers run on blocking threads under a semaphore, and they acquire their
@@ -266,15 +270,33 @@ least-recently-used cache capped at 4,096 sources; when a new source
 arrives at capacity, the bucket used longest ago is evicted. An evicted
 source that returns gets a full bucket, which is a small leniency in
 exchange for a hard memory bound. A request that exceeds its bucket gets
-status 1012 and the connection is closed.
+status 1012 at the request's own sequence number, and the connection is
+closed. The server reads the call body first to learn that number: both the
+Go and the Rust client number calls per connection, so a refusal at any
+other sequence would not match the pending call.
 
 Token buckets limit the rate of new work, not how much a source holds at
 once. A source within its connection burst could otherwise open every
 active-session slot and keep each one with a long poll. Each listener
 therefore also counts the connections a source holds, from acceptance
-until the session ends, and closes a new connection beyond 32. Loopback
-peers are exempt, since behind a local TCP proxy every client would appear
-as one loopback source. Realtime inbox polls are limited in the same way per
+until the session ends, and closes a new connection beyond 32 (0 removes
+the limit). Loopback peers are exempt, since behind a local TCP proxy every
+client would appear as one loopback source. A forwarder on another host that
+rewrites client addresses, or a NAT, has the same effect: every client
+behind it is one source, and since the Rust client holds a connection for
+each realtime inbox poll or KEX receive (a Go client multiplexes them on one
+connection), and every client's idle connections stay open for up to the
+330 s idle timeout, a small number of devices can reach the limit. The same
+holds for the 256 active sessions per listener: both limits must cover the
+devices active within one idle timeout, sized in connections per device per
+listener: a go-foks client keeps one connection per server type (probe,
+registration, user, Merkle query, KV, realtime), several of them on the
+authenticated listener, and the Rust client pools up to two idle
+connections per endpoint. The operator
+lists such a forwarder's address or prefix in `trusted_sources`, which
+exempts it as loopback is exempt, or raises or removes the limit for NAT
+that it does not control. A Go v0.1.9 host has no per-source connection
+limit at all. Realtime inbox polls are limited in the same way per
 account rather than per source: one account holds at most 8, so it cannot
 take every poll slot from other users. Every refusal is counted in
 `foks_admission_rejected_total` with a `reason` label.

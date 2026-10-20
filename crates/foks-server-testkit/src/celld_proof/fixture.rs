@@ -241,7 +241,7 @@ impl CellServer {
                 session_faults: Some(Arc::clone(&environment.inner.session_faults)),
                 diagnostics: None,
                 metrics: Arc::new(foks_server::ServerMetrics::default()),
-                rate_limits: environment.inner.rate_limits,
+                rate_limits: environment.inner.rate_limits.clone(),
                 limits: environment.inner.session_limits,
                 waitlist_enabled: false,
             },

@@ -383,6 +383,9 @@ struct ServeArguments {
     maximum_realtime_polls_per_account: usize,
     #[arg(long, default_value_t = LimitsConfig::default().request_timeout_seconds)]
     request_timeout_seconds: u64,
+    /// Seconds a connection may stay idle between requests.
+    #[arg(long, default_value_t = LimitsConfig::default().idle_timeout_seconds)]
+    idle_timeout_seconds: u64,
     #[arg(long, default_value_t = LimitsConfig::default().maximum_pending_writes)]
     maximum_pending_writes: usize,
     #[arg(long, default_value_t = RateLimitConfig::default().connection_burst)]
@@ -397,8 +400,13 @@ struct ServeArguments {
     maximum_rate_limit_ips: usize,
     #[arg(long, default_value_t = RateLimitConfig::default().ipv6_source_prefix)]
     ipv6_source_prefix: u8,
+    /// Connections one source can hold on each listener (zero disables).
     #[arg(long, default_value_t = RateLimitConfig::default().maximum_connections_per_source)]
     maximum_connections_per_source: usize,
+    /// An address or prefix exempt from per-source limits, such as a
+    /// forwarder that rewrites client addresses; repeat for each.
+    #[arg(long = "trusted-source")]
+    trusted_sources: Vec<String>,
     #[arg(long)]
     automatic_backup_directory: Option<PathBuf>,
     #[arg(long, default_value_t = 86_400)]
@@ -675,6 +683,7 @@ fn serve_config(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         maximum_in_flight_requests: limits.maximum_in_flight_requests,
         maximum_realtime_polls_per_account: limits.maximum_realtime_polls_per_account,
         request_timeout_seconds: limits.request_timeout_seconds,
+        idle_timeout_seconds: limits.idle_timeout_seconds,
         maximum_pending_writes: limits.maximum_pending_writes,
         connection_rate_burst: rate_limits.connection_burst,
         connections_per_second: rate_limits.connections_per_second,
@@ -683,6 +692,11 @@ fn serve_config(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         maximum_rate_limit_ips: rate_limits.maximum_tracked_ips,
         ipv6_source_prefix: rate_limits.ipv6_source_prefix,
         maximum_connections_per_source: rate_limits.maximum_connections_per_source,
+        trusted_sources: rate_limits
+            .trusted_sources
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
         automatic_backup_directory: Some(config.backup_directory),
         automatic_backup_interval_seconds: config.backup_interval_seconds,
         automatic_backup_retain: config.backup_retain,
@@ -810,6 +824,7 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
         maximum_in_flight_requests: arguments.maximum_in_flight_requests,
         maximum_realtime_polls_per_account: arguments.maximum_realtime_polls_per_account,
         request_timeout_seconds: arguments.request_timeout_seconds,
+        idle_timeout_seconds: arguments.idle_timeout_seconds,
         maximum_pending_writes: arguments.maximum_pending_writes,
     }
     .session_limits();
@@ -864,6 +879,11 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
             maximum_tracked_ips: arguments.maximum_rate_limit_ips,
             ipv6_source_prefix: arguments.ipv6_source_prefix,
             maximum_connections_per_source: arguments.maximum_connections_per_source,
+            trusted_sources: arguments
+                .trusted_sources
+                .iter()
+                .map(|prefix| prefix.parse())
+                .collect::<Result<_, foks_server::Error>>()?,
         },
         backup: arguments
             .automatic_backup_directory

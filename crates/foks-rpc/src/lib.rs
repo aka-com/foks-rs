@@ -34,7 +34,8 @@ mod server;
 pub use generated::*;
 pub use response::{encode_status_response_at, encode_void_success_response_at, RpcStatus};
 pub use server::{
-    decode_call, decode_message, read_call, read_message, DecodedCall, InboundMessage,
+    call_sequence, cancelled_sequence, decode_call, decode_message, encode_cancel_v2, read_call,
+    read_message, DecodedCall, InboundMessage,
 };
 
 pub const CURRENT_COMPATIBILITY_VERSION: u64 = 1;
@@ -166,6 +167,7 @@ pub fn status_phrase(code: u64) -> Option<&'static str> {
         STATUS_USERNAME_IN_USE_ERROR => "that name is already in use on the server",
         STATUS_DUPLICATE_ERROR => "the server already has this record",
         STATUS_PERMISSION_ERROR => "the server refused permission",
+        STATUS_AUTH_ERROR => "the server does not accept this device's credential",
         STATUS_BAD_ARGS_ERROR => "the server rejected the request as malformed",
         STATUS_BAD_INVITE_CODE_ERROR => "the invitation code is not valid",
         STATUS_BAD_PASSPHRASE_ERROR => "the passphrase is not correct",

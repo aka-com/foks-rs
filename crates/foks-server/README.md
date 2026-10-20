@@ -96,7 +96,9 @@ delegated Ed25519 mTLS subkey, burns one-time hardware recovery challenges, and
 stores PUK-encrypted PIV management-key envelopes with monotonic generations.
 The server never talks to PC/SC and never receives a PIN, PUK, management key,
 or private hardware key. Client-side hardware support is macOS/Linux only.
-Interactive software-device KEX is supported. Rotation to another
+Interactive software-device KEX is supported, for Rust clients and for Go
+v0.1.9 clients, which multiplex KEX calls on one connection (see the session
+limits below). Rotation to another
 already-enrolled Yubi recipient remains outside this slice.
 
 Protocol IDs, method positions, status codes, and service numbers are extracted
@@ -158,16 +160,19 @@ the same default.
   `maximum_active_connections` (256), `maximum_pending_connections` (32),
   `maximum_kex_receive_polls` (32), `maximum_in_flight_requests` (64, at
   least 2), `maximum_realtime_polls_per_account` (8),
-  `request_timeout_seconds` (30) and `maximum_pending_writes` (64). The
-  `serve` flags of the same names set the same values.
+  `request_timeout_seconds` (30), `idle_timeout_seconds` (330) and
+  `maximum_pending_writes` (64). The `serve` flags of the same names set the
+  same values.
 - `[rate_limits]` sets the per-source admission limits: the token buckets
   `connection_burst` (512), `connections_per_second` (256), `request_burst`
   (2,000) and `requests_per_second` (1,000), `maximum_tracked_ips` (4,096),
-  `ipv6_source_prefix` (64, 1 to 128) and
-  `maximum_connections_per_source` (32). The `serve` flags set the same
-  values; the token bucket and tracking flags are named
+  `ipv6_source_prefix` (64, 1 to 128), `maximum_connections_per_source`
+  (32; 0 removes the limit) and `trusted_sources` (empty; a list of
+  addresses or prefixes such as `"10.0.0.0/8"`, at most 256). The `serve`
+  flags set the same values; the token bucket and tracking flags are named
   `--connection-rate-burst`, `--request-rate-burst` and
-  `--maximum-rate-limit-ips`.
+  `--maximum-rate-limit-ips`, and `--trusted-source` is repeated once per
+  entry.
 - `[storage]` sets database capacity: `maximum_database_bytes` (64 GiB),
   `maximum_teams` (4,096), `maximum_team_members` (64),
   `maximum_kv_namespace_bytes` (16 GiB) and `maximum_kv_namespace_objects`
@@ -186,7 +191,8 @@ the same default.
   at most 2^63 - 1.
 
 Each value must be non-zero, except `maximum_kex_receive_polls`, where zero
-refuses every KEX receive. `maximum_team_members` bounds the rows of one
+refuses every KEX receive, and `maximum_connections_per_source`, where zero
+removes the per-source connection limit. `maximum_team_members` bounds the rows of one
 team roster and must not exceed 1,024, the number of roster rows a realtime
 mutation scans when it records message recipients; a larger roster could not
 create channels or send messages. A configured `[web_admin]` listener requires
@@ -238,11 +244,36 @@ configured capacity limits (see [Capacity limits](#capacity-limits)). They
 use fixed, non-user-derived names and never export paths, identities, request
 values, or key material.
 
+A connection may wait `idle_timeout_seconds` (330 s) between requests, with no
+long poll pending, before the server closes it. Reads and writes within a
+frame are bounded separately by the 15 s I/O timeout (`io_timeout`). A Go
+v0.1.9 server never closes an idle connection and a Go client closes its own
+after five minutes idle, so the default lets the client's close come first; a
+call that raced a server-side close would otherwise fail with an RPC EOF that
+the Go client does not retry.
+
+Idle connections count against `maximum_active_connections` and
+`maximum_connections_per_source` for as long as they stay open, so both
+limits must cover every client that was active within the last
+`idle_timeout_seconds`, not only the ones with a request in progress. Size
+them in connections per device per listener: go-foks keeps one connection
+per server type (probe, registration, user, Merkle query, KV, realtime) open
+for about five minutes after its last call, so a Go device holds several on
+the authenticated listener (user, KV and realtime) and some on the public
+one, and the Rust client pools up to two idle connections per endpoint
+besides the connections its long polls hold. A connection that finds every active slot taken waits in the
+listener's queue of `maximum_pending_connections` and is dropped when that
+queue is full. Size the limits for the number of devices active in any 5.5
+minute window, or lower `idle_timeout_seconds` (at the cost of Go calls that
+race a server-side close).
+
 Each request has one deadline, `request_timeout_seconds` after the first byte
 of its frame arrives. Reading the rest of the frame, waiting for a handler
-permit, reader checkout, the handler, its queued writes, external chunk
-transfers and the response write all consume it; idle time between requests
-does not. A request that reaches its deadline before the handler returns is
+permit, reader checkout, the handler, its queued writes and external chunk
+transfers all consume it; idle time between requests does not. Once the
+handler has returned, the response write gets a fresh `io_timeout` allowance,
+so a response whose work used most of the deadline is still delivered to a
+slow reader instead of being discarded. A request that reaches its deadline before the handler returns is
 closed without a response. If its write is still in the writer queue at that
 point, the writer does not run it: it opens no transaction for the job and
 counts it in `foks_writer_expired_total`. A write that the handler submits
@@ -253,13 +284,46 @@ of a committed SSO access-refresh claim. A rising count means that handlers,
 including their wait in the writer queue, take longer than the request timeout
 before their writes start. Long polls (OIDC completion, KEX receive and
 realtime inbox) wait on their own timeouts instead, and their response write
-gets a fresh `io_timeout` allowance.
+gets the same fresh allowance.
+
+A long poll does not block its connection. Go clients multiplex calls on one
+connection by sequence number, and go-foks device pairing issues further KEX
+calls while an hour-long KEX receive is pending. While long polls are
+pending, the session keeps reading frames: a call is served (ordinary
+requests one at a time, as on an idle connection), and each response is
+written when it is ready, so responses can arrive in a different order than
+their calls. A CANCEL control message for a pending poll's sequence number
+ends that poll without a response and releases its permits; end of stream or
+a read error closes the connection and drops its pending polls. One
+connection holds at most four pending long polls; a fifth is answered with
+status 1012 at its sequence number, counted as
+`foks_admission_rejected_total{reason="connection_long_polls"}`, and the
+connection goes on serving the peer's other calls. A long poll refused by the
+KEX receive budget is answered the same way, and so are a request refused
+because every handler permit is in use or its working memory cannot be
+admitted. A connection with a pending long poll is not idle. After 4,096
+frames (a compiled limit) a connection admits no new long poll: it answers
+one with status 1012, counted only in `foks_requests_total`, while it still
+serves ordinary calls and reads cancels and end of stream, and it ends once
+the long polls admitted before the limit have been answered.
+
+A session that ends in order (after that drain, on end of stream, an idle or
+frame-read timeout, or after a refusal that closes the connection, such as
+the per-source request rate) sends TLS close_notify and a TCP FIN and reads
+what the peer still sends for up to two seconds, so that its last response
+is not lost to a reset. A malformed or oversized frame, a handler timeout,
+an armed fault and a server stop close the connection without that.
 
 `foks_requests_total{family,status}` counts written responses by route family
 (the protocol name, such as `KvStore` or `Reg`) and wire status code (`0` for
 a success). Responses written before a route is resolved have
-`family="unrouted"`: per-address rate-limit refusals, unknown methods, methods
-on the wrong listener and oversized arguments. A request that ends without a
+`family="unrouted"`: per-address rate-limit refusals, unknown methods,
+methods on the wrong listener and oversized arguments. A request whose client
+certificate is not bound to an active credential, such as one from a revoked
+device whose certificate has not expired, receives status 1006 (`AUTH_ERROR`,
+as on a Go host), counted under its route's family, and the connection stays
+open; this holds for ordinary routes and the realtime inbox poll. A storage
+fault during that lookup is reported with site `authenticate`. A request that ends without a
 response, for example on a handler timeout, appears only in
 `foks_requests_started_total`. `foks_request_internal_errors_total{site,reason}`
 counts server faults that a handler reported as status 1014 (transaction
@@ -274,17 +338,26 @@ with status 1012 because every pooled read connection was in use. The
 `foks_reader_pool_open` gauge is the number of connections that pool holds
 open; it never decreases, because the pool keeps every connection it opens.
 `foks_rate_limited_requests_total` counts per-source token-bucket,
-handler-permit, request-memory and KEX receive refusals.
+handler-permit, request-memory, KEX receive and per-connection long-poll
+refusals.
 `foks_admission_rejected_total{reason}` counts every admission refusal by its
 cause: `connection_rate` and `request_rate` (the per-source token buckets),
 `source_connections` (the per-source connection limit), `admission_queue` (a
 full queue of accepted connections), `request_handlers` (every handler permit
 in use), `account_realtime_polls` (the per-account realtime inbox poll limit),
-`kex_receive_polls` (the global KEX receive limit) and `request_memory` (the
-shared request working-memory budget). `foks_kex_active_polls`,
+`kex_receive_polls` (the global KEX receive limit and each source's share
+of it), `connection_long_polls` (more than four long polls pending on one
+connection) and `request_memory` (the shared request input, working and
+response memory budgets). A request whose working or response memory runs
+out is answered with status 1012 when the shortfall comes while its argument
+is decoded, before any handler runs, or when its route only reads (KV reads
+and listings, chain and Merkle loads, realtime reads). On any other route the
+handler may already have committed a write, so the connection closes without
+a response and the client keeps the outcome as unknown. `foks_kex_active_polls`,
 `foks_kex_admitted_total`, `foks_kex_rejected_total` and
 `foks_kex_completed_total{reason}` (`delivered`, `timeout`, `disconnected`,
-`shutdown`, `failed`) describe KEX receives.
+`cancelled` by the client's CANCEL message, `shutdown`, `failed`) describe
+KEX receives.
 
 When OIDC is configured and the host has a rollout policy, `/metrics` also
 reports the `foks_oidc_*` rollout gauges: mode, provider block, authorization
@@ -326,16 +399,44 @@ tracking memory. A source is one IPv4 address, or one IPv6 prefix of
 new bucket by choosing another address within its prefix. An IPv4-mapped IPv6
 peer is its IPv4 source. The `[rate_limits]` table or the `serve` flags set
 the refill rates, bursts, prefix length and maximum tracked source count. A
-connection whose bucket is empty is closed without a response; a framed
-request that exceeds its bucket receives FOKS status 1012 and the connection
-closes.
+connection whose bucket is empty is closed without a response. A framed
+request that exceeds its bucket is still read, within the frame and request
+memory limits, and receives FOKS status 1012 at the request's own sequence
+number; the connection then closes. A control frame (NOTIFY or CANCEL) over
+the bucket has no sequence number and closes the connection unanswered.
 
 Each listener also limits the connections one source holds at once, queued
 or active, to `maximum_connections_per_source`, so that one source cannot
 occupy all `maximum_active_connections` slots with long polls or slow
-requests. A connection over the limit is closed without a response. Loopback
-peers are exempt: they are local processes or a local TCP proxy, and behind
-such a proxy every client would share one source.
+requests. A connection over the limit is closed without a response and
+counted in `foks_admission_rejected_total{reason="source_connections"}`; at
+most once a minute per listener, stderr gets a line `FOKS connection refused:
+reason=source_connections, source=...` with the number of refusals since the
+previous line. Loopback peers are exempt: they are local processes or a local
+TCP proxy, and behind such a proxy every client would share one source.
+
+The same holds for any forwarder or network address translation between the
+clients and the server that rewrites the client's source address: a load
+balancer or TCP proxy on another host that uses source NAT (for example a
+Kubernetes Service with `externalTrafficPolicy: Cluster`, or Docker's
+userland proxy), an office NAT, carrier-grade NAT, or an IPv6 site whose
+clients share one /64. Every client behind it is one source. The Rust client
+holds a connection open for each realtime inbox poll, KEX receive or OIDC
+completion poll (a Go client multiplexes its polls on one connection per
+host), and every client keeps its connections open while idle for up to
+`idle_timeout_seconds` (330 s), so a small number of devices behind one
+such address can reach the default limit of 32, and a refused client sees
+only a reset connection. Go v0.1.9 hosts have no such limit. For a forwarder the operator
+controls, list its address or prefix in `trusted_sources`: those peers are
+exempt from the per-source connection limit, the KEX relay's per-source
+share and the per-source share of KEX receives (8 by default; see below), as
+loopback peers are. For clients behind NAT that the operator does
+not control, raise `maximum_connections_per_source` or set it to 0 to remove
+the limit. The token buckets still count a trusted source or a NAT address
+as one source, so `connection_burst`, `request_burst` and their rates must
+cover the aggregate of the clients behind it. Passthrough load balancers that
+preserve the client address need neither setting. The server does not read
+the PROXY protocol.
 
 A realtime inbox poll (`RtPollInbox`) holds its connection for up to 55
 seconds. One account, across all of its devices, can hold at most
@@ -354,13 +455,31 @@ A KEX receive can stay open for up to an hour. At most
 `maximum_active_connections`, are outstanding at once across all
 connections; a receive over that limit is refused at once with status 1012
 and is not queued, so receives cannot hold every connection of the public
-listener.
+listener. The refusal leaves its connection open. One source can hold at
+most a quarter of that budget (8 of the default 32, and at least one), so
+that a single address cannot take every pairing slot for an hour; a receive
+over its source's share is refused the same way. Pairing one Go device holds
+up to three receives across both devices, so two concurrent pairings behind
+one NAT address fit in the default share; raising
+`maximum_kex_receive_polls` (and `maximum_active_connections`, which caps it
+at half) raises the share with it. Both refusals are counted in
+`foks_kex_rejected_total` and
+`foks_admission_rejected_total{reason="kex_receive_polls"}`. Loopback peers
+and `trusted_sources` are exempt from the per-source share. Accepted RPC
+connections send TCP keepalive probes after 15 s of silence, as a Go
+listener does, then every 15 s, at most nine times, where the platform
+allows setting those (Linux, the BSDs, macOS; Windows keeps its own probe
+count). A receive left by a client that vanished without closing its
+connection then releases its slot within a few minutes rather than after an
+hour. If keepalive cannot be enabled, the connection is still served and
+stderr gets one warning.
 
 The public KEX relay holds at most 4,096 pairing packets or 32 MiB of them,
 each for up to two hours, and refuses a send at either bound with status 1012.
 One source can hold at most a sixteenth of each (256 packets or 2 MiB), so
 that it cannot fill the relay and block device pairing for other users.
-Loopback peers are exempt, as from the per-source connection limit.
+Loopback peers and `trusted_sources` are exempt, as from the per-source
+connection limit.
 
 Automatic backups are opt-in:
 
@@ -434,7 +553,8 @@ reads use read-only connections from bounded asynchronous sessions; the default
 limits are four async runtime workers, 256 active and 32 pending connections per
 listener, 64 request handlers shared across listeners, 4,096 requests per
 connection, 64 pending writes in the executable, a 15-second I/O timeout, a
-30-second request-execution timeout, and a 16 MiB frame ceiling. A timed-out
+330-second idle timeout between requests, a 30-second request-execution
+timeout, and a 16 MiB frame ceiling. A timed-out
 handler closes its connection without claiming that a durable mutation was
 cancelled; any surviving synchronous work retains its execution permit until
 it exits, keeping resource use bounded.

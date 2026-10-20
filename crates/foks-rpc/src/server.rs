@@ -103,6 +103,55 @@ pub fn decode_message(content: &[u8]) -> Result<InboundMessage> {
     }
 }
 
+/// Returns the sequence number of an unframed `CALL_V2` message from its
+/// first two elements alone, without decoding its argument. A server uses
+/// it to answer a call whose argument it could not decode within its memory
+/// budget.
+pub fn call_sequence(content: &[u8]) -> Option<u64> {
+    let mut cursor = Cursor::new(content);
+    if !matches!(cursor.byte().ok()?, 0x95 | 0x96) {
+        return None;
+    }
+    if unsigned(cursor.value().ok()?).ok()? != METHOD_CALL_V2 {
+        return None;
+    }
+    unsigned(cursor.value().ok()?).ok()
+}
+
+/// Returns the sequence number that a `CANCEL` or `CANCEL_V2` control message
+/// cancels, or `None` for any other message. go-snowpack-rpc sends one when
+/// the context of a call it is waiting on ends; the message is
+/// `[method type, sequence, ...method name]`.
+pub fn cancelled_sequence(content: &[u8]) -> Option<u64> {
+    let mut cursor = Cursor::new(content);
+    let elements = match cursor.byte().ok()? {
+        byte @ 0x92..=0x9f => usize::from(byte - 0x90),
+        _ => return None,
+    };
+    let method = unsigned(cursor.value().ok()?).ok()?;
+    if !matches!(method, METHOD_CANCEL | METHOD_CANCEL_V2) {
+        return None;
+    }
+    let sequence = unsigned(cursor.value().ok()?).ok()?;
+    for _ in 2..elements {
+        cursor.value().ok()?;
+    }
+    cursor.done().then_some(sequence)
+}
+
+/// Encodes the framed `CANCEL_V2` control message that go-snowpack-rpc sends
+/// for a version 2 call whose context ended while it waited for the
+/// response: `[7, sequence, protocol ID, method position]`.
+pub fn encode_cancel_v2(protocol_id: u64, method_position: u64, sequence: u64) -> Result<Vec<u8>> {
+    let content = foks_snowpack::encode(&foks_snowpack::Value::Array(vec![
+        foks_snowpack::Value::Unsigned(METHOD_CANCEL_V2),
+        foks_snowpack::Value::Unsigned(sequence),
+        foks_snowpack::Value::Unsigned(protocol_id),
+        foks_snowpack::Value::Unsigned(method_position),
+    ]))?;
+    super::frame(&content, super::DEFAULT_MAX_FRAME_LENGTH)
+}
+
 /// Strictly decodes one unframed v0.1.9 RPC call.
 pub fn decode_call(content: &[u8]) -> Result<DecodedCall> {
     let mut cursor = Cursor::new(content);

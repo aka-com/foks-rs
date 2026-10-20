@@ -639,7 +639,22 @@ pub enum TestProfile {
     BackupAutomation,
     /// Serves Reg.joinWaitList with a cap of `WAITLIST_TEST_ENTRIES` entries.
     Waitlist,
+    /// Ends each connection after `FEW_REQUESTS_PER_CONNECTION` frames.
+    FewRequests,
+    /// Closes connections idle for `SHORT_IDLE_TIMEOUT` between requests;
+    /// other limits are the defaults.
+    ShortIdle,
 }
+
+/// Idle allowance between requests under `TestProfile::ShortIdle`.
+pub const SHORT_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Idle allowance between requests under `TestProfile::TightIo`, whose
+/// `io_timeout` is 500 ms.
+pub const TIGHT_IO_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Frame budget of one connection under `TestProfile::FewRequests`.
+pub const FEW_REQUESTS_PER_CONNECTION: usize = 3;
 
 pub const WAITLIST_TEST_ENTRIES: u64 = 4;
 
@@ -700,7 +715,9 @@ impl TestProfile {
             | Self::RealtimeSingleReader
             | Self::StorageShutdown
             | Self::RateLimited
-            | Self::BackupAutomation => foks_server_db::Config::default(),
+            | Self::BackupAutomation
+            | Self::FewRequests
+            | Self::ShortIdle => foks_server_db::Config::default(),
         };
         let limits = foks_server::SessionLimits {
             maximum_read_connections: if matches!(self, Self::RealtimeSingleReader) {
@@ -753,6 +770,18 @@ impl TestProfile {
                 std::time::Duration::from_secs(2)
             } else {
                 foks_server::SessionLimits::default().request_timeout
+            },
+            idle_timeout: if matches!(self, Self::TightIo) {
+                TIGHT_IO_IDLE_TIMEOUT
+            } else if matches!(self, Self::ShortIdle) {
+                SHORT_IDLE_TIMEOUT
+            } else {
+                foks_server::SessionLimits::default().idle_timeout
+            },
+            maximum_requests: if matches!(self, Self::FewRequests) {
+                FEW_REQUESTS_PER_CONNECTION
+            } else {
+                foks_server::SessionLimits::default().maximum_requests
             },
             ..foks_server::SessionLimits::default()
         };

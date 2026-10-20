@@ -171,7 +171,7 @@ pub(super) async fn realtime_poll_response(
     call: RoutedCall,
     certificate: Option<Vec<u8>>,
 ) -> Result<Vec<u8>, RpcStatus> {
-    let certificate = certificate.ok_or_else(super::permission_denied)?;
+    let certificate = certificate.ok_or(RpcStatus::AuthError)?;
     realtime::poll_response(data, call, certificate).await
 }
 

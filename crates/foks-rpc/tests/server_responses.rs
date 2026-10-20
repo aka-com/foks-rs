@@ -90,6 +90,7 @@ fn headerless_nonvoid_success_matches_the_generated_go_client_envelope() {
 fn every_typed_status_is_observed_as_an_application_error() {
     let versions = KvPathVersionVector::decode(&fixture("kv-path-version-vector.snowp")).unwrap();
     let statuses = [
+        RpcStatus::AuthError,
         RpcStatus::BadArguments("bad input".into()),
         RpcStatus::DeviceAlreadyProvisioned,
         RpcStatus::Expired,
