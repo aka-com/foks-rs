@@ -1,7 +1,8 @@
 use super::*;
 fn workspace() -> CertificateWorkspace {
     CertificateWorkspace::new(
-        crate::net::memory::Pools::new(Default::default())
+        crate::net::memory::pools(Default::default())
+            .unwrap()
             .admitted_request(None)
             .unwrap(),
         MAX_DER,

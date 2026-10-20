@@ -2031,6 +2031,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "foks-hosted-transport"
+version = "0.4.0"
+dependencies = [
+ "foks-metadata-core",
+ "foks-rpc",
+ "foks-snowpack",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "foks-keystore"
 version = "0.4.0"
 dependencies = [
@@ -2177,6 +2188,7 @@ dependencies = [
  "clap",
  "foks-client-db",
  "foks-crypto",
+ "foks-hosted-transport",
  "foks-local-deadline",
  "foks-merkle-store",
  "foks-metadata-core",

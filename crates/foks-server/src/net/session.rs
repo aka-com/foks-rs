@@ -19,7 +19,9 @@ use foks_rpc::{
 };
 use foks_snowpack::{decode, Value};
 use rustls::pki_types::CertificateDer;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+#[cfg(test)]
+use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::{watch, Semaphore};
 
 use crate::auth::Principal;
@@ -217,7 +219,7 @@ impl ServerData {
             small_request_memory: Arc::new(Semaphore::new(
                 config.limits.maximum_control_memory_bytes,
             )),
-            memory: super::memory::Pools::new(config.limits),
+            memory: super::memory::pools(config.limits)?,
             kex_relay: Arc::new(kex::Relay::default()),
             realtime: crate::services::realtime::RealtimeService::new(Arc::clone(&config.metrics)),
         })
@@ -1491,7 +1493,14 @@ pub(crate) async fn serve(
             && matches!(&routed,Ok(call) if call.route.id==crate::rpc::RouteId::RegPollOAuth2SessionCompletion);
         let chunk_download = !data.proof_enabled()
             && matches!(&routed, Ok(call) if call.route.id == crate::rpc::RouteId::KvStoreGetEncryptedChunk);
-        if !request_memory.admit_working(argument_bytes, chunk_download) {
+        let workload = if chunk_download {
+            super::memory::Workload::ChunkDownload {
+                maximum_encoded_bytes: crate::chunks::MAXIMUM_ENCODED_CHUNK_BYTES,
+            }
+        } else {
+            super::memory::Workload::Ordinary
+        };
+        if !request_memory.admit_working(argument_bytes, workload) {
             if service_data.proof_enabled() {
                 return Ok(());
             }
@@ -1917,77 +1926,7 @@ where
     }
 }
 
-#[cfg(test)]
-async fn read_frame_length_async<R: AsyncRead + Unpin>(
-    reader: &mut R,
-    maximum: usize,
-) -> foks_rpc::Result<usize> {
-    let marker = read_byte_async(reader).await?;
-    read_frame_length_after_marker(reader, maximum, marker).await
-}
-
-pub(crate) async fn read_frame_ingress<R: AsyncRead + Unpin>(
-    reader: &mut R,
-    maximum: usize,
-    budget: std::time::Duration,
-) -> foks_rpc::Result<(usize, crate::deadline::Deadline)> {
-    // Idle time is not request work. Once the first byte arrives, all remaining
-    // framing, dispatch and ordinary response work consume this same deadline.
-    let marker = read_byte_async(reader).await?;
-    let deadline = crate::deadline::Deadline::after(budget)
-        .map_err(|error| foks_rpc::Error::Io(std::io::Error::other(error)))?;
-    let length = tokio::time::timeout_at(
-        deadline.instant().into(),
-        read_frame_length_after_marker(reader, maximum, marker),
-    )
-    .await
-    .map_err(|_| foks_rpc::Error::Io(timeout_error("frame deadline expired")))??;
-    Ok((length, deadline))
-}
-
-async fn read_frame_length_after_marker<R: AsyncRead + Unpin>(
-    reader: &mut R,
-    maximum: usize,
-    marker: u8,
-) -> foks_rpc::Result<usize> {
-    let length = match marker {
-        0x00..=0x7f => usize::from(marker),
-        0xcc => {
-            let value = usize::from(read_byte_async(reader).await?);
-            if value <= 0x7f {
-                return Err(foks_rpc::Error::FrameLengthMarker(marker));
-            }
-            value
-        }
-        0xcd => {
-            let value = usize::from(read_u16_async(reader).await?);
-            if value <= usize::from(u8::MAX) {
-                return Err(foks_rpc::Error::FrameLengthMarker(marker));
-            }
-            value
-        }
-        0xce => {
-            let value = usize::try_from(read_u32_async(reader).await?).map_err(|_| {
-                foks_rpc::Error::FrameTooLarge {
-                    received: usize::MAX,
-                    maximum,
-                }
-            })?;
-            if value <= usize::from(u16::MAX) {
-                return Err(foks_rpc::Error::FrameLengthMarker(marker));
-            }
-            value
-        }
-        _ => return Err(foks_rpc::Error::FrameLengthMarker(marker)),
-    };
-    if length > maximum {
-        return Err(foks_rpc::Error::FrameTooLarge {
-            received: length,
-            maximum,
-        });
-    }
-    Ok(length)
-}
+pub(crate) use foks_hosted_transport::framing::read_frame_ingress;
 
 async fn read_call_body_async<R: AsyncRead + Unpin>(
     reader: &mut R,
@@ -2023,31 +1962,11 @@ async fn read_call_body_async<R: AsyncRead + Unpin>(
     Ok((message, memory))
 }
 
-async fn read_byte_async<R: AsyncRead + Unpin>(reader: &mut R) -> std::io::Result<u8> {
-    let mut byte = [0];
-    reader.read_exact(&mut byte).await?;
-    Ok(byte[0])
-}
-
-async fn read_u16_async<R: AsyncRead + Unpin>(reader: &mut R) -> std::io::Result<u16> {
-    let mut bytes = [0; 2];
-    reader.read_exact(&mut bytes).await?;
-    Ok(u16::from_be_bytes(bytes))
-}
-
-async fn read_u32_async<R: AsyncRead + Unpin>(reader: &mut R) -> std::io::Result<u32> {
-    let mut bytes = [0; 4];
-    reader.read_exact(&mut bytes).await?;
-    Ok(u32::from_be_bytes(bytes))
-}
-
 fn phase_deadline(
     deadline: crate::deadline::Deadline,
     maximum: std::time::Duration,
 ) -> Result<tokio::time::Instant> {
-    deadline.remaining()?;
-    let phase = crate::deadline::Deadline::after(maximum)?;
-    Ok(deadline.instant().min(phase.instant()).into())
+    foks_hosted_transport::framing::phase_deadline(deadline, maximum).map_err(Into::into)
 }
 
 pub(crate) async fn write_response_until<W: tokio::io::AsyncWrite + Unpin>(
@@ -2056,28 +1975,9 @@ pub(crate) async fn write_response_until<W: tokio::io::AsyncWrite + Unpin>(
     deadline: crate::deadline::Deadline,
     maximum: std::time::Duration,
 ) -> Result<()> {
-    tokio::time::timeout_at(phase_deadline(deadline, maximum)?, async {
-        writer.write_all(response).await?;
-        writer.flush().await
-    })
-    .await
-    .map_err(|_| crate::Error::Io(timeout_error("response deadline expired")))??;
-    Ok(())
-}
-
-#[cfg(test)]
-pub(super) async fn write_response<W: tokio::io::AsyncWrite + Unpin>(
-    writer: &mut W,
-    response: &[u8],
-    timeout: std::time::Duration,
-) -> Result<()> {
-    write_response_until(
-        writer,
-        response,
-        crate::deadline::Deadline::after(timeout)?,
-        timeout,
-    )
-    .await
+    foks_hosted_transport::framing::write_response_until(writer, response, deadline, maximum)
+        .await
+        .map_err(Into::into)
 }
 
 fn timeout_error(message: &'static str) -> std::io::Error {
@@ -2307,7 +2207,7 @@ mod tests {
                 length,
                 1024,
                 Arc::new(Semaphore::new(4096)),
-                super::super::memory::Pools::new(crate::SessionLimits::default()),
+                super::super::memory::pools(crate::SessionLimits::default()).unwrap(),
             ),
         )
         .await;
@@ -2394,16 +2294,20 @@ mod tests {
         sender_one.write_all(&request).await.unwrap();
         sender_two.write_all(&request).await.unwrap();
 
-        let first_length =
-            read_frame_length_async(&mut reader_one, foks_rpc::DEFAULT_MAX_FRAME_LENGTH)
-                .await
-                .unwrap();
+        let first_length = read_frame_ingress(
+            &mut reader_one,
+            foks_rpc::DEFAULT_MAX_FRAME_LENGTH,
+            std::time::Duration::from_secs(15),
+        )
+        .await
+        .unwrap()
+        .0;
         let first = read_call_body_async(
             &mut reader_one,
             first_length,
             foks_rpc::DEFAULT_MAX_FRAME_LENGTH,
             Arc::clone(&budget),
-            super::super::memory::Pools::new(crate::SessionLimits::default()),
+            super::super::memory::pools(crate::SessionLimits::default()).unwrap(),
         )
         .await
         .unwrap();
@@ -2413,16 +2317,20 @@ mod tests {
         }
         assert_eq!(budget.available_permits(), 0);
 
-        let second_length =
-            read_frame_length_async(&mut reader_two, foks_rpc::DEFAULT_MAX_FRAME_LENGTH)
-                .await
-                .unwrap();
+        let second_length = read_frame_ingress(
+            &mut reader_two,
+            foks_rpc::DEFAULT_MAX_FRAME_LENGTH,
+            std::time::Duration::from_secs(15),
+        )
+        .await
+        .unwrap()
+        .0;
         let mut second = Box::pin(read_call_body_async(
             &mut reader_two,
             second_length,
             foks_rpc::DEFAULT_MAX_FRAME_LENGTH,
             Arc::clone(&budget),
-            super::super::memory::Pools::new(crate::SessionLimits::default()),
+            super::super::memory::pools(crate::SessionLimits::default()).unwrap(),
         ));
         assert!(
             tokio::time::timeout(std::time::Duration::from_millis(10), &mut second)

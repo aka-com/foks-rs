@@ -1,7 +1,8 @@
 use super::*;
 use crate::restricted_storage::import::list::connection::{FixedExpected, FIXED_CHECKS};
 fn memory() -> Arc<Request> {
-    crate::net::memory::Pools::new(Default::default())
+    crate::net::memory::pools(Default::default())
+        .unwrap()
         .admitted_request(None)
         .unwrap()
 }

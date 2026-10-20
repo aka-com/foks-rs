@@ -671,7 +671,7 @@ mod tests {
         (import, control)
     }
     fn pools() -> Arc<Pools> {
-        Pools::new(Default::default())
+        crate::net::memory::pools(Default::default()).unwrap()
     }
     fn failed_path(import: &NativePersonalListImport) -> PathBuf {
         import.identity.path().to_path_buf()

@@ -184,7 +184,8 @@ pub async fn start_native_personal_list_qualification(
     control.check()?;
     let artifacts = artifacts.clone();
     let job = control.clone();
-    let pools = Pools::new(limits);
+    let pools = crate::net::memory::pools(limits)
+        .map_err(|_| ScanError::Unsupported("qualification session limits"))?;
     let construction_pools = pools.clone();
     let (owner, tls) = tokio::task::spawn_blocking(move || {
         let mut scanner = crate::restricted_storage::RestrictedScanner::capture_finalized_backup(
