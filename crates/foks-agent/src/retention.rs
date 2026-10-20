@@ -203,7 +203,14 @@ fn record_failure(profile: &str, error: &(dyn std::error::Error + 'static)) {
         }
     };
     if !failing.contains_key(profile) && failing.len() >= FAILING_PROFILES {
-        failing.pop_first();
+        // Evict the failure recorded longest ago.
+        if let Some(oldest) = failing
+            .iter()
+            .min_by_key(|(_, failure)| failure.at_ms)
+            .map(|(name, _)| name.clone())
+        {
+            failing.remove(&oldest);
+        }
     }
     failing.insert(
         profile.to_owned(),
@@ -214,6 +221,13 @@ fn record_failure(profile: &str, error: &(dyn std::error::Error + 'static)) {
             logged_at_ms,
         },
     );
+}
+
+/// A profile removed from the registry no longer has a failing pass.
+fn forget_removed_profiles(names: &[String]) {
+    if let Ok(mut failing) = FAILING.lock() {
+        failing.retain(|name, _| names.contains(name));
+    }
 }
 
 /// A successful pass clears the profile's recorded failure.
@@ -278,6 +292,7 @@ fn run(
         }
     };
     let names: Vec<String> = registry.profiles().map(|p| p.name.clone()).collect();
+    forget_removed_profiles(&names);
     WAKE.store(false, Ordering::Relaxed);
     if let Ok(mut hints) = HINTS.get_or_init(Default::default).lock() {
         for name in std::mem::take(&mut *hints) {
@@ -353,6 +368,9 @@ fn admit(state: &Path, profile: &str) -> Option<super::profile_work::Permit> {
 mod tests {
     use super::*;
 
+    /// The failure registry is process-wide; its tests run one at a time.
+    static FAILING_TESTS: Mutex<()> = Mutex::new(());
+
     /// A foreground request that holds the profile for longer than the
     /// maintenance slice delays the pass instead of failing its admission.
     #[test]
@@ -386,6 +404,7 @@ mod tests {
     /// the profile or message; a later success clears the profile.
     #[test]
     fn failures_are_redacted_rate_limited_per_profile_and_cleared() {
+        let _serial = FAILING_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         let logged_at = |profile: &str| FAILING.lock().unwrap()[profile].logged_at_ms;
         let error = std::io::Error::other("checked session refused for private-name");
         record_failure("retention-test-a", &error);
@@ -402,11 +421,45 @@ mod tests {
         let text = status.to_string();
         assert!(!text.contains("retention-test") && !text.contains("private-name"));
         record_success("retention-test-a");
-        record_success("retention-test-b");
-        let failing = FAILING.lock().unwrap();
-        assert!(!failing.contains_key("retention-test-a"));
-        assert!(!failing.contains_key("retention-test-b"));
+        assert!(!FAILING.lock().unwrap().contains_key("retention-test-a"));
+        // A profile no longer in the registry is forgotten.
+        let others: Vec<String> = FAILING
+            .lock()
+            .unwrap()
+            .keys()
+            .filter(|name| *name != "retention-test-b")
+            .cloned()
+            .collect();
+        forget_removed_profiles(&others);
+        assert!(!FAILING.lock().unwrap().contains_key("retention-test-b"));
     }
+
+    /// At the cap the failure recorded longest ago is evicted, whatever its
+    /// profile's name.
+    #[test]
+    fn the_oldest_failure_is_evicted_at_the_cap() {
+        let _serial = FAILING_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        FAILING.lock().unwrap().clear();
+        let error = std::io::Error::other("refused");
+        for index in 0..FAILING_PROFILES - 1 {
+            record_failure(&format!("retention-cap-{index:02}"), &error);
+        }
+        record_failure("zz-retention-cap-oldest", &error);
+        for (name, failure) in FAILING.lock().unwrap().iter_mut() {
+            failure.at_ms = if name == "zz-retention-cap-oldest" {
+                5
+            } else {
+                10
+            };
+        }
+        record_failure("retention-cap-new", &error);
+        let failing = FAILING.lock().unwrap();
+        assert_eq!(failing.len(), FAILING_PROFILES);
+        assert!(!failing.contains_key("zz-retention-cap-oldest"));
+        assert!(failing.contains_key("retention-cap-00"));
+        assert!(failing.contains_key("retention-cap-new"));
+    }
+
     #[test]
     fn startup_discovers_last_profile_and_backoff_is_profile_local() {
         let names = vec!["a".into(), "b".into(), "c".into()];
