@@ -5,7 +5,7 @@ const fail = () => { throw new Error("proof node derivation rejected"); };
 
 export function nodeDecoder(module) {
   const forbidden = () => { throw new Error("pure node decoder called an import"); };
-  const instance = new WebAssembly.Instance(module, {foks:{sql:forbidden,domain:forbidden}});
+  const instance = new WebAssembly.Instance(module, {foks:{sql:forbidden,domain:forbidden,sql_page:forbidden}});
   const exports = instance.exports;
   for (const name of ["small_box_input_alloc","small_box_ciphertext_length","output_pointer","output_length"]) {
     if (typeof exports[name] !== "function") fail();

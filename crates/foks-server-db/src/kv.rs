@@ -3,13 +3,13 @@
 pub const KV_NAME_CONFLICT_SQL: &str = "SELECT '1' FROM kv_dirent_current
 WHERE uid = ?1 AND parent_id = ?2 AND dirent_id != ?3 AND name_mac = ?4 LIMIT 1";
 
-const KV_LIST_INITIAL_SQL: &str = "SELECT d.exact_dirent, c.node_id FROM kv_dirent_current c
+pub const KV_LIST_INITIAL_SQL: &str = "SELECT d.exact_dirent, c.node_id FROM kv_dirent_current c
 JOIN kv_dirents d ON d.uid=c.uid AND d.parent_id=c.parent_id AND d.dirent_id=c.dirent_id AND d.version=c.version
 WHERE c.uid=?1 AND c.parent_id=?2 ORDER BY c.name_mac,c.dirent_id LIMIT ?3";
-const KV_LIST_MAC_SQL: &str = "SELECT d.exact_dirent, c.node_id FROM kv_dirent_current c
+pub const KV_LIST_MAC_SQL: &str = "SELECT d.exact_dirent, c.node_id FROM kv_dirent_current c
 JOIN kv_dirents d ON d.uid=c.uid AND d.parent_id=c.parent_id AND d.dirent_id=c.dirent_id AND d.version=c.version
 WHERE c.uid=?1 AND c.parent_id=?2 AND c.name_mac>?3 ORDER BY c.name_mac,c.dirent_id LIMIT ?4";
-const KV_LIST_TIME_SQL: &str = "SELECT d.exact_dirent, c.node_id FROM kv_dirent_current c
+pub const KV_LIST_TIME_SQL: &str = "SELECT d.exact_dirent, c.node_id FROM kv_dirent_current c
 JOIN kv_dirents d ON d.uid=c.uid AND d.parent_id=c.parent_id AND d.dirent_id=c.dirent_id AND d.version=c.version
 WHERE c.uid=?1 AND c.parent_id=?2 AND c.creation_time>=?3 ORDER BY c.creation_time,c.dirent_id LIMIT ?4";
 

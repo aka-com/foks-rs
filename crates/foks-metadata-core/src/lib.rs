@@ -6,10 +6,15 @@
 
 pub mod authority;
 pub mod catalog;
+pub mod directory;
 mod dirents;
+pub mod list_encoder;
 #[cfg(feature = "native")]
 pub mod native;
+pub mod page;
+pub mod page_catalog;
 pub mod personal;
+pub mod read_token;
 #[cfg(target_arch = "wasm32")]
 mod wasm;
 pub mod wire;
@@ -55,6 +60,15 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub trait Sql {
     fn query(&mut self, statement: Statement, parameters: &[Value]) -> Result<Option<Vec<Value>>>;
     fn execute(&mut self, statement: Statement, parameters: &[Value]) -> Result<u64>;
+
+    /// Separate private page ABI; unsupported hosts never fall back to scalar SQL.
+    fn query_page(
+        &mut self,
+        _statement: page_catalog::PageStatement,
+        _parameters: &[Value],
+    ) -> Result<page::PageBuffer> {
+        Err(Error::Bounds)
+    }
 
     /// Run only the shared domain kernel in a nested rollback scope. Hosts with
     /// callback-only transaction APIs override this operation, never the kernel.
