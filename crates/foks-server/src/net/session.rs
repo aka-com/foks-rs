@@ -988,11 +988,25 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
 /// hour-long KEX receive, does not keep its permits until it times out.
 fn enable_keepalive(stream: &tokio::net::TcpStream) -> std::io::Result<()> {
     let period = std::time::Duration::from_secs(15);
-    let keepalive = socket2::TcpKeepalive::new()
-        .with_time(period)
-        .with_interval(period);
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd"))]
-    let keepalive = keepalive.with_retries(9);
+    let keepalive = socket2::TcpKeepalive::new().with_time(period);
+    // socket2 sets the probe interval and count only where the platform has
+    // them (not, for example, on OpenBSD, Haiku, Solaris or AIX); elsewhere
+    // the system defaults apply after the first probe.
+    #[cfg(any(
+        target_os = "android",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "fuchsia",
+        target_os = "illumos",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "netbsd",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "windows",
+    ))]
+    let keepalive = keepalive.with_interval(period).with_retries(9);
     socket2::SockRef::from(stream).set_tcp_keepalive(&keepalive)
 }
 
