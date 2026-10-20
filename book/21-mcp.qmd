@@ -226,6 +226,11 @@ reading and the boot identifier, but each keeps its own anchor and rejection
 watermark (`kv_adapter_clocks` and `kv_upload_clocks`), and a repair of one
 leaves the other unchanged. The status and repair requests name the clock:
 `--domain adapter` (the default) or `--domain upload` on the CLI commands.
+Only a write that needs a resumable upload identity consults the upload
+clock. A file write without an explicit upload handle claims an identity
+only once its first 4 MiB chunk shows a large file; a small file is
+written inline, takes no receipt row and is not refused by an untrusted
+upload clock.
 
 Cancellation is honored but does not undo remote work; a cancelled request
 answers "check mutation status before retrying." An interrupted upload may
