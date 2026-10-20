@@ -392,8 +392,9 @@ completion poll (a Go client multiplexes its polls on one connection per
 host), so a small number of Rust devices behind one such address can reach
 the default limit of 32, and a refused client sees only a reset connection. Go v0.1.9 hosts have no such limit. For a forwarder the operator
 controls, list its address or prefix in `trusted_sources`: those peers are
-exempt from the per-source connection limit and the KEX relay's per-source
-share, as loopback peers are. For clients behind NAT that the operator does
+exempt from the per-source connection limit, the KEX relay's per-source
+share and the per-source share of KEX receives (8 by default; see below), as
+loopback peers are. For clients behind NAT that the operator does
 not control, raise `maximum_connections_per_source` or set it to 0 to remove
 the limit. The token buckets still count a trusted source or a NAT address
 as one source, so `connection_burst`, `request_burst` and their rates must
@@ -418,12 +419,21 @@ A KEX receive can stay open for up to an hour. At most
 `maximum_active_connections`, are outstanding at once across all
 connections; a receive over that limit is refused at once with status 1012
 and is not queued, so receives cannot hold every connection of the public
-listener. The refusal leaves its connection open. One source can hold at most an eighth of that budget (4 of the
-default 32, and at least one), so that a single address cannot take every
-pairing slot for an hour; a receive over its source's share is refused the
-same way. Both refusals are counted in `foks_kex_rejected_total` and
+listener. The refusal leaves its connection open. One source can hold at
+most a quarter of that budget (8 of the default 32, and at least one), so
+that a single address cannot take every pairing slot for an hour; a receive
+over its source's share is refused the same way. Pairing one Go device holds
+up to three receives across both devices, so two concurrent pairings behind
+one NAT address fit in the default share; raising
+`maximum_kex_receive_polls` (and `maximum_active_connections`, which caps it
+at half) raises the share with it. Both refusals are counted in
+`foks_kex_rejected_total` and
 `foks_admission_rejected_total{reason="kex_receive_polls"}`. Loopback peers
-and `trusted_sources` are exempt from the per-source share.
+and `trusted_sources` are exempt from the per-source share. Accepted RPC
+connections send TCP keepalive probes after 15 s of silence, every 15 s, as
+a Go listener does, so a receive left by a client that vanished without
+closing its connection releases its slot within a few minutes rather than
+after an hour.
 
 The public KEX relay holds at most 4,096 pairing packets or 32 MiB of them,
 each for up to two hours, and refuses a send at either bound with status 1012.

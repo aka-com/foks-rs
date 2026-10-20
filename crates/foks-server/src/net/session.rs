@@ -290,6 +290,7 @@ pub(crate) async fn serve(
 ) -> Result<()> {
     // Small request/response TLS records must not wait for delayed TCP ACKs.
     stream.set_nodelay(true)?;
+    enable_keepalive(&stream)?;
     let acceptor = tokio_rustls::TlsAcceptor::from(Arc::clone(tls));
     let handshake = tokio::select! {
         result = stop.changed() => {
@@ -969,6 +970,21 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
     }
 }
 
+/// TCP keepalive on accepted RPC connections: probes after 15 s idle, every
+/// 15 s, nine times, as a Go `net.Listen` listener sets them. A peer that
+/// vanished without closing its connection is then detected within about
+/// two and a half minutes, so that a long poll it left pending, such as an
+/// hour-long KEX receive, does not keep its permits until it times out.
+fn enable_keepalive(stream: &tokio::net::TcpStream) -> std::io::Result<()> {
+    let period = std::time::Duration::from_secs(15);
+    let keepalive = socket2::TcpKeepalive::new()
+        .with_time(period)
+        .with_interval(period);
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd"))]
+    let keepalive = keepalive.with_retries(9);
+    socket2::SockRef::from(stream).set_tcp_keepalive(&keepalive)
+}
+
 /// The deadline for writing a completed request's response: a fresh
 /// `io_timeout` allowance. The request deadline bounds the body read, the
 /// handler and its queued writes; a long poll waits on its own timeout. In
@@ -1348,10 +1364,12 @@ fn read_only_route(id: RouteId) -> bool {
     )
 }
 
-/// The KEX receives one source can hold at once: an eighth of the global
-/// budget, and at least one.
+/// The KEX receives one source can hold at once: a quarter of the global
+/// budget (8 of the default 32), and at least one. Pairing one go-foks
+/// device holds up to three receives across both devices, so two pairings
+/// behind one NAT address fit in the share.
 fn kex_receive_source_share(capacity: usize) -> usize {
-    (capacity / 8).max(1)
+    (capacity / 4).max(1)
 }
 
 /// A source's slot of the per-source KEX receive share; `None` for an exempt
@@ -1851,14 +1869,38 @@ mod tests {
         assert_eq!(foks_rpc::call_sequence(&[0x94, 0x01, 0x2a]), None);
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn accepted_connections_send_keepalive_probes_as_go_listeners_do() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let _client = tokio::net::TcpStream::connect(address).await.unwrap();
+        let (accepted, _) = listener.accept().await.unwrap();
+        enable_keepalive(&accepted).unwrap();
+        let socket = socket2::SockRef::from(&accepted);
+        assert!(socket.keepalive().unwrap());
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd"))]
+        {
+            assert_eq!(
+                socket.tcp_keepalive_time().unwrap(),
+                std::time::Duration::from_secs(15)
+            );
+            assert_eq!(
+                socket.tcp_keepalive_interval().unwrap(),
+                std::time::Duration::from_secs(15)
+            );
+            assert_eq!(socket.tcp_keepalive_retries().unwrap(), 9);
+        }
+    }
+
     #[test]
     fn one_source_holds_at_most_its_share_of_kex_receives() {
         let metrics = Arc::new(crate::ServerMetrics::default());
-        let capacity = 16;
+        let capacity = 8;
         let budget = Arc::new(Semaphore::new(capacity));
         let share = kex_receive_source_share(capacity);
         assert_eq!(share, 2);
-        assert_eq!(kex_receive_source_share(4), 1);
+        assert_eq!(kex_receive_source_share(32), 8);
+        assert_eq!(kex_receive_source_share(2), 1);
         let sources = Arc::new(crate::rate_limit::KeyedLimit::new(share));
         let config = crate::RateLimitConfig::default();
         let first = config.limited_source("192.0.2.1".parse().unwrap());

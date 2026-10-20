@@ -219,7 +219,7 @@ mechanism differs by resource.
 | Request handlers (shared) | 64 blocking permits | `try_acquire_owned` fails; status 1012 |
 | Realtime inbox polls | 8 per account; 256 in total (the authenticated listener's sessions) | status 1012 |
 | Realtime poll state reads | 16 readers (half the reader pool) | reads wait for a permit |
-| KEX receives | 32, at most half the active sessions; 4 (an eighth) per source | status 1012, not queued |
+| KEX receives | 32, at most half the active sessions; 8 (a quarter) per source, loopback and `trusted_sources` exempt | status 1012, not queued |
 | Request memory | 64 MiB, 2 × frame length reserved per frame; frames up to 4 KiB use a separate 1 MiB budget | frames wait for permits |
 | Working and response memory | 512 MiB and 128 MiB, charged by the codec, SQL results and chunk transfers | status 1012 during decoding or on a read-only route; on a route that may write, the connection closes unanswered |
 | Frame size | 16 MiB | rejected before allocation |

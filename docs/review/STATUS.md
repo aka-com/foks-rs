@@ -849,7 +849,7 @@ server-source-admission-fairness ([finding](findings/server.md#server-source-adm
 Follow-ups:
 
 - Per-connection lifetime bound (recommendation 2)
-- Per-source cap on concurrent long polls (KexReceive, SSO poll, RtPollInbox) (recommendation 2). KexReceive now has one: a source holds at most an eighth of the KEX receive budget (c3-session-kex-receive-budget-per-source). RtPollInbox is capped per account, not per source; the SSO poll has no per-source cap.
+- Per-source cap on concurrent long polls (KexReceive, SSO poll, RtPollInbox) (recommendation 2). KexReceive now has one: a source holds at most a quarter of the KEX receive budget (c3-session-kex-receive-budget-per-source). RtPollInbox is capped per account, not per source; the SSO poll has no per-source cap.
 - End-to-end testkit/listener_boundaries.rs cases for one IP holding more than the cap and for IPv6 rotation: the testkit connects only from loopback, which is exempt, so these are covered by unit tests in net/listener.rs and rate_limit.rs against scripted non-loopback peers
 - book/docs/research/research-server.md still describes per-IP buckets with old line references; it is a dated research note, and only its KEX relay paragraph was updated (4856674)
 
