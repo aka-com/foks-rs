@@ -1675,10 +1675,13 @@ async fn handle_streaming_upload(
     let handshake = header.upload_id.is_some() && header.adapter.is_none();
     let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
     let ready_sender = handshake.then_some(ready_sender);
-    let cancellation = control.cancellation.clone();
+    // The worker runs under a child control, as supervised dispatch does:
+    // cancelling it stops the worker without cancelling the request, whose
+    // definite answer may still have to be written.
+    let worker_control = control.child();
+    let cancellation = worker_control.cancellation.clone();
     let worker_cancellation = cancellation.clone();
     let worker_header = header.clone();
-    let worker_control = control.clone();
     let worker = tokio::task::spawn_blocking(move || {
         #[cfg(test)]
         if held_dispatch(&state_dir) {
@@ -1686,6 +1689,21 @@ async fn handle_streaming_upload(
                 std::thread::sleep(Duration::from_millis(1));
             }
             return Err("held upload worker cancelled".into());
+        }
+        #[cfg(test)]
+        if rejected_upload(&state_dir) {
+            drop(receiver);
+            return Ok((
+                GuardedResponse::new(
+                    Response::error(
+                        request_id,
+                        ErrorCode::InvalidRequest,
+                        "upload refused before its first byte",
+                    ),
+                    permit,
+                ),
+                profile_permit,
+            ));
         }
         let result = (|| {
             let _scope = worker_control.enter()?;
@@ -1745,13 +1763,19 @@ async fn handle_streaming_upload(
         .await
         {
             Ok(Ok(())) => {
-                control.check()?;
-                write_controlled_response(
+                // The upload identity is registered from here on, so a
+                // deadline that passes before the client learns it is ready
+                // is answered as ambiguous, not as a bare close.
+                if write_final_response(
                     stream,
                     Response::success(request_id, serde_json::json!({"upload_ready":true})),
                     &control,
                 )
                 .await?
+                {
+                    cancellation.cancel();
+                    return Ok(());
+                }
             }
             Ok(Err(_)) => {
                 drop(sender);
@@ -1764,7 +1788,11 @@ async fn handle_streaming_upload(
                     return answer_ambiguous_upload(stream, request_id, &cancellation, &control)
                         .await;
                 };
-                let (response, _profile_permit) = completed??;
+                let (response, _profile_permit) = match completed {
+                    Ok(Ok((response, profile_permit))) => (response, Some(profile_permit)),
+                    Ok(Err(error)) => (upload_worker_failure(request_id, &*error), None),
+                    Err(error) => (upload_worker_failure(request_id, &error), None),
+                };
                 write_final_response(stream, response, &control).await?;
                 return Ok(());
             }
@@ -1775,6 +1803,9 @@ async fn handle_streaming_upload(
     }
     let mut offset = 0u64;
     let mut committed = false;
+    // The worker stopped taking chunks: it has returned or is returning its
+    // own answer, which a cancellation would replace.
+    let mut worker_returned = false;
     for _ in 0..MAXIMUM_STREAM_FRAMES {
         let frame = match tokio::time::timeout(
             control.remaining().unwrap_or(Duration::ZERO),
@@ -1790,6 +1821,11 @@ async fn handle_streaming_upload(
             }
         };
         let bytes = Zeroizing::new(frame);
+        // A frame read just as the deadline passed is erased undecoded.
+        if control.check().is_err() {
+            drop(bytes);
+            return answer_ambiguous_upload(stream, request_id, &cancellation, &control).await;
+        }
         let mut frame = foks_agent_proto::decode_upload_frame(&bytes)?;
         validate_upload_frame_binding(&mut frame, request_id, &control)?;
         match frame.payload {
@@ -1817,7 +1853,10 @@ async fn handle_streaming_upload(
                 .await
                 {
                     Ok(Ok(())) => {}
-                    Ok(Err(_)) => break,
+                    Ok(Err(_)) => {
+                        worker_returned = true;
+                        break;
+                    }
                     Err(_) => {
                         return answer_ambiguous_upload(stream, request_id, &cancellation, &control)
                             .await
@@ -1835,7 +1874,10 @@ async fn handle_streaming_upload(
                 .await
                 {
                     Ok(Ok(())) => {}
-                    Ok(Err(_)) => break,
+                    Ok(Err(_)) => {
+                        worker_returned = true;
+                        break;
+                    }
                     Err(_) => {
                         return answer_ambiguous_upload(stream, request_id, &cancellation, &control)
                             .await
@@ -1847,7 +1889,7 @@ async fn handle_streaming_upload(
         }
     }
     drop(sender);
-    if !committed {
+    if !committed && !worker_returned {
         cancellation.cancel();
     }
     let (response, profile_permit) =
@@ -1855,24 +1897,8 @@ async fn handle_streaming_upload(
             .await
         {
             Ok(Ok(Ok((response, profile_permit)))) => (response, Some(profile_permit)),
-            Ok(Ok(Err(error))) => (
-                Response::error(
-                    request_id,
-                    ErrorCode::OperationFailed,
-                    format!("streaming upload worker failed: {error}"),
-                )
-                .into(),
-                None,
-            ),
-            Ok(Err(error)) => (
-                Response::error(
-                    request_id,
-                    ErrorCode::OperationFailed,
-                    format!("streaming upload worker failed: {error}"),
-                )
-                .into(),
-                None,
-            ),
+            Ok(Ok(Err(error))) => (upload_worker_failure(request_id, &*error), None),
+            Ok(Err(error)) => (upload_worker_failure(request_id, &error), None),
             Err(_) => {
                 return answer_ambiguous_upload(stream, request_id, &cancellation, &control).await;
             }
@@ -1880,6 +1906,15 @@ async fn handle_streaming_upload(
     write_final_response(stream, response, &control).await?;
     drop(profile_permit);
     Ok(())
+}
+
+fn upload_worker_failure(request_id: u64, error: &dyn std::fmt::Display) -> GuardedResponse {
+    Response::error(
+        request_id,
+        ErrorCode::OperationFailed,
+        format!("streaming upload worker failed: {error}"),
+    )
+    .into()
 }
 
 /// Ends a streaming upload that reached its deadline: the worker is
@@ -2218,8 +2253,8 @@ async fn write_controlled_response(
 /// The request loop writes its own rejections of work it never started
 /// with [`write_controlled_response`], which writes nothing once the
 /// control has expired. A dispatched worker that fails to enter its
-/// request scope answers through here and is reported as ambiguous, which
-/// is conservative.
+/// request scope answers through here; when that failure is the expired
+/// deadline it is reported as ambiguous, which is conservative.
 async fn write_final_response(
     stream: &mut tokio::net::UnixStream,
     response: impl Into<GuardedResponse>,
@@ -10874,6 +10909,20 @@ fn held_dispatch(state_dir: &Path) -> bool {
         .any(|held| held == state_dir)
 }
 
+/// State directories whose streaming-upload worker refuses the upload with a
+/// definite error before reading a byte.
+#[cfg(test)]
+static REJECTED_UPLOADS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn rejected_upload(state_dir: &Path) -> bool {
+    REJECTED_UPLOADS
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|rejected| rejected == state_dir)
+}
+
 #[cfg(test)]
 mod deadline_rejection_tests {
     use super::*;
@@ -10885,9 +10934,17 @@ mod deadline_rejection_tests {
         operation: Operation,
         frames: Vec<Zeroizing<Vec<u8>>>,
     ) -> ErrorCode {
+        hooked_operation_answer(&HELD_DISPATCHES, operation, frames).await
+    }
+
+    async fn hooked_operation_answer(
+        hook: &'static Mutex<Vec<PathBuf>>,
+        operation: Operation,
+        frames: Vec<Zeroizing<Vec<u8>>>,
+    ) -> ErrorCode {
         let temporary = tempfile::tempdir().unwrap();
         let state_dir = temporary.path().to_path_buf();
-        HELD_DISPATCHES.lock().unwrap().push(state_dir.clone());
+        hook.lock().unwrap().push(state_dir.clone());
         let capacity = ConnectionCapacity {
             recovery: Arc::new(Semaphore::new(1)),
             blocking: Arc::new(Semaphore::new(1)),
@@ -10920,10 +10977,7 @@ mod deadline_rejection_tests {
         let answered = tokio::time::timeout(Duration::from_secs(5), read_frame(&mut client))
             .await
             .expect("the agent answered or closed within the test budget");
-        HELD_DISPATCHES
-            .lock()
-            .unwrap()
-            .retain(|held| held != &state_dir);
+        hook.lock().unwrap().retain(|held| held != &state_dir);
         let frame = answered
             .unwrap()
             .expect("an answer frame before end of stream");
@@ -10976,12 +11030,8 @@ mod deadline_rejection_tests {
         );
     }
 
-    /// The upload worker does not consume chunks, so the agent's send of the
-    /// fifth chunk into its four-slot channel waits until the deadline. That
-    /// wait, the common case for a slow worker, ends in an answer.
-    #[tokio::test]
-    async fn streaming_upload_held_in_its_worker_is_answered_at_the_deadline() {
-        let header = KvUploadHeader {
+    fn upload_header(upload_id: Option<foks_agent_proto::UploadHandle>) -> KvUploadHeader {
+        KvUploadHeader {
             store: foks_agent_proto::KvStoreRef::Account(foks_agent_proto::AccountStoreRef {
                 profile: "held".to_owned(),
                 account_alias: "me".to_owned(),
@@ -10993,9 +11043,12 @@ mod deadline_rejection_tests {
             write_role: foks_agent_proto::KvRole::Owner,
             mkdir_p: false,
             adapter: None,
-            upload_id: None,
-        };
-        let frames = (0..8u64)
+            upload_id,
+        }
+    }
+
+    fn upload_chunks() -> Vec<Zeroizing<Vec<u8>>> {
+        (0..8u64)
             .map(|index| {
                 foks_agent_proto::encode(&foks_agent_proto::KvUploadFrame {
                     version: foks_agent_proto::PROTOCOL_VERSION,
@@ -11007,9 +11060,50 @@ mod deadline_rejection_tests {
                 })
                 .unwrap()
             })
-            .collect();
+            .collect()
+    }
+
+    /// A client that sends no frames, and a resumable upload whose worker
+    /// never reports readiness, are answered at the deadline.
+    #[tokio::test]
+    async fn streaming_upload_frame_and_readiness_waits_are_answered_at_the_deadline() {
+        for upload_id in [
+            None,
+            Some(foks_agent_proto::UploadHandle::new([1; 16], 1, [2; 16])),
+        ] {
+            let header = upload_header(upload_id);
+            assert_eq!(
+                held_operation_answer(Operation::PutKvStream { header }, Vec::new()).await,
+                ErrorCode::DeadlineExceeded
+            );
+        }
+    }
+
+    /// A worker that refuses the upload before reading ends the chunk
+    /// stream; its definite answer is written, not replaced by a
+    /// cancellation of the request.
+    #[tokio::test]
+    async fn streaming_upload_rejected_before_its_first_byte_is_answered() {
+        let header = upload_header(None);
         assert_eq!(
-            held_operation_answer(Operation::PutKvStream { header }, frames).await,
+            hooked_operation_answer(
+                &REJECTED_UPLOADS,
+                Operation::PutKvStream { header },
+                upload_chunks(),
+            )
+            .await,
+            ErrorCode::InvalidRequest
+        );
+    }
+
+    /// The upload worker does not consume chunks, so the agent's send of the
+    /// fifth chunk into its four-slot channel waits until the deadline. That
+    /// wait, the common case for a slow worker, ends in an answer.
+    #[tokio::test]
+    async fn streaming_upload_held_in_its_worker_is_answered_at_the_deadline() {
+        let header = upload_header(None);
+        assert_eq!(
+            held_operation_answer(Operation::PutKvStream { header }, upload_chunks()).await,
             ErrorCode::DeadlineExceeded
         );
     }
@@ -11194,7 +11288,7 @@ mod deadline_rejection_tests {
     async fn expired_rejection_does_not_start_a_fresh_response_write_budget() {
         let (mut writer, reader) = tokio::net::UnixStream::pair().unwrap();
         let control = request_control::RequestControl::background(
-            Duration::from_millis(2),
+            Duration::from_millis(50),
             CancellationToken::new(),
         )
         .unwrap();
