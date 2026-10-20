@@ -436,7 +436,7 @@ pub(crate) async fn serve(
                     .request_rate_limited(crate::AdmissionRejection::RequestMemory);
                 let memory = service_data.memory.request(None);
                 responder
-                    .refuse(&memory, sequence, crate::metrics::UNROUTED, deadline)
+                    .refuse(&memory, sequence, crate::metrics::UNROUTED)
                     .await?;
                 return Ok(());
             }
@@ -467,12 +467,7 @@ pub(crate) async fn serve(
             let sequence = call.sequence();
             drop(call);
             responder
-                .refuse(
-                    &request_memory,
-                    sequence,
-                    crate::metrics::UNROUTED,
-                    deadline,
-                )
+                .refuse(&request_memory, sequence, crate::metrics::UNROUTED)
                 .await?;
             return Ok(());
         }
@@ -484,12 +479,7 @@ pub(crate) async fn serve(
             let sequence = call.sequence();
             drop(call);
             responder
-                .refuse(
-                    &request_memory,
-                    sequence,
-                    crate::metrics::UNROUTED,
-                    deadline,
-                )
+                .refuse(&request_memory, sequence, crate::metrics::UNROUTED)
                 .await?;
             continue;
         }
@@ -519,9 +509,7 @@ pub(crate) async fn serve(
             service_data
                 .metrics
                 .request_rate_limited(crate::AdmissionRejection::RequestMemory);
-            responder
-                .refuse(&request_memory, sequence, family, deadline)
-                .await?;
+            responder.refuse(&request_memory, sequence, family).await?;
             return Ok(());
         }
         deadline.remaining()?;
@@ -547,9 +535,7 @@ pub(crate) async fn serve(
                     service_data
                         .metrics
                         .request_rate_limited(crate::AdmissionRejection::ConnectionLongPolls);
-                    responder
-                        .refuse(&request_memory, sequence, family, deadline)
-                        .await?;
+                    responder.refuse(&request_memory, sequence, family).await?;
                     continue;
                 }
                 let pending = match call.route.id {
@@ -562,9 +548,7 @@ pub(crate) async fn serve(
                         ) {
                             Ok(admitted) => admitted,
                             Err(request_memory) => {
-                                responder
-                                    .refuse(&request_memory, sequence, family, deadline)
-                                    .await?;
+                                responder.refuse(&request_memory, sequence, family).await?;
                                 continue;
                             }
                         };
@@ -751,9 +735,7 @@ pub(crate) async fn serve(
                     .metrics
                     .request_rate_limited(crate::AdmissionRejection::RequestHandlers);
                 let memory = service_data.memory.request(None);
-                responder
-                    .refuse(&memory, sequence, family, deadline)
-                    .await?;
+                responder.refuse(&memory, sequence, family).await?;
                 return Ok(());
             }
             BoundedExecution::TimedOut => {
@@ -854,20 +836,21 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
         }
     }
 
-    /// Answers `sequence` with `RateLimited` for a refused request.
+    /// Answers `sequence` with `RateLimited` for a refused request, under
+    /// the fresh write allowance every response gets, so that a refusal is
+    /// written even when the request's own deadline has run out.
     async fn refuse(
         &mut self,
         memory: &Arc<super::memory::Request>,
         sequence: u64,
         family: &'static str,
-        deadline: crate::deadline::Deadline,
     ) -> Result<()> {
         let response =
             memory.sync(|| encode_status_response_at(&RpcStatus::RateLimited, sequence))?;
         write_response_until(
             &mut self.writer,
             &response,
-            deadline,
+            response_write_deadline(self.limits.io_timeout)?,
             self.limits.io_timeout,
         )
         .await?;
@@ -1328,8 +1311,10 @@ fn memory_failure_refusal(
     })?))
 }
 
-/// Routes that read without changing server state, so that a request
-/// refused after its handler ran has no ambiguous outcome.
+/// Routes whose handlers make no client-visible mutation, so that a request
+/// refused after its handler ran has no ambiguous outcome. Authorization can
+/// still refresh SSO access state for any authenticated route; that write is
+/// the server's own bookkeeping, not an outcome the client must reconcile.
 fn read_only_route(id: RouteId) -> bool {
     matches!(
         id,
@@ -1359,7 +1344,6 @@ fn read_only_route(id: RouteId) -> bool {
             | RouteId::RealTimeRtListAllChannelsForTeam
             | RouteId::RealTimeRtGetThread
             | RouteId::RealTimeRtGetInboxVersion
-            | RouteId::RealTimeRtGetChangedThreads
             | RouteId::RealTimeRtGetThreadRecents
     )
 }
@@ -1830,6 +1814,8 @@ mod tests {
             RouteId::KexReceive,
             RouteId::RealTimeRtSend,
             RouteId::RealTimeRtPollInbox,
+            // Reconciles through the writer.
+            RouteId::RealTimeRtGetChangedThreads,
             RouteId::UserRevokeDevice,
         ] {
             assert!(!read_only_route(id), "{id:?}");
@@ -2062,7 +2048,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn frame_budget_is_not_renewed_for_body_execution_or_transmission() {
+    async fn frame_budget_is_not_renewed_for_body_read_or_execution() {
         let (mut peer, mut input) = tokio::io::duplex(16);
         peer.write_all(&[0xcd, 0x01, 0x00]).await.unwrap();
         let (length, deadline) =
@@ -2071,7 +2057,7 @@ mod tests {
                 .unwrap();
         assert_eq!(length, 256);
         // Keep the peer alive but withhold the body. Body time consumes the
-        // original frame budget, leaving no fresh allowance for dispatch/output.
+        // original frame budget, leaving none for dispatch.
         let body = tokio::time::timeout_at(
             phase_deadline(deadline, std::time::Duration::from_secs(15)).unwrap(),
             read_call_body_async(
@@ -2093,6 +2079,8 @@ mod tests {
             .unwrap(),
             BoundedExecution::TimedOut
         ));
+        // A write bounded by the spent frame budget fails, which is why
+        // responses are written under `response_write_deadline` instead.
         let mut output = Vec::new();
         assert!(write_response_until(
             &mut output,
