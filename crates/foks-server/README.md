@@ -786,7 +786,9 @@ pages of the restored database. Remove the whole old database directory, or
 restore to a new path. The `.storage-lock` and `.writer-lock` files remain
 after a clean shutdown and do not block a restore, but restore refuses while
 either is held, so stop every server and offline command using the path
-first; it holds both locks itself until it finishes. Both commands open the
+first. Before checking the destination it takes whichever of the two lock
+files exist (read-only access is enough) and holds them until it finishes.
+Both commands open the
 database with the compiled limits unless `--config
 /var/lib/foks/server.toml` supplies the `[storage]`,
 `[waitlist]` and `[chunk_capacity]` tables; the paths still come from the

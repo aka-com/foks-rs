@@ -119,11 +119,13 @@ pub fn restore_backup(
 ) -> Result<()> {
     let database_path = database_path.as_ref();
     let key_directory = key_directory.as_ref();
+    // Lock first so that no server or offline command can create the
+    // database or a sidecar between the checks and the copy.
+    let _destination_locks = lock_restore_destination(database_path)?;
     refuse_restore_sidecars(database_path)?;
     if database_path.exists() || directory_has_entries(key_directory)? {
         return Err(crate::Error::Config("restore destination is not empty"));
     }
-    let _destination_locks = lock_restore_destination(database_path)?;
 
     let validated = read_validated_backup_artifacts(artifacts, database_config)?;
     let host_key_files = &validated.key_files;
@@ -339,9 +341,12 @@ fn sidecar_path(database_path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
-/// Takes every existing lock file at the destination exclusively and keeps it
-/// for the whole restore, so no server or offline command can start on the
-/// path meanwhile. A held lock refuses the restore.
+/// Takes whichever lock files exist at the destination exclusively and keeps
+/// them for the whole restore, so no server or offline command can start on
+/// the path meanwhile. A held lock refuses the restore. The files are opened
+/// read-only: flock does not need write access, so a 0600 lock file owned by
+/// the server's user does not stop a restore run by an operator who can read
+/// it.
 fn lock_restore_destination(database_path: &Path) -> Result<Vec<std::fs::File>> {
     let mut held = Vec::new();
     for (suffix, message) in RESTORE_LOCKS {
@@ -357,13 +362,18 @@ fn lock_restore_destination(database_path: &Path) -> Result<Vec<std::fs::File>> 
             Err(error) => return Err(error.into()),
         }
         let mut options = std::fs::OpenOptions::new();
-        options.read(true).write(true);
+        options.read(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt as _;
-            options.custom_flags(libc::O_NOFOLLOW);
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
         }
         let file = options.open(&path)?;
+        if !file.metadata()?.is_file() {
+            return Err(crate::Error::Config(
+                "restore destination lock is not a regular file",
+            ));
+        }
         match file.try_lock() {
             Ok(()) => held.push(file),
             Err(std::fs::TryLockError::WouldBlock) => return Err(crate::Error::Config(message)),
@@ -1246,8 +1256,12 @@ mod tests {
             let keys = root.path().join("keys");
             let lock = sidecar_path(&database, suffix);
             // Left behind by a clean shutdown: not held, so restore proceeds
-            // to read the (absent) backup.
+            // to read the (absent) backup. A read-only file shows that the
+            // restore does not need write access to take the lock.
             std::fs::write(&lock, b"").unwrap();
+            let mut permissions = std::fs::metadata(&lock).unwrap().permissions();
+            permissions.set_readonly(true);
+            std::fs::set_permissions(&lock, permissions).unwrap();
             assert!(matches!(
                 restore_backup(
                     &missing_artifacts(root.path()),
@@ -1258,11 +1272,7 @@ mod tests {
                 Err(crate::Error::Io(_))
             ));
             // Held by a running server or offline command.
-            let holder = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(&lock)
-                .unwrap();
+            let holder = std::fs::File::open(&lock).unwrap();
             holder.try_lock().unwrap();
             match restore_backup(
                 &missing_artifacts(root.path()),
@@ -1279,11 +1289,7 @@ mod tests {
             drop(holder);
             let held = lock_restore_destination(&database).unwrap();
             assert_eq!(held.len(), 1);
-            let other = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(&lock)
-                .unwrap();
+            let other = std::fs::File::open(&lock).unwrap();
             assert!(matches!(
                 other.try_lock(),
                 Err(std::fs::TryLockError::WouldBlock)

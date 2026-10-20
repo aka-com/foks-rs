@@ -332,8 +332,9 @@ directory, or a `-wal`, `-shm` or `-journal` file beside the database path.
 SQLite checks a WAL only against its own header, so a WAL left by an earlier
 installation would be replayed into the restored file on its first open. The
 `.storage-lock` and `.writer-lock` files survive a clean shutdown and are
-accepted when nobody holds them; restore refuses while either is held and
-holds both itself until it finishes.
+accepted when nobody holds them; restore refuses while either is held, and
+holds whichever of them exist from before its destination checks until it
+finishes.
 
 ## Invariants written in SQL
 
