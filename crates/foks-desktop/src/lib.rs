@@ -1285,11 +1285,13 @@ pub fn read_catalog_item(
     let value = transport.call(Operation::ReadKv {
         store: store.clone(),
         path: item.metadata.path.clone(),
+        dirent_id: item.metadata.dirent_id,
         version: item.metadata.version,
     })?;
     let mut read: KvReadResult = decode_agent_value(value)?;
     if read.store != store
         || read.path != item.metadata.path
+        || read.dirent_id != item.metadata.dirent_id
         || read.version != item.metadata.version
         || read.node_type != item.metadata.node_type
         || read.read_role != item.metadata.read_role
@@ -1333,12 +1335,14 @@ pub fn read_catalog_item(
                     decode_agent_value(transport.call(Operation::ReadKvChunk {
                         store: store.clone(),
                         path: item.metadata.path.clone(),
+                        dirent_id: item.metadata.dirent_id,
                         version: item.metadata.version,
                         offset,
                         length,
                     })?)?;
                 let invalid = chunk.store != store
                     || chunk.path != item.metadata.path
+                    || chunk.dirent_id != item.metadata.dirent_id
                     || chunk.version != item.metadata.version
                     || chunk.offset != offset
                     || chunk.content.is_empty()
@@ -3857,6 +3861,7 @@ mod tests {
                 Operation::ReadKv {
                     store,
                     path,
+                    dirent_id,
                     version,
                 } => {
                     assert_eq!(store, self.store);
@@ -3865,6 +3870,7 @@ mod tests {
                     Ok(serde_json::to_value(KvReadResult {
                         store,
                         path,
+                        dirent_id,
                         version,
                         node_type: "file".to_owned(),
                         // As the agent answers now: a large file has no size
@@ -3880,6 +3886,7 @@ mod tests {
                 Operation::ReadKvChunk {
                     store,
                     path,
+                    dirent_id,
                     version,
                     offset,
                     length,
@@ -3891,6 +3898,7 @@ mod tests {
                     Ok(serde_json::to_value(KvChunkResult {
                         store,
                         path,
+                        dirent_id,
                         version,
                         offset,
                         content: (0..count)
@@ -3967,6 +3975,35 @@ mod tests {
             }),
             total,
             operations: Mutex::new(Vec::new()),
+        }
+    }
+
+    #[test]
+    fn selected_read_rejects_recreated_identity_at_initial_read_and_later_chunk() {
+        struct Replaced {
+            inner: LargeReadTransport,
+            after_chunks: bool,
+        }
+        impl AgentTransport for Replaced {
+            fn call(&self, operation: Operation) -> Result<Value, AgentError> {
+                let corrupt = if self.after_chunks {
+                    matches!(&operation, Operation::ReadKvChunk { offset, .. } if *offset > 0)
+                } else {
+                    matches!(&operation, Operation::ReadKv { .. })
+                };
+                let mut value = self.inner.call(operation)?;
+                if corrupt {
+                    value["dirent_id"] = serde_json::to_value([8; 16]).unwrap();
+                }
+                Ok(value)
+            }
+        }
+        for after_chunks in [false, true] {
+            let transport = Replaced {
+                inner: large_read_transport(2 * u64::from(KV_READ_CHUNK_BYTES)),
+                after_chunks,
+            };
+            assert!(read_catalog_item(&transport, &large_file_item()).is_err());
         }
     }
 

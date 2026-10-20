@@ -217,6 +217,8 @@ fn show_issues_exactly_one_version_bound_team_read() {
     let (output, requests) = capture_operations(
         strings(&[
             "kv-read",
+            "--dirent-id",
+            "00000000000000000000000000000000",
             "work",
             "personal",
             "/wifi/password",
@@ -230,6 +232,7 @@ fn show_issues_exactly_one_version_bound_team_read() {
             serde_json::to_value(KvReadResult {
                 store: store.clone(),
                 path: "/wifi/password".to_owned(),
+                dirent_id: [0; 16],
                 version: 19,
                 node_type: "small-file".to_owned(),
                 size: Some(15),
@@ -248,6 +251,7 @@ fn show_issues_exactly_one_version_bound_team_read() {
         Operation::ReadKv {
             store,
             path: "/wifi/password".to_owned(),
+            dirent_id: [0; 16],
             version: 19,
         }
     );

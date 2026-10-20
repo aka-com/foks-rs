@@ -252,10 +252,12 @@ impl foks_desktop::AgentTransport for ReadTransport {
             Operation::ReadKv {
                 store,
                 path,
+                dirent_id,
                 version,
             } => serde_json::to_value(KvReadResult {
                 store,
                 path,
+                dirent_id,
                 version,
                 node_type: "small-file".to_owned(),
                 size: Some(READ_VALUE.len() as u64),
@@ -282,10 +284,12 @@ impl foks_desktop::AgentTransport for DownloadTransport {
             Operation::ReadKv {
                 store,
                 path,
+                dirent_id,
                 version,
             } => serde_json::to_value(KvReadResult {
                 store,
                 path,
+                dirent_id,
                 version,
                 node_type: "file".to_owned(),
                 // Model a legacy file without the optional size extension;
@@ -299,6 +303,7 @@ impl foks_desktop::AgentTransport for DownloadTransport {
             Operation::ReadKvChunk {
                 store,
                 path,
+                dirent_id,
                 version,
                 offset,
                 length,
@@ -307,6 +312,7 @@ impl foks_desktop::AgentTransport for DownloadTransport {
                 serde_json::to_value(KvChunkResult {
                     store,
                     path,
+                    dirent_id,
                     version,
                     offset,
                     content: vec![0x5a; count],
@@ -357,11 +363,11 @@ fn read_text_issues_exactly_one_version_bound_read() {
             write_role: KvRole::Owner,
         },
     };
-    let transport = ReadTransport {
+    let transport = Arc::new(ReadTransport {
         calls: Mutex::new(Vec::new()),
-    };
-
-    let read = read_text(&transport, &item).unwrap();
+    });
+    let lock = crate::applock::AppLock::unlocked_for_test();
+    let read = read_text(transport.clone(), &item, &lock.interval_for_test()).unwrap();
 
     assert_eq!(read.value.as_str(), "guest-password");
     assert_eq!(
@@ -372,6 +378,7 @@ fn read_text_issues_exactly_one_version_bound_read() {
                 account_alias: "personal".to_owned(),
             }),
             path: "/wifi/password".to_owned(),
+            dirent_id: [7; 16],
             version: 7,
         }]
     );
@@ -381,13 +388,20 @@ fn read_text_issues_exactly_one_version_bound_read() {
 fn download_streams_files_larger_than_the_reveal_limit_in_bound_chunks() {
     let total = 16 * 1024 * 1024 + 1;
     let item = download_item(total);
-    let transport = DownloadTransport {
+    let transport = Arc::new(DownloadTransport {
         total,
         calls: Mutex::new(Vec::new()),
-    };
+    });
     let directory = tempfile::tempdir().unwrap();
     let destination = directory.path().join("large.bin");
-    download_to_path(&transport, &item, &destination).unwrap();
+    let lock = crate::applock::AppLock::unlocked_for_test();
+    download_to_path(
+        transport.clone(),
+        &item,
+        &destination,
+        &lock.interval_for_test(),
+    )
+    .unwrap();
     assert_eq!(std::fs::metadata(destination).unwrap().len(), total);
     let calls = transport.calls.lock().unwrap();
     assert!(matches!(
@@ -996,4 +1010,303 @@ fn move_preserves_exact_source_and_invalidates_its_store() {
     );
     assert!(foks_desktop::move_kv_operation(&item, &item.metadata.path).is_err());
     assert!(foks_desktop::move_kv_operation(&item, "relative").is_err());
+}
+
+// Checkpoints pause the real worker at named boundaries; no timing assumptions
+// or sleeps decide whether invalidation wins.
+fn publication_barrier(
+    lock: &Arc<crate::applock::AppLock>,
+    phase: &'static str,
+) -> (
+    crate::applock::UnlockedInterval,
+    Arc<std::sync::Barrier>,
+    Arc<std::sync::Barrier>,
+) {
+    let reached = Arc::new(std::sync::Barrier::new(2));
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    let worker_reached = reached.clone();
+    let worker_resume = resume.clone();
+    let once = std::sync::atomic::AtomicBool::new(false);
+    let interval = lock.interval_for_test().with_checkpoint(move |actual| {
+        if actual == phase && !once.swap(true, Ordering::AcqRel) {
+            worker_reached.wait();
+            worker_resume.wait();
+        }
+    });
+    (interval, reached, resume)
+}
+
+#[test]
+fn locking_during_secret_read_rejects_plaintext_even_after_unlock() {
+    for unlock in [false, true] {
+        let lock = crate::applock::AppLock::unlocked_for_test();
+        let (interval, reached, resume) = publication_barrier(&lock, "after-agent-read");
+        let mut item = download_item(READ_VALUE.len() as u64);
+        item.metadata.node_type = "small-file".into();
+        let worker = std::thread::spawn(move || {
+            read_text(
+                Arc::new(ReadTransport {
+                    calls: Mutex::new(Vec::new()),
+                }),
+                &item,
+                &interval,
+            )
+        });
+        reached.wait();
+        lock.invalidate_for_test(unlock);
+        resume.wait();
+        assert_eq!(worker.join().unwrap().unwrap_err().code, "app-locked");
+    }
+}
+
+#[test]
+fn lock_after_dialog_rejects_selection_before_reading_or_creating_a_file() {
+    for unlock in [false, true] {
+        let lock = crate::applock::AppLock::unlocked_for_test();
+        let (interval, reached, resume) = publication_barrier(&lock, "after-dialog");
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("new.bin");
+        let worker_destination = destination.clone();
+        let transport = Arc::new(DownloadTransport {
+            total: 1,
+            calls: Mutex::new(Vec::new()),
+        });
+        let worker_transport = transport.clone();
+        let worker = std::thread::spawn(move || {
+            let path = crate::commands::vault::select_download_destination(&interval, || {
+                worker_destination
+            })?;
+            download_to_path(worker_transport, &download_item(1), &path, &interval)
+        });
+        reached.wait();
+        lock.invalidate_for_test(unlock);
+        resume.wait();
+        assert_eq!(worker.join().unwrap().unwrap_err().code, "app-locked");
+        assert!(transport.calls.lock().unwrap().is_empty());
+        assert!(!destination.exists());
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn lock_during_download_never_creates_or_replaces_destination_and_cleans_temporary() {
+    for phase in ["after-agent-read", "between-chunks", "before-publication"] {
+        for unlock in [false, true] {
+            for existing in [false, true] {
+                let lock = crate::applock::AppLock::unlocked_for_test();
+                let (interval, reached, resume) = publication_barrier(&lock, phase);
+                let directory = tempfile::tempdir().unwrap();
+                let destination = directory.path().join("saved.bin");
+                if existing {
+                    std::fs::write(&destination, b"existing destination").unwrap();
+                }
+                let worker_destination = destination.clone();
+                let total = u64::from(DOWNLOAD_CHUNK_BYTES) + 1;
+                let transport = Arc::new(DownloadTransport {
+                    total,
+                    calls: Mutex::new(Vec::new()),
+                });
+                let worker_transport = transport.clone();
+                let worker = std::thread::spawn(move || {
+                    download_to_path(
+                        worker_transport,
+                        &download_item(total),
+                        &worker_destination,
+                        &interval,
+                    )
+                });
+                reached.wait();
+                if phase == "before-publication" {
+                    assert_eq!(transport.calls.lock().unwrap().len(), 3);
+                    // A fully prepared temporary file exists, but the final
+                    // destination has not been touched while the gate is pending.
+                    assert_eq!(
+                        std::fs::read_dir(directory.path()).unwrap().count(),
+                        usize::from(existing) + 1
+                    );
+                }
+                lock.invalidate_for_test(unlock);
+                resume.wait();
+                assert_eq!(worker.join().unwrap().unwrap_err().code, "app-locked");
+                if existing {
+                    assert_eq!(
+                        std::fs::read(&destination).unwrap(),
+                        b"existing destination"
+                    );
+                } else {
+                    assert!(!destination.exists());
+                }
+                assert_eq!(
+                    std::fs::read_dir(directory.path()).unwrap().count(),
+                    usize::from(existing)
+                );
+                if phase == "between-chunks" {
+                    assert_eq!(
+                        transport.calls.lock().unwrap().len(),
+                        2,
+                        "no second chunk read after invalidation"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn lock_immediately_before_plaintext_or_clipboard_publication_rejects_old_interval() {
+    for unlock in [false, true] {
+        for clipboard in [false, true] {
+            let lock = crate::applock::AppLock::unlocked_for_test();
+            let (interval, reached, resume) = publication_barrier(&lock, "before-publication");
+            let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let worker_writes = writes.clone();
+            let worker = std::thread::spawn(move || {
+                let mut item = download_item(READ_VALUE.len() as u64);
+                item.metadata.node_type = "small-file".into();
+                let read = read_text(
+                    Arc::new(ReadTransport {
+                        calls: Mutex::new(Vec::new()),
+                    }),
+                    &item,
+                    &interval,
+                )?;
+                interval.publish(|| {
+                    if clipboard {
+                        worker_writes.fetch_add(1, Ordering::AcqRel);
+                    }
+                    Ok(read)
+                })
+            });
+            reached.wait();
+            lock.invalidate_for_test(unlock);
+            resume.wait();
+            assert_eq!(worker.join().unwrap().unwrap_err().code, "app-locked");
+            assert_eq!(writes.load(Ordering::Acquire), 0);
+        }
+    }
+}
+
+struct BlockedReadTransport {
+    inner: Arc<dyn foks_desktop::AgentTransport>,
+    chunk: bool,
+    reached: Arc<std::sync::Barrier>,
+    resume: Arc<std::sync::Barrier>,
+}
+impl foks_desktop::AgentTransport for BlockedReadTransport {
+    fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        let block = if self.chunk {
+            matches!(&operation, Operation::ReadKvChunk { offset: 0, .. })
+        } else {
+            matches!(&operation, Operation::ReadKv { .. })
+        };
+        let result = self.inner.call(operation);
+        if block {
+            self.reached.wait();
+            self.resume.wait();
+        }
+        result
+    }
+}
+
+#[test]
+fn blocked_agent_reads_cannot_return_secret_or_request_more_chunks_after_lock() {
+    for unlock in [false, true] {
+        for chunk in [false, true] {
+            let lock = crate::applock::AppLock::unlocked_for_test();
+            let interval = lock.interval_for_test();
+            let reached = Arc::new(std::sync::Barrier::new(2));
+            let resume = Arc::new(std::sync::Barrier::new(2));
+            let download = Arc::new(DownloadTransport {
+                total: u64::from(DOWNLOAD_CHUNK_BYTES) + 1,
+                calls: Mutex::new(Vec::new()),
+            });
+            let inner: Arc<dyn foks_desktop::AgentTransport> = if chunk {
+                download.clone()
+            } else {
+                Arc::new(ReadTransport {
+                    calls: Mutex::new(Vec::new()),
+                })
+            };
+            let transport = Arc::new(BlockedReadTransport {
+                inner,
+                chunk,
+                reached: reached.clone(),
+                resume: resume.clone(),
+            });
+            let worker = std::thread::spawn(move || {
+                let mut item = download_item(0);
+                if !chunk {
+                    item.metadata.node_type = "small-file".into();
+                }
+                read_text(transport, &item, &interval)
+            });
+            reached.wait();
+            lock.invalidate_for_test(unlock);
+            resume.wait();
+            assert_eq!(worker.join().unwrap().unwrap_err().code, "app-locked");
+            if chunk {
+                assert_eq!(download.calls.lock().unwrap().len(), 2);
+            }
+        }
+    }
+}
+
+#[test]
+fn download_rejects_changed_entry_identity_without_publishing_or_leaving_temporary_files() {
+    struct Replacement {
+        inner: DownloadTransport,
+        between_chunks: bool,
+    }
+    impl foks_desktop::AgentTransport for Replacement {
+        fn call(
+            &self,
+            operation: Operation,
+        ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+            let replace = if self.between_chunks {
+                matches!(&operation, Operation::ReadKvChunk { offset, .. } if *offset > 0)
+            } else {
+                matches!(&operation, Operation::ReadKv { .. })
+            };
+            let mut value = foks_desktop::AgentTransport::call(&self.inner, operation)?;
+            if replace {
+                value["dirent_id"] = serde_json::to_value([8; 16]).unwrap();
+            }
+            Ok(value)
+        }
+    }
+    for between_chunks in [false, true] {
+        for existing in [false, true] {
+            let total = u64::from(DOWNLOAD_CHUNK_BYTES) + 17;
+            let item = download_item(total);
+            let transport = Replacement {
+                inner: DownloadTransport {
+                    total,
+                    calls: Mutex::new(Vec::new()),
+                },
+                between_chunks,
+            };
+            let directory = tempfile::tempdir().unwrap();
+            let destination = directory.path().join("download.bin");
+            if existing {
+                std::fs::write(&destination, b"keep existing").unwrap();
+            }
+            let lock = crate::applock::AppLock::unlocked_for_test();
+            assert!(download_to_path(
+                Arc::new(transport),
+                &item,
+                &destination,
+                &lock.interval_for_test()
+            )
+            .is_err());
+            if existing {
+                assert_eq!(std::fs::read(&destination).unwrap(), b"keep existing");
+            } else {
+                assert!(!destination.exists());
+            }
+            assert_eq!(
+                std::fs::read_dir(directory.path()).unwrap().count(),
+                usize::from(existing)
+            );
+        }
+    }
 }

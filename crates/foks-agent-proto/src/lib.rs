@@ -36,6 +36,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn selected_reads_require_identity_and_reject_pre_identity_ipc() {
+        assert_eq!(PROTOCOL_VERSION, 35);
+        for operation in [
+            Operation::ReadKv {
+                store: KvStoreRef::Account(AccountStoreRef {
+                    profile: "p".into(),
+                    account_alias: "a".into(),
+                }),
+                path: "/file".into(),
+                dirent_id: [9; 16],
+                version: 1,
+            },
+            Operation::ReadKvChunk {
+                store: KvStoreRef::Account(AccountStoreRef {
+                    profile: "p".into(),
+                    account_alias: "a".into(),
+                }),
+                path: "/file".into(),
+                dirent_id: [9; 16],
+                version: 1,
+                offset: 0,
+                length: 128,
+            },
+        ] {
+            let request = Request::new(1, operation);
+            assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
+            let mut missing = serde_json::to_value(&request).unwrap();
+            missing["operation"]
+                .as_object_mut()
+                .unwrap()
+                .remove("dirent_id");
+            assert!(decode_request(&encode(&missing).unwrap()).is_err());
+            let mut old = request;
+            old.version = 34;
+            assert!(matches!(
+                decode_request(&encode(&old).unwrap()),
+                Err(Error::Version)
+            ));
+        }
+    }
+
+    #[test]
     fn requests_and_responses_round_trip_with_version_binding() {
         let request = Request::new(
             7,
@@ -198,6 +240,7 @@ mod tests {
             let read = KvReadResult {
                 store: store.clone(),
                 path: "/secret".to_owned(),
+                dirent_id: [0; 16],
                 version: 4,
                 node_type: "small-file".to_owned(),
                 size: Some(length as u64),
@@ -216,6 +259,7 @@ mod tests {
             let chunk = KvChunkResult {
                 store: store.clone(),
                 path: "/secret".to_owned(),
+                dirent_id: [0; 16],
                 version: 4,
                 offset: 9,
                 content: payload.clone(),
@@ -326,6 +370,7 @@ mod tests {
                 account_alias: "personal".to_owned(),
             }),
             path: "/large".to_owned(),
+            dirent_id: [0; 16],
             version: 4,
             offset: 0,
             content: content.clone(),
@@ -660,7 +705,7 @@ mod tests {
 
     #[test]
     fn reconcile_is_a_local_v29_mutation_with_no_initial_trust_inputs() {
-        assert_eq!(PROTOCOL_VERSION, 34);
+        assert_eq!(PROTOCOL_VERSION, 35);
         let operation = Operation::ReconcileProfile {
             profile: "saved".into(),
         };
@@ -677,7 +722,7 @@ mod tests {
 
     #[test]
     fn submit_message_is_a_local_v29_mutation() {
-        assert_eq!(PROTOCOL_VERSION, 34);
+        assert_eq!(PROTOCOL_VERSION, 35);
         let request = Request::new(
             20,
             Operation::Chat {

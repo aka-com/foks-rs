@@ -109,7 +109,8 @@ impl TeamViewCacheKey {
 /// **The key is not on its own sufficient evidence.** A dirent version
 /// restarts at 1 after an unlink and a re-create on a fresh random dirent
 /// identifier, so one `(path, version)` pair names different nodes at
-/// different times. An entry stored under this key is therefore only usable
+/// different times. The key also pins the selected dirent identity; fallback
+/// resolution must preserve it. An entry stored under this key is only usable
 /// together with the version vector in [`KvNodeCacheEntry`], which the server
 /// checks against its current directory and dirent heads.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -121,13 +122,20 @@ pub struct KvNodeCacheKey {
     pub party: Vec<u8>,
     pub binding: [u8; 32],
     pub path: String,
+    pub dirent_id: [u8; 16],
     pub version: u64,
 }
 
 impl KvNodeCacheKey {
     /// `party` is the namespace owner: the acting user for a personal path,
     /// the team for a team path.
-    pub fn new(user: &AuthCacheKey, party: &EntityId, path: &str, version: u64) -> Self {
+    pub fn new(
+        user: &AuthCacheKey,
+        party: &EntityId,
+        path: &str,
+        dirent_id: [u8; 16],
+        version: u64,
+    ) -> Self {
         Self {
             state_root: user.state_root.clone(),
             profile: user.profile.clone(),
@@ -136,6 +144,7 @@ impl KvNodeCacheKey {
             party: party.as_bytes().to_vec(),
             binding: user.binding,
             path: path.to_owned(),
+            dirent_id,
             version,
         }
     }
@@ -284,6 +293,7 @@ impl crate::CheckedProfileSession<'_> {
         credential: &DeviceCredential,
         party: &EntityId,
         path: &str,
+        dirent_id: [u8; 16],
         version: u64,
     ) -> Result<Option<(Arc<dyn KvNodeCache>, KvNodeCacheKey)>> {
         let Some(cache) = self.session.read_caches.kv_nodes.as_ref() else {
@@ -297,7 +307,7 @@ impl crate::CheckedProfileSession<'_> {
         )?;
         Ok(Some((
             Arc::clone(cache),
-            KvNodeCacheKey::new(&user, party, path, version),
+            KvNodeCacheKey::new(&user, party, path, dirent_id, version),
         )))
     }
 
