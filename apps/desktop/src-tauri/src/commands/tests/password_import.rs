@@ -276,6 +276,49 @@ fn a_file_without_a_password_column_or_in_another_encoding_is_refused() {
 }
 
 #[test]
+fn a_login_nested_too_deep_or_too_long_is_skipped_promptly() {
+    let at_depth = |depth: usize| vec!["a"; depth].join("/");
+    let long = "x".repeat(240);
+    let mut text = String::from("folder,name,login_username,login_password\n");
+    text.push_str(&format!("{},Deep,ana,pw1\n", "a/".repeat(5_000)));
+    text.push_str(&format!("{},Limit,ana,pw2\n", at_depth(32)));
+    text.push_str(&format!("{},Over,ana,pw3\n", at_depth(33)));
+    text.push_str(&format!("{},Wide,ana,pw4\n", [long.as_str(); 4].join("/")));
+    text.push_str(&format!("{},Wider,ana,pw5\n", [long.as_str(); 5].join("/")));
+    text.push_str("a/b,Kept,ana,pw6\n");
+    let started = std::time::Instant::now();
+    let parsed = parse_export(text.as_bytes()).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    let reason = "Its folder path is too long: more than 32 folders or 1024 bytes.";
+    assert_eq!(
+        parsed.skipped,
+        [(2, "Deep"), (4, "Over"), (6, "Wider")]
+            .map(|(row, name)| SkippedRowDto {
+                row,
+                name: Some(name.to_owned()),
+                reason: reason.to_owned(),
+            })
+            .to_vec()
+    );
+    assert_eq!(
+        names(&parsed.entries),
+        vec![
+            format!("{}/Limit", at_depth(32)),
+            format!("{}/Wide", [long.as_str(); 4].join("/")),
+            "a/b/Kept".to_owned(),
+        ]
+    );
+    // KeePassXC's `Root` group is dropped before the depth is counted.
+    let keepass = format!(
+        "Group,Title,Username,Password\nRoot/{},Limit,ana,pw\n",
+        at_depth(32)
+    );
+    let parsed = parse_export(keepass.as_bytes()).unwrap();
+    assert!(parsed.skipped.is_empty());
+    assert_eq!(parsed.entries[0].folder.len(), 32);
+}
+
+#[test]
 fn a_file_with_too_many_logins_is_refused() {
     let mut text = String::from("name,password\n");
     for index in 0..=MAXIMUM_IMPORT_ENTRIES {

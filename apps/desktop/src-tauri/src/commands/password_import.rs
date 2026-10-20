@@ -46,6 +46,12 @@ pub(super) const MAXIMUM_IMPORT_ENTRIES: usize = 10_000;
 /// The longest name or folder an import gives, in bytes after encoding,
 /// which leaves room in the 255-byte component limit for a ` (n)` suffix.
 const MAXIMUM_NAME_BYTES: usize = 240;
+/// The most folders a login may be nested in below the destination.
+const MAXIMUM_FOLDER_DEPTH: usize = 32;
+/// The longest folder path a login may give below the destination, in bytes
+/// with its `/` separators: the limit [`destination_folder`] sets for the
+/// destination itself.
+const MAXIMUM_FOLDER_BYTES: usize = 1024;
 
 /// What a column of the file holds, by its header.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -290,13 +296,25 @@ fn website_and_others(value: &str) -> (&str, Vec<&str>) {
 
 /// The folders a login's folder or group value names below the destination.
 /// KeePassXC names its top group `Root` in every row, so a first `Root` of a
-/// `Group` column is dropped.
-fn entry_folder(value: &str, keepass_group: bool) -> Vec<String> {
-    let mut folders: Vec<String> = value.split('/').filter_map(path_component).collect();
-    if keepass_group && folders.first().map(String::as_str) == Some("Root") {
-        folders.remove(0);
+/// `Group` column is dropped. `None` when the value names more than
+/// [`MAXIMUM_FOLDER_DEPTH`] folders or more than [`MAXIMUM_FOLDER_BYTES`]
+/// bytes of them; the value is read only up to the first folder past either
+/// bound.
+fn entry_folder(value: &str, keepass_group: bool) -> Option<Vec<String>> {
+    let mut folders: Vec<String> = Vec::new();
+    let mut bytes = 0;
+    let mut drop_root = keepass_group;
+    for component in value.split('/').filter_map(path_component) {
+        if std::mem::take(&mut drop_root) && component == "Root" {
+            continue;
+        }
+        bytes += component.len() + usize::from(!folders.is_empty());
+        if folders.len() == MAXIMUM_FOLDER_DEPTH || bytes > MAXIMUM_FOLDER_BYTES {
+            return None;
+        }
+        folders.push(component);
     }
-    folders
+    Some(folders)
 }
 
 /// The small file a login is stored as: the three lines the New password
@@ -373,7 +391,8 @@ pub(super) fn parse_export(bytes: &[u8]) -> Result<ParsedImport, AgentError> {
         .any(|(name, found)| *found == Some(Column::Folder) && name.trim() == "Group");
     // Each login's folders, name and text, before names are made unique.
     let mut rows: Vec<(Vec<String>, String, Zeroizing<String>)> = Vec::new();
-    // Every folder a login is written in, and each folder above it.
+    // Every folder a login is written in. The folders above it are the
+    // prefixes of these, which `is_folder` finds without storing each one.
     let mut folders: BTreeSet<Vec<String>> = BTreeSet::new();
     let mut skipped = Vec::new();
     for (position, record) in records.enumerate() {
@@ -430,14 +449,19 @@ pub(super) fn parse_export(bytes: &[u8]) -> Result<ParsedImport, AgentError> {
             skipped.push(skip("A secure note, not a login.".to_owned()));
             continue;
         }
+        let Some(folder) = entry_folder(value(Column::Folder), keepass_group) else {
+            skipped.push(skip(format!(
+                "Its folder path is too long: more than {MAXIMUM_FOLDER_DEPTH} folders or {MAXIMUM_FOLDER_BYTES} bytes."
+            )));
+            continue;
+        };
         if rows.len() == MAXIMUM_IMPORT_ENTRIES {
             return Err(file_error(format!(
                 "This file holds more than {MAXIMUM_IMPORT_ENTRIES} logins. Split it and import each part."
             )));
         }
-        let folder = entry_folder(value(Column::Folder), keepass_group);
-        for depth in 1..=folder.len() {
-            folders.insert(folder[..depth].to_vec());
+        if !folder.is_empty() {
+            folders.insert(folder.clone());
         }
         let (url, other_urls) = website_and_others(url);
         let notes = value(Column::Notes);
@@ -458,13 +482,22 @@ pub(super) fn parse_export(bytes: &[u8]) -> Result<ParsedImport, AgentError> {
     // A login does not take the name of a folder that other logins are
     // written in, which would put a file where they need a folder, nor a
     // name another login of its folder took.
+    // `path` names a folder when it is a prefix of a login's folder. Every
+    // folder with that prefix sorts at or after `path` and before any folder
+    // without it, so the first folder from `path` on decides.
+    let is_folder = |path: &Vec<String>| {
+        folders
+            .range(path.clone()..)
+            .next()
+            .is_some_and(|folder| folder.starts_with(path))
+    };
     let mut taken = BTreeSet::new();
     let mut entries = Vec::with_capacity(rows.len());
     for (folder, base, content) in rows {
         let mut path = folder;
         path.push(base.clone());
         let mut copy = 1;
-        while folders.contains(&path) || taken.contains(&path) {
+        while is_folder(&path) || taken.contains(&path) {
             copy += 1;
             if let Some(name) = path.last_mut() {
                 *name = format!("{base} ({copy})");

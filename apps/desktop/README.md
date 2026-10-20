@@ -500,8 +500,10 @@ random id, replacing any import held before; it answers `null` when the
 picker is cancelled, or `{id, fileName, entries, skipped, ignoredColumns}`,
 where each entry is `{name, folder, document}` (encoded path components;
 `document` when the login is longer than 2,040 bytes and is stored as a
-file) and each skipped row is `{row, name?, reason}`. A file that is not
-UTF-8 or has no password column fails with `import-file`.
+file) and each skipped row is `{row, name?, reason}`. A row whose folder
+or group names more than 32 folders, or more than 1,024 bytes of them, is
+skipped with that reason. A file that is not UTF-8 or has no password
+column fails with `import-file`.
 `commit_password_import` takes the `importId`, the `entries` to save (indexes
 into the preview), a `storeId`, a destination `folder` outside Trash and, in
 a team, both roles, and an `onProgress` channel. It writes each login with a
