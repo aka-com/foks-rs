@@ -255,11 +255,13 @@ the Go client does not retry.
 Idle connections count against `maximum_active_connections` and
 `maximum_connections_per_source` for as long as they stay open, so both
 limits must cover every client that was active within the last
-`idle_timeout_seconds`, not only the ones with a request in progress. go-foks
-keeps one connection per server type (probe, registration, user, KV,
-realtime) open for about five minutes after its last call, and the Rust client
-pools up to two idle connections per endpoint besides the connections its
-long polls hold. A connection that finds every active slot taken waits in the
+`idle_timeout_seconds`, not only the ones with a request in progress. Size
+them in connections per device per listener: go-foks keeps one connection
+per server type (probe, registration, user, Merkle query, KV, realtime) open
+for about five minutes after its last call, so a Go device holds several on
+the authenticated listener (user, KV and realtime) and some on the public
+one, and the Rust client pools up to two idle connections per endpoint
+besides the connections its long polls hold. A connection that finds every active slot taken waits in the
 listener's queue of `maximum_pending_connections` and is dropped when that
 queue is full. Size the limits for the number of devices active in any 5.5
 minute window, or lower `idle_timeout_seconds` (at the cost of Go calls that
@@ -299,14 +301,18 @@ status 1012 at its sequence number, counted as
 connection goes on serving the peer's other calls. A long poll refused by the
 KEX receive budget is answered the same way, and so are a request refused
 because every handler permit is in use or its working memory cannot be
-admitted. A connection with a pending long poll is not idle. Each connection
-serves at most 4,096 frames, a compiled limit. After that it still serves
-ordinary calls and reads cancels and end of stream, but answers any new long
-poll with status 1012 (counted only in `foks_requests_total`), and it closes
-in order once the long polls admitted before the limit have been answered:
-the server sends TLS close_notify and a TCP FIN and reads what the peer still
-sends for up to two seconds, so that the last response is not lost to a
-reset.
+admitted. A connection with a pending long poll is not idle. After 4,096
+frames (a compiled limit) a connection admits no new long poll: it answers
+one with status 1012, counted only in `foks_requests_total`, while it still
+serves ordinary calls and reads cancels and end of stream, and it ends once
+the long polls admitted before the limit have been answered.
+
+A session that ends in order (after that drain, on end of stream, an idle or
+frame-read timeout, or after a refusal that closes the connection, such as
+the per-source request rate) sends TLS close_notify and a TCP FIN and reads
+what the peer still sends for up to two seconds, so that its last response
+is not lost to a reset. A malformed or oversized frame, a handler timeout,
+an armed fault and a server stop close the connection without that.
 
 `foks_requests_total{family,status}` counts written responses by route family
 (the protocol name, such as `KvStore` or `Reg`) and wire status code (`0` for
@@ -460,10 +466,13 @@ at half) raises the share with it. Both refusals are counted in
 `foks_kex_rejected_total` and
 `foks_admission_rejected_total{reason="kex_receive_polls"}`. Loopback peers
 and `trusted_sources` are exempt from the per-source share. Accepted RPC
-connections send TCP keepalive probes after 15 s of silence, every 15 s, as
-a Go listener does, so a receive left by a client that vanished without
-closing its connection releases its slot within a few minutes rather than
-after an hour.
+connections send TCP keepalive probes after 15 s of silence, as a Go
+listener does, then every 15 s, at most nine times, where the platform
+allows setting those (Linux, the BSDs, macOS; Windows keeps its own probe
+count). A receive left by a client that vanished without closing its
+connection then releases its slot within a few minutes rather than after an
+hour. If keepalive cannot be enabled, the connection is still served and
+stderr gets one warning.
 
 The public KEX relay holds at most 4,096 pairing packets or 32 MiB of them,
 each for up to two hours, and refuses a send at either bound with status 1012.

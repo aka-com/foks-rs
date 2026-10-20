@@ -427,3 +427,31 @@ fn connect_public(
     .unwrap();
     rustls::StreamOwned::new(connection, tcp)
 }
+
+/// A refusal that ends the session is followed by an orderly close: a peer
+/// that pipelined more frames behind the refused call still reads the
+/// refusal, then a TLS close_notify rather than a reset.
+#[test]
+fn a_closing_refusal_reaches_a_pipelining_peer_before_an_orderly_close() {
+    let environment = TestEnvironment::with_profile(TestProfile::RateLimited).unwrap();
+    let server = environment.start_server().unwrap();
+    let mut connection = connect_public(server.addresses().public_services, server.service_roots());
+    // Two calls fit the request bucket; the third is refused and the fourth
+    // is already on the wire when the server ends the session.
+    let mut pipelined = Vec::new();
+    for sequence in 0..4 {
+        pipelined.extend(foks_rpc::encode_get_host_id_request_at(sequence).unwrap());
+    }
+    connection.write_all(&pipelined).unwrap();
+    connection.flush().unwrap();
+    for sequence in 0..2 {
+        foks_rpc::read_response(&mut connection, DEFAULT_MAX_FRAME_LENGTH, sequence).unwrap();
+    }
+    assert!(matches!(
+        foks_rpc::read_response(&mut connection, DEFAULT_MAX_FRAME_LENGTH, 2),
+        Err(RpcError::RemoteStatus { code: 1012, .. })
+    ));
+    let mut byte = [0];
+    assert_eq!(connection.read(&mut byte).unwrap(), 0);
+    server.shutdown().unwrap();
+}
