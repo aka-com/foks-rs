@@ -2056,6 +2056,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "foks-metadata-core"
+version = "0.4.0"
+dependencies = [
+ "foks-merkle-store",
+ "foks-proto",
+ "foks-server-db",
+ "foks-snowpack",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "foks-oidc"
 version = "0.4.0"
 dependencies = [
