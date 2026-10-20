@@ -123,6 +123,9 @@ export function ScreenRouter({
         })
       }
       onUploadDroppedFile={uploadDroppedFile}
+      onUploadsChanged={(storeId, message) =>
+        refresh(message, storeOf(shown, storeId)?.server)
+      }
       // A modal workflow owns the drop while it is open; the new-item sheet
       // takes dropped files itself.
       dropEnabled={workflow === null}

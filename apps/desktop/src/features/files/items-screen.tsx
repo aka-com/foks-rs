@@ -176,6 +176,11 @@ export interface ItemsScreenProps {
   onNewFolder?: (storeId: string, path: string) => void;
   /** Saves a file dropped on the vault's content area. */
   onUploadDroppedFile?: (upload: DropUpload) => Promise<void>;
+  /**
+   * Refreshes a store's server after the Uploads panel resumed or cancelled
+   * one of its uploads, with `message` for the notice.
+   */
+  onUploadsChanged?: (storeId: string, message: string) => Promise<void>;
   /** Cleared while a modal workflow owns the drop, such as the new-item sheet. */
   dropEnabled?: boolean;
 }
@@ -276,6 +281,7 @@ export function ItemsScreen({
   onTeamInfo,
   onNewFolder,
   onUploadDroppedFile,
+  onUploadsChanged,
   dropEnabled = true,
 }: ItemsScreenProps): ReactNode {
   const snapshot = useShellSnapshot();
@@ -1885,6 +1891,11 @@ export function ItemsScreen({
                 key={selectedStore.id}
                 bridge={bridge}
                 storeId={selectedStore.id}
+                onChanged={
+                  onUploadsChanged
+                    ? (message) => onUploadsChanged(selectedStore.id, message)
+                    : undefined
+                }
               />
             ) : null}
             <div className="lt">

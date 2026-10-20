@@ -530,6 +530,9 @@ plaintext_bytes, reserved_bytes, node_id, version}`, decoded by
 previous page. `resume_file_upload` and `cancel_file_upload` take `{storeId,
 uploadId}` and answer one upload. The Uploads button at the top of the Files
 list (`src/features/files/file-uploads.tsx`) reads them only when opened.
+It offers Resume only for states with work left, shows the node and version
+a verified or completed upload was saved as, keeps the page it showed after
+a resume or cancel, and then refreshes the store's server.
 
 A failed `import_dropped_file` or `replace_dropped_file` names the upload
 handle the host issued and points to Uploads, except when the agent refused
