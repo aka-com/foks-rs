@@ -178,8 +178,28 @@ fn set_fk(db: &scan::Database, on: bool) -> Result<()> {
     }
     Ok(())
 }
-fn integrity(db: &scan::Database) -> Result<()> {
-    db.control().statement()?;
+/// Upper bound, over the tables of the verified schema, of one plus the
+/// table's index count plus its foreign-key count. Checked against the schema
+/// by a unit test.
+const MAXIMUM_TABLE_FANOUT: u64 = 10;
+/// Opcodes allowed per row and per b-tree or foreign key. integrity_check
+/// measured about 12 per row per b-tree on the bundled SQLite;
+/// foreign_key_check and the policy's full-table scans cost less.
+const WHOLE_DATABASE_OPERATIONS_PER_ROW: u64 = 64;
+
+/// Opcode budget of one statement that may visit every row of the database
+/// (integrity_check, foreign_key_check, the policy's full-table scans). The
+/// keyset probes keep `STATEMENT_OPERATIONS`; that cap is crossed by
+/// integrity_check at a few tens of thousands of rows.
+fn whole_database_operations(rows: u64) -> usize {
+    let operations = rows
+        .saturating_mul(WHOLE_DATABASE_OPERATIONS_PER_ROW * MAXIMUM_TABLE_FANOUT)
+        .saturating_add(super::STATEMENT_OPERATIONS as u64);
+    usize::try_from(operations).unwrap_or(usize::MAX)
+}
+
+fn integrity(db: &scan::Database, operations: usize) -> Result<()> {
+    db.control().statement_with_budget(operations)?;
     {
         let mut statement = db.connection().prepare("PRAGMA main.foreign_key_check")?;
         let mut rows = statement.query([])?;
@@ -187,7 +207,7 @@ fn integrity(db: &scan::Database) -> Result<()> {
             return Err(unsupported("import foreign key violation"));
         }
     }
-    db.control().statement()?;
+    db.control().statement_with_budget(operations)?;
     let mut stmt = db.connection().prepare("PRAGMA main.integrity_check(1)")?;
     let mut rows = stmt.query([])?;
     let row = rows
@@ -232,7 +252,8 @@ pub(crate) fn import_personal_list(
     if source.summary.external_chunk_references != 0 {
         return Err(unsupported("import external chunks"));
     }
-    policy::verify(&source._database)?;
+    let whole_database = whole_database_operations(source.summary.rows);
+    policy::verify(&source._database, whole_database)?;
     let source_coordinate = semantic::coordinate(&source._database)?;
     let directory = tempfile::Builder::new()
         .prefix("foks-personal-import-")
@@ -329,9 +350,9 @@ pub(crate) fn import_personal_list(
     job.statement()?;
     target.connection().execute_batch("COMMIT")?;
     set_fk(&target, true)?;
-    integrity(&target)?;
+    integrity(&target, whole_database)?;
     target.verify_schema()?;
-    policy::verify(&target)?;
+    policy::verify(&target, whole_database)?;
     let audited = rescan(&target, &source._package)?;
     if audited != source.summary {
         return Err(unsupported("import storage summary mismatch"));

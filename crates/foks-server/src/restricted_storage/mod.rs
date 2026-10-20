@@ -24,6 +24,9 @@ use std::sync::{
 const MAX_DATABASE: u64 = 64 * 1024 * 1024 * 1024;
 const MAX_KEYS: usize = 4096;
 const STEP_ROWS: usize = 128;
+/// Opcode budget of one ordinary statement: the scanner's and the import's
+/// keyset `LIMIT 1` probes and other bounded reads.
+const STATEMENT_OPERATIONS: usize = 1_000_000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ScanError {
@@ -134,6 +137,7 @@ impl StorageScanComplete {
 struct Control {
     control: Mutex<ScanControl>,
     operations: AtomicUsize,
+    budget: AtomicUsize,
     interrupted: AtomicBool,
 }
 impl Control {
@@ -142,6 +146,7 @@ impl Control {
         Ok(Arc::new(Self {
             control: Mutex::new(value.clone()),
             operations: AtomicUsize::new(0),
+            budget: AtomicUsize::new(STATEMENT_OPERATIONS),
             interrupted: AtomicBool::new(false),
         }))
     }
@@ -164,13 +169,22 @@ impl Control {
         original.check()
     }
     fn statement(&self) -> Result<()> {
+        self.statement_with_budget(STATEMENT_OPERATIONS)
+    }
+    /// Starts one statement with its own opcode budget. Cancellation and the
+    /// deadline are still checked by the progress hook whatever the budget.
+    fn statement_with_budget(&self, operations: usize) -> Result<()> {
         self.check()?;
+        self.budget.store(operations, Ordering::Release);
         self.operations.store(0, Ordering::Release);
         Ok(())
     }
     fn progress(&self) -> bool {
-        let stop =
-            self.operations.fetch_add(1000, Ordering::AcqRel) >= 999_000 || self.check().is_err();
+        let used = self
+            .operations
+            .fetch_add(1000, Ordering::AcqRel)
+            .saturating_add(1000);
+        let stop = used >= self.budget.load(Ordering::Acquire) || self.check().is_err();
         if stop {
             self.interrupted.store(true, Ordering::Release);
         }
