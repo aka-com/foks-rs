@@ -123,6 +123,7 @@ pub fn restore_backup(
     if database_path.exists() || directory_has_entries(key_directory)? {
         return Err(crate::Error::Config("restore destination is not empty"));
     }
+    let _destination_locks = lock_restore_destination(database_path)?;
 
     let validated = read_validated_backup_artifacts(artifacts, database_config)?;
     let host_key_files = &validated.key_files;
@@ -288,12 +289,11 @@ pub(crate) fn validate_completed_backup(
     read_validated_backup_artifacts(artifacts, database_config).map(drop)
 }
 
-/// Files that SQLite or the server keep next to a database. SQLite replays a
-/// `-wal` whose own header is valid into whichever main file sits beside it,
-/// so a sidecar left by an earlier installation would silently replace pages
-/// of the restored database on its first open. The lock files are refused as
-/// well so that a restore never shares a path with a live or stale server.
-const RESTORE_SIDECARS: [(&str, &str); 5] = [
+/// SQLite files kept next to a database. SQLite replays a `-wal` whose own
+/// header is valid into whichever main file sits beside it, so a sidecar left
+/// by an earlier installation would silently replace pages of the restored
+/// database on its first open.
+const RESTORE_SIDECARS: [(&str, &str); 3] = [
     (
         "-wal",
         "restore destination has a SQLite -wal sidecar; remove it or choose a new path",
@@ -306,27 +306,71 @@ const RESTORE_SIDECARS: [(&str, &str); 5] = [
         "-journal",
         "restore destination has a SQLite -journal sidecar; remove it or choose a new path",
     ),
+];
+
+/// Lock files the server and the offline commands keep next to a database.
+/// They remain after a clean shutdown, so their presence alone is not refused;
+/// a lock that is held means a server or command is using the path.
+const RESTORE_LOCKS: [(&str, &str); 2] = [
     (
         ".storage-lock",
-        "restore destination has a .storage-lock file; remove it or choose a new path",
+        "restore destination storage lock is held; stop every server and offline command using this path",
     ),
     (
         ".writer-lock",
-        "restore destination has a .writer-lock file; remove it or choose a new path",
+        "restore destination writer lock is held; stop every server and offline command using this path",
     ),
 ];
 
 fn refuse_restore_sidecars(database_path: &Path) -> Result<()> {
     for (suffix, message) in RESTORE_SIDECARS {
-        let mut sidecar = database_path.as_os_str().to_os_string();
-        sidecar.push(suffix);
-        match std::fs::symlink_metadata(PathBuf::from(sidecar)) {
+        match std::fs::symlink_metadata(sidecar_path(database_path, suffix)) {
             Ok(_) => return Err(crate::Error::Config(message)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
     }
     Ok(())
+}
+
+fn sidecar_path(database_path: &Path, suffix: &str) -> PathBuf {
+    let mut path = database_path.as_os_str().to_os_string();
+    path.push(suffix);
+    PathBuf::from(path)
+}
+
+/// Takes every existing lock file at the destination exclusively and keeps it
+/// for the whole restore, so no server or offline command can start on the
+/// path meanwhile. A held lock refuses the restore.
+fn lock_restore_destination(database_path: &Path) -> Result<Vec<std::fs::File>> {
+    let mut held = Vec::new();
+    for (suffix, message) in RESTORE_LOCKS {
+        let path = sidecar_path(database_path, suffix);
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_file() => {}
+            Ok(_) => {
+                return Err(crate::Error::Config(
+                    "restore destination lock is not a regular file",
+                ))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        let file = options.open(&path)?;
+        match file.try_lock() {
+            Ok(()) => held.push(file),
+            Err(std::fs::TryLockError::WouldBlock) => return Err(crate::Error::Config(message)),
+            Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
+        }
+    }
+    Ok(held)
 }
 
 fn directory_has_entries(path: &Path) -> std::io::Result<bool> {
@@ -1155,9 +1199,8 @@ mod tests {
             let database = root.path().join("data").join("foks-server.sqlite");
             let keys = root.path().join("keys");
             std::fs::create_dir_all(database.parent().unwrap()).unwrap();
-            let mut sidecar = database.as_os_str().to_os_string();
-            sidecar.push(suffix);
-            std::fs::write(PathBuf::from(&sidecar), b"stale").unwrap();
+            let sidecar = sidecar_path(&database, suffix);
+            std::fs::write(&sidecar, b"stale").unwrap();
             // The artifacts do not exist: the refusal must come before the
             // backup is read and before anything is written.
             let missing = root.path().join("backup");
@@ -1182,7 +1225,69 @@ mod tests {
                 .map(|entry| entry.unwrap().file_name())
                 .collect();
             assert_eq!(entries.len(), 1, "{suffix}: {entries:?}");
-            assert_eq!(std::fs::read(PathBuf::from(&sidecar)).unwrap(), b"stale");
+            assert_eq!(std::fs::read(&sidecar).unwrap(), b"stale");
+        }
+    }
+
+    fn missing_artifacts(root: &Path) -> BackupArtifacts {
+        let missing = root.join("backup");
+        BackupArtifacts {
+            database: missing.join("foks-server.sqlite"),
+            key_directory: missing.join("keys"),
+            key_manifest: missing.join("key-manifest.txt"),
+        }
+    }
+
+    #[test]
+    fn restore_accepts_released_lock_files_and_refuses_held_ones() {
+        for (suffix, message) in RESTORE_LOCKS {
+            let root = tempfile::tempdir().unwrap();
+            let database = root.path().join("foks-server.sqlite");
+            let keys = root.path().join("keys");
+            let lock = sidecar_path(&database, suffix);
+            // Left behind by a clean shutdown: not held, so restore proceeds
+            // to read the (absent) backup.
+            std::fs::write(&lock, b"").unwrap();
+            assert!(matches!(
+                restore_backup(
+                    &missing_artifacts(root.path()),
+                    &database,
+                    &keys,
+                    foks_server_db::Config::default(),
+                ),
+                Err(crate::Error::Io(_))
+            ));
+            // Held by a running server or offline command.
+            let holder = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&lock)
+                .unwrap();
+            holder.try_lock().unwrap();
+            match restore_backup(
+                &missing_artifacts(root.path()),
+                &database,
+                &keys,
+                foks_server_db::Config::default(),
+            ) {
+                Err(crate::Error::Config(found)) => assert_eq!(found, message, "{suffix}"),
+                other => panic!("{suffix}: unexpected result {other:?}"),
+            }
+            assert!(!database.exists());
+            assert!(!keys.exists());
+            // The restore holds the existing locks while it runs.
+            drop(holder);
+            let held = lock_restore_destination(&database).unwrap();
+            assert_eq!(held.len(), 1);
+            let other = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&lock)
+                .unwrap();
+            assert!(matches!(
+                other.try_lock(),
+                Err(std::fs::TryLockError::WouldBlock)
+            ));
         }
     }
 

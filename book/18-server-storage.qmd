@@ -325,6 +325,14 @@ each input database or WAL file is bounded by the configured database size
 limit. As on normal startup, the migration from 47 or older discards old SSO
 browser challenges, sessions, access state, and binding receipts.
 
+Restore refuses a destination that already holds the database, a non-empty key
+directory, or a `-wal`, `-shm` or `-journal` file beside the database path.
+SQLite checks a WAL only against its own header, so a WAL left by an earlier
+installation would be replayed into the restored file on its first open. The
+`.storage-lock` and `.writer-lock` files survive a clean shutdown and are
+accepted when nobody holds them; restore refuses while either is held and
+holds both itself until it finishes.
+
 ## Invariants written in SQL
 
 The server pushes as much correctness as it can into the schema so that no
