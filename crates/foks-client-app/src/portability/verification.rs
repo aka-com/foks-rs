@@ -145,9 +145,11 @@ pub fn verify_imported_profile(
                 status,
             });
         }
-        // A revoked mTLS credential can be rejected before an RPC status exists.
-        // Label it revoked only when another account in this pass fetched a current
-        // authenticated chain for the same user; a transport failure alone is not proof.
+        // A revoked mTLS credential is answered with AUTH_ERROR (1006), which a
+        // go-foks host also returns for its own storage faults, and older Rust
+        // hosts closed the connection without a status. Label it revoked only
+        // when another account in this pass fetched a current authenticated
+        // chain for the same user; neither outcome alone is proof.
         for (account, report) in state.accounts.iter().zip(&mut reports) {
             if !matches!(report.status, "offline" | "failed") {
                 continue;

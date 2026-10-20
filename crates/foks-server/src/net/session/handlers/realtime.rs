@@ -1,4 +1,4 @@
-use super::super::{permission_denied, ServerData};
+use super::super::{authentication_status, permission_denied, ServerData};
 use crate::metrics::realtime::ReconcileSource;
 use crate::{auth::Principal, rpc::RoutedCall, services::realtime::Response};
 use foks_proto::{RealtimeWire, RtAppId, RtInboxPollResult};
@@ -100,7 +100,7 @@ async fn poll_inner(
                 .now_micros()
                 .map_err(|error| crate::status::unmapped(error.into(), "realtime_poll"))?;
             Principal::authenticate(&CertificateDer::from(certificate), &database, now)
-                .map_err(|_| permission_denied())
+                .map_err(authentication_status)
         }
     })
     .await?;

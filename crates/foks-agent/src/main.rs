@@ -2785,6 +2785,10 @@ fn remote_status_response(id: u64, status: u64, reason: String) -> Option<Respon
             ErrorCode::OperationFailed,
             "The server refused permission for this action.",
         ),
+        foks_rpc::STATUS_AUTH_ERROR => (
+            ErrorCode::OperationFailed,
+            "The server does not accept this device's credential. The device may have been revoked.",
+        ),
         foks_rpc::STATUS_EXPIRED_ERROR => (
             ErrorCode::OperationFailed,
             "This request expired. Start it again.",
@@ -7230,6 +7234,11 @@ mod tests {
                 foks_rpc::STATUS_OVER_QUOTA_ERROR,
                 ErrorCode::QuotaExceeded,
                 "capacity limit",
+            ),
+            (
+                foks_rpc::STATUS_AUTH_ERROR,
+                ErrorCode::OperationFailed,
+                "may have been revoked",
             ),
         ] {
             let response = remote_status_response(8, status, format!("remote status {status}"))

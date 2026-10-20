@@ -166,6 +166,7 @@ pub fn status_phrase(code: u64) -> Option<&'static str> {
         STATUS_USERNAME_IN_USE_ERROR => "that name is already in use on the server",
         STATUS_DUPLICATE_ERROR => "the server already has this record",
         STATUS_PERMISSION_ERROR => "the server refused permission",
+        STATUS_AUTH_ERROR => "the server does not accept this device's credential",
         STATUS_BAD_ARGS_ERROR => "the server rejected the request as malformed",
         STATUS_BAD_INVITE_CODE_ERROR => "the invitation code is not valid",
         STATUS_BAD_PASSPHRASE_ERROR => "the passphrase is not correct",

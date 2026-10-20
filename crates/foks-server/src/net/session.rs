@@ -523,13 +523,11 @@ pub(crate) async fn serve(
                             });
                         }
                         let principal = if listener == Listener::Authenticated {
-                            let certificate =
-                                CertificateDer::from(certificate.ok_or(crate::Error::Config(
-                                    "authenticated TLS session has no client certificate",
-                                ))?);
-                            let now = data.clock.now_micros()?;
-                            let database = match data.read_database() {
-                                Ok(database) => database,
+                            // A failed authentication is answered on the open
+                            // connection, as go-foks answers every call of an
+                            // unauthenticated connection with AUTH_ERROR.
+                            match authenticate_request(&data, certificate) {
+                                Ok(principal) => Some(principal),
                                 Err(status) => {
                                     let (response, status) = encode_result(Err(status), sequence)?;
                                     return Ok(RequestOutcome {
@@ -541,8 +539,7 @@ pub(crate) async fn serve(
                                         _memory: Arc::clone(&request_memory),
                                     });
                                 }
-                            };
-                            Some(Principal::authenticate(&certificate, &database, now)?)
+                            }
                         } else {
                             None
                         };
@@ -1079,6 +1076,33 @@ fn realtime_poll_read_permits(maximum_read_connections: usize) -> usize {
     (maximum_read_connections / 2).max(1)
 }
 
+/// Binds the client certificate of an authenticated-listener request to its
+/// active credential, or returns the status that answers the request.
+fn authenticate_request(
+    data: &ServerData,
+    certificate: Option<Vec<u8>>,
+) -> std::result::Result<Principal, RpcStatus> {
+    let certificate = CertificateDer::from(certificate.ok_or(RpcStatus::AuthError)?);
+    let now = data
+        .clock
+        .now_micros()
+        .map_err(|error| crate::status::unmapped(error.into(), "authenticate"))?;
+    let database = data.read_database()?;
+    Principal::authenticate(&certificate, &database, now).map_err(authentication_status)
+}
+
+/// The status for a failed [`Principal::authenticate`]. A certificate that is
+/// not bound to an active credential, or whose key or credential kind does
+/// not match, is go-foks `AUTH_ERROR` (1006). A storage fault while looking up
+/// the binding is not a verdict on the certificate: it takes the status that
+/// every route gives that fault, and a server fault is counted.
+fn authentication_status(error: crate::Error) -> RpcStatus {
+    match error {
+        error @ crate::Error::Database(_) => crate::status::unmapped(error, "authenticate"),
+        _ => RpcStatus::AuthError,
+    }
+}
+
 fn permission_denied() -> RpcStatus {
     RpcStatus::PermissionDenied("active device does not authorize this request".to_owned())
 }
@@ -1148,6 +1172,32 @@ mod tests {
             sequence: 7,
             request_memory: pools.request(Some(Arc::clone(memory).try_acquire_owned().unwrap())),
         }
+    }
+
+    #[test]
+    fn authentication_failures_are_auth_errors_and_storage_faults_are_retryable() {
+        for error in [
+            crate::Error::Config(
+                "authenticated peer certificate is not bound to an active credential",
+            ),
+            crate::Error::Config("authenticated peer certificate public key does not match"),
+        ] {
+            assert_eq!(authentication_status(error), RpcStatus::AuthError);
+        }
+        let before = crate::status::contract::failures_counted();
+        assert_eq!(
+            authentication_status(crate::status::contract::sqlite(rusqlite::ffi::SQLITE_BUSY)),
+            RpcStatus::TransactionRetry
+        );
+        assert_eq!(
+            authentication_status(crate::status::contract::sqlite(rusqlite::ffi::SQLITE_IOERR)),
+            RpcStatus::TransactionRetry
+        );
+        assert_eq!(crate::status::contract::failures_counted(), before + 2);
+        assert_eq!(
+            authentication_status(crate::status::contract::database_full()),
+            RpcStatus::QuotaExceeded
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
