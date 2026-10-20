@@ -493,7 +493,7 @@ integrity-checked database, and exact declared key set, and requires empty
 destination paths.
 
 Restore and retention validation also accept the same prior schemas as server
-startup (43 through 49, upgraded to 50). They copy the database and any WAL into
+startup (43 through 50, upgraded to 51). They copy the database and any WAL into
 a private temporary directory, apply the normal transactional migrations,
 checkpoint, and validate that copy. Restore installs the migrated database;
 validation never opens or changes the original snapshot in SQLite. Retention
@@ -605,3 +605,22 @@ Reasons are `disk_full`, `permission_denied`, `io`, `schema_mismatch`,
 These records contain no paths, SQL, identities, request content, or underlying
 error text. Existing failure counters and committed-reclamation accounting retain
 their meanings; a retention failure can occur after a new snapshot is published.
+
+External chunk stores are bound to a canonical storage locator, stable host ID,
+and random namespace ID. Startup checks the immutable namespace marker even when
+there are no external chunks. Missing or foreign markers and changed locators
+fail closed. This binding is placement identity, not a distributed ownership fence.
+
+After upgrading a database that already contains external references, stop the
+server and run `foks-server adopt-chunk-store --config /path/to/server.toml`.
+Before first adoption, preserve a consistent offline SQLite backup, including
+committed WAL. Adoption pins the chosen locator immediately; verification failures
+retain resumable progress but cannot reset or rebind the pending namespace.
+Correct a mistaken first locator only by restoring that pre-adoption backup while
+the installation is stopped, before activation or subsequent writes. Adoption
+verifies each referenced object and checkpoints its progress; reference mutations
+invalidate progress and force a full rescan on the next invocation.
+
+Backup validates the bound store before hydration. Completed self-contained
+backups clear the storage binding in their private copy, so restore can start
+without the old object store and can bind a fresh store before conversion.

@@ -1,9 +1,12 @@
 # Recovery experiments
 
-This suite measures the **local durable process-restart baseline**, not host,
-disk, or AZ recovery. The controller and original SQLite volume survive. There
-is no replication, distributed fencing, promotion, routing failover, or power
-loss emulation in this harness. Passing it does not certify hosted HA.
+This suite measures local process restart and independent-directory restore
+experiments, not actual host/AZ recovery. The process-restart baseline retains
+the original SQLite volume. Additional experiments delete fixture-owned server
+files and recover from a snapshot copied outside that directory. All processes
+and files still share one host. There is no replication, distributed fencing,
+automatic promotion, routing failover, or power-loss emulation. Passing the
+suite does not certify hosted HA; some tests pass by proving missing guarantees.
 
 Build the exact executable being measured before every run:
 
@@ -55,6 +58,35 @@ alone can make an old backup unacceptable. The retry fixture covers a lost or
 partial signup response, restarts both sides, and checks reconciliation without
 a second Merkle publication. It uses in-process deterministic fault hooks and a
 graceful server restart; it is not an instruction-level process-crash experiment.
+
+## Independent-directory and former-owner experiments
+
+The `volume` module copies a completed backup to a separate controller-owned
+directory before injecting failure. The positive case deletes the source server
+database, keys, local backups and configuration, then restores into another
+directory and validates all expected reads plus a new write/read. Client stores
+and controller-held operator-root material survive. A complete quiescent snapshot
+is a prerequisite of this positive fixture, not a replication implementation.
+
+A stale-snapshot variant adds an acknowledged insertion after copying the backup.
+The replacement accepts new writes, but the ledger rejects recovery because the
+insertion is gone. A former-owner variant alternates independent server copies
+at the same endpoint and uses two pre-pinned clients. Both copies accept divergent
+writes. This demonstrates absent distributed fencing without simulating two
+simultaneously reachable owners or clearing either client's rollback anchors.
+`begin_recovery_attempt` clears observations when changing the selected recovery
+target; it retains every acknowledgment and the original fault time. A rejection
+is recorded in the ledger instead of counting reads across branches as recovery.
+
+The simultaneous-restore test defaults to four installations. Set
+`FOKS_RECOVERY_TENANTS` to 1–32 for an explicit local experiment. Every source is
+stopped and erased before parallel replacement startup, with a shared outer
+15-second budget that includes teardown. Per-tenant clocks stop after successful
+authenticated validation. This small fixture does not establish fleet density.
+
+Set `FOKS_RECOVERY_EVIDENCE_DIR` to retain these new per-scenario JSONL ledgers.
+Use a new directory for each run: existing filenames are rejected, not overwritten.
+The original process-crash test continues to use `FOKS_RECOVERY_LEDGER` separately.
 
 ## Extending this into a hosted recovery qualification
 

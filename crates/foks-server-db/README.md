@@ -21,11 +21,11 @@ device/inode identity; unsupported filesystem identity semantics fail closed.
 The server writer retains its adjacent path lock and rechecks the captured
 identity and link count under that lock before opening SQLite.
 
-The schema is pre-release v1, currently SQLite schema version 50. Fresh creation
+The schema is pre-release v1, currently SQLite schema version 51. Fresh creation
 and writer upgrades use the same index definitions.
 
 `Database::open` (including the server writer's identity-checked open) upgrades
-versions 43 through 49 in one immediate transaction. Version 43 receives the
+versions 43 through 50 in one immediate transaction. Version 43 receives the
 inbox reconciliation column and triggers; versions 43 and 44 receive the seven
 expiry indexes. Older SSO schemas rename `fence` to `blocked_reason` and
 `admission_hash` to `source_hash` when those columns are present. Version 48 also
@@ -39,7 +39,7 @@ controlled writer restart and retain a backup. No upgrade runs inside recurring
 maintenance.
 
 `Database::open_existing` and `ReadDatabase::open` validate only: they refuse 43
-through 49 until the writer has upgraded them. All validating paths reject
+through 50 until the writer has upgraded them. All validating paths reject
 foreign, future and unsupported older versions. Upgraded files and backups
 cannot be opened by older binaries; there is no downgrade path. Other
 incompatible pre-release changes may still require replacement unless an
@@ -81,3 +81,7 @@ and abandoned-upload cleanup delete metadata references only; they do not delete
 external objects. Orphans and removed objects therefore keep consuming physical
 bucket space. Do not apply bucket lifecycle deletion: a referenced object or an
 in-progress backup could still require it. A coordinated collector is future work.
+
+Schema 51 records the installation chunk-store binding and a revision for external
+chunk references. Existing external references require explicit offline adoption;
+startup never guesses a namespace or rebinds an active store.
