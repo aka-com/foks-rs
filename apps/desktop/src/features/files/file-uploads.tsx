@@ -13,6 +13,7 @@ const uploadLabels: Record<string, string> = {
   uploading: 'Uploading',
   'content-complete': 'Ready to publish',
   publishing: 'Checking publication',
+  'publication-rejected': 'Publication rejected; resume to publish again',
   verified: 'Uploaded',
   completed: 'Completed',
   blocked: 'Needs attention',

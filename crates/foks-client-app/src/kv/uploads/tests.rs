@@ -885,3 +885,37 @@ fn implicit_inline_put_takes_no_receipt_row_and_ignores_the_receipt_clock() {
         b"still saved"
     );
 }
+
+/// A publication the server definitely rejected is reported as such, and
+/// Resume publishes the retained content again instead of refusing forever.
+#[test]
+fn rejected_publication_is_reported_and_resume_publishes_again() {
+    let f = AccountFixture::start();
+    f.run(|s, v, k| s.create_account("me", "uploadrejected", "laptop", "", "", None, v, k));
+    let id = handle(&f, 41);
+    let original = vec![0x41; 3000];
+    f.run(|s, v, k| {
+        foks_client::reject_next_namespace_put_for_test();
+        assert!(s
+            .put_kv_file_identified(
+                "me",
+                "/rejected.bin",
+                &mut Cursor::new(&original),
+                id,
+                false,
+                false,
+                v,
+                k,
+            )
+            .is_err());
+        let uploads = s.list_kv_uploads("me", v)?;
+        assert_eq!(uploads[0].state, "publication-rejected");
+        Ok(())
+    });
+    let done = f.run(|s, v, k| s.resume_kv_upload("me", id, v, k));
+    assert_eq!(done.state, "completed");
+    assert_eq!(
+        f.run(|s, v, _| s.read_kv_file("me", "/rejected.bin", v)),
+        original
+    );
+}

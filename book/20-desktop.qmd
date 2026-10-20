@@ -247,6 +247,10 @@ upload handle. They take a reservation through `begin_upload_reconciliation`,
 which, unlike other mutations, may proceed while an earlier change still
 needs a refresh, since it acts only on an existing handle; it still
 excludes concurrent mutations and does not clear the refresh requirement.
+An upload whose publication the server definitely rejected is listed as
+`publication-rejected`, not `publishing`. Its content is complete, so
+Resume synchronizes the store, checks that the destination still matches
+the recorded intent and publishes again; Cancel releases it.
 
 ## Clipboard hygiene
 
