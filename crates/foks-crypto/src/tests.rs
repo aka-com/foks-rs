@@ -1942,37 +1942,76 @@ fn seed_chain_plaintexts_bypass_the_non_zeroizing_prefix_decoder() {
     assert!(hybrid.contains("decode_prefix_sensitive(plaintext)"));
 }
 
-/// The names `source` imports from foks_snowpack in its `use` items, with
-/// any `as` rename resolved to the imported name.
-fn imported_snowpack_names(source: &str) -> Vec<String> {
-    let mut names = Vec::new();
-    let mut rest = source;
-    while let Some(start) = rest.find("use foks_snowpack::") {
-        let item = &rest[start + "use foks_snowpack::".len()..];
-        let end = item.find(';').expect("use item ends");
-        let list = item[..end]
-            .trim()
-            .trim_start_matches('{')
-            .trim_end_matches('}');
-        for name in list.split(',') {
-            let name = name.split_whitespace().next().unwrap_or("");
-            if !name.is_empty() {
-                names.push(name.trim_start_matches("self::").to_owned());
+/// The ways `source` can reach foks_snowpack's general decoders under a name
+/// the plain-text guard does not see: a `use` of `decode` or
+/// `decode_prefix` (in nested groups, through a module path, renamed, or
+/// from `::foks_snowpack`), a glob import, an alias of the crate itself, and
+/// a call through a longer path such as `foks_snowpack::x::decode(`.
+fn snowpack_decoder_reaches(source: &str) -> Vec<String> {
+    const GENERAL: [&str; 2] = ["decode", "decode_prefix"];
+    let mut found = Vec::new();
+    for statement in source.split(';') {
+        let Some(start) = statement.lines().position(|line| {
+            let line = line.trim_start();
+            let line = line
+                .strip_prefix("pub(crate) ")
+                .or_else(|| line.strip_prefix("pub(super) "))
+                .or_else(|| line.strip_prefix("pub "))
+                .unwrap_or(line);
+            line.starts_with("use ")
+        }) else {
+            continue;
+        };
+        let item = statement.lines().skip(start).collect::<Vec<_>>().join(" ");
+        let item = item.replace("::foks_snowpack", "foks_snowpack");
+        if !item.contains("foks_snowpack") {
+            continue;
+        }
+        if item.contains("foks_snowpack as") {
+            found.push("an alias of foks_snowpack".to_owned());
+        }
+        if item.contains('*') {
+            found.push("a glob import from foks_snowpack".to_owned());
+        }
+        for piece in item.split(['{', '}', ',']) {
+            let path = piece.split(" as ").next().unwrap_or("").trim();
+            let name = path.rsplit("::").next().unwrap_or("").trim();
+            if GENERAL.contains(&name) {
+                found.push(format!("an import of {name}"));
             }
         }
-        rest = &item[end..];
     }
-    names
+    let mut rest = source;
+    while let Some(start) = rest.find("foks_snowpack::") {
+        let path: String = rest[start..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == ':')
+            .collect();
+        let after = &rest[start + path.len()..];
+        let name = path.rsplit("::").next().unwrap_or("");
+        if GENERAL.contains(&name) && after.trim_start().starts_with('(') {
+            found.push(format!("a call of {path}"));
+        }
+        rest = &rest[start + "foks_snowpack::".len()..];
+    }
+    found
 }
 
 #[test]
-fn snowpack_import_scan_finds_plain_and_renamed_names() {
-    assert_eq!(
-        imported_snowpack_names(
-            "use foks_snowpack::{encode, Value};\nuse foks_snowpack::decode as d;"
-        ),
-        ["encode", "Value", "decode"]
-    );
+fn snowpack_decoder_scan_finds_every_import_form() {
+    assert!(snowpack_decoder_reaches("use foks_snowpack::{encode, Value};").is_empty());
+    for source in [
+        "use foks_snowpack::decode;",
+        "use foks_snowpack::{encode, decode as d};",
+        "use foks_snowpack::{codec::{decode_prefix}, Value};",
+        "use foks_snowpack::x::decode;",
+        "pub(crate) use ::foks_snowpack::decode;",
+        "use foks_snowpack::*;",
+        "use foks_snowpack as s;",
+        "fn f() { foks_snowpack::x::decode(b); }",
+    ] {
+        assert!(!snowpack_decoder_reaches(source).is_empty(), "{source}");
+    }
 }
 
 #[test]
@@ -1986,13 +2025,8 @@ fn secret_plaintext_sites_avoid_the_general_decoder_and_unerased_encodings() {
     for source in [include_str!("passphrase.rs"), include_str!("kex.rs")] {
         assert!(!source.contains(&general_decoder));
         assert!(!source.contains(&general_prefix_decoder));
-        // Nor may they import the general decoders under their plain names.
-        for import in imported_snowpack_names(source) {
-            assert!(
-                !matches!(import.as_str(), "decode" | "decode_prefix"),
-                "imports foks_snowpack::{import}"
-            );
-        }
+        // Nor may they reach the general decoders under another name.
+        assert_eq!(snowpack_decoder_reaches(source), Vec::<String>::new());
     }
     let kex = include_str!("kex.rs");
     assert!(kex.contains("let plaintext = Zeroizing::new(cleartext.encoded()?);"));
