@@ -1261,6 +1261,7 @@ class ProcessGraphTests(unittest.TestCase):
                         c.verify(evidence, root, p.PROCESS)
                     environment.assert_not_called()
 
+    @unittest.skipUnless(Path("/usr/bin/sandbox-exec").is_file(), "the reviewed network-denial launcher is macOS sandbox-exec")
     def test_process_transport_regression_keeps_exact_root_workspace_bindings(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
