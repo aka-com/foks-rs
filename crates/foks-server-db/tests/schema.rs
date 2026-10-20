@@ -140,6 +140,9 @@ fn remove_accounting(connection: &Connection) {
 
 fn predecessor(connection: &Connection, version: i64) {
     assert!(matches!(version, 43..=49));
+    connection
+        .execute_batch(include_str!("fixtures/remove_kv_current.sql"))
+        .unwrap();
     if version <= 48 {
         remove_accounting(connection);
     } else {

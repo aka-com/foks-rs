@@ -108,7 +108,7 @@ impl Statement {
             Self::DirectoryNode => ("SELECT '1' FROM kv_directory_heads WHERE uid=?1 AND directory_id=?2", &[B,B], &[I], false),
             Self::FileNode => ("SELECT '1' FROM kv_file_uploads WHERE uid=?1 AND file_id=?2 AND reclaiming=0", &[B,B], &[I], false),
             Self::SmallNode => ("SELECT '1' FROM kv_nodes WHERE uid=?1 AND node_id=?2 AND node_type=CAST(?3 AS INTEGER)", &[B,B,I], &[I], false),
-            Self::NameConflict => ("SELECT '1' FROM kv_dirent_heads h JOIN kv_dirents d ON d.uid=h.uid AND d.parent_id=h.parent_id AND d.dirent_id=h.dirent_id AND d.version=h.version WHERE h.uid=?1 AND h.parent_id=?2 AND h.dirent_id!=?3 AND d.name_mac=?4 AND substr(d.node_id,1,1)!=X'00' LIMIT 1", &[B,B,B,B], &[I], false),
+            Self::NameConflict => ("SELECT '1' FROM kv_dirent_current\nWHERE uid = ?1 AND parent_id = ?2 AND dirent_id != ?3 AND name_mac = ?4 LIMIT 1", &[B,B,B,B], &[I], false),
             Self::InsertDirent => ("INSERT INTO kv_dirents(uid,parent_id,dirent_id,version,directory_version,node_id,name_mac,creation_time,exact_dirent) VALUES(?1,?2,?3,CAST(?4 AS INTEGER),CAST(?5 AS INTEGER),?6,?7,CAST(?8 AS INTEGER),?9)", &[B,B,B,I,I,B,B,I,B], &[], true),
             Self::SetHead => ("INSERT INTO kv_dirent_heads(uid,parent_id,dirent_id,version) VALUES(?1,?2,?3,CAST(?4 AS INTEGER)) ON CONFLICT(uid,parent_id,dirent_id) DO UPDATE SET version=excluded.version", &[B,B,B,I], &[], true),
             Self::ProbeTypes => ("SELECT CAST(CAST(?1 AS INTEGER) AS TEXT),?2,?3,?4", &[I,B,N,T], &[I,B,N,T], false),

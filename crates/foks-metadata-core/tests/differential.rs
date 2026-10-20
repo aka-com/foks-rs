@@ -591,6 +591,10 @@ fn errors_after_sql_effects_roll_back_and_hosts_require_outer_transaction() {
 
 #[test]
 fn name_conflict_query_cost_records_retained_history_and_unrelated_current_heads() {
+    assert_eq!(
+        Statement::NameConflict.spec().sql,
+        foks_server_db::KV_NAME_CONFLICT_SQL
+    );
     let mut measurements = Vec::new();
     for (retained, unrelated_heads) in [
         (0u32, 0u32),
@@ -599,6 +603,7 @@ fn name_conflict_query_cost_records_retained_history_and_unrelated_current_heads
         (0, 100),
         (0, 1000),
         (1000, 1000),
+        (10000, 10000),
     ] {
         let test = fixture();
         let mut c = Connection::open(&test.path).unwrap();
@@ -670,8 +675,12 @@ fn name_conflict_query_cost_records_retained_history_and_unrelated_current_heads
         )
         .unwrap();
     }
-    // This records costs rather than asserting a convenient scaling threshold.
-    // A growing curve is an explicit redesign finding, not a failed equivalence.
+    // Negative indexed lookup work is independent of both retained versions
+    // and unrelated live heads; SQLite b-tree depth is outside VM opcode count.
+    let baseline = measurements[0]["vm_steps"].as_i64().unwrap();
+    assert!(measurements
+        .iter()
+        .all(|m| m["vm_steps"].as_i64().unwrap() == baseline));
     eprintln!(
         "NameConflict SQLite VM measurements: {}",
         serde_json::to_string(&measurements).unwrap()

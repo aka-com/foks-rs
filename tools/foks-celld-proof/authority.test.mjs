@@ -54,6 +54,34 @@ test("native schema and exact FOKS rows round trip through authoritative SQLite"
   } finally {db.close();}
 });
 
+test("current heads are rebuilt from native PutDirents and derived-only tampering is rejected",()=>{
+  const {db,authority,request}=fixture();
+  try {
+    const projection=vectors.after.tables.find(t=>t.name==="kv_dirent_current");
+    assert.equal(projection.rows.length,1);
+    assert.ok(!request.delta.changes.some(c=>c.table==="kv_dirent_current"));
+    const tampered=structuredClone(vectors.after);
+    const table=tampered.tables.find(t=>t.name==="kv_dirent_current");
+    const column=vectors.schema.tables.find(t=>t.name===table.name).columns.findIndex(c=>c.name==="creation_time");
+    table.rows[0][column]={kind:"integer",value:"1"};
+    const forged=structuredClone(request);
+    forged.delta.after_hash=hash(tampered);
+    assert.throws(()=>authority.apply(forged));
+    assert.deepEqual(authority.read({epoch:"1",owner}).snapshot,vectors.before);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM proof_receipts").get().n,0);
+    const direct=structuredClone(request);
+    direct.delta.changes.push({table:"kv_dirent_current",old:null,new:projection.rows[0]});
+    assert.throws(()=>authority.apply(direct));
+    assert.deepEqual(authority.read({epoch:"1",owner}).snapshot,vectors.before);
+    authority.apply(request);
+    assert.deepEqual(authority.read({epoch:"1",owner}).snapshot,vectors.after);
+    const derivedOnly={...request,revision:"1",attempt:"derived_only_attempt",delta:{before_hash:hash(vectors.after),after_hash:hash(tampered),changes:[]}};
+    assert.throws(()=>authority.apply(derivedOnly));
+    assert.deepEqual(authority.read({epoch:"1",owner}).snapshot,vectors.after);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM proof_receipts").get().n,1);
+  } finally {db.close();}
+});
+
 test("failure after dirent insertion rolls back node, dirent, head, counters and receipt",()=>{
   const {db,authority,request}=fixture();
   try {

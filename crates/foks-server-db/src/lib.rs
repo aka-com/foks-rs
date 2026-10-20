@@ -13,9 +13,8 @@ mod clock;
 pub use chunk_binding::{ChunkStorageBinding, ChunkStorageBindingState};
 pub use chunk_collection::ChunkDeletion;
 pub use chunk_ledger::{
-    ChunkPublicationPolicy,
     ChunkInventoryCheckpoint, ChunkInventoryEntry, ChunkObject, ChunkPhysicalUsage,
-    ChunkReservation, ChunkReservationAction,
+    ChunkPublicationPolicy, ChunkReservation, ChunkReservationAction,
 };
 mod config;
 mod connection;
@@ -29,6 +28,7 @@ mod idempotency;
 mod identity;
 mod invites;
 mod kv;
+pub use kv::KV_NAME_CONFLICT_SQL;
 mod kv_objects;
 pub use kv_objects::{ExternalKvChunk, KvChunkKey, KvChunkPayload, StoredKvChunkObject};
 mod log_upload;
