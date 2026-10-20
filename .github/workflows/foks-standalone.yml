@@ -176,6 +176,8 @@ jobs:
         run: tools/foks-v019-oracle/run-go-client-compat.sh
       - name: Test release client/server lifecycle
         run: tools/foks-server/test-client-server.sh
+      - name: Test crash recovery and stale-backup rejection against the release server
+        run: tools/foks-server/test-recovery.sh
       - name: Test small-team, restart, capacity, and backup behavior
         run: tools/foks-server/test-small-team.sh
       - name: Verify host-key rotation with pinned Go v0.1.9
