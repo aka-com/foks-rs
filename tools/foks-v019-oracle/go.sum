@@ -165,8 +165,8 @@ github.com/keybase/msgpackzip v0.0.0-20250106200500-93bf3a4c34cf h1:wG5lhAbfl5Gi
 github.com/keybase/msgpackzip v0.0.0-20250106200500-93bf3a4c34cf/go.mod h1:XGERKRnPD1bFQJrhQp5XHw4JtZ+u3nlgdx/xrwF13ow=
 github.com/keybase/saltpack v0.0.0-20221220231257-f6cce11cfd0f h1:q6W4z1Qbv9UfOPCpX/ymoiNVbT/+PuCVtOWHu2O5Pss=
 github.com/keybase/saltpack v0.0.0-20221220231257-f6cce11cfd0f/go.mod h1:8hM5WwVH+oXJVaxqscISOuOjPHV20Htnl56CBLAPzMY=
-github.com/klauspost/compress v1.18.0 h1:c/Cqfb0r+Yi+JtIEq73FWXVkRonBlf0CRNYc8Zttxdo=
-github.com/klauspost/compress v1.18.0/go.mod h1:2Pp+KzxcywXVXMr50+X0Q/Lsb43OQHYWRCY2AiWywWQ=
+github.com/klauspost/compress v1.18.7 h1:aUyZsS4kH3QTKurYhAOwAHxllVPnOthb3vPfnF1Ehjw=
+github.com/klauspost/compress v1.18.7/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=
 github.com/klauspost/cpuid/v2 v2.3.0 h1:S4CRMLnYUhGeDFDqkGriYKdfoFlDnMtqTiI/sFzhA9Y=
 github.com/klauspost/cpuid/v2 v2.3.0/go.mod h1:hqwkgyIinND0mEev00jJYCxPNVRVXFQeu1XKlok6oO0=
 github.com/kr/pretty v0.1.0/go.mod h1:dAy3ld7l9f0ibDNOQOHHMYYIIbhfbHSm3C4ZsoJORNo=

@@ -5,7 +5,9 @@ go 1.25.0
 require (
 	github.com/foks-proj/go-foks v0.1.9
 	github.com/foks-proj/go-snowpack-rpc v0.0.2
+	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/keybase/go-codec v0.0.0-20180928230036-164397562123
+	github.com/modelcontextprotocol/go-sdk v1.4.1
 	go.uber.org/zap v1.27.0
 	golang.org/x/crypto v0.52.0
 )
@@ -60,7 +62,6 @@ require (
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/go-piv/piv-go/v2 v2.3.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
-	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/google/go-jsonnet v0.20.0 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
@@ -79,7 +80,7 @@ require (
 	github.com/keybase/go-keychain v0.0.1 // indirect
 	github.com/keybase/msgpackzip v0.0.0-20250106200500-93bf3a4c34cf // indirect
 	github.com/keybase/saltpack v0.0.0-20221220231257-f6cce11cfd0f // indirect
-	github.com/klauspost/compress v1.18.0 // indirect
+	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/magiconair/properties v1.8.10 // indirect
@@ -93,7 +94,6 @@ require (
 	github.com/moby/sys/user v0.4.0 // indirect
 	github.com/moby/sys/userns v0.1.0 // indirect
 	github.com/moby/term v0.5.0 // indirect
-	github.com/modelcontextprotocol/go-sdk v1.4.1 // indirect
 	github.com/morikuni/aec v1.0.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
