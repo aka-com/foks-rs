@@ -191,7 +191,8 @@ the same default.
   at most 2^63 - 1.
 
 Each value must be non-zero, except `maximum_kex_receive_polls`, where zero
-refuses every KEX receive. `maximum_team_members` bounds the rows of one
+refuses every KEX receive, and `maximum_connections_per_source`, where zero
+removes the per-source connection limit. `maximum_team_members` bounds the rows of one
 team roster and must not exceed 1,024, the number of roster rows a realtime
 mutation scans when it records message recipients; a larger roster could not
 create channels or send messages. A configured `[web_admin]` listener requires

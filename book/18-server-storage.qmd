@@ -215,8 +215,9 @@ mechanism differs by resource.
 | Reader pool | 32 connections | `Error::ReaderPool`; status 1012 |
 | Listener admission queue | 32 pending connections | `try_send` fails; connection dropped |
 | Active sessions per listener | 256 | accept loop waits for a permit |
-| Connections per source per listener | 32, loopback exempt | connection dropped |
+| Connections per source per listener | 32 (0 = unlimited); loopback and `trusted_sources` exempt | connection dropped |
 | Request handlers (shared) | 64 blocking permits | `try_acquire_owned` fails; status 1012 |
+| Pending long polls per connection | 4 | status 1012 at the call's sequence; the connection stays open |
 | Realtime inbox polls | 8 per account; 256 in total (the authenticated listener's sessions) | status 1012 |
 | Realtime poll state reads | 16 readers (half the reader pool) | reads wait for a permit |
 | KEX receives | 32, at most half the active sessions; 8 (a quarter) per source, loopback and `trusted_sources` exempt | status 1012, not queued |
