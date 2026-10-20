@@ -6,10 +6,12 @@ license.workspace = true
 publish = false
 
 [dependencies]
+foks-local-deadline = { workspace = true, features = ["clock"] }
 foks-agent-proto = { workspace = true }
 thiserror = { workspace = true }
 rustix = { workspace = true, features = ["fs", "net", "event"] }
 zeroize = { workspace = true }
+getrandom = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

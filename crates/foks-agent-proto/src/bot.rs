@@ -30,6 +30,9 @@ pub enum BotAction {
     Export {
         operation_id: String,
     },
+    CompleteExport {
+        operation_id: String,
+    },
 }
 impl BotAction {
     pub fn validate(&self) -> bool {
@@ -52,12 +55,12 @@ impl BotAction {
                 }
                 .validate()
             }
-            Self::Cancel { operation_id } | Self::Export { operation_id } => {
-                crate::account::RenameAction::Cancel {
-                    operation_id: operation_id.clone(),
-                }
-                .validate()
+            Self::Cancel { operation_id }
+            | Self::Export { operation_id }
+            | Self::CompleteExport { operation_id } => crate::account::RenameAction::Cancel {
+                operation_id: operation_id.clone(),
             }
+            .validate(),
             Self::Prepare { pin, .. } => pin
                 .as_ref()
                 .is_none_or(|p| (1..=32).contains(&p.expose().len())),

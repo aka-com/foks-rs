@@ -50,15 +50,10 @@ pub struct AppInfo {
 #[tauri::command]
 pub async fn agent_status(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
 ) -> Result<AgentStatusDto, AgentError> {
     require_main_window(&webview)?;
-    let value = success_value(
-        state
-            .agent
-            .call(foks_agent_proto::Operation::AgentStatus)
-            .await?,
-    )?;
+    let value = success_value(state.call(foks_agent_proto::Operation::AgentStatus).await?)?;
     let status =
         serde_json::from_value::<foks_agent_proto::AgentStatus>(value).map_err(|error| {
             AgentError::unknown(format!(
@@ -74,7 +69,7 @@ pub async fn agent_status(
 #[tauri::command]
 pub async fn auto_recover_agent(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
 ) -> Result<AgentStatusDto, AgentError> {
     require_main_window(&webview)?;
     let app = webview.app_handle().clone();
@@ -100,7 +95,7 @@ pub async fn auto_recover_agent(
 #[tauri::command]
 pub async fn retry_agent_connection(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
 ) -> Result<AgentStatusDto, AgentError> {
     require_main_window(&webview)?;
     let app = webview.app_handle().clone();
@@ -175,7 +170,7 @@ fn macos_user_name() -> Option<String> {
 pub fn app_info(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
 ) -> Result<AppInfo, AgentError> {
     require_main_window(&webview)?;
     Ok(AppInfo {
@@ -200,7 +195,7 @@ pub fn app_info(
 #[tauri::command]
 pub fn diagnostic_timings(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     since: u64,
 ) -> Result<crate::diagnostics::TimingBatch, AgentError> {
     require_main_window(&webview)?;
@@ -212,7 +207,7 @@ pub fn diagnostic_timings(
 #[tauri::command]
 pub fn agent_process_info(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
 ) -> Result<crate::agent::AgentProcessInfo, AgentError> {
     require_main_window(&webview)?;
     Ok(state.agent.process_info())
@@ -223,7 +218,7 @@ pub fn agent_process_info(
 #[tauri::command]
 pub async fn restart_agent(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     takeover: bool,
 ) -> Result<crate::agent::MaintenanceSnapshot, AgentError> {
     require_main_window(&webview)?;
@@ -250,7 +245,7 @@ pub async fn restart_agent(
 #[tauri::command]
 pub fn take_agent_connection_loss(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
 ) -> Result<Option<String>, AgentError> {
     require_main_window(&webview)?;
     Ok(state.agent.take_connection_failure())
@@ -266,7 +261,7 @@ pub fn restart_app(app: tauri::AppHandle, webview: tauri::Webview) -> Result<(),
 pub fn quit_app(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     closing: State<'_, std::sync::Arc<crate::close_guard::CloseGuard>>,
 ) -> Result<(), AgentError> {
     require_main_window(&webview)?;

@@ -117,6 +117,7 @@ pub(super) enum AdmissionError {
     Full,
     Deadline,
     Cancelled,
+    Clock(foks_local_deadline::Error),
 }
 impl std::fmt::Display for AdmissionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -124,10 +125,18 @@ impl std::fmt::Display for AdmissionError {
             Self::Full => "Profile request queue is full; operation did not start.",
             Self::Deadline => "Profile admission deadline exceeded; operation did not start.",
             Self::Cancelled => "Profile request cancelled before execution.",
+            Self::Clock(_) => "Profile admission clock could not be validated.",
         })
     }
 }
-impl std::error::Error for AdmissionError {}
+impl std::error::Error for AdmissionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Clock(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 pub(super) fn coordinator() -> &'static Arc<Coordinator> {
     static COORDINATOR: OnceLock<Arc<Coordinator>> = OnceLock::new();
@@ -299,6 +308,51 @@ impl Coordinator {
                 .map_err(|_| AdmissionError::Deadline)?;
         }
     }
+    pub(super) async fn acquire_control(
+        self: &Arc<Self>,
+        root: &Path,
+        scope: Scope,
+        control: &crate::request_control::RequestControl,
+        cap: Duration,
+    ) -> Result<Permit, AdmissionError> {
+        let check = || {
+            control.check().map_err(|error| match error {
+                foks_client::Error::Cancelled => AdmissionError::Cancelled,
+                foks_client::Error::LocalDeadline(error) => AdmissionError::Clock(error),
+                _ => AdmissionError::Deadline,
+            })
+        };
+        check()?;
+        let deadline = control.deadline.instant().min(Instant::now() + cap);
+        let mut pending = self.enqueue(root, scope)?;
+        let id = pending.id.expect("new waiter");
+        let mut waited_behind = None;
+        loop {
+            check()?;
+            if Instant::now() >= deadline {
+                return Err(AdmissionError::Deadline);
+            }
+            let notified = self.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            {
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                if Self::admit(&mut state, id) {
+                    pending.id = None;
+                    return Ok(Permit {
+                        coordinator: Arc::clone(self),
+                        id,
+                        waited_behind,
+                    });
+                }
+                if waited_behind.is_none() {
+                    waited_behind = Self::blocked_by(&state, id);
+                }
+            }
+            let wait = CONTROL_POLL.min(deadline.saturating_duration_since(Instant::now()));
+            let _ = tokio::time::timeout(wait, notified).await;
+        }
+    }
     pub(super) fn acquire_blocking(
         self: &Arc<Self>,
         root: &Path,
@@ -312,6 +366,18 @@ impl Coordinator {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let mut waited_behind = None;
         loop {
+            // Preserve the full worker deadline, including the local clock domain.
+            if let Err(error) = crate::request_control::current()
+                .and_then(|control| control.check().map_err(Into::into))
+            {
+                if !matches!(
+                    error,
+                    foks_client_app::Error::InvalidConfig("request deadline context is required")
+                ) {
+                    drop(state);
+                    return Err(AdmissionError::Deadline);
+                }
+            }
             // Release the mutex before Pending's destructor removes the waiter.
             if cancellation.is_cancelled() {
                 drop(state);
@@ -396,7 +462,7 @@ thread_local! {
     static CONTROL: RefCell<Option<(Instant, CancellationToken)>> = const { RefCell::new(None) };
 }
 pub(super) fn with_control<T>(
-    timeout: Duration,
+    _timeout: Duration,
     cancellation: CancellationToken,
     work: impl FnOnce() -> T,
 ) -> T {
@@ -406,35 +472,41 @@ pub(super) fn with_control<T>(
             CONTROL.with(|slot| *slot.borrow_mut() = self.0.take());
         }
     }
-    let _restore =
-        Restore(CONTROL.with(|slot| slot.replace(Some((Instant::now() + timeout, cancellation)))));
+    let deadline = crate::request_control::current()
+        .map(|c| c.deadline.instant())
+        .unwrap_or_else(|_| Instant::now());
+    let _restore = Restore(CONTROL.with(|slot| slot.replace(Some((deadline, cancellation)))));
     work()
 }
-pub(super) fn check_control() -> Result<(), AdmissionError> {
+pub(super) fn check_control() -> Result<(), foks_client_app::Error> {
+    crate::request_control::current()?.check()?;
     CONTROL.with(|slot| {
         if let Some((deadline, cancellation)) = slot.borrow().as_ref() {
             if cancellation.is_cancelled() {
-                return Err(AdmissionError::Cancelled);
+                return Err(foks_client::Error::Cancelled.into());
             }
             if Instant::now() >= *deadline {
-                return Err(AdmissionError::Deadline);
+                return Err(foks_client::Error::DeadlineExceeded.into());
             }
         }
         Ok(())
     })
 }
-pub(super) fn wait_for_external_lock() -> Result<(), AdmissionError> {
+pub(super) fn wait_for_external_lock() -> Result<(), foks_client_app::Error> {
+    crate::request_control::current()?.check()?;
     CONTROL.with(|slot| {
         let control = slot.borrow();
         let Some((deadline, cancellation)) = control.as_ref() else {
-            return Err(AdmissionError::Full);
+            return Err(foks_client_app::Error::InvalidConfig(
+                "request lock control is required",
+            ));
         };
         if cancellation.is_cancelled() {
-            return Err(AdmissionError::Cancelled);
+            return Err(foks_client::Error::Cancelled.into());
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            return Err(AdmissionError::Deadline);
+            return Err(foks_client::Error::DeadlineExceeded.into());
         }
         let slept = Instant::now();
         std::thread::sleep(remaining.min(CONTROL_POLL));
@@ -489,6 +561,12 @@ mod tests {
 
     #[test]
     fn phase_timing_accumulates_only_inside_a_request() {
+        let control = crate::request_control::RequestControl::background(
+            Duration::from_secs(1),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        let _scope = control.enter().unwrap();
         note_session(Duration::from_millis(5));
         let ((), phases) = with_phase_timing(|| {
             note_session(Duration::from_millis(5));

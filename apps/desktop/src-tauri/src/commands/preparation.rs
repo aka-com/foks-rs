@@ -17,7 +17,7 @@ pub(super) async fn prepare_catalog_mutation(
     state: &AppState,
 ) -> Result<MutationGuard, AgentError> {
     let permit = state.begin_mutation()?;
-    ensure_catalog_for_mutation(state, &permit, state.agent.transport()).await?;
+    ensure_catalog_for_mutation(state, &permit, state.transport()?).await?;
     Ok(permit)
 }
 
@@ -26,6 +26,8 @@ pub(super) async fn ensure_catalog_for_mutation(
     permit: &MutationGuard,
     transport: Arc<dyn AgentTransport>,
 ) -> Result<(), AgentError> {
+    let transport = foks_desktop::bind_transport_deadline(transport, state.deadline()?.clone())
+        .map_err(AgentError::from_desktop)?;
     let Some((generation, token)) = state.begin_missing_catalog_for_mutation(permit)? else {
         return Ok(());
     };
@@ -35,19 +37,24 @@ pub(super) async fn ensure_catalog_for_mutation(
     // state since the last fresh listing. It settles nothing: it covers one
     // profile, or a catalog that was missing rather than stale.
     let (fresh, _) = state.catalog_read_freshness(false);
-    let snapshot = tauri::async_runtime::spawn_blocking(move || {
-        match profile {
-            Some(profile) => {
-                foks_desktop::load_profile_catalog_cancellable(transport, profile, token, fresh)
-            }
-            None => foks_desktop::load_catalog_cancellable(transport, token, fresh),
-        }
-        .map_err(AgentError::from_desktop)
-    })
-    .await
-    .map_err(|error| {
-        AgentError::unknown(format!("Failed to prepare the vault catalog: {error}"))
-    })??;
+    let snapshot = {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            false,
+            move || {
+                match profile {
+                    Some(profile) => foks_desktop::load_profile_catalog_cancellable(
+                        transport, profile, token, fresh,
+                    ),
+                    None => foks_desktop::load_catalog_cancellable(transport, token, fresh),
+                }
+                .map_err(AgentError::from_desktop)
+            },
+            |_| {},
+        )
+        .await
+    }?;
     // Apply the same response validation as list_catalog before publication.
     CatalogDto::from_snapshot(&snapshot)?;
     if !state.accept_catalog(generation, snapshot) {
@@ -79,7 +86,7 @@ pub(super) async fn prepare_group_mutation<T>(
     select: impl FnOnce() -> Result<T, AgentError>,
 ) -> Result<(MutationGuard, T), AgentError> {
     let permit = prepare_catalog_mutation(state).await?;
-    let prepared = prepare_group_facts(state, store_id, facts, state.agent.transport()).await?;
+    let prepared = prepare_group_facts(state, store_id, facts, state.transport()?).await?;
     let target = state.with_prepared_group_facts(&permit, prepared, select)?;
     Ok((permit, target))
 }
@@ -90,6 +97,8 @@ pub(super) async fn prepare_group_facts(
     facts: GroupMutationFacts,
     transport: Arc<dyn AgentTransport>,
 ) -> Result<PreparedGroupFacts, AgentError> {
+    let transport = foks_desktop::bind_transport_deadline(transport, state.deadline()?.clone())
+        .map_err(AgentError::from_desktop)?;
     let team = state.selected_active_team_for_mutation(store_id)?;
     let generation = state
         .catalog_generation
@@ -122,13 +131,16 @@ pub(super) async fn prepare_group_facts(
                 foks_desktop::CatalogStoreSummary::Team { .. } => false,
             });
             catalog.profile_overviews.clear();
-            let accounts = tauri::async_runtime::spawn_blocking(move || {
-                load_accounts(transport.as_ref(), &catalog)
-            })
-            .await
-            .map_err(|error| {
-                AgentError::unknown(format!("Failed to prepare account identities: {error}"))
-            })??;
+            let accounts = {
+                let deadline = state.deadline()?.clone();
+                super::deadline::run(
+                    &deadline,
+                    false,
+                    move || load_accounts(transport.as_ref(), &catalog),
+                    |_| {},
+                )
+                .await
+            }?;
             prepared.accounts = Some((team.profile, accounts));
         }
         GroupMutationFacts::Federation | GroupMutationFacts::FederationRemoval => {

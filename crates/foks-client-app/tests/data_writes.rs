@@ -139,7 +139,28 @@ fn adapter_writes_are_bound_durable_and_never_replayed() {
                 retained.state,
                 foks_client_db::AdapterLedgerState::Committed
             );
+            // Large-file success retains its protected spool and dependency
+            // ownership until bounded local maintenance durably erases them.
+            assert!(retained.internal_id.is_some());
+            assert!(session.upload_cleanup_debt()?.reserved_bytes > 0);
+            let mut maintenance = foks_client_app::AdapterMaintenanceCursor::default();
+            let cleanup_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            loop {
+                session.maintain_adapter_state(&mut maintenance, &master)?;
+                let retained = hard.adapter_submission(handle(1))?.unwrap();
+                let debt = session.upload_cleanup_debt()?;
+                if retained.internal_id.is_none() && debt.reserved_bytes == 0 {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < cleanup_deadline,
+                    "terminal cleanup did not finish: parent={:?}, debt={debt:?}",
+                    retained.internal_id
+                );
+            }
+            let retained = hard.adapter_submission(handle(1))?.unwrap();
             assert!(retained.internal_id.is_none());
+            assert_eq!(session.upload_cleanup_debt()?.reserved_bytes, 0);
             assert_eq!(
                 retained
                     .node_id

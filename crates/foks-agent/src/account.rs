@@ -74,12 +74,21 @@ pub(super) fn web_admin(
     cancellation: CancellationToken,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     use foks_agent_proto::admin::{AdminAction, AdminNavigation};
-    if !action.validate() {
+    struct PendingAdmin(foks_agent_proto::admin::AdminAction);
+    impl Drop for PendingAdmin {
+        fn drop(&mut self) {
+            if let AdminAction::Configure { destination } = &mut self.0 {
+                zeroize::Zeroize::zeroize(destination);
+            }
+        }
+    }
+    let mut action = PendingAdmin(action);
+    if !action.0.validate() {
         return Err(Box::new(AgentRequestError("invalid admin handoff")));
     }
     let session =
         crate::read_cache::open_profile_session(registry, profile, timeout, cancellation)?;
-    with_vault(state_dir, &session, |session, vault| match action {
+    with_vault(state_dir, &session, |session, vault| match &mut action.0 {
         AdminAction::Policy => {
             let (host_id, uid, destination) = session.web_admin_policy(alias, vault)?;
             Ok(serde_json::to_value(
@@ -93,11 +102,12 @@ pub(super) fn web_admin(
             )?)
         }
         AdminAction::Configure { destination } => {
-            session.configure_web_admin(alias, &destination, vault)?;
+            session.configure_web_admin(alias, destination.as_str(), vault)?;
             Ok(serde_json::json!({"configured":true}))
         }
         AdminAction::Prepare { pin } => {
             let parent = pin
+                .as_ref()
                 .map(|pin| {
                     let a = vault.yubi_account(alias)?;
                     Ok::<_, Box<dyn std::error::Error>>(

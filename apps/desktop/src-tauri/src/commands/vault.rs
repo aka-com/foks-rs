@@ -3,9 +3,7 @@
 use crate::agent::AgentError;
 use crate::applock::UnlockedInterval;
 use crate::commands::context::AppState;
-use crate::commands::execution::{
-    ambiguous_worker_failure, apply_kv_mutation, map_mutation_error, MutationKind,
-};
+use crate::commands::execution::{apply_kv_mutation, map_mutation_error, MutationKind};
 use crate::commands::preparation::{check_mutation_access, prepare_catalog_mutation};
 use crate::commands::types::{CommandAck, MutationDto, RoleDto};
 use crate::commands::validation::{
@@ -25,7 +23,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tauri::{Manager as _, State};
+use tauri::Manager as _;
 use tauri_plugin_dialog::DialogExt as _;
 use zeroize::Zeroizing;
 
@@ -330,6 +328,26 @@ struct IntervalTransport {
 }
 
 impl foks_desktop::AgentTransport for IntervalTransport {
+    fn call_with_deadline(
+        &self,
+        mut operation: Operation,
+        deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        if self.interval.check().is_err() {
+            operation.zeroize_plaintext();
+            return Err(foks_desktop::AgentError::Cancelled);
+        }
+        let mut result = self
+            .inner
+            .call_with_deadline(operation, deadline, cancelled);
+        if self.interval.checkpoint("after-agent-read").is_err() {
+            foks_desktop::discard_transport_result(&mut result);
+            return Err(foks_desktop::AgentError::Cancelled);
+        }
+        result
+    }
+
     fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
         self.interval
             .check()
@@ -345,7 +363,7 @@ impl foks_desktop::AgentTransport for IntervalTransport {
     }
 }
 
-fn clear_response(value: &mut serde_json::Value) {
+pub(super) fn clear_response(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::String(value) => zeroize::Zeroize::zeroize(value),
         serde_json::Value::Array(values) => values.iter_mut().for_each(clear_response),
@@ -410,12 +428,13 @@ pub(super) fn download_to_path(
     item: &CatalogItem,
     destination: &Path,
     interval: &UnlockedInterval,
+    deadline: &foks_local_deadline::Deadline,
 ) -> Result<(), AgentError> {
     let transport = IntervalTransport {
         inner: transport,
         interval: interval.clone(),
     };
-    download_with_interval(&transport, item, destination, interval).or_else(|error| {
+    download_with_interval(&transport, item, destination, interval, deadline).or_else(|error| {
         interval.check()?;
         Err(error)
     })
@@ -426,7 +445,9 @@ fn download_with_interval(
     item: &CatalogItem,
     destination: &Path,
     interval: &UnlockedInterval,
+    deadline: &foks_local_deadline::Deadline,
 ) -> Result<(), AgentError> {
+    deadline.check().map_err(super::deadline::clock_error)?;
     interval.check()?;
     let store = protocol_store(&item.store);
     let value = transport
@@ -504,6 +525,7 @@ fn download_with_interval(
                     false,
                 ));
             }
+            deadline.check().map_err(super::deadline::clock_error)?;
             interval.check()?;
             temporary.write_all(&content).map_err(|error| {
                 AgentError::new(
@@ -542,6 +564,7 @@ fn download_with_interval(
                     AgentError::new("invalid-response", error.to_string(), false)
                 })?;
                 let content = Zeroizing::new(std::mem::take(&mut chunk.content));
+                deadline.check().map_err(super::deadline::clock_error)?;
                 interval.check()?;
                 let next = offset.checked_add(content.len() as u64).ok_or_else(|| {
                     AgentError::new(
@@ -575,6 +598,7 @@ fn download_with_interval(
                     )
                 })?;
                 offset = next;
+                deadline.check().map_err(super::deadline::clock_error)?;
                 interval.checkpoint("between-chunks")?;
                 if eof {
                     if item
@@ -612,6 +636,7 @@ fn download_with_interval(
     // All transfer and sync work precedes the short publication critical section.
     // NamedTempFile removes the unpublished plaintext on every rejected path.
     interval.publish(|| {
+        deadline.check().map_err(super::deadline::clock_error)?;
         temporary.persist(destination).map_err(|error| {
             AgentError::new(
                 "download-write",
@@ -918,17 +943,17 @@ async fn apply_file_upload(
     kind: MutationKind,
 ) -> Result<MutationDto, AgentError> {
     state.invalidate_catalog_items(&super::execution::catalog_store(&header.store));
-    let transport = state.agent.transport();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        upload_file(transport.as_ref(), header, &source, kind)
-    })
-    .await
-    .map_err(|error| {
-        ambiguous_worker_failure(
-            state,
-            format!("The file import stopped before reporting its outcome: {error}"),
+    let transport = state.transport()?;
+    let result = {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            true,
+            move || upload_file(transport.as_ref(), header, &source, kind),
+            |_| {},
         )
-    })?;
+        .await
+    };
     if result.as_ref().is_err_and(|error| error.ambiguous) {
         state
             .mutation_requires_refresh
@@ -1053,82 +1078,101 @@ async fn load_catalog(
             foks_desktop::CatalogLoadToken::default(),
         )
     };
-    let transport = state.agent.transport();
+    let transport = state.transport()?;
     let worker_state = state.clone();
     let worker_app = app.clone();
-    let (snapshot, profiles) = tauri::async_runtime::spawn_blocking(move || {
-        // An item read takes this listing once and hands it to the catalog
-        // walk, so the walk issues no listing of its own and the local
-        // metadata attached below is built from the same registry view. A
-        // store-only read walks no KV tree and attaches no metadata, so it
-        // does not pay for the listing.
-        let profiles: Vec<super::servers::ProfileSummary> = if include_items {
-            catalog_profile_listing(transport.as_ref())?
-        } else {
-            Vec::new()
-        };
-        let names: Vec<String> = profiles
-            .iter()
-            .map(|profile| profile.name.clone())
-            .collect();
-        let snapshot = if let Some(channel) = on_partial {
-            let failure = std::sync::Mutex::new(None);
-            let snapshot = foks_desktop::load_catalog_progressive_with_profiles(
-                transport,
-                names,
-                token.clone(),
-                fresh,
-                |snapshot| {
-                    let result = (|| {
-                        crate::applock::require_unlocked_generation(&worker_app, access)?;
-                        let mut sent = Ok(());
-                        if !worker_state.publish_catalog_snapshot(
-                            generation,
-                            snapshot.clone(),
-                            |published, accepted| {
-                                sent = (|| {
-                                    let dto = catalog_dto(accepted, published, Some(&profiles))?;
-                                    crate::applock::require_unlocked_generation(
-                                        &worker_app,
-                                        access,
-                                    )?;
-                                    channel
-                                        .send(dto)
-                                        .map_err(|error| AgentError::unknown(error.to_string()))
-                                })();
-                            },
-                        ) {
-                            return Err(super::context::catalog_changed_during_read());
-                        }
-                        sent
-                    })();
-                    if let Err(error) = result {
-                        token.cancel();
-                        *failure
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error);
+    let (snapshot, profiles) = {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            false,
+            move || {
+                // An item read takes this listing once and hands it to the catalog
+                // walk, so the walk issues no listing of its own and the local
+                // metadata attached below is built from the same registry view. A
+                // store-only read walks no KV tree and attaches no metadata, so it
+                // does not pay for the listing.
+                let profiles: Vec<super::servers::ProfileSummary> = if include_items {
+                    catalog_profile_listing(transport.as_ref())?
+                } else {
+                    Vec::new()
+                };
+                let names: Vec<String> = profiles
+                    .iter()
+                    .map(|profile| profile.name.clone())
+                    .collect();
+                let snapshot = if let Some(channel) = on_partial {
+                    let failure = std::sync::Mutex::new(None);
+                    let snapshot = foks_desktop::load_catalog_progressive_with_profiles(
+                        transport,
+                        names,
+                        token.clone(),
+                        fresh,
+                        |snapshot| {
+                            let result = (|| {
+                                worker_state
+                                    .deadline()?
+                                    .check()
+                                    .map_err(super::deadline::clock_error)?;
+                                crate::applock::require_unlocked_generation(&worker_app, access)?;
+                                let mut sent = Ok(());
+                                if !worker_state.publish_catalog_snapshot(
+                                    generation,
+                                    snapshot.clone(),
+                                    |published, accepted| {
+                                        sent = (|| {
+                                            let dto =
+                                                catalog_dto(accepted, published, Some(&profiles))?;
+                                            crate::applock::require_unlocked_generation(
+                                                &worker_app,
+                                                access,
+                                            )?;
+                                            worker_state
+                                                .deadline()?
+                                                .check()
+                                                .map_err(super::deadline::clock_error)?;
+                                            channel.send(dto).map_err(|error| {
+                                                AgentError::unknown(error.to_string())
+                                            })
+                                        })();
+                                    },
+                                ) {
+                                    return Err(super::context::catalog_changed_during_read());
+                                }
+                                sent
+                            })();
+                            if let Err(error) = result {
+                                token.cancel();
+                                *failure
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                                    Some(error);
+                            }
+                        },
+                    )
+                    .map_err(AgentError::from_desktop);
+                    if let Some(error) = failure
+                        .into_inner()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    {
+                        return Err(error);
                     }
-                },
-            )
-            .map_err(AgentError::from_desktop);
-            if let Some(error) = failure
-                .into_inner()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-            {
-                return Err(error);
-            }
-            snapshot
-        } else if include_items {
-            foks_desktop::load_catalog_cancellable_with_profiles(transport, names, token, fresh)
-                .map_err(AgentError::from_desktop)
-        } else {
-            foks_desktop::load_stores_cancellable(transport, token)
-                .map_err(AgentError::from_desktop)
-        }?;
-        Ok::<_, AgentError>((snapshot, profiles))
-    })
-    .await
-    .map_err(|error| AgentError::unknown(format!("Failed to load vault catalog: {error}")))??;
+                    snapshot
+                } else if include_items {
+                    foks_desktop::load_catalog_cancellable_with_profiles(
+                        transport, names, token, fresh,
+                    )
+                    .map_err(AgentError::from_desktop)
+                } else {
+                    foks_desktop::load_stores_cancellable(transport, token)
+                        .map_err(AgentError::from_desktop)
+                }?;
+                Ok::<_, AgentError>((snapshot, profiles))
+            },
+            |_| {},
+        )
+        .await
+    }?;
     let mut dto = catalog_dto(&snapshot, generation, None)?;
     // A load that lost its generation to a later load or mutation must not be
     // reported as the current snapshot: the reads that follow it would answer
@@ -1153,7 +1197,7 @@ async fn load_catalog(
 #[tauri::command]
 pub async fn list_stores(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
 ) -> Result<CatalogDto, AgentError> {
     require_main_window(&webview)?;
     load_catalog(&state, webview.app_handle(), false, false, None).await
@@ -1162,7 +1206,7 @@ pub async fn list_stores(
 #[tauri::command]
 pub async fn list_catalog(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     fresh: Option<bool>,
 ) -> Result<CatalogDto, AgentError> {
     require_main_window(&webview)?;
@@ -1179,7 +1223,7 @@ pub async fn list_catalog(
 #[tauri::command]
 pub async fn list_profile_catalog(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
 ) -> Result<CatalogDto, AgentError> {
     require_main_window(&webview)?;
@@ -1190,30 +1234,35 @@ pub async fn list_profile_catalog(
     // A read of one profile settles that profile alone: it says nothing about
     // the other profiles, whose first pages the agent may still hold.
     let (fresh, epoch) = state.catalog_read_freshness(false);
-    let transport = state
-        .agent
-        .transport_for("list_profile_catalog", Some(&profile));
-    let (snapshot, profiles) = tauri::async_runtime::spawn_blocking(move || {
-        // The catalog walk takes this listing rather than issuing its own.
-        let mut profiles: Vec<super::servers::ProfileSummary> = serde_json::from_value(
-            transport
-                .call_cancellable(Operation::ListProfiles, &|| token.is_cancelled())
-                .map_err(AgentError::from_desktop)?,
+    let transport = state.transport_for("list_profile_catalog", Some(&profile))?;
+    let (snapshot, profiles) = {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            false,
+            move || {
+                // The catalog walk takes this listing rather than issuing its own.
+                let mut profiles: Vec<super::servers::ProfileSummary> = serde_json::from_value(
+                    transport
+                        .call_cancellable(Operation::ListProfiles, &|| token.is_cancelled())
+                        .map_err(AgentError::from_desktop)?,
+                )
+                .map_err(|error| super::validation::invalid_response(error.to_string()))?;
+                let names = profiles
+                    .iter()
+                    .map(|candidate| candidate.name.clone())
+                    .collect::<Vec<_>>();
+                profiles.retain(|candidate| candidate.name == profile);
+                let snapshot = foks_desktop::load_profile_catalog_with_profiles(
+                    transport, profile, &names, token, fresh,
+                )
+                .map_err(AgentError::from_desktop)?;
+                Ok::<_, AgentError>((snapshot, profiles))
+            },
+            |_| {},
         )
-        .map_err(|error| super::validation::invalid_response(error.to_string()))?;
-        let names = profiles
-            .iter()
-            .map(|candidate| candidate.name.clone())
-            .collect::<Vec<_>>();
-        profiles.retain(|candidate| candidate.name == profile);
-        let snapshot = foks_desktop::load_profile_catalog_with_profiles(
-            transport, profile, &names, token, fresh,
-        )
-        .map_err(AgentError::from_desktop)?;
-        Ok::<_, AgentError>((snapshot, profiles))
-    })
-    .await
-    .map_err(|error| AgentError::unknown(format!("Failed to load profile catalog: {error}")))??;
+        .await
+    }?;
     crate::applock::require_unlocked_generation(app, access)?;
     let mut result = Err(super::context::catalog_changed_during_read());
     if !state.publish_catalog_snapshot(generation, snapshot, |published, accepted| {
@@ -1231,7 +1280,7 @@ pub async fn list_profile_catalog(
 #[tauri::command]
 pub async fn list_catalog_progressive(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     on_partial: tauri::ipc::Channel<CatalogDto>,
     fresh: Option<bool>,
 ) -> Result<CatalogDto, AgentError> {
@@ -1250,7 +1299,7 @@ pub async fn list_catalog_progressive(
 pub async fn read_item(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     path: String,
     version: u64,
@@ -1258,22 +1307,33 @@ pub async fn read_item(
     let interval = crate::applock::unlocked_interval(&app)?;
     require_main_window(&webview)?;
     let item = state.selected_item(&store_id, &path, version)?;
-    let transport = state.agent.transport();
+    let transport = state.transport()?;
     let worker_interval = interval.clone();
-    let result =
-        tauri::async_runtime::spawn_blocking(move || read_text(transport, &item, &worker_interval))
-            .await
-            .map_err(|error| AgentError::unknown(format!("failed to read item: {error}")))?;
+    let result = super::deadline::run(
+        state.deadline()?,
+        false,
+        move || read_text(transport, &item, &worker_interval),
+        |read| zeroize::Zeroize::zeroize(&mut *read.value),
+    )
+    .await?;
+    // Errors have no plaintext result to publish; preserve the worker's terminal
+    // error classification before applying the successful-result publication gate.
     // The renderer still needs its epoch check: an IPC reply already dispatched
     // before locking can arrive afterward.
-    interval.publish(|| result)
+    interval.publish(|| {
+        state
+            .deadline()?
+            .check()
+            .map_err(super::deadline::clock_error)?;
+        Ok(result)
+    })
 }
 
 #[tauri::command]
 pub async fn copy_item_value(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     path: String,
     version: u64,
@@ -1281,14 +1341,20 @@ pub async fn copy_item_value(
     let interval = crate::applock::unlocked_interval(&app)?;
     require_main_window(&webview)?;
     let item = state.selected_item(&store_id, &path, version)?;
-    let transport = state.agent.transport();
+    let transport = state.transport()?;
     let worker_interval = interval.clone();
-    let value = tauri::async_runtime::spawn_blocking(move || {
-        read_text(transport, &item, &worker_interval).map(|read| read.value)
-    })
-    .await
-    .map_err(|error| AgentError::unknown(format!("failed to read item: {error}")))??;
+    let value = super::deadline::run(
+        state.deadline()?,
+        false,
+        move || read_text(transport, &item, &worker_interval).map(|read| read.value),
+        |value| zeroize::Zeroize::zeroize(&mut **value),
+    )
+    .await?;
     interval.publish(|| {
+        state
+            .deadline()?
+            .check()
+            .map_err(super::deadline::clock_error)?;
         crate::clipboard::copy_with_hygiene(&app, value)
             .map_err(|error| AgentError::new("clipboard", error, true))
     })?;
@@ -1299,7 +1365,7 @@ pub async fn copy_item_value(
 pub fn copy_item_path(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     path: String,
     version: u64,
@@ -1333,7 +1399,7 @@ pub fn copy_text(
 pub async fn download_file(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     path: String,
     version: u64,
@@ -1368,13 +1434,26 @@ pub async fn download_file(
     let destination = destination
         .into_path()
         .map_err(|error| AgentError::new("download-path", error.to_string(), false))?;
-    let transport = state.agent.transport();
+    let state = state.begin_operation(foks_agent_proto::DeadlineClass::Bulk)?;
+    let transport = state.transport()?;
     let worker_interval = interval.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        download_to_path(transport, &item, &destination, &worker_interval)
-    })
-    .await
-    .map_err(|error| AgentError::unknown(format!("download failed: {error}")))??;
+    let deadline = state.deadline()?.clone();
+    let worker_deadline = deadline.clone();
+    super::deadline::run(
+        &deadline,
+        false,
+        move || {
+            download_to_path(
+                transport,
+                &item,
+                &destination,
+                &worker_interval,
+                &worker_deadline,
+            )
+        },
+        |_| {},
+    )
+    .await?;
     Ok(DownloadResult { saved: true })
 }
 
@@ -1383,7 +1462,7 @@ pub async fn download_file(
 pub async fn create_text_item(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     path: String,
     value: String,
@@ -1409,7 +1488,7 @@ pub async fn create_text_item(
 pub async fn create_link(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     path: String,
     target: String,
@@ -1440,7 +1519,7 @@ pub async fn create_link(
 pub async fn create_folder(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     path: String,
     read_role: Option<String>,
@@ -1470,7 +1549,7 @@ pub async fn create_folder(
 pub async fn edit_text_item(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     path: String,
     version: u64,
@@ -1494,7 +1573,7 @@ pub async fn edit_text_item(
 pub async fn move_item(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     path: String,
     version: u64,
@@ -1521,7 +1600,7 @@ pub async fn move_item(
 pub async fn remove_item(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     path: String,
     version: u64,
@@ -1547,7 +1626,7 @@ pub async fn remove_item(
 pub async fn import_dropped_file(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     path: String,
     source_path: String,
@@ -1581,7 +1660,7 @@ pub async fn import_dropped_file(
 pub async fn pick_import_file(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
 ) -> Result<Option<String>, AgentError> {
     require_main_window(&webview)?;
     let picker_app = app.clone();
@@ -1602,7 +1681,7 @@ pub async fn pick_import_file(
 #[tauri::command]
 pub fn release_import_file(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     source_path: String,
 ) -> Result<CommandAck, AgentError> {
     require_main_window(&webview)?;
@@ -1616,7 +1695,7 @@ pub fn release_import_file(
 pub async fn replace_dropped_file(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     path: String,
     version: u64,
@@ -1644,7 +1723,7 @@ pub async fn replace_dropped_file(
 pub async fn pick_and_replace_file(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     path: String,
     version: u64,
@@ -1652,7 +1731,11 @@ pub async fn pick_and_replace_file(
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
-    let state = state.for_store(&store_id)?;
+    let prepared = state
+        .begin_operation(foks_agent_proto::DeadlineClass::Ordinary)?
+        .for_store(&store_id)?;
+    let original_state = state;
+    let state = prepared;
     let _permit = prepare_catalog_mutation(&state).await?;
     let item = state.selected_bound_mutation_item(&store_id, &path, version, &dirent_id)?;
     require_file_item(&item)?;
@@ -1669,6 +1752,9 @@ pub async fn pick_and_replace_file(
     let source = source
         .into_path()
         .map_err(|error| AgentError::new("upload-source", error.to_string(), false))?;
+    let state = original_state
+        .begin_operation(foks_agent_proto::DeadlineClass::Bulk)?
+        .for_store(&store_id)?;
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_file_upload(&state, header, source, MutationKind::Guarded).await
 }
@@ -1681,7 +1767,7 @@ fn parse_upload_identity(text: &str) -> Result<foks_agent_proto::UploadHandle, A
 pub async fn list_file_uploads(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     after: Option<[u8; 32]>,
 ) -> Result<serde_json::Value, AgentError> {
@@ -1689,24 +1775,31 @@ pub async fn list_file_uploads(
     require_main_window(&webview)?;
     let state = state.for_store(&store_id)?;
     let (store, _) = state.selected_store(&store_id)?;
-    let transport = state.agent.transport();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        transport
-            .call(Operation::ListKvUploads {
-                store: protocol_store(&store),
-                after,
-            })
-            .map_err(AgentError::from_desktop)
-    })
-    .await
-    .map_err(|e| AgentError::unknown(e.to_string()))??;
+    let transport = state.transport()?;
+    let result = {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            false,
+            move || {
+                transport
+                    .call(Operation::ListKvUploads {
+                        store: protocol_store(&store),
+                        after,
+                    })
+                    .map_err(AgentError::from_desktop)
+            },
+            clear_response,
+        )
+        .await
+    }?;
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     Ok(result)
 }
 async fn change_file_upload(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     upload_id: String,
     resume: bool,
@@ -1719,7 +1812,7 @@ async fn change_file_upload(
     let upload_id = parse_upload_identity(&upload_id)?;
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     state.invalidate_catalog_items(&store);
-    let transport = state.agent.transport();
+    let transport = state.transport()?;
     let operation = if resume {
         Operation::ResumeKvUpload {
             store: protocol_store(&store),
@@ -1731,11 +1824,16 @@ async fn change_file_upload(
             upload_id,
         }
     };
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        transport.call(operation).map_err(AgentError::from_desktop)
-    })
-    .await
-    .map_err(|e| ambiguous_worker_failure(&state, e.to_string()))?;
+    let result = {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            true,
+            move || transport.call(operation).map_err(AgentError::from_desktop),
+            clear_response,
+        )
+        .await
+    };
     if result.as_ref().is_err_and(|e| e.ambiguous) {
         state
             .mutation_requires_refresh
@@ -1748,7 +1846,7 @@ async fn change_file_upload(
 pub async fn resume_file_upload(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     upload_id: String,
 ) -> Result<serde_json::Value, AgentError> {
@@ -1758,7 +1856,7 @@ pub async fn resume_file_upload(
 pub async fn cancel_file_upload(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     store_id: String,
     upload_id: String,
 ) -> Result<serde_json::Value, AgentError> {

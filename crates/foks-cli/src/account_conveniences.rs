@@ -1,4 +1,3 @@
-use foks_agent_client::AgentClient;
 use foks_agent_proto::{account::RenameAction, Operation, ResponseResult, SecretString};
 use std::path::{Path, PathBuf};
 #[derive(clap::Subcommand)]
@@ -54,13 +53,13 @@ pub fn run(state: &Path, command: RenameCommand) -> Result<(), Box<dyn std::erro
     if let RenameCommand::List(scope) = &command {
         super::mcp::ensure_agent(state)?;
         let response =
-            AgentClient::new(state.join("foks-rs.sock")).call(Operation::ListAccountRenames {
+            super::deadline::agent_client(state)?.call(Operation::ListAccountRenames {
                 profile: scope.profile.clone(),
                 account_alias: scope.account_alias.clone(),
             })?;
         return match response.result {
             ResponseResult::Success { value } => {
-                println!("{}", serde_json::to_string_pretty(&value)?);
+                super::deadline::print_agent_value(value)?;
                 Ok(())
             }
             ResponseResult::Error { message, .. } => Err(message.into()),
@@ -104,14 +103,14 @@ pub fn run(state: &Path, command: RenameCommand) -> Result<(), Box<dyn std::erro
         return Err("invalid rename action or operation handle".into());
     }
     super::mcp::ensure_agent(state)?;
-    let response = AgentClient::new(state.join("foks-rs.sock")).call(Operation::RenameAccount {
+    let response = super::deadline::agent_client(state)?.call(Operation::RenameAccount {
         profile: scope.profile,
         account_alias: scope.account_alias,
         action,
     })?;
     match response.result {
         ResponseResult::Success { value } => {
-            println!("{}", serde_json::to_string_pretty(&value)?);
+            super::deadline::print_agent_value(value)?;
             Ok(())
         }
         ResponseResult::Error { message, .. } => Err(message.into()),

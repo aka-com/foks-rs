@@ -211,7 +211,7 @@ pub async fn open_notification_settings(
 #[tauri::command]
 pub async fn chat_local(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     local: State<'_, LocalState>,
     action: Action,
 ) -> Result<Session, AgentError> {
@@ -240,11 +240,16 @@ pub async fn chat_local(
         let generation = crate::applock::unlocked_generation(app)?;
         let owned_app = app.clone();
         let state = state.inner().clone();
-        let remaining = tauri::async_runtime::spawn_blocking(move || {
-            super::chat_migration::recover(&owned_app, &state, generation)
-        })
-        .await
-        .map_err(|_| error("Saved message recovery was interrupted."))??;
+        let remaining = {
+            let deadline = state.deadline()?.clone();
+            super::deadline::run(
+                &deadline,
+                true,
+                move || super::chat_migration::recover(&owned_app, &state, generation),
+                |_| {},
+            )
+            .await
+        }?;
         crate::applock::require_unlocked_generation(app, generation)?;
         let mut inner = local
             .0

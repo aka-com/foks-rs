@@ -86,9 +86,11 @@ pub fn run(root: &Path, command: StateCommand) -> Result<(), Box<dyn std::error:
         } => {
             let preview = portability::prepare_state_export(root)?;
             let report = preview.report()?;
+            super::deadline::check()?;
             eprintln!("{}", serde_json::to_string_pretty(&report)?);
             eprintln!("This archive copies existing device credentials. Copies share the same server-side revocation identity. Provision a new device for independent revocation.");
             if !yes {
+                super::deadline::pause()?;
                 eprint!("Export this exact snapshot? Type export to continue: ");
                 io::stderr().flush()?;
                 let mut line = String::new();
@@ -96,7 +98,9 @@ pub fn run(root: &Path, command: StateCommand) -> Result<(), Box<dyn std::error:
                 if line.trim() != "export" {
                     return Err("export cancelled".into());
                 }
+                super::deadline::confirmed_stage(std::time::Duration::from_secs(300))?;
             }
+            super::deadline::check()?;
             serde_json::to_value(
                 preview
                     .authorize(&report.digest)?
@@ -176,12 +180,12 @@ pub fn run(root: &Path, command: StateCommand) -> Result<(), Box<dyn std::error:
             let failed = reports.iter().any(|r| !r.verified);
             let value = serde_json::to_value(&reports)?;
             if failed {
-                println!("{}", serde_json::to_string_pretty(&value)?);
+                super::deadline::print_json(&value)?;
                 return Err("some imported accounts remain blocked; supply required credentials or reauthenticate and retry".into());
             }
             value
         }
     };
-    println!("{}", serde_json::to_string_pretty(&report)?);
+    super::deadline::print_json(&report)?;
     Ok(())
 }

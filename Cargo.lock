@@ -1569,6 +1569,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66b7e2430c6dff6a955451e2cfc438f09cea1965a9d6f87f7e3b90decc014099"
 
 [[package]]
+name = "enum-as-inner"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1e6a265c649f3f5979b601d26f1d05ada116434c87741c9493cb56218f76cbc"
+dependencies = [
+ "heck 0.5.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "enumflags2"
 version = "0.7.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1754,6 +1766,7 @@ dependencies = [
  "foks-crypto",
  "foks-go-interop",
  "foks-keystore",
+ "foks-local-deadline",
  "foks-oidc",
  "foks-proto",
  "foks-rpc",
@@ -1778,6 +1791,8 @@ name = "foks-agent-client"
 version = "0.4.0"
 dependencies = [
  "foks-agent-proto",
+ "foks-local-deadline",
+ "getrandom 0.4.3",
  "rustix",
  "serde_json",
  "tempfile",
@@ -1790,6 +1805,7 @@ name = "foks-agent-proto"
 version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
+ "foks-local-deadline",
  "foks-proto",
  "serde",
  "serde_json",
@@ -1807,6 +1823,7 @@ dependencies = [
  "foks-client-app",
  "foks-compat-artifact",
  "foks-keystore",
+ "foks-local-deadline",
  "foks-mcp",
  "foks-oidc",
  "foks-server-testkit",
@@ -1826,6 +1843,7 @@ dependencies = [
  "chacha20poly1305",
  "foks-client-db",
  "foks-crypto",
+ "foks-local-deadline",
  "foks-merkle-store",
  "foks-oidc",
  "foks-proto",
@@ -1857,6 +1875,7 @@ dependencies = [
  "foks-compat-artifact",
  "foks-crypto",
  "foks-keystore",
+ "foks-local-deadline",
  "foks-oidc",
  "foks-proto",
  "foks-protocol-metadata",
@@ -1944,6 +1963,7 @@ dependencies = [
  "clap",
  "foks-agent-client",
  "foks-agent-proto",
+ "foks-local-deadline",
  "getrandom 0.4.3",
  "libc",
  "serde",
@@ -1964,6 +1984,7 @@ dependencies = [
  "foks-crypto",
  "foks-desktop",
  "foks-keystore",
+ "foks-local-deadline",
  "foks-protocol-metadata",
  "foks-verify",
  "foks-yubi",
@@ -2025,6 +2046,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "foks-local-deadline"
+version = "0.4.0"
+dependencies = [
+ "libc",
+ "nix",
+ "serde",
+ "serde_json",
+ "sysctl",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "foks-mcp"
 version = "0.4.0"
 dependencies = [
@@ -2032,12 +2065,14 @@ dependencies = [
  "foks-agent-client",
  "foks-agent-proto",
  "foks-crypto",
+ "foks-local-deadline",
  "foks-proto",
  "futures-util",
  "getrandom 0.4.3",
  "rmcp",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.20",
  "time",
  "tokio",
@@ -2076,6 +2111,7 @@ version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
+ "foks-local-deadline",
  "openidconnect",
  "reqwest",
  "serde_json",
@@ -6020,6 +6056,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "sysctl"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cca424247104946a59dacd27eaad296223b7feec3d168a6dd04585183091eb0b"
+dependencies = [
+ "bitflags 2.13.1",
+ "byteorder",
+ "enum-as-inner",
+ "libc",
+ "thiserror 2.0.20",
+ "walkdir",
 ]
 
 [[package]]

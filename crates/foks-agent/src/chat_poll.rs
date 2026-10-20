@@ -1,8 +1,5 @@
 //! Dedicated, cancellable account poll admission and supervision.
-use super::{
-    chat, dispatch_error_response, profile_work, with_vault, write_response, CANCELLATION_GRACE,
-    CHAT_POLL_TIMEOUT,
-};
+use super::{chat, dispatch_error_response, profile_work, with_vault};
 use foks_agent_proto::{ErrorCode, Operation, Request, Response, ResponseTiming, TeamStoreRef};
 use foks_client_app::{CancellationToken, ProfileRegistry, ProfileSession};
 use std::{
@@ -38,6 +35,7 @@ impl Drop for ActiveChatPollGuard {
 }
 
 #[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_chat_poll(
     stream: &mut tokio::net::UnixStream,
     state_dir: PathBuf,
@@ -45,19 +43,21 @@ pub(super) async fn handle_chat_poll(
     active: Arc<Mutex<std::collections::HashSet<ChatPollKey>>>,
     timeout: Duration,
     request: Request,
+    control: crate::request_control::RequestControl,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    control.check()?;
     let Operation::Chat { store, action } = &request.operation else {
         return Err("chat poll dispatch received another operation".into());
     };
     if !action.validate() {
-        write_response(
+        super::write_controlled_response(
             stream,
-            &Response::error(
+            Response::error(
                 request.id,
                 ErrorCode::InvalidRequest,
                 "invalid chat poll request",
             ),
-            timeout,
+            &control,
         )
         .await?;
         return Ok(false);
@@ -78,20 +78,20 @@ pub(super) async fn handle_chat_poll(
         .map_err(|_| "chat poll registry is unavailable")?
         .insert(key.clone());
     if !inserted {
-        write_response(
+        super::write_controlled_response(
             stream,
-            &Response::error(
+            Response::error(
                 request.id,
                 ErrorCode::Busy,
                 "chat synchronization is already active for this account",
             ),
-            timeout,
+            &control,
         )
         .await?;
         return Ok(false);
     }
     let guard = ActiveChatPollGuard { polls: active, key };
-    let admission = tokio::time::timeout(timeout, polling.acquire_owned());
+    let admission = tokio::time::timeout(control.remaining()?, polling.acquire_owned());
     tokio::pin!(admission);
     let admitted = loop {
         tokio::select! {
@@ -110,28 +110,30 @@ pub(super) async fn handle_chat_poll(
         Ok(Ok(permit)) => permit,
         Ok(Err(_)) => return Err("agent chat poll pool closed".into()),
         Err(_) => {
-            write_response(
+            super::write_controlled_response(
                 stream,
-                &Response::error(
+                Response::error(
                     request.id,
                     ErrorCode::Busy,
                     "agent chat poll pool is saturated",
                 ),
-                timeout,
+                &control,
             )
             .await?;
             return Ok(false);
         }
     };
-    let cancellation = CancellationToken::new();
+    let cancellation = control.cancellation.clone();
+    let _cancel_on_drop = super::CancelOnDrop(cancellation.clone());
     let worker_cancellation = cancellation.clone();
     let store = store.clone();
     let id = request.id;
+    let worker_control = control.clone();
     let mut task = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
         let _guard = guard;
         let mut timing = ResponseTiming::default();
-        match foks_keystore::without_user_interaction(|| {
+        let mut response = match foks_keystore::without_user_interaction(|| {
+            let _scope = worker_control.enter()?;
             run_chat_poll(
                 &state_dir,
                 store,
@@ -145,27 +147,32 @@ pub(super) async fn handle_chat_poll(
             Ok(value) => Response::success(id, value),
             Err(error) => dispatch_error_response(id, error.as_ref()),
         }
-        .with_timing(timing)
+        .with_timing(timing);
+        if let Err(error) = worker_control.check() {
+            response.zeroize_plaintext();
+            return super::GuardedResponse::new(dispatch_error_response(id, &error), permit);
+        }
+        super::GuardedResponse::new(response, permit)
     });
-    let deadline = tokio::time::Instant::now() + CHAT_POLL_TIMEOUT;
+    let deadline = tokio::time::Instant::from_std(control.deadline.instant());
     let (response, close) = loop {
         tokio::select! {
             result = &mut task => {
-                let response = result.unwrap_or_else(|error| Response::error(
+                let response = result.unwrap_or_else(|error| super::GuardedResponse::from(Response::error(
                     id,
                     ErrorCode::OperationFailed,
                     format!("agent chat poll worker failed: {error}"),
-                ));
+                )));
                 break (response, false);
             }
             _ = tokio::time::sleep_until(deadline) => {
                 cancellation.cancel();
-                let _ = tokio::time::timeout(CANCELLATION_GRACE, &mut task).await;
+                tokio::spawn(async move { if let Ok(mut response) = task.await { response.zeroize_plaintext(); } });
                 break (Response::error(
                     id,
                     ErrorCode::DeadlineExceeded,
                     "chat poll operation deadline exceeded",
-                ), true);
+                ).into(), true);
             }
             result = stream.readable() => {
                 result?;
@@ -174,14 +181,14 @@ pub(super) async fn handle_chat_poll(
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
                     Ok(_) | Err(_) => {
                         cancellation.cancel();
-                        let _ = tokio::time::timeout(CANCELLATION_GRACE, &mut task).await;
+                        tokio::spawn(async move { if let Ok(mut response) = task.await { response.zeroize_plaintext(); } });
                         return Ok(true);
                     }
                 }
             }
         }
     };
-    write_response(stream, &response, timeout).await?;
+    super::write_controlled_response(stream, response, &control).await?;
     Ok(close)
 }
 
@@ -220,10 +227,10 @@ fn run_chat_poll(
         let phase = std::time::Instant::now();
         let session = (|| -> Result<_, Box<dyn std::error::Error>> {
             let registry = ProfileRegistry::open(state_dir)?;
-            let session = ProfileSession::open_with_control(
+            let session = ProfileSession::open_with_deadline(
                 &registry,
                 &store.profile,
-                timeout,
+                crate::request_control::current()?.deadline,
                 cancellation.clone(),
             )?;
             Ok((registry, session))
@@ -262,10 +269,10 @@ fn run_chat_poll(
         let phase = std::time::Instant::now();
         let session = (|| -> Result<_, Box<dyn std::error::Error>> {
             let registry = ProfileRegistry::open(state_dir)?;
-            let session = ProfileSession::open_with_control(
+            let session = ProfileSession::open_with_deadline(
                 &registry,
                 &store.profile,
-                timeout,
+                crate::request_control::current()?.deadline,
                 cancellation.clone(),
             )?;
             Ok((registry, session))
@@ -298,7 +305,7 @@ mod tests {
         let (mut server, client) = tokio::net::UnixStream::pair().unwrap();
         let polls = Arc::new(Mutex::new(std::collections::HashSet::new()));
         let capacity = Arc::new(Semaphore::new(0));
-        let request = Request::new(
+        let request = crate::test_request(
             1,
             Operation::Chat {
                 store: TeamStoreRef {
@@ -322,7 +329,9 @@ mod tests {
                 capacity,
                 polls.clone(),
                 Duration::from_secs(15),
-                request,
+                request.clone(),
+                crate::request_control::RequestControl::receive(&request, Duration::from_secs(15))
+                    .unwrap(),
             ),
         )
         .await
@@ -362,6 +371,12 @@ mod tests {
             .unwrap();
         let state_dir = root.path().to_owned();
         let worker = std::thread::spawn(move || {
+            let control = crate::request_control::RequestControl::background(
+                Duration::from_secs(10),
+                CancellationToken::new(),
+            )
+            .unwrap();
+            let _scope = control.enter().unwrap();
             let mut timing = ResponseTiming::default();
             let result = run_chat_poll(
                 &state_dir,

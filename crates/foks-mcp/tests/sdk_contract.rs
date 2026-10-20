@@ -75,6 +75,7 @@ impl foks_mcp::session::Backend for WaitingBackend {
         &self,
         _: foks_mcp::contract::Invocation,
         token: &tokio_util::sync::CancellationToken,
+        _: &foks_local_deadline::Deadline,
     ) -> Result<rmcp::model::CallToolResult, String> {
         self.started
             .store(true, std::sync::atomic::Ordering::Release);

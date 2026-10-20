@@ -152,16 +152,27 @@ fn scoped_error(profile: &str, error: &(dyn std::error::Error + 'static)) -> Res
 /// it with that observation and the steps it took. A caller that joined a
 /// flight is answered with the leading observation's steps: they are the
 /// steps of the observation it is given.
-async fn coalesce<F, Fut>(key: FlightKey, timeout: Duration, work: F) -> (ResponseResult, Phases)
+async fn coalesce<F, Fut>(
+    key: FlightKey,
+    subscriber: &crate::request_control::RequestControl,
+    job_cap: Duration,
+    work: F,
+) -> (ResponseResult, Phases)
 where
-    F: FnOnce() -> Fut + Send + 'static,
+    F: FnOnce(crate::request_control::RequestControl) -> Fut + Send + 'static,
     Fut: Future<Output = (ResponseResult, Phases)> + Send + 'static,
 {
+    if let Err(error) = subscriber.check() {
+        return (scoped_error(&key.1, &error), Phases::new());
+    }
     let mut receiver = {
         let mut flights = FLIGHTS
             .get_or_init(Mutex::default)
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Err(error) = subscriber.check() {
+            return (scoped_error(&key.1, &error), Phases::new());
+        }
         if let Some(receiver) = flights.get(&key) {
             receiver.clone()
         } else {
@@ -171,12 +182,23 @@ where
                     Phases::new(),
                 );
             }
+            let control = match crate::request_control::RequestControl::background(
+                job_cap,
+                CancellationToken::new(),
+            ) {
+                Ok(control) => control,
+                Err(error) => return (scoped_error(&key.1, &error), Phases::new()),
+            };
             let (sender, receiver) = watch::channel(None);
             flights.insert(key.clone(), receiver.clone());
             let key = key.clone();
             tokio::spawn(async move {
                 let _flight = FlightGuard(key);
-                let result = work().await;
+                let result = work(control.clone()).await;
+                let result = match control.check() {
+                    Ok(()) => result,
+                    Err(error) => (scoped_error(&_flight.0 .1, &error), result.1),
+                };
                 sender.send_replace(Some(result));
             });
             receiver
@@ -185,34 +207,51 @@ where
     let profile = key.1;
     let wait = async {
         loop {
-            if let Some(result) = receiver.borrow_and_update().clone() {
-                return result;
+            if let Err(error) = subscriber.check() {
+                return (scoped_error(&profile, &error), Phases::new());
             }
-            if receiver.changed().await.is_err() {
-                return (
-                    failure(
-                        &profile,
-                        ErrorCode::OperationFailed,
-                        "connectivity worker stopped",
-                    ),
-                    Phases::new(),
-                );
+            if let Some(result) = receiver.borrow_and_update().clone() {
+                // A full-domain check immediately precedes usable output.
+                return match subscriber.check() {
+                    Ok(()) => result,
+                    Err(error) => (scoped_error(&profile, &error), Phases::new()),
+                };
+            }
+            tokio::select! {
+                changed = receiver.changed() => {
+                    if changed.is_err() {
+                        return (failure(&profile, ErrorCode::OperationFailed,
+                            "connectivity worker stopped"), Phases::new());
+                    }
+                }
+                // Cancellation has no async notification; it cannot refresh
+                // the absolute timer or cancel the independent shared owner.
+                () = tokio::time::sleep(Duration::from_millis(25)) => (),
             }
         }
     };
-    tokio::time::timeout(timeout, wait)
-        .await
-        .unwrap_or_else(|_| {
-            (
-                failure(
-                    &profile,
-                    ErrorCode::DeadlineExceeded,
-                    "connectivity observation exceeded its deadline",
-                ),
-                Phases::new(),
-            )
-        })
+    tokio::time::timeout_at(
+        tokio::time::Instant::from_std(subscriber.deadline.instant()),
+        wait,
+    )
+    .await
+    .unwrap_or_else(|_| {
+        (
+            failure(
+                &profile,
+                ErrorCode::DeadlineExceeded,
+                "connectivity observation exceeded its deadline",
+            ),
+            Phases::new(),
+        )
+    })
 }
+
+const RENEWAL_JOB_CAP: Duration = Duration::from_secs(15);
+const IDENTITY_JOB_CAP: Duration = Duration::from_secs(15);
+
+// Periodic refresh owns a new subscriber at per-profile admission. Foreground
+// entry points below require the caller's existing full control explicitly.
 
 pub(super) async fn renew(
     state_dir: &Path,
@@ -220,7 +259,24 @@ pub(super) async fn renew(
     client: reqwest::Client,
     timeout: Duration,
 ) -> ResponseResult {
-    renew_observed(state_dir, profile, client, timeout).await.0
+    let subscriber =
+        match crate::request_control::RequestControl::background(timeout, CancellationToken::new())
+        {
+            Ok(control) => control,
+            Err(error) => return scoped_error(profile, &error),
+        };
+    renew_with_control(state_dir, profile, client, &subscriber).await
+}
+
+pub(super) async fn renew_with_control(
+    state_dir: &Path,
+    profile: &str,
+    client: reqwest::Client,
+    subscriber: &crate::request_control::RequestControl,
+) -> ResponseResult {
+    renew_observed(state_dir, profile, client, subscriber)
+        .await
+        .0
 }
 
 /// The compatibility renewal with the steps it took: reading the profile's
@@ -229,16 +285,25 @@ async fn renew_observed(
     state_dir: &Path,
     profile: &str,
     client: reqwest::Client,
-    timeout: Duration,
+    subscriber: &crate::request_control::RequestControl,
 ) -> (ResponseResult, Phases) {
     let root = state_dir.to_owned();
     let profile = profile.to_owned();
     coalesce(
         flight_key(&root, &profile, false),
-        timeout,
-        move || async move {
+        subscriber,
+        RENEWAL_JOB_CAP,
+        move |control| async move {
             let mut steps = Steps::new();
-            let result = renew_one(&root, &profile, &client, timeout, &mut steps).await;
+            let result = renew_one(
+                &root,
+                &profile,
+                &client,
+                RENEWAL_JOB_CAP,
+                &mut steps,
+                control,
+            )
+            .await;
             (result, steps.into_phases())
         },
     )
@@ -251,11 +316,19 @@ async fn renew_one(
     client: &reqwest::Client,
     timeout: Duration,
     steps: &mut Steps,
+    control: crate::request_control::RequestControl,
 ) -> ResponseResult {
     let started = Instant::now();
+    if let Err(error) = control.check() {
+        return scoped_error(profile, &error);
+    }
     let capacity = FETCH_CAPACITY
         .get_or_init(|| Arc::new(Semaphore::new(MAXIMUM_COMPATIBILITY_ARTIFACT_FETCHES)));
-    let Ok(Ok(worker)) = tokio::time::timeout(timeout, capacity.clone().acquire_owned()).await
+    let Ok(Ok(worker)) = tokio::time::timeout_at(
+        tokio::time::Instant::from_std(control.deadline.instant()),
+        capacity.clone().acquire_owned(),
+    )
+    .await
     else {
         steps.step("lease");
         return failure(
@@ -265,9 +338,10 @@ async fn renew_one(
         );
     };
     let admission = match profile_work::coordinator()
-        .acquire(
+        .acquire_control(
             root,
             profile_work::Scope::RegistryRead,
+            &control,
             timeout.saturating_sub(started.elapsed()),
         )
         .await
@@ -280,12 +354,16 @@ async fn renew_one(
     };
     let snapshot_root = root.to_owned();
     let snapshot_profile = profile.to_owned();
+    let snapshot_control = control.clone();
     let snapshot = tokio::task::spawn_blocking(move || {
         let _admission = admission;
-        let snapshot = read_registry_snapshot(started, timeout, || {
-            ProfileRegistry::try_open(&snapshot_root)
-                .and_then(|registry| registry.hosted_lease_renewal(&snapshot_profile))
-        });
+        let snapshot = (|| {
+            let _scope = snapshot_control.enter()?;
+            read_registry_snapshot(started, timeout, || {
+                ProfileRegistry::try_open(&snapshot_root)
+                    .and_then(|registry| registry.hosted_lease_renewal(&snapshot_profile))
+            })
+        })();
         (snapshot, worker)
     })
     .await;
@@ -305,8 +383,12 @@ async fn renew_one(
             )
         }
     };
+    let remaining = match control.remaining() {
+        Ok(value) => value,
+        Err(error) => return scoped_error(profile, &error),
+    };
     let fetched = tokio::time::timeout(
-        timeout.saturating_sub(started.elapsed()),
+        remaining,
         fetch_compatibility_artifact(client, snapshot.url()),
     )
     .await;
@@ -329,6 +411,9 @@ async fn renew_one(
             )
         }
     };
+    if let Err(error) = control.check() {
+        return scoped_error(profile, &error);
+    }
     let signed =
         match serde_json::from_slice::<foks_compat_artifact::SignedCompatibilityArtifact>(&bytes) {
             Ok(signed) => signed,
@@ -354,9 +439,10 @@ async fn renew_one(
         return success("unchanged");
     }
     let admission = match profile_work::coordinator()
-        .acquire(
+        .acquire_control(
             root,
             profile_work::Scope::profile(profile),
+            &control,
             timeout.saturating_sub(started.elapsed()),
         )
         .await
@@ -365,6 +451,7 @@ async fn renew_one(
         Err(error) => return scoped_error(profile, &error),
     };
     let applied = tokio::task::spawn_blocking(move || {
+        let _scope = control.enter()?;
         let _admission = admission;
         let _worker = worker;
         if started.elapsed() >= timeout {
@@ -460,10 +547,10 @@ fn identity_network_budget(remaining: Duration) -> Duration {
 /// The identity check with the steps it took: waiting for the profile's
 /// admission and a worker, opening the profile's session, and the round trip
 /// that reconciles the saved host.
-async fn identity(
+async fn identity_with_control(
     root: &Path,
     profile: &str,
-    timeout: Duration,
+    subscriber: &crate::request_control::RequestControl,
     network_budget: Duration,
     workers: Arc<Semaphore>,
 ) -> (ResponseResult, Phases) {
@@ -471,12 +558,19 @@ async fn identity(
     let profile = profile.to_owned();
     coalesce(
         flight_key(&root, &profile, true),
-        timeout,
-        move || async move {
+        subscriber,
+        IDENTITY_JOB_CAP,
+        move |control| async move {
+            let timeout = IDENTITY_JOB_CAP;
             let mut steps = Steps::new();
             let started = Instant::now();
             let admission = match profile_work::coordinator()
-                .acquire(&root, profile_work::Scope::profile(&profile), timeout)
+                .acquire_control(
+                    &root,
+                    profile_work::Scope::profile(&profile),
+                    &control,
+                    timeout,
+                )
                 .await
             {
                 Ok(permit) => permit,
@@ -485,8 +579,12 @@ async fn identity(
                     return (scoped_error(&profile, &error), steps.into_phases());
                 }
             };
-            let remaining = timeout.saturating_sub(started.elapsed());
-            let worker = match tokio::time::timeout(remaining, workers.acquire_owned()).await {
+            let worker = match tokio::time::timeout_at(
+                tokio::time::Instant::from_std(control.deadline.instant()),
+                workers.acquire_owned(),
+            )
+            .await
+            {
                 Ok(Ok(worker)) => worker,
                 _ => {
                     steps.step("admit");
@@ -510,6 +608,7 @@ async fn identity(
                 let body = Instant::now();
                 let (result, phases) = profile_work::with_phase_timing(|| {
                     foks_keystore::without_user_interaction(|| {
+                        let _scope = control.enter()?;
                         profile_work::with_control(remaining, cancellation.clone(), || {
                             let registry = read_registry_snapshot(started, timeout, || {
                                 ProfileRegistry::try_open(&root)
@@ -596,16 +695,16 @@ async fn identity(
 /// readout states where an observation that took seconds spent them. The
 /// halves run at the same time, so their steps do not add up to the
 /// observation's own duration.
-pub(super) async fn reconcile(
+pub(super) async fn reconcile_with_control(
     root: &Path,
     profile: &str,
-    timeout: Duration,
+    subscriber: &crate::request_control::RequestControl,
     workers: Arc<Semaphore>,
 ) -> (serde_json::Value, ResponseTiming) {
     let started = Instant::now();
     let compatibility = async {
-        match compatibility_http_client(timeout) {
-            Ok(client) => renew_observed(root, profile, client, timeout).await,
+        match compatibility_http_client(RENEWAL_JOB_CAP) {
+            Ok(client) => renew_observed(root, profile, client, subscriber).await,
             Err(_) => (
                 failure(
                     profile,
@@ -617,11 +716,11 @@ pub(super) async fn reconcile(
         }
     };
     let ((identity, identity_phases), (compatibility, compatibility_phases)) = tokio::join!(
-        identity(
+        identity_with_control(
             root,
             profile,
-            timeout,
-            identity_network_budget(timeout),
+            subscriber,
+            identity_network_budget(IDENTITY_JOB_CAP),
             workers
         ),
         compatibility
@@ -645,6 +744,38 @@ pub(super) async fn reconcile(
 
 #[cfg(test)]
 mod tests {
+    fn subscriber(timeout: Duration) -> crate::request_control::RequestControl {
+        crate::request_control::RequestControl::background(timeout, CancellationToken::new())
+            .unwrap()
+    }
+    async fn coalesce<F, Fut>(
+        key: FlightKey,
+        timeout: Duration,
+        work: F,
+    ) -> (ResponseResult, Phases)
+    where
+        F: FnOnce(crate::request_control::RequestControl) -> Fut + Send + 'static,
+        Fut: Future<Output = (ResponseResult, Phases)> + Send + 'static,
+    {
+        super::coalesce(key, &subscriber(timeout), RENEWAL_JOB_CAP, work).await
+    }
+    async fn identity(
+        root: &Path,
+        profile: &str,
+        timeout: Duration,
+        network_budget: Duration,
+        workers: Arc<Semaphore>,
+    ) -> (ResponseResult, Phases) {
+        identity_with_control(root, profile, &subscriber(timeout), network_budget, workers).await
+    }
+    async fn reconcile(
+        root: &Path,
+        profile: &str,
+        timeout: Duration,
+        workers: Arc<Semaphore>,
+    ) -> (serde_json::Value, ResponseTiming) {
+        reconcile_with_control(root, profile, &subscriber(timeout), workers).await
+    }
     use super::*;
 
     #[test]
@@ -1027,7 +1158,7 @@ mod tests {
                 let started = started.clone();
                 let finished = finished.clone();
                 async move {
-                    coalesce(key, Duration::from_secs(10), move || async move {
+                    coalesce(key, Duration::from_secs(10), move |_control| async move {
                         let permit = workers.acquire_owned().await.unwrap();
                         started.send(()).unwrap();
                         release.acquire().await.unwrap().forget();
@@ -1088,15 +1219,19 @@ mod tests {
         let first_release = release.clone();
         let first_key = key.clone();
         let first = tokio::spawn(async move {
-            coalesce(first_key, Duration::from_secs(5), move || async move {
-                first_started.notify_one();
-                first_release.notified().await;
-                (success("renewed"), vec![("fetch".to_owned(), 7)])
-            })
+            coalesce(
+                first_key,
+                Duration::from_secs(5),
+                move |_control| async move {
+                    first_started.notify_one();
+                    first_release.notified().await;
+                    (success("renewed"), vec![("fetch".to_owned(), 7)])
+                },
+            )
             .await
         });
         started.notified().await;
-        let second = coalesce(key, Duration::from_secs(5), || async {
+        let second = coalesce(key, Duration::from_secs(5), |_control| async {
             panic!("duplicate renewal was dispatched")
         });
         let releaser = async {
@@ -1116,10 +1251,14 @@ mod tests {
         let key = flight_key(directory.path(), "saved", false);
         let release = Arc::new(tokio::sync::Notify::new());
         let worker_release = release.clone();
-        let first = coalesce(key.clone(), Duration::from_millis(10), move || async move {
-            worker_release.notified().await;
-            (success("renewed"), Phases::new())
-        })
+        let first = coalesce(
+            key.clone(),
+            Duration::from_millis(10),
+            move |_control| async move {
+                worker_release.notified().await;
+                (success("renewed"), Phases::new())
+            },
+        )
         .await;
         assert!(matches!(
             first.0,
@@ -1130,7 +1269,7 @@ mod tests {
         ));
         // A caller that gave up on the flight measured no steps of its own.
         assert!(first.1.is_empty());
-        let second = coalesce(key, Duration::from_secs(5), || async {
+        let second = coalesce(key.clone(), Duration::from_secs(5), |_control| async {
             panic!("active flight was replaced")
         });
         let releaser = async {
@@ -1139,6 +1278,145 @@ mod tests {
         };
         let (result, _) = tokio::join!(second, releaser);
         assert_eq!(result.0, success("renewed"));
+    }
+
+    #[tokio::test]
+    async fn expired_or_cancelled_subscriber_never_starts_a_flight() {
+        let directory = tempfile::tempdir().unwrap();
+        let expired = subscriber(Duration::from_millis(1));
+        tokio::time::sleep_until(tokio::time::Instant::from_std(expired.deadline.instant())).await;
+        let result = super::coalesce(
+            flight_key(directory.path(), "expired", false),
+            &expired,
+            RENEWAL_JOB_CAP,
+            |_| async { panic!("expired observer started work") },
+        )
+        .await;
+        assert!(matches!(
+            result.0,
+            ResponseResult::Error {
+                code: ErrorCode::DeadlineExceeded,
+                ..
+            }
+        ));
+        let cancelled = subscriber(Duration::from_secs(5));
+        cancelled.cancellation.cancel();
+        let result = super::coalesce(
+            flight_key(directory.path(), "cancelled", false),
+            &cancelled,
+            RENEWAL_JOB_CAP,
+            |_| async { panic!("cancelled observer started work") },
+        )
+        .await;
+        assert!(matches!(result.0, ResponseResult::Error { .. }));
+        assert!(FLIGHTS.get().is_none_or(|flights| !flights
+            .lock()
+            .unwrap()
+            .keys()
+            .any(|key| key.0 == directory.path())));
+    }
+
+    #[tokio::test]
+    async fn cancelled_subscriber_leaves_shared_job_usable_to_a_later_observer() {
+        let directory = tempfile::tempdir().unwrap();
+        let key = flight_key(directory.path(), "saved", false);
+        let first_key = key.clone();
+        let observer = subscriber(Duration::from_secs(5));
+        let cancellation = observer.cancellation.clone();
+        let release = Arc::new(tokio::sync::Notify::new());
+        let worker_release = release.clone();
+        let (started, entered) = tokio::sync::oneshot::channel();
+        let first = tokio::spawn(async move {
+            super::coalesce(
+                first_key,
+                &observer,
+                RENEWAL_JOB_CAP,
+                move |job| async move {
+                    started.send(()).unwrap();
+                    worker_release.notified().await;
+                    assert!(job.check().is_ok(), "subscriber cancelled the shared owner");
+                    (success("renewed"), Phases::new())
+                },
+            )
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), entered)
+            .await
+            .unwrap()
+            .unwrap();
+        cancellation.cancel();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(2), first)
+                .await
+                .unwrap()
+                .unwrap()
+                .0,
+            ResponseResult::Error { .. }
+        ));
+        let second = coalesce(key, Duration::from_secs(5), |_| async {
+            panic!("active shared job was replaced")
+        });
+        let release_after_join = async {
+            tokio::task::yield_now().await;
+            release.notify_one();
+        };
+        let (result, _) = tokio::join!(second, release_after_join);
+        assert_eq!(result.0, success("renewed"));
+    }
+
+    #[tokio::test]
+    async fn later_subscriber_cannot_extend_an_expired_active_job() {
+        let directory = tempfile::tempdir().unwrap();
+        let key = flight_key(directory.path(), "saved", false);
+        let first_key = key.clone();
+        let release = Arc::new(tokio::sync::Notify::new());
+        let worker_release = release.clone();
+        let (started, entered) = tokio::sync::oneshot::channel();
+        let first = tokio::spawn(async move {
+            super::coalesce(
+                first_key,
+                &subscriber(Duration::from_secs(5)),
+                Duration::from_millis(50),
+                move |control| async move {
+                    assert!(started.send(control).is_ok());
+                    worker_release.notified().await;
+                    (success("late"), Phases::new())
+                },
+            )
+            .await
+        });
+        let control = tokio::time::timeout(Duration::from_secs(2), entered)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::sleep_until(tokio::time::Instant::from_std(control.deadline.instant())).await;
+        assert!(control.check().is_err());
+        let second_control = subscriber(Duration::from_secs(5));
+        let second = super::coalesce(
+            key.clone(),
+            &second_control,
+            Duration::from_secs(15),
+            |_| async { panic!("an expired but physically active job was replaced") },
+        );
+        let release_after_join = async {
+            tokio::task::yield_now().await;
+            release.notify_one();
+        };
+        let (second, _) = tokio::join!(second, release_after_join);
+        for result in [first.await.unwrap(), second] {
+            assert!(matches!(
+                result.0,
+                ResponseResult::Error {
+                    code: ErrorCode::DeadlineExceeded,
+                    ..
+                }
+            ));
+        }
+        let fresh = coalesce(key, Duration::from_secs(5), |_| async {
+            (success("fresh"), Phases::new())
+        })
+        .await;
+        assert_eq!(fresh.0, success("fresh"));
     }
 
     #[tokio::test]

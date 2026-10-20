@@ -726,6 +726,8 @@ impl ClientCredentials {
     where
         E: From<Error>,
     {
+        let _operation_control = session.operation_scope().map_err(E::from)?;
+        session.check_operation().map_err(E::from)?;
         self.ensure_session_root(session).map_err(E::from)?;
         let key = held_profile_key(&session.paths.directory);
         if HeldCheckedProfile::is_held(&key) {
@@ -737,6 +739,7 @@ impl ClientCredentials {
             } else {
                 checked_profile_for_use(self, session).map_err(E::from)?
             };
+            session.check_operation().map_err(E::from)?;
             return operation(&checked);
         }
         let lock = runtime::ProfileLock::operation(session.paths()).map_err(E::from)?;
@@ -754,7 +757,10 @@ impl ClientCredentials {
         // local maintenance must not prevent the user's operation on deferral.
         let _ = self.compact_session_merkle_roots(&checked);
         let held = HeldCheckedProfile::enter(key);
-        let result = operation(&checked);
+        let result = session
+            .check_operation()
+            .map_err(E::from)
+            .and_then(|()| operation(&checked));
         drop(held);
         drop(material);
         let checkpoint = self.advance_checkpoint(session);
@@ -819,6 +825,8 @@ impl ClientCredentials {
     where
         E: From<Error>,
     {
+        let _left_control = left.operation_scope().map_err(E::from)?;
+        let _right_control = right.operation_scope().map_err(E::from)?;
         self.ensure_session_root(left).map_err(E::from)?;
         self.ensure_session_root(right).map_err(E::from)?;
         if left.paths.directory == right.paths.directory {
@@ -908,7 +916,11 @@ impl ClientCredentials {
         let right_checked = checked_profile_for_use(self, right).map_err(E::from)?;
         let left_held = HeldCheckedProfile::enter(left_key);
         let right_held = HeldCheckedProfile::enter(right_key);
-        let result = operation(&left_checked, &right_checked);
+        let result = left
+            .check_operation()
+            .and_then(|()| right.check_operation())
+            .map_err(E::from)
+            .and_then(|()| operation(&left_checked, &right_checked));
         drop(right_held);
         drop(left_held);
         drop(material);
@@ -939,10 +951,13 @@ impl ClientCredentials {
     where
         E: From<Error>,
     {
+        let _operation_control = session.operation_scope().map_err(E::from)?;
+        session.check_operation().map_err(E::from)?;
         self.ensure_session_root(session).map_err(E::from)?;
         let key = held_profile_key(&session.paths.directory);
         if HeldCheckedProfile::is_held(&key) {
             let checked = checked_profile_for_use(self, session).map_err(E::from)?;
+            session.check_operation().map_err(E::from)?;
             return operation(&checked).map(Some);
         }
         let Some(lock) = runtime::ProfileLock::try_operation(session.paths()).map_err(E::from)?
@@ -963,7 +978,10 @@ impl ClientCredentials {
         // local maintenance must not prevent the user's operation on deferral.
         let _ = self.compact_session_merkle_roots(&checked);
         let held = HeldCheckedProfile::enter(key);
-        let result = operation(&checked);
+        let result = session
+            .check_operation()
+            .map_err(E::from)
+            .and_then(|()| operation(&checked));
         drop(held);
         drop(material);
         let checkpoint = self.advance_checkpoint(session);
@@ -998,10 +1016,13 @@ impl ClientCredentials {
     where
         E: From<Error>,
     {
+        let _operation_control = session.operation_scope().map_err(E::from)?;
+        session.check_operation().map_err(E::from)?;
         self.ensure_session_root(session).map_err(E::from)?;
         let key = held_profile_key(&session.paths.directory);
         if HeldCheckedProfile::is_held(&key) {
             let checked = checked_profile_for_use(self, session).map_err(E::from)?;
+            session.check_operation().map_err(E::from)?;
             return operation(&checked).map(SharedSessionOutcome::Ran);
         }
         let Some(lock) =
@@ -1020,7 +1041,10 @@ impl ClientCredentials {
         let material = HeldSessionMaterial::enter(material);
         let checked = checked_profile_for_use(self, session).map_err(E::from)?;
         let held = HeldCheckedProfile::enter(key);
-        let result = operation(&checked);
+        let result = session
+            .check_operation()
+            .map_err(E::from)
+            .and_then(|()| operation(&checked));
         drop(held);
         drop(material);
         let checkpoint = self.advance_checkpoint(session);
@@ -1583,10 +1607,13 @@ impl ClientCredentials {
                 "checkpoint barrier requires an exclusive checked session",
             ));
         }
-        self.advance_checkpoint(session)
+        self.advance_checkpoint(session)?;
+        session.check_operation()
     }
 
     pub(crate) fn advance_checkpoint(&self, session: &ProfileSession) -> Result<()> {
+        // This obligation survives expiry once local evidence has changed.
+        let _completion = runtime::OperationScope::suspend();
         // Read under the manifest lock. A session sharing the profile lock
         // can write and publish between a read taken outside it and this
         // reconciliation, and a checkpoint read before that publication would
@@ -2931,6 +2958,68 @@ mod admission_tests {
             })
             .unwrap();
         (temporary, root)
+    }
+
+    #[test]
+    fn cancellation_after_a_write_still_publishes_the_external_checkpoint() {
+        let (_temporary, root) = one_profile_state();
+        let credentials = ClientCredentials::open(&root).unwrap();
+        let registry = ProfileRegistry::open(&root).unwrap();
+        let cancellation = foks_client::CancellationToken::new();
+        let deadline = foks_local_deadline::Deadline::capture(
+            std::time::Instant::now() + std::time::Duration::from_secs(10),
+        )
+        .unwrap();
+        let session =
+            ProfileSession::open_with_deadline(&registry, "a", deadline, cancellation.clone())
+                .unwrap();
+        credentials
+            .with_checked_session(&session, |checked| {
+                let mut hard =
+                    foks_client_db::HardStateStore::open(&checked.paths().hard_database)?;
+                let mut limits = hard.upload_limits()?;
+                limits.max_pending = 12;
+                hard.set_upload_limits(limits)?;
+                cancellation.cancel();
+                Ok::<_, Error>(())
+            })
+            .unwrap();
+        assert!(session.check_operation().is_err());
+        let fresh = ProfileSession::open(&registry, "a").unwrap();
+        credentials
+            .with_checked_session(&fresh, |checked| {
+                assert_eq!(
+                    foks_client_db::HardStateStore::open(&checked.paths().hard_database)?
+                        .upload_limits()?
+                        .max_pending,
+                    12
+                );
+                Ok::<_, Error>(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn cancelled_session_cannot_create_a_database_or_enter_callback() {
+        let (_temporary, root) = one_profile_state();
+        let credentials = ClientCredentials::open(&root).unwrap();
+        let registry = ProfileRegistry::open(&root).unwrap();
+        let cancellation = foks_client::CancellationToken::new();
+        let deadline = foks_local_deadline::Deadline::capture(
+            std::time::Instant::now() + std::time::Duration::from_secs(10),
+        )
+        .unwrap();
+        let session =
+            ProfileSession::open_with_deadline(&registry, "a", deadline, cancellation.clone())
+                .unwrap();
+        cancellation.cancel();
+        let result = credentials.with_checked_session(&session, |_| {
+            panic!("cancelled operation entered callback");
+            #[allow(unreachable_code)]
+            Ok::<_, Error>(())
+        });
+        assert!(result.is_err());
+        assert!(!hard_state_artifacts_exist(&session.paths.hard_database).unwrap());
     }
 
     #[test]

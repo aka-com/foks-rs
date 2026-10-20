@@ -1,15 +1,12 @@
 //! Browser credentials stay native; the webview can only open its account's stored flow.
-use super::{
-    context::AppState,
-    validation::{invalid_request, invalid_response, require_main_window, valid_local_name},
-};
+use super::validation::{invalid_request, invalid_response, require_main_window, valid_local_name};
 use crate::agent::AgentError;
 use foks_agent_proto::{
     sso::{SsoAction, SsoProgress},
     Operation,
 };
 use serde::Serialize;
-use tauri::{Manager as _, State};
+use tauri::Manager as _;
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Progress {
@@ -60,14 +57,16 @@ fn validate(p: &SsoProgress, alias: &str) -> Result<(), AgentError> {
     }
     Ok(())
 }
-fn public_progress(result: SsoProgress) -> Progress {
+fn public_progress(mut result: SsoProgress) -> Progress {
+    let browser_available = result.browser_url.is_some();
+    zeroize::Zeroize::zeroize(&mut result.browser_url);
     Progress {
         operation_id: result.operation_id,
         account_alias: result.account_alias,
         purpose: result.purpose,
         account_status: result.account_status,
         state: result.state,
-        browser_available: result.browser_url.is_some(),
+        browser_available,
         expires_at_ms: result.expires_at_ms,
         service_access: result.service_access,
     }
@@ -75,11 +74,12 @@ fn public_progress(result: SsoProgress) -> Progress {
 #[tauri::command]
 pub async fn sso_request(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     account_alias: String,
     action: SsoAction,
 ) -> Result<Progress, AgentError> {
+    let state = state.begin_operation(action.deadline_class())?;
     require_main_window(&webview)?;
     let generation = crate::applock::unlocked_generation(webview.app_handle())?;
     if !valid_local_name(&profile) || !valid_local_name(&account_alias) || !action.validate() {
@@ -95,7 +95,7 @@ pub async fn sso_request(
     } else {
         Some(state.begin_mutation()?)
     };
-    let transport = state.agent.transport();
+    let transport = state.transport()?;
     let expected = account_alias.clone();
     let changes_account = matches!(
         action,
@@ -115,34 +115,36 @@ pub async fn sso_request(
         | SsoAction::FinishLogin { operation_id, .. }
         | SsoAction::FinishSignup { operation_id, .. } => Some(operation_id.clone()),
     };
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        super::servers::require_transport_profile(transport.as_ref(), &profile)?;
-        let value = transport
-            .call(Operation::Sso {
-                profile,
-                account_alias,
-                action,
-            })
-            .map_err(AgentError::from_desktop)?;
-        let p: SsoProgress = serde_json::from_value(value)
-            .map_err(|_| invalid_response("Invalid authentication response."))?;
-        validate(&p, &expected)?;
-        if expected_id.is_some_and(|id| Some(id) != p.operation_id) {
-            return Err(invalid_response("Authentication handle changed."));
-        }
-        Ok::<_, AgentError>(p)
-    })
-    .await
-    .map_err(|_| {
-        if !inspecting {
-            super::execution::ambiguous_worker_failure(
-                &state,
-                "Authentication interrupted; resume its existing flow.",
-            )
-        } else {
-            invalid_request("Authentication interrupted; resume its existing flow.")
-        }
-    })?
+    let result = {
+        let deadline = state.deadline()?.clone();
+        super::deadline::run(
+            &deadline,
+            !inspecting,
+            move || {
+                super::servers::require_transport_profile(transport.as_ref(), &profile)?;
+                let value = transport
+                    .call(Operation::Sso {
+                        profile,
+                        account_alias,
+                        action,
+                    })
+                    .map_err(AgentError::from_desktop)?;
+                let mut p: SsoProgress = serde_json::from_value(value)
+                    .map_err(|_| invalid_response("Invalid authentication response."))?;
+                if let Err(error) = validate(&p, &expected) {
+                    zeroize::Zeroize::zeroize(&mut p.browser_url);
+                    return Err(error);
+                }
+                if expected_id.is_some_and(|id| Some(id) != p.operation_id) {
+                    zeroize::Zeroize::zeroize(&mut p.browser_url);
+                    return Err(invalid_response("Authentication handle changed."));
+                }
+                Ok::<_, AgentError>(p)
+            },
+            |progress| zeroize::Zeroize::zeroize(&mut progress.browser_url),
+        )
+        .await
+    }
     .map_err(|error| {
         if !inspecting {
             super::execution::observe_mutation_error(&state, error)
@@ -150,22 +152,27 @@ pub async fn sso_request(
             error
         }
     })?;
+    let result = public_progress(result);
     crate::applock::require_unlocked_generation(webview.app_handle(), generation)?;
+    state
+        .deadline()?
+        .check()
+        .map_err(super::deadline::clock_error)?;
     if changes_account {
         state.invalidate_catalog();
     }
-    Ok(public_progress(result))
+    Ok(result)
 }
 #[tauri::command]
 pub async fn open_sso_browser(
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     profile: String,
     account_alias: String,
     operation_id: String,
 ) -> Result<serde_json::Value, AgentError> {
     require_main_window(&webview)?;
-    let generation = crate::applock::unlocked_generation(webview.app_handle())?;
+    let interval = crate::applock::unlocked_interval(webview.app_handle())?;
     let action = SsoAction::Status {
         operation_id: operation_id.clone(),
     };
@@ -175,7 +182,6 @@ pub async fn open_sso_browser(
     let expected = account_alias.clone();
     let value = crate::agent::success_value(
         state
-            .agent
             .call(Operation::Sso {
                 profile,
                 account_alias,
@@ -183,17 +189,18 @@ pub async fn open_sso_browser(
             })
             .await?,
     )?;
-    let p: SsoProgress = serde_json::from_value(value)
+    let mut p: SsoProgress = serde_json::from_value(value)
         .map_err(|_| invalid_response("Invalid authentication response."))?;
-    validate(&p, &expected)?;
+    let validation = validate(&p, &expected);
+    let url = p.browser_url.take().map(zeroize::Zeroizing::new);
+    validation?;
     if p.operation_id.as_deref() != Some(operation_id.as_str()) || p.state != "waiting" {
         return Err(invalid_request("This browser flow is no longer waiting."));
     }
-    let url = p.browser_url.ok_or_else(|| {
+    let url = url.ok_or_else(|| {
         invalid_request("The start response was interrupted. Cancel this flow and begin again.")
     })?;
-    crate::applock::require_unlocked_generation(webview.app_handle(), generation)?;
-    super::chat::open_chat_link(webview, url).await
+    super::chat::open_link_until(url, interval, state.deadline()?).await
 }
 
 #[cfg(test)]

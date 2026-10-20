@@ -1,10 +1,9 @@
 use crate::commands::execution::{execute_kv_mutation, MutationKind};
 use crate::commands::validation::{DOWNLOAD_CHUNK_BYTES, MAXIMUM_TEXT_ITEM_BYTES};
 use crate::commands::vault::{
-    create_item_roles, download_to_path, file_create_header, file_edit_header, parse_item_role,
-    read_text, remove_item_operation, require_file_item, require_text_item,
-    set_create_mutation_roles, set_create_operation_roles, take_text_value, upload_file,
-    CatalogDto,
+    create_item_roles, file_create_header, file_edit_header, parse_item_role, read_text,
+    remove_item_operation, require_file_item, require_text_item, set_create_mutation_roles,
+    set_create_operation_roles, take_text_value, upload_file, CatalogDto,
 };
 use foks_agent_proto::{
     KvChunkResult, KvPrecondition, KvReadResult, KvRole, KvStoreRef, KvUploadHeader, Operation,
@@ -107,6 +106,30 @@ struct CatalogReadTransport {
 }
 
 impl foks_desktop::AgentTransport for CatalogReadTransport {
+    fn call_with_deadline(
+        &self,
+        mut operation: foks_agent_proto::Operation,
+        deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        if let Err(error) = deadline.check() {
+            operation.zeroize_plaintext();
+            return Err(foks_desktop::local_deadline_error(error));
+        }
+        self.call_cancellable(operation, cancelled)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        header: foks_agent_proto::KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+        deadline: &foks_local_deadline::Deadline,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        deadline
+            .check()
+            .map_err(foks_desktop::local_deadline_error)?;
+        self.put_kv_stream(header, reader)
+    }
+
     fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
         self.calls.lock().unwrap().push(operation.clone());
         match operation {
@@ -246,6 +269,30 @@ pub(super) struct ReadTransport {
 }
 
 impl foks_desktop::AgentTransport for ReadTransport {
+    fn call_with_deadline(
+        &self,
+        mut operation: foks_agent_proto::Operation,
+        deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        if let Err(error) = deadline.check() {
+            operation.zeroize_plaintext();
+            return Err(foks_desktop::local_deadline_error(error));
+        }
+        self.call_cancellable(operation, cancelled)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        header: foks_agent_proto::KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+        deadline: &foks_local_deadline::Deadline,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        deadline
+            .check()
+            .map_err(foks_desktop::local_deadline_error)?;
+        self.put_kv_stream(header, reader)
+    }
+
     fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
         self.calls.lock().unwrap().push(operation.clone());
         match operation {
@@ -278,6 +325,30 @@ pub(super) struct DownloadTransport {
 }
 
 impl foks_desktop::AgentTransport for DownloadTransport {
+    fn call_with_deadline(
+        &self,
+        mut operation: foks_agent_proto::Operation,
+        deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        if let Err(error) = deadline.check() {
+            operation.zeroize_plaintext();
+            return Err(foks_desktop::local_deadline_error(error));
+        }
+        self.call_cancellable(operation, cancelled)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        header: foks_agent_proto::KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+        deadline: &foks_local_deadline::Deadline,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        deadline
+            .check()
+            .map_err(foks_desktop::local_deadline_error)?;
+        self.put_kv_stream(header, reader)
+    }
+
     fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
         self.calls.lock().unwrap().push(operation.clone());
         let value = match operation {
@@ -485,6 +556,30 @@ pub(super) struct MutationTransport {
 }
 
 impl foks_desktop::AgentTransport for MutationTransport {
+    fn call_with_deadline(
+        &self,
+        mut operation: foks_agent_proto::Operation,
+        deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        if let Err(error) = deadline.check() {
+            operation.zeroize_plaintext();
+            return Err(foks_desktop::local_deadline_error(error));
+        }
+        self.call_cancellable(operation, cancelled)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        header: foks_agent_proto::KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+        deadline: &foks_local_deadline::Deadline,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        deadline
+            .check()
+            .map_err(foks_desktop::local_deadline_error)?;
+        self.put_kv_stream(header, reader)
+    }
+
     fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
         self.calls.lock().unwrap().push(operation);
         Ok(serde_json::Value::Null)
@@ -676,6 +771,30 @@ pub(super) struct ConflictTransport {
 }
 
 impl foks_desktop::AgentTransport for ConflictTransport {
+    fn call_with_deadline(
+        &self,
+        mut operation: foks_agent_proto::Operation,
+        deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        if let Err(error) = deadline.check() {
+            operation.zeroize_plaintext();
+            return Err(foks_desktop::local_deadline_error(error));
+        }
+        self.call_cancellable(operation, cancelled)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        header: foks_agent_proto::KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+        deadline: &foks_local_deadline::Deadline,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        deadline
+            .check()
+            .map_err(foks_desktop::local_deadline_error)?;
+        self.put_kv_stream(header, reader)
+    }
+
     fn call(&self, _operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
         self.calls.fetch_add(1, Ordering::AcqRel);
         Err(foks_desktop::AgentError::Protocol {
@@ -806,6 +925,30 @@ pub(super) struct UploadTransport {
 }
 
 impl foks_desktop::AgentTransport for UploadTransport {
+    fn call_with_deadline(
+        &self,
+        mut operation: foks_agent_proto::Operation,
+        deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        if let Err(error) = deadline.check() {
+            operation.zeroize_plaintext();
+            return Err(foks_desktop::local_deadline_error(error));
+        }
+        self.call_cancellable(operation, cancelled)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        header: foks_agent_proto::KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+        deadline: &foks_local_deadline::Deadline,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        deadline
+            .check()
+            .map_err(foks_desktop::local_deadline_error)?;
+        self.put_kv_stream(header, reader)
+    }
+
     fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
         let issuance = matches!(operation, Operation::KvUploadIssuance { .. });
         self.calls.lock().unwrap().push(operation);
@@ -881,6 +1024,30 @@ fn eighty_four_megabyte_drop_uses_only_the_bounded_stream_boundary() {
 pub(super) struct EarlyUploadLoss;
 
 impl foks_desktop::AgentTransport for EarlyUploadLoss {
+    fn call_with_deadline(
+        &self,
+        mut operation: foks_agent_proto::Operation,
+        deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        if let Err(error) = deadline.check() {
+            operation.zeroize_plaintext();
+            return Err(foks_desktop::local_deadline_error(error));
+        }
+        self.call_cancellable(operation, cancelled)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        header: foks_agent_proto::KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+        deadline: &foks_local_deadline::Deadline,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        deadline
+            .check()
+            .map_err(foks_desktop::local_deadline_error)?;
+        self.put_kv_stream(header, reader)
+    }
+
     fn call(&self, _operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
         Ok(serde_json::json!({"database_id":vec![1;16],"issued_at":1}))
     }
@@ -928,6 +1095,30 @@ pub(super) struct ResizeDuringUpload {
 }
 
 impl foks_desktop::AgentTransport for ResizeDuringUpload {
+    fn call_with_deadline(
+        &self,
+        mut operation: foks_agent_proto::Operation,
+        deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        if let Err(error) = deadline.check() {
+            operation.zeroize_plaintext();
+            return Err(foks_desktop::local_deadline_error(error));
+        }
+        self.call_cancellable(operation, cancelled)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        header: foks_agent_proto::KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+        deadline: &foks_local_deadline::Deadline,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        deadline
+            .check()
+            .map_err(foks_desktop::local_deadline_error)?;
+        self.put_kv_stream(header, reader)
+    }
+
     fn call(&self, _operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
         Ok(serde_json::json!({"database_id":vec![1;16],"issued_at":1}))
     }
@@ -1201,6 +1392,30 @@ struct BlockedReadTransport {
     resume: Arc<std::sync::Barrier>,
 }
 impl foks_desktop::AgentTransport for BlockedReadTransport {
+    fn call_with_deadline(
+        &self,
+        mut operation: foks_agent_proto::Operation,
+        deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        if let Err(error) = deadline.check() {
+            operation.zeroize_plaintext();
+            return Err(foks_desktop::local_deadline_error(error));
+        }
+        self.call_cancellable(operation, cancelled)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        header: foks_agent_proto::KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+        deadline: &foks_local_deadline::Deadline,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        deadline
+            .check()
+            .map_err(foks_desktop::local_deadline_error)?;
+        self.put_kv_stream(header, reader)
+    }
+
     fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
         let block = if self.chunk {
             matches!(&operation, Operation::ReadKvChunk { offset: 0, .. })
@@ -1266,6 +1481,30 @@ fn download_rejects_changed_entry_identity_without_publishing_or_leaving_tempora
         between_chunks: bool,
     }
     impl foks_desktop::AgentTransport for Replacement {
+        fn call_with_deadline(
+            &self,
+            mut operation: foks_agent_proto::Operation,
+            deadline: &foks_local_deadline::Deadline,
+            cancelled: &dyn Fn() -> bool,
+        ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+            if let Err(error) = deadline.check() {
+                operation.zeroize_plaintext();
+                return Err(foks_desktop::local_deadline_error(error));
+            }
+            self.call_cancellable(operation, cancelled)
+        }
+        fn put_kv_stream_with_deadline(
+            &self,
+            header: foks_agent_proto::KvUploadHeader,
+            reader: &mut dyn std::io::Read,
+            deadline: &foks_local_deadline::Deadline,
+        ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+            deadline
+                .check()
+                .map_err(foks_desktop::local_deadline_error)?;
+            self.put_kv_stream(header, reader)
+        }
+
         fn call(
             &self,
             operation: Operation,
@@ -1308,6 +1547,89 @@ fn download_rejects_changed_entry_identity_without_publishing_or_leaving_tempora
             .is_err());
             if existing {
                 assert_eq!(std::fs::read(&destination).unwrap(), b"keep existing");
+            } else {
+                assert!(!destination.exists());
+            }
+            assert_eq!(
+                std::fs::read_dir(directory.path()).unwrap().count(),
+                usize::from(existing)
+            );
+        }
+    }
+}
+
+fn download_to_path(
+    transport: Arc<dyn foks_desktop::AgentTransport>,
+    item: &CatalogItem,
+    destination: &std::path::Path,
+    interval: &crate::applock::UnlockedInterval,
+) -> Result<(), crate::agent::AgentError> {
+    let deadline = foks_local_deadline::Deadline::capture(
+        std::time::Instant::now() + std::time::Duration::from_secs(300),
+    )
+    .unwrap();
+    crate::commands::vault::download_to_path(transport, item, destination, interval, &deadline)
+}
+
+#[tokio::test]
+async fn expired_download_never_publishes_and_cleans_its_temporary_file() {
+    for phase in ["after-agent-read", "between-chunks", "before-publication"] {
+        for existing in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let destination = directory.path().join("download.bin");
+            if existing {
+                std::fs::write(&destination, b"original destination").unwrap();
+            }
+            let lock = crate::applock::AppLock::unlocked_for_test();
+            let (reached_tx, reached_rx) = tokio::sync::oneshot::channel();
+            let reached_tx = Mutex::new(Some(reached_tx));
+            let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+            let resume_rx = Mutex::new(resume_rx);
+            let interval = lock.interval_for_test().with_checkpoint(move |actual| {
+                if actual == phase {
+                    if let Some(tx) = reached_tx.lock().unwrap().take() {
+                        tx.send(()).unwrap();
+                        resume_rx
+                            .lock()
+                            .unwrap()
+                            .recv_timeout(std::time::Duration::from_secs(10))
+                            .unwrap();
+                    }
+                }
+            });
+            let deadline = foks_local_deadline::Deadline::capture(
+                std::time::Instant::now() + std::time::Duration::from_secs(1),
+            )
+            .unwrap();
+            let worker_deadline = deadline.clone();
+            let worker_destination = destination.clone();
+            let worker = tokio::task::spawn_blocking(move || {
+                let total = u64::from(DOWNLOAD_CHUNK_BYTES) + 17;
+                crate::commands::vault::download_to_path(
+                    Arc::new(DownloadTransport {
+                        total,
+                        calls: Mutex::new(Vec::new()),
+                    }),
+                    &download_item(total),
+                    &worker_destination,
+                    &interval,
+                    &worker_deadline,
+                )
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(5), reached_rx)
+                .await
+                .unwrap()
+                .unwrap();
+            // The barrier chooses the boundary; the absolute expiry chooses release.
+            tokio::time::sleep_until(deadline.instant().into()).await;
+            assert!(deadline.check().is_err());
+            resume_tx.send(()).unwrap();
+            assert!(worker.await.unwrap().is_err());
+            if existing {
+                assert_eq!(
+                    std::fs::read(&destination).unwrap(),
+                    b"original destination"
+                );
             } else {
                 assert!(!destination.exists());
             }

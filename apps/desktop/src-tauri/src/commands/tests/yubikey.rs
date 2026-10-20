@@ -287,7 +287,9 @@ fn security_key_sync_and_lifecycle_reports_reject_malformed_success() {
 
     let state = AppState::new(Arc::new(AgentHandle::new(
         "/tmp/unused-foks-agent.sock".into(),
-    )));
+    )))
+    .begin_operation(foks_agent_proto::DeadlineClass::Ordinary)
+    .unwrap();
     let error = yubi_revocation_response(
         serde_json::json!({
             "alias":"other","user_chain_sequence":9,"removed_local_credential":true
@@ -305,6 +307,30 @@ pub(super) struct YubiResumeTransport {
 }
 
 impl foks_desktop::AgentTransport for YubiResumeTransport {
+    fn call_with_deadline(
+        &self,
+        mut operation: foks_agent_proto::Operation,
+        deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        if let Err(error) = deadline.check() {
+            operation.zeroize_plaintext();
+            return Err(foks_desktop::local_deadline_error(error));
+        }
+        self.call_cancellable(operation, cancelled)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        header: foks_agent_proto::KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+        deadline: &foks_local_deadline::Deadline,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        deadline
+            .check()
+            .map_err(foks_desktop::local_deadline_error)?;
+        self.put_kv_stream(header, reader)
+    }
+
     fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
         self.calls.lock().unwrap().push(operation.clone());
         match operation {

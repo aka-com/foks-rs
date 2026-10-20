@@ -114,6 +114,22 @@ impl SsoAction {
         }
     }
 }
+impl SsoAction {
+    pub fn deadline_class(&self) -> crate::DeadlineClass {
+        match self {
+            Self::BeginYubiSignup { .. } => crate::DeadlineClass::Ordinary,
+            Self::FinishYubiSignup { .. } => crate::DeadlineClass::Ordinary,
+            Self::Begin { .. } => crate::DeadlineClass::Ordinary,
+            Self::AccountStatus { .. } => crate::DeadlineClass::Ordinary,
+            Self::Status { .. } => crate::DeadlineClass::Ordinary,
+            Self::Poll { .. } => crate::DeadlineClass::Ordinary,
+            Self::Cancel { .. } => crate::DeadlineClass::Ordinary,
+            Self::FinishLogin { .. } => crate::DeadlineClass::Ordinary,
+            Self::FinishSignup { .. } => crate::DeadlineClass::Ordinary,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

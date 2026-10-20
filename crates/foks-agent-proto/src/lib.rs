@@ -2,6 +2,9 @@
 
 #![forbid(unsafe_code)]
 
+pub use foks_local_deadline::DeadlineEnvelope;
+pub use message::DeadlineClass;
+
 pub use foks_proto::{UploadHandle, MAXIMUM_DEVICE_NAME_BYTES};
 
 pub mod account;
@@ -35,10 +38,16 @@ pub use message::{
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn test_deadline() -> DeadlineEnvelope {
+        serde_json::from_value(serde_json::json!({"version":1,"domain":{"clock":"darwin_uptime_raw_v1","boot":"12345678-1234-1234-1234-123456789abc"},"expires_ns":"18446744073709551615"})).unwrap()
+    }
+    fn test_request(id: u64, operation: Operation) -> Request {
+        Request::new(id, operation, test_deadline())
+    }
 
     #[test]
     fn selected_reads_require_identity_and_reject_pre_identity_ipc() {
-        assert_eq!(PROTOCOL_VERSION, 36);
+        assert_eq!(PROTOCOL_VERSION, 37);
         for operation in [
             Operation::ReadKv {
                 store: KvStoreRef::Account(AccountStoreRef {
@@ -61,7 +70,7 @@ mod tests {
                 length: 128,
             },
         ] {
-            let request = Request::new(1, operation);
+            let request = test_request(1, operation);
             assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
             let mut missing = serde_json::to_value(&request).unwrap();
             missing["operation"]
@@ -80,7 +89,7 @@ mod tests {
 
     #[test]
     fn requests_and_responses_round_trip_with_version_binding() {
-        let request = Request::new(
+        let request = test_request(
             7,
             Operation::SyncAccount {
                 profile: "hosted".into(),
@@ -97,12 +106,13 @@ mod tests {
 
     #[test]
     fn go_profile_discovery_is_read_only_and_has_a_stable_shape() {
-        let request = Request::new(8, Operation::DiscoverGoProfiles);
+        let request = test_request(8, Operation::DiscoverGoProfiles);
         assert!(!request.operation.is_mutation());
         assert_eq!(
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
                 "version": PROTOCOL_VERSION,
+                "deadline": test_deadline(),
                 "id": 8,
                 "operation": { "operation": "discover-go-profiles" }
             })
@@ -111,7 +121,7 @@ mod tests {
 
     #[test]
     fn profile_overview_is_read_only_and_profile_bound() {
-        let request = Request::new(
+        let request = test_request(
             9,
             Operation::ListProfileOverview {
                 profile: "hosted".to_owned(),
@@ -122,6 +132,7 @@ mod tests {
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
                 "version": PROTOCOL_VERSION,
+                "deadline": test_deadline(),
                 "id": 9,
                 "operation": {
                     "operation": "list-profile-overview",
@@ -190,7 +201,7 @@ mod tests {
                 },
             },
         ] {
-            let request = Request::new(49, operation);
+            let request = test_request(49, operation);
             assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
         }
     }
@@ -284,7 +295,7 @@ mod tests {
             let frame = encode(&upload).unwrap();
             assert_eq!(decode_upload_frame(&frame).unwrap(), upload);
 
-            let request = Request::new(
+            let request = test_request(
                 12,
                 Operation::PutKv {
                     store: store.clone(),
@@ -424,7 +435,7 @@ mod tests {
             },
         ] {
             assert_eq!(
-                decode_request(&encode(&Request::new(91, operation.clone())).unwrap())
+                decode_request(&encode(&test_request(91, operation.clone())).unwrap())
                     .unwrap()
                     .operation,
                 operation
@@ -434,7 +445,7 @@ mod tests {
 
     #[test]
     fn rejects_truncation_trailing_bytes_and_oversized_prefixes() {
-        let request = encode(&Request::new(1, Operation::Ping)).unwrap();
+        let request = encode(&test_request(1, Operation::Ping)).unwrap();
         assert!(matches!(
             decode_request(&request[..request.len() - 1]),
             Err(Error::Length)
@@ -451,6 +462,7 @@ mod tests {
     #[test]
     fn unsupported_versions_fail_before_dispatch() {
         let request = Request {
+            deadline: test_deadline(),
             version: PROTOCOL_VERSION + 1,
             id: 1,
             operation: Operation::Ping,
@@ -463,7 +475,7 @@ mod tests {
 
     #[test]
     fn json_wire_shape_is_stable_with_current_envelopes() {
-        let request = Request::new(
+        let request = test_request(
             9,
             Operation::SyncTeam {
                 profile: "local".to_owned(),
@@ -474,6 +486,7 @@ mod tests {
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
                 "version": PROTOCOL_VERSION,
+                "deadline": test_deadline(),
                 "id": 9,
                 "operation": {
                     "operation": "sync-team",
@@ -504,7 +517,7 @@ mod tests {
 
     #[test]
     fn federation_operations_round_trip_with_explicit_profile_bindings() {
-        let member_add = Request::new(
+        let member_add = test_request(
             13,
             Operation::AddFederatedTeamMember {
                 local_profile: "local".to_owned(),
@@ -519,6 +532,7 @@ mod tests {
             serde_json::to_value(&member_add).unwrap(),
             serde_json::json!({
                 "version": PROTOCOL_VERSION,
+                "deadline": test_deadline(),
                 "id": 13,
                 "operation": {
                     "operation": "add-federated-team-member",
@@ -536,7 +550,7 @@ mod tests {
             member_add
         );
 
-        let listing = Request::new(
+        let listing = test_request(
             14,
             Operation::ListFederatedTeams {
                 profile: "local".to_owned(),
@@ -545,7 +559,7 @@ mod tests {
         );
         assert_eq!(decode_request(&encode(&listing).unwrap()).unwrap(), listing);
 
-        let expulsion = Request::new(
+        let expulsion = test_request(
             15,
             Operation::ExpelFederatedTeam {
                 profile: "local".to_owned(),
@@ -558,6 +572,7 @@ mod tests {
             serde_json::to_value(&expulsion).unwrap(),
             serde_json::json!({
                 "version": PROTOCOL_VERSION,
+                "deadline": test_deadline(),
                 "id": 15,
                 "operation": {
                     "operation": "expel-federated-team",
@@ -577,7 +592,7 @@ mod tests {
 
     #[test]
     fn a_catalog_listing_omitting_fresh_is_decoded_as_not_fresh() {
-        let request = Request::new(
+        let request = test_request(
             32,
             Operation::ListKv {
                 store: AccountStoreRef {
@@ -620,7 +635,7 @@ mod tests {
             limit: 200,
             fresh: false,
         };
-        let request = Request::new(31, operation.clone());
+        let request = test_request(31, operation.clone());
         assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
         assert!(!operation.is_mutation());
 
@@ -706,12 +721,12 @@ mod tests {
 
     #[test]
     fn reconcile_is_a_local_v29_mutation_with_no_initial_trust_inputs() {
-        assert_eq!(PROTOCOL_VERSION, 36);
+        assert_eq!(PROTOCOL_VERSION, 37);
         let operation = Operation::ReconcileProfile {
             profile: "saved".into(),
         };
         assert!(operation.is_mutation());
-        let request = Request::new(19, operation);
+        let request = test_request(19, operation);
         assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
         let mut previous = serde_json::to_value(&request).unwrap();
         previous["version"] = serde_json::json!(27);
@@ -723,8 +738,8 @@ mod tests {
 
     #[test]
     fn submit_message_is_a_local_v29_mutation() {
-        assert_eq!(PROTOCOL_VERSION, 36);
-        let request = Request::new(
+        assert_eq!(PROTOCOL_VERSION, 37);
+        let request = test_request(
             20,
             Operation::Chat {
                 store: TeamStoreRef {
@@ -788,7 +803,7 @@ mod tests {
                 device_id: "04".to_owned() + &"ab".repeat(32),
             },
         ] {
-            let request = Request::new(47, operation.clone());
+            let request = test_request(47, operation.clone());
             assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
         }
 
@@ -824,7 +839,7 @@ mod tests {
             protocol: ProfileProtocol::V019,
             trust: ProfileTrust::WebPki,
         };
-        let request = Request::new(32, profile);
+        let request = test_request(32, profile);
         assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
         assert_eq!(
             serde_json::from_value::<AgentStatus>(serde_json::json!({
@@ -841,6 +856,7 @@ mod tests {
     #[test]
     fn request_ids_survive_version_errors_but_not_malformed_frames() {
         let request = Request {
+            deadline: test_deadline(),
             version: PROTOCOL_VERSION + 1,
             id: 44,
             operation: Operation::Ping,
@@ -938,7 +954,7 @@ mod tests {
             },
         ];
         for (index, operation) in operations.into_iter().enumerate() {
-            let request = Request::new(20 + index as u64, operation);
+            let request = test_request(20 + index as u64, operation);
             assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
         }
     }
@@ -947,7 +963,7 @@ mod tests {
     fn roster_selector_and_device_name_wire_shapes_are_stable() {
         let party_id_hex = format!("01{}", "ab".repeat(32));
         assert_eq!(
-            serde_json::to_value(Request::new(
+            serde_json::to_value(test_request(
                 25,
                 Operation::DemoteTeamMember {
                     profile: "local".to_owned(),
@@ -960,6 +976,7 @@ mod tests {
             .unwrap(),
             serde_json::json!({
                 "version": PROTOCOL_VERSION,
+                "deadline": test_deadline(),
                 "id": 25,
                 "operation": {
                     "operation": "demote-team-member",
@@ -972,7 +989,7 @@ mod tests {
             })
         );
         assert_eq!(
-            serde_json::to_value(Request::new(
+            serde_json::to_value(test_request(
                 26,
                 Operation::RemoveTeamMember {
                     profile: "local".to_owned(),
@@ -983,6 +1000,7 @@ mod tests {
             .unwrap(),
             serde_json::json!({
                 "version": PROTOCOL_VERSION,
+                "deadline": test_deadline(),
                 "id": 26,
                 "operation": {
                     "operation": "remove-team-member",
@@ -1020,7 +1038,7 @@ mod tests {
             invite: SecretString::new("s.secret-invite"),
             passphrase: Some(SecretString::new("secret-passphrase")),
         };
-        let encoded = encode(&Request::new(10, operation.clone())).unwrap();
+        let encoded = encode(&test_request(10, operation.clone())).unwrap();
         assert_eq!(decode_request(&encoded).unwrap().operation, operation);
         let debug = format!("{operation:?}");
         assert!(debug.contains("<redacted>"));
@@ -1064,7 +1082,7 @@ mod tests {
                 assert!(!debug.contains(secret));
             }
             assert_eq!(
-                decode_request(&encode(&Request::new(11, operation.clone())).unwrap())
+                decode_request(&encode(&test_request(11, operation.clone())).unwrap())
                     .unwrap()
                     .operation,
                 operation
@@ -1079,6 +1097,7 @@ mod tests {
     fn change_passphrase_without_a_current_secret_decodes() {
         let request = serde_json::json!({
             "version": PROTOCOL_VERSION,
+                "deadline": test_deadline(),
             "id": 12,
             "operation": {
                 "operation": "change-passphrase",
@@ -1111,7 +1130,7 @@ mod tests {
                 "cage 32 advice 4 letter 128 avoid 16 acoustic 2 doctor 64 amount",
             ),
         };
-        let encoded = encode(&Request::new(17, operation.clone())).unwrap();
+        let encoded = encode(&test_request(17, operation.clone())).unwrap();
         assert_eq!(decode_request(&encoded).unwrap().operation, operation);
         let debug = format!("{operation:?}");
         assert!(debug.contains("<redacted>"));
@@ -1156,7 +1175,7 @@ mod tests {
             serial: 3,
         };
         assert_eq!(
-            decode_request(&encode(&Request::new(18, operation.clone())).unwrap())
+            decode_request(&encode(&test_request(18, operation.clone())).unwrap())
                 .unwrap()
                 .operation,
             operation
@@ -1277,7 +1296,7 @@ mod tests {
             },
         ];
         for operation in operations {
-            let decoded = decode_request(&encode(&Request::new(12, operation.clone())).unwrap())
+            let decoded = decode_request(&encode(&test_request(12, operation.clone())).unwrap())
                 .unwrap()
                 .operation;
             assert_eq!(decoded, operation);
@@ -1312,6 +1331,32 @@ mod tests {
             ] {
                 assert!(!debug.contains(secret));
             }
+        }
+    }
+    #[test]
+    fn deadline_is_mandatory_only_after_bounded_version_dispatch() {
+        let old = serde_json::json!({"version":36,"id":7,"operation":{"operation":"ping"}});
+        assert!(matches!(
+            decode_request(&encode(&old).unwrap()),
+            Err(Error::Version)
+        ));
+        let current =
+            serde_json::json!({"version":PROTOCOL_VERSION,"id":7,"operation":{"operation":"ping"}});
+        assert!(decode_request(&encode(&current).unwrap()).is_err());
+        let mut malformed = serde_json::to_value(test_request(7, Operation::Ping)).unwrap();
+        malformed["deadline"]["expires_ns"] = serde_json::json!("01");
+        assert!(decode_request(&encode(&malformed).unwrap()).is_err());
+    }
+    #[test]
+    fn response_plaintext_is_erased_in_nested_json_and_error_details() {
+        let mut reply = Response::success(
+            1,
+            serde_json::json!({"secret-key":["password",{"nested":"protected-secret-value"}]}),
+        );
+        reply.zeroize_plaintext();
+        let encoded = serde_json::to_string(&reply).unwrap();
+        for secret in ["secret-key", "password", "nested", "protected-secret-value"] {
+            assert!(!encoded.contains(secret));
         }
     }
 }

@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
+pub(crate) mod deadline;
 mod maintenance;
 mod process;
 mod transport;
@@ -304,10 +305,7 @@ static MANAGED_AGENT_PID: Mutex<Option<u32>> = Mutex::new(None);
 
 impl AgentHandle {
     pub fn new(socket: PathBuf) -> Self {
-        let mut client = AgentClient::new(&socket);
-        client
-            .set_timeout(Duration::from_secs(60))
-            .expect("the agent client accepts a 60-second timeout");
+        let client = AgentClient::new(&socket);
         let connection_failure = Arc::new(Mutex::new(None));
         let startup_gate = Arc::new(StartupGate::new_open());
         Self {

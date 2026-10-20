@@ -14,7 +14,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
 };
-use tauri::{Manager, State};
+use tauri::Manager;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -188,7 +188,7 @@ fn operation_record_directory(app: &tauri::AppHandle) -> Result<PathBuf, AgentEr
 pub async fn first_run_operation_status(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     attempt: AccountAttempt,
 ) -> Result<AttemptStatus, AgentError> {
     require_main_window(&webview)?;
@@ -216,7 +216,7 @@ pub async fn first_run_operation_status(
 pub async fn run_first_run_account_operation(
     app: tauri::AppHandle,
     webview: tauri::Webview,
-    state: State<'_, AppState>,
+    state: super::deadline::CommandState,
     request: AccountRequest,
 ) -> Result<MutationDto, AgentError> {
     require_main_window(&webview)?;

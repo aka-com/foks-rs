@@ -49,13 +49,11 @@ pub fn run(state: &Path, command: AdminCommand) -> Result<(), Box<dyn std::error
     }
     super::mcp::ensure_agent(state)?;
     let checking = matches!(&action, AdminAction::Prepare { .. });
-    let response = foks_agent_client::AgentClient::new(state.join("foks-rs.sock")).call(
-        Operation::WebAdmin {
-            profile: scope.profile.clone(),
-            account_alias: scope.account_alias.clone(),
-            action,
-        },
-    )?;
+    let response = super::deadline::agent_client(state)?.call(Operation::WebAdmin {
+        profile: scope.profile.clone(),
+        account_alias: scope.account_alias.clone(),
+        action,
+    })?;
     match response.result {
         ResponseResult::Error { message, .. } => Err(message.into()),
         ResponseResult::Success { value } => {
@@ -65,6 +63,7 @@ pub fn run(state: &Path, command: AdminCommand) -> Result<(), Box<dyn std::error
                     return Err("admin handoff changed account".into());
                 }
             }
+            super::deadline::check()?;
             println!(
                 "{}",
                 serde_json::json!({"configured":!checking,"verified":checking})
