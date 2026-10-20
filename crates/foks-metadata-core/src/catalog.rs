@@ -71,6 +71,14 @@ pub enum Statement {
     AuthorityRollback,
     AuthorityRelease,
     AuthoritySettle,
+    PersonalIssuedCredential,
+    PersonalCurrentCredential,
+    PersonalAnchor,
+    PersonalSsoPolicy,
+    PersonalRoleGeneration,
+    PersonalRoot,
+    PersonalDirectory,
+    PersonalSmallNode,
 }
 
 #[derive(Serialize)]
@@ -84,7 +92,7 @@ pub struct Spec {
 }
 
 impl Statement {
-    pub const ALL: [Self; 32] = [
+    pub const ALL: [Self; 40] = [
         Self::NamespaceParty,
         Self::NamespaceEnsure,
         Self::Head,
@@ -117,6 +125,14 @@ impl Statement {
         Self::AuthorityRollback,
         Self::AuthorityRelease,
         Self::AuthoritySettle,
+        Self::PersonalIssuedCredential,
+        Self::PersonalCurrentCredential,
+        Self::PersonalAnchor,
+        Self::PersonalSsoPolicy,
+        Self::PersonalRoleGeneration,
+        Self::PersonalRoot,
+        Self::PersonalDirectory,
+        Self::PersonalSmallNode,
     ];
 
     pub fn from_id(id: u32) -> Result<Self> {
@@ -127,8 +143,40 @@ impl Statement {
     }
 
     pub fn spec(self) -> Spec {
-        if (self as u32) >= Self::AuthorityState as u32 {
+        if matches!(
+            self,
+            Self::AuthorityState
+                | Self::AuthorityInitialize
+                | Self::AuthorityClock
+                | Self::AuthorityPromote
+                | Self::AuthorityActivate
+                | Self::AuthorityRevision
+                | Self::AuthorityAllocate
+                | Self::AuthorityPrincipal
+                | Self::AuthoritySetPrincipal
+                | Self::AuthorityIntent
+                | Self::AuthorityRegister
+                | Self::AuthorityOutcome
+                | Self::AuthorityPrune
+                | Self::AuthoritySavepoint
+                | Self::AuthorityRollback
+                | Self::AuthorityRelease
+                | Self::AuthoritySettle
+        ) {
             return crate::authority::catalog::spec(self);
+        }
+        if matches!(
+            self,
+            Self::PersonalIssuedCredential
+                | Self::PersonalCurrentCredential
+                | Self::PersonalAnchor
+                | Self::PersonalSsoPolicy
+                | Self::PersonalRoleGeneration
+                | Self::PersonalRoot
+                | Self::PersonalDirectory
+                | Self::PersonalSmallNode
+        ) {
+            return crate::personal::catalog::spec(self);
         }
         use Kind::{Blob as B, Integer as I, NullableBlob as N, Text as T};
         let (sql, parameters, columns, write): (_, &'static [_], &'static [_], _) = match self {
@@ -149,7 +197,7 @@ impl Statement {
             Self::InsertDirent => ("INSERT INTO kv_dirents(uid,parent_id,dirent_id,version,directory_version,node_id,name_mac,creation_time,exact_dirent) VALUES(?1,?2,?3,CAST(?4 AS INTEGER),CAST(?5 AS INTEGER),?6,?7,CAST(?8 AS INTEGER),?9)", &[B,B,B,I,I,B,B,I,B], &[], true),
             Self::SetHead => ("INSERT INTO kv_dirent_heads(uid,parent_id,dirent_id,version) VALUES(?1,?2,?3,CAST(?4 AS INTEGER)) ON CONFLICT(uid,parent_id,dirent_id) DO UPDATE SET version=excluded.version", &[B,B,B,I], &[], true),
             Self::ProbeTypes => ("SELECT CAST(CAST(?1 AS INTEGER) AS TEXT),?2,?3,?4", &[I,B,N,T], &[I,B,N,T], false),
-            _ => unreachable!("authority statements delegated above"),
+            _ => unreachable!("other catalog groups explicitly delegated above"),
         };
         Spec {
             id: self as u32,

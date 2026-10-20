@@ -110,3 +110,15 @@ test('only nonzero export status invokes the domain rejection factory',()=>{
   assert.throws(()=>kernel.invoke('{}',false,factory),value=>value===token);
   assert.equal(conversions,1);
 });
+
+test('personal entry is distinct and never converts typed outer failures to domain rejections',()=>{
+  const kernel=Object.create(Kernel.prototype), memory=new WebAssembly.Memory({initial:1});
+  const payload={kind:'stale_cache',exact_hex:'0102ff'}, bytes=new TextEncoder().encode(JSON.stringify(payload));
+  let called=[];
+  kernel.instance={exports:{memory,input_alloc:()=>128,run_personal(){called.push('personal');return 1;},read_personal(){called.push('point');return 1;},run_authority(){throw new Error('synthetic selector must not run');},output_pointer:()=>1024,output_length:()=>bytes.length}};
+  new Uint8Array(memory.buffer,1024,bytes.length).set(bytes);
+  for(const personal of ['authority','point'])assert.throws(()=>kernel.run('{}',{personal}),error=>!(error instanceof KernelError)&&sameData(error.payload,payload));
+  assert.deepEqual(called,['personal','point']);
+  assert.throws(()=>kernel.run('{}',{personal:'authority',authority:true}),/mixed entry selectors/);
+  assert.throws(()=>kernel.run('{}',{personal:'controller'}),/personal entry selector/);
+});

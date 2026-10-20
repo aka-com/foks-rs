@@ -56,8 +56,8 @@ try:
     for index,vector in enumerate(vectors):
         selected=token
         wrong_rejected=None
-        if vector.get('authority') is True:
-            selected=control_token if json.loads(vector['command'])['caller']['kind']=='controller' else frontend_token
+        if vector.get('authority') is True or vector.get('personal'):
+            selected=control_token if not vector.get('personal') and json.loads(vector['command'])['caller']['kind']=='controller' else frontend_token
             wrong=frontend_token if selected==control_token else control_token
             denied=urllib.request.Request(f'http://127.0.0.1:{public}/{index}',data=b'',headers={'authorization':'Bearer '+wrong})
             try:

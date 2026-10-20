@@ -170,3 +170,43 @@ pub extern "C" fn run_authority() -> u32 {
     OUTPUT.with(|b| *b.borrow_mut() = output);
     status
 }
+
+/// Separate real-personal qualification entry. It accepts no synthetic principal
+/// or controller selector. Only the trusted host constructs parsed peer parts.
+#[no_mangle]
+pub extern "C" fn run_personal() -> u32 {
+    let bytes = INPUT.with(|b| std::mem::take(&mut *b.borrow_mut()));
+    let result = serde_json::from_slice::<crate::authority::PersonalInvocation>(&bytes)
+        .map_err(|_| crate::personal::PersonalError::Kernel(Error::Invalid("personal invocation")))
+        .and_then(|invocation| crate::authority::run_personal(&mut Host { calls: 0 }, invocation));
+    personal_output(result)
+}
+
+#[no_mangle]
+pub extern "C" fn read_personal() -> u32 {
+    let bytes = INPUT.with(|b| std::mem::take(&mut *b.borrow_mut()));
+    let result = serde_json::from_slice::<crate::authority::PersonalPointInvocation>(&bytes)
+        .map_err(|_| {
+            crate::personal::PersonalError::Kernel(Error::Invalid("personal point invocation"))
+        })
+        .and_then(|invocation| {
+            crate::authority::read_personal_point(&mut Host { calls: 0 }, invocation)
+        });
+    personal_output(result)
+}
+
+fn personal_output<T: serde::Serialize>(result: crate::personal::Result<T>) -> u32 {
+    let (status, output) = match result {
+        Ok(reply) => (
+            0,
+            serde_json::to_vec(&reply).expect("bounded personal reply"),
+        ),
+        Err(error) => (
+            1,
+            serde_json::to_vec(&crate::authority::PersonalErrorPayload::from(&error))
+                .expect("bounded typed personal error"),
+        ),
+    };
+    OUTPUT.with(|b| *b.borrow_mut() = output);
+    status
+}

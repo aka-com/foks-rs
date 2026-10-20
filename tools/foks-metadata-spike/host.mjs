@@ -126,24 +126,31 @@ export class Kernel {
     const pointer=this.instance.exports.input_alloc(bytes.length);
     if(!pointer)throw new Error('input allocation');
     this.range(pointer,bytes.length,MAX_INPUT).set(bytes);
-    const status=authority ? this.instance.exports.run_authority() : this.instance.exports.run();
+    const entry=authority==='personal'?'run_personal':authority==='personal_point'?'read_personal':authority?'run_authority':'run';
+    const status=this.instance.exports[entry]();
     const result=JSON.parse(decoder.decode(this.range(this.instance.exports.output_pointer(),this.instance.exports.output_length(),65536)));
     if(status!==0)throw statusError(result);
     return result;
   }
   // Only this outer entry resets controls. Domain reentry inherits all limits.
   // The caller must let all errors escape its transactionSync and await sync.
-  run(command,{failAfter=0,trapAfter=0,failStatement=0,trapStatement=0,deadline=Date.now()+1000,authority=false}={}) {
+  run(command,{failAfter=0,trapAfter=0,failStatement=0,trapStatement=0,deadline=Date.now()+1000,authority=false,personal=false}={}) {
     if(this.running)throw new Error('outer entry guard');
+    if(personal!==false&&personal!=='authority'&&personal!=='point')throw new Error('personal entry selector');
+    if(personal&&authority)throw new Error('mixed entry selectors');
+    const entry=personal==='authority'?'personal':personal==='point'?'personal_point':authority;
     this.running=true;
     this.calls=0;this.failAfter=failAfter;this.trapAfter=trapAfter;
     this.failStatement=failStatement;this.trapStatement=trapStatement;
-    this.deadline=deadline;this.authority=authority;
+    this.deadline=deadline;this.authority=authority||personal==='authority';
     try {
       if(Date.now()>=this.deadline)throw new KernelError('expired');
-      return this.invoke(command,authority);
+      return this.invoke(command,entry,code=>personal?new PersonalError(code):new KernelError(code));
     }
     finally {this.running=false;}
   }
 }
 export class KernelError extends Error {constructor(code){super(code);this.code=code;}}
+
+// Never a domain callback rejection: this is an outer typed resolver failure.
+export class PersonalError extends Error {constructor(payload){super(JSON.stringify(payload));this.payload=payload;}}

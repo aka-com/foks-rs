@@ -368,7 +368,7 @@ impl Harness {
             .unwrap();
             std::fs::write(
                 directory.join("catalog.json"),
-                serde_json::to_vec(&Statement::ALL.map(Statement::spec)).unwrap(),
+                serde_json::to_vec(Statement::ALL.map(Statement::spec).as_slice()).unwrap(),
             )
             .unwrap();
         }

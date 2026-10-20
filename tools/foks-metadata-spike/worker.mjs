@@ -1,7 +1,7 @@
 import module from './kernel.wasm';
 import catalog from './catalog.json' with {type:'json'};
 import fixture from './vectors.json' with {type:'json'};
-import {Kernel,KernelError,sameData} from './host.mjs';
+import {Kernel,KernelError,PersonalError,sameData} from './host.mjs';
 import {executeDurably} from './durability.mjs';
 
 const quote=s=>'"'+s.replaceAll('"','""')+'"';
@@ -65,20 +65,20 @@ export class FoksMetadata {
     let reply=null,outcome='ok',message=null;
     try {
       const execute=()=>{
-        const reply=kernel.run(vector.command,{failAfter:vector.fail_after,trapAfter:vector.trap_after,failStatement:vector.fail_statement,trapStatement:vector.trap_statement,deadline:outputDeadline,authority:vector.authority===true});
+        const reply=kernel.run(vector.command,{failAfter:vector.fail_after,trapAfter:vector.trap_after,failStatement:vector.fail_statement,trapStatement:vector.trap_statement,deadline:outputDeadline,authority:vector.authority===true,personal:vector.personal||false});
         if(vector.deferred_failure)storage.sql.exec('INSERT INTO m0_child VALUES(1)');
         return reply;
       };
-      reply=vector.authority===true ? await executeDurably(storage,execute,{deadline:outputDeadline}) : storage.transactionSync(execute);
-    } catch(error) {outcome=error instanceof KernelError?error.code:'host_failure';message=String(error.message).slice(0,300);reply=null;}
+      reply=(vector.authority===true||vector.personal) ? await executeDurably(storage,execute,{deadline:outputDeadline}) : storage.transactionSync(execute);
+    } catch(error) {outcome=error instanceof PersonalError?error.payload:error instanceof KernelError?error.code:'host_failure';message=String(error.message).slice(0,300);reply=null;}
     // The reply remains private until both COMMIT and durability proof succeed.
     await storage.sync();
     const observed=snapshot(storage,vector);
     const equal=sameData(observed,vector.after);
     const replyEqual=sameData(reply,vector.reply);
     const childEmpty=storage.sql.exec('SELECT count(*) AS n FROM m0_child').one().n===0;
-    if(vector.authority===true && Date.now()>=outputDeadline)throw new Error('authority output deadline expired');
-    const passed=equal&&replyEqual&&outcome===vector.outcome&&childEmpty;
+    if((vector.authority===true||vector.personal) && Date.now()>=outputDeadline)throw new Error('authority output deadline expired');
+    const passed=equal&&replyEqual&&sameData(outcome,vector.outcome)&&childEmpty;
     return Response.json({name:vector.name,passed,equal,replyEqual,outcome,message,calls:kernel.calls,memory_bytes:kernel.instance.exports.memory.buffer.byteLength,schema_version:fixture.schema_version},{status:passed?200:500});
   }
 }
@@ -91,7 +91,7 @@ export default {async fetch(request,env) {
   // These are immutable qualification vectors, not arbitrary frontend bodies.
   // Separate capabilities exercise the trusted-caller boundary without claiming
   // production credential rotation or public FOKS principal authentication.
-  const token=vector.authority===true ? (JSON.parse(vector.command).caller.kind==='controller' ? env.CONTROL_TOKEN : env.FRONTEND_TOKEN) : env.M0_TOKEN;
+  const token=vector.personal ? env.FRONTEND_TOKEN : vector.authority===true ? (JSON.parse(vector.command).caller.kind==='controller' ? env.CONTROL_TOKEN : env.FRONTEND_TOKEN) : env.M0_TOKEN;
   if(request.headers.get('authorization')!==`Bearer ${token}`)return new Response('unauthorized',{status:403});
   return env.FOKS_M0.get(env.FOKS_M0.idFromName(path)).fetch(request);
 }};

@@ -141,6 +141,7 @@ func TestGoClientAgainstRustServer(t *testing.T) {
 	liveKVPutGet(t, ctx, authRPC, &user)
 	liveRename(t, ctx, &userClient, &merkleClient, &user)
 	liveBot(t, ctx, &userClient, &regClient, &merkleClient, &user, authenticatedAddress, serviceRoots)
+	writePersonalContextFixture(t, certChain, user.uid, deviceID)
 	t.Logf("official Go client completed user=%s team=%s", user.uid, teamID)
 }
 
