@@ -97,6 +97,7 @@ export async function copyItem(
     storeId: item.store,
     path: item.path,
     version: item.version,
+    direntId: item.direntId,
   };
   const response = await (field === 'value'
     ? bridge.copyItemValue(request)
@@ -120,7 +121,7 @@ export interface AnnouncedCopy {
   /** Why the caller refuses the copy, shown instead of copying. */
   problem?: string;
   /** Any failure other than a missing field. */
-  onError: (error: unknown, item: Item) => void;
+  onError: (error: unknown, item?: Item) => void;
 }
 
 /**
@@ -153,7 +154,8 @@ export async function copyAndAnnounce({
   } catch (error) {
     const missing = missingFieldMessage(error);
     if (missing) toasts.show(missing, { tone: 'warning' });
-    else onError(error, item);
+    // Without the item: a refused read is never an edit conflict.
+    else onError(error);
   }
 }
 
@@ -183,6 +185,7 @@ export async function openWebsiteAndAnnounce({
       storeId: item.store,
       path: item.path,
       version: item.version,
+      direntId: item.direntId,
     });
     rememberRecent(itemRefOf(item));
     toasts.show('Website opened in the browser');
@@ -190,6 +193,7 @@ export async function openWebsiteAndAnnounce({
     const typed = normalizeCommandError(error);
     if (typed.code === 'field-missing' || typed.code === 'website-unsupported')
       toasts.show(typed.message, { tone: 'warning' });
-    else onError(error, item);
+    // Without the item: a refused read is never an edit conflict.
+    else onError(error);
   }
 }

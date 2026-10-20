@@ -16,6 +16,11 @@ cargo test --locked -j 2 -p foks-server-testkit --test retry_recovery \
   signup_commit_with_lost_or_partial_response_reconciles_without_replay
 ```
 
+`tools/foks-server/test-recovery.sh` runs the same ignored tests against a
+release build (or the binary `FOKS_SERVER_BIN` names); the nightly
+`server full` job of the standalone workflow runs it after the release
+client/server lifecycle test.
+
 The binary tests are explicitly ignored in ordinary runs. Opting in without
 `FOKS_SERVER_BIN` fails rather than silently skipping. Use an absolute binary
 path; adjust it if using `CARGO_TARGET_DIR`. Run serially to keep timing evidence

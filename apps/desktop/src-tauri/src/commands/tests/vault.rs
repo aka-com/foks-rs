@@ -1178,6 +1178,165 @@ fn early_transport_loss_with_an_unchanged_source_stays_agent_lost() {
 
     assert_eq!(error.code, "agent-lost");
     assert!(error.fatal);
+    assert!(
+        error
+            .message
+            .contains("If the agent recorded upload handle "),
+        "{}",
+        error.message
+    );
+}
+
+/// Answers every upload stream with one agent error, before reading it.
+struct RefusedUpload(fn() -> foks_desktop::AgentError);
+
+impl foks_desktop::AgentTransport for RefusedUpload {
+    fn call_with_deadline(
+        &self,
+        operation: foks_agent_proto::Operation,
+        _deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        self.call_cancellable(operation, cancelled)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        header: foks_agent_proto::KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+        _deadline: &foks_local_deadline::Deadline,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        self.put_kv_stream(header, reader)
+    }
+    fn call(&self, _operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        Ok(serde_json::json!({"database_id":vec![1;16],"issued_at":1}))
+    }
+    fn put_kv_stream(
+        &self,
+        _header: KvUploadHeader,
+        _reader: &mut dyn std::io::Read,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        Err((self.0)())
+    }
+}
+
+fn protocol_error(code: foks_agent_proto::ErrorCode) -> foks_desktop::AgentError {
+    foks_desktop::AgentError::Protocol {
+        code,
+        message: "refused.".to_owned(),
+        fields: foks_agent_proto::ErrorFields {
+            capability: Some("kv".to_owned()),
+            ..Default::default()
+        }
+        .into(),
+    }
+}
+
+#[test]
+fn only_failures_after_upload_admission_point_to_the_uploads_list() {
+    use foks_agent_proto::ErrorCode;
+    let source = tempfile::NamedTempFile::new().unwrap();
+    source.as_file().set_len(1024).unwrap();
+    let store = CatalogStoreRef::Account(foks_agent_proto::AccountStoreRef {
+        profile: "foks.example".to_owned(),
+        account_alias: "personal".to_owned(),
+    });
+    let upload = |refusal: fn() -> foks_desktop::AgentError| {
+        let header = file_create_header(&store, "/bundle.tar", 0, None, None).unwrap();
+        upload_file(
+            &RefusedUpload(refusal),
+            header,
+            source.path(),
+            MutationKind::Create,
+        )
+        .unwrap_err()
+    };
+    // The agent refuses these before it records the handle.
+    for (refusal, code) in [
+        (
+            (|| protocol_error(ErrorCode::CapabilityDenied)) as fn() -> _,
+            "capability-denied",
+        ),
+        (
+            || protocol_error(ErrorCode::CredentialsRequired),
+            "credentials-required",
+        ),
+        (
+            || protocol_error(ErrorCode::UploadClockUntrusted),
+            "upload-clock-untrusted",
+        ),
+        (
+            || protocol_error(ErrorCode::UploadPendingFull),
+            "upload-pending-full",
+        ),
+        (
+            || protocol_error(ErrorCode::UploadRetentionFull),
+            "upload-retention-full",
+        ),
+    ] {
+        let error = upload(refusal);
+        assert_eq!(error.code, code);
+        assert!(!error.message.contains("Upload"), "{}", error.message);
+    }
+    // After admission the agent keeps the prepared content under the handle.
+    for (refusal, code) in [
+        (
+            (|| protocol_error(ErrorCode::ServerUnavailable)) as fn() -> _,
+            "server-unavailable",
+        ),
+        (
+            || protocol_error(ErrorCode::UploadSpoolFull),
+            "upload-spool-full",
+        ),
+        (
+            || foks_desktop::AgentError::DeadlineExceeded,
+            "deadline-exceeded",
+        ),
+        (
+            || foks_desktop::AgentError::Ambiguous("lost reply".to_owned()),
+            "ambiguous",
+        ),
+        (
+            || protocol_error(ErrorCode::ReauthenticationRequired),
+            "reauthentication-required",
+        ),
+    ] {
+        let error = upload(refusal);
+        assert_eq!(error.code, code);
+        assert!(
+            error.message.contains("Upload handle: ")
+                && error
+                    .message
+                    .ends_with("Open Uploads to inspect or resume prepared content."),
+            "{}",
+            error.message
+        );
+    }
+    // These can come before or after registration.
+    for (refusal, code) in [
+        (
+            (|| protocol_error(ErrorCode::ProfileBusy)) as fn() -> _,
+            "profile-busy",
+        ),
+        (|| protocol_error(ErrorCode::Busy), "busy"),
+        (
+            || protocol_error(ErrorCode::InvalidRequest),
+            "invalid-request",
+        ),
+        (
+            || protocol_error(ErrorCode::RollbackDetected),
+            "rollback-detected",
+        ),
+    ] {
+        let error = upload(refusal);
+        assert_eq!(error.code, code);
+        assert!(
+            error
+                .message
+                .contains("If the agent recorded upload handle "),
+            "{}",
+            error.message
+        );
+    }
 }
 
 pub(super) struct ResizeDuringUpload {
@@ -1852,4 +2011,233 @@ async fn expired_download_never_publishes_and_cleans_its_temporary_file() {
             );
         }
     }
+}
+
+/// The read commands resolve the renderer's selection by dirent as well as
+/// path and version: an entry that replaced the listed one at the same path
+/// and version is refused rather than read in its place.
+#[test]
+fn a_read_refuses_another_dirent_at_the_listed_path_and_version() {
+    let state = super::support::phase_four_state(Vec::new());
+    let store = CatalogStoreRef::Account(super::support::account_ref("work.example", "personal"));
+    let id = crate::commands::store_key::store_id(&store);
+    let mut item = download_item(1);
+    item.store = store;
+    item.metadata.path = "/notes/plan".to_owned();
+    item.metadata.version = 4;
+    item.metadata.dirent_id = [9; 16];
+    state
+        .catalog
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .items
+        .push(item.clone());
+    let listed = "09".repeat(16);
+    assert_eq!(
+        state
+            .selected_read_item(&id, "/notes/plan", 4, &listed)
+            .unwrap(),
+        item
+    );
+    let replaced = state
+        .selected_read_item(&id, "/notes/plan", 4, &"0a".repeat(16))
+        .unwrap_err();
+    // Not `conflict`: the renderer answers that with the edit-conflict sheet.
+    assert_eq!(replaced.code, "item-replaced");
+    assert!(replaced.retryable);
+    assert_eq!(
+        replaced.message,
+        "This item was replaced. Refresh the vault before reading it."
+    );
+    // A changed or removed item keeps the lookup's own codes.
+    let changed = state
+        .selected_read_item(&id, "/notes/plan", 5, &listed)
+        .unwrap_err();
+    assert_eq!(changed.code, "item-version-mismatch");
+    let missing = state
+        .selected_read_item(&id, "/notes/gone", 4, &listed)
+        .unwrap_err();
+    assert_eq!(missing.code, "item-not-found");
+}
+
+/// One profile with `accounts` account vaults whose every ListKv page takes
+/// `delay`, as a fresh read on a slow server does.
+struct SlowListKv {
+    accounts: usize,
+    delay: std::time::Duration,
+}
+
+impl foks_desktop::AgentTransport for SlowListKv {
+    fn call_with_deadline(
+        &self,
+        mut operation: foks_agent_proto::Operation,
+        deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        if let Err(error) = deadline.check() {
+            operation.zeroize_plaintext();
+            return Err(foks_desktop::local_deadline_error(error));
+        }
+        self.call_cancellable(operation, cancelled)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        _header: foks_agent_proto::KvUploadHeader,
+        _reader: &mut dyn std::io::Read,
+        _deadline: &foks_local_deadline::Deadline,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        unreachable!("a catalog read does not upload")
+    }
+    fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        match operation {
+            Operation::ListKnownStores { .. } => Ok(serde_json::json!([])),
+            Operation::ListProfileOverview { profile } => {
+                let accounts = (0..self.accounts)
+                    .map(|index| {
+                        serde_json::json!({
+                            "profile": profile, "alias": format!("vault{index}"),
+                            "username": format!("user{index}"),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                Ok(serde_json::to_value(foks_agent_proto::ProfileOverview {
+                    profile: profile.clone(),
+                    accounts: foks_agent_proto::ResponseResult::Success {
+                        value: serde_json::Value::Array(accounts),
+                    },
+                    teams: foks_agent_proto::ResponseResult::Success {
+                        value: serde_json::json!([]),
+                    },
+                    server_status: foks_agent_proto::ResponseResult::Success {
+                        value: serde_json::json!({
+                            "profile": profile, "configured_probe": profile, "host": null,
+                            "compatibility": {"status": "not-required"}, "chat_supported": null,
+                        }),
+                    },
+                })
+                .unwrap())
+            }
+            Operation::ListKv { .. } => {
+                std::thread::sleep(self.delay);
+                Ok(serde_json::to_value(foks_agent_proto::KvPage {
+                    snapshot_version: 1,
+                    entries: vec![],
+                    next_cursor: None,
+                })
+                .unwrap())
+            }
+            other => panic!("unexpected catalog operation {other:?}"),
+        }
+    }
+    fn put_kv_stream(
+        &self,
+        _header: KvUploadHeader,
+        _reader: &mut dyn std::io::Read,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        unreachable!("a catalog read does not upload")
+    }
+}
+
+/// Walks the catalog through a transport bound to a deadline `budget` away,
+/// publishing progressively, and answers the snapshot and the number of
+/// partial publications.
+fn walk_within(budget: std::time::Duration) -> (foks_desktop::CatalogSnapshot, usize) {
+    let transport = foks_desktop::bind_transport_deadline(
+        Arc::new(SlowListKv {
+            accounts: 12,
+            delay: std::time::Duration::from_millis(40),
+        }),
+        foks_local_deadline::Deadline::capture(std::time::Instant::now() + budget).unwrap(),
+    )
+    .unwrap();
+    let published = Mutex::new(0);
+    let snapshot = foks_desktop::load_catalog_progressive_with_profiles(
+        transport,
+        vec!["slow.example".to_owned()],
+        foks_desktop::CatalogLoadToken::default(),
+        true,
+        |_| *published.lock().unwrap() += 1,
+    )
+    .unwrap();
+    let count = *published.lock().unwrap();
+    (snapshot, count)
+}
+
+/// The serial walk of one profile's stores shares the command's single
+/// budget: twelve 40 ms ListKv pages do not fit in 200 ms, so the read
+/// publishes the stores it reached and records the rest as failed with
+/// deadline-exceeded, while a Bulk-sized budget loads them all.
+#[test]
+fn a_catalog_walk_that_crosses_its_deadline_publishes_what_it_read() {
+    let (short, published) = walk_within(std::time::Duration::from_millis(200));
+    assert!(published > 0, "the read published before the deadline");
+    let failed: Vec<_> = short
+        .failures
+        .iter()
+        .map(|failure| crate::agent::AgentError::from_desktop(failure.error.clone()).code)
+        .collect();
+    assert!(!failed.is_empty(), "stores past the deadline are not read");
+    assert!(
+        failed.iter().all(|code| code == "deadline-exceeded"),
+        "{failed:?}"
+    );
+    let (whole, _) = walk_within(foks_agent_proto::DeadlineClass::Bulk.cap());
+    assert!(whole.failures.is_empty(), "{:?}", whole.failures);
+}
+
+/// Answers every read with the agent's `conflict`, as it does when the entry
+/// at the path is no longer the listed version or dirent.
+struct ConflictingRead;
+
+impl foks_desktop::AgentTransport for ConflictingRead {
+    fn call_with_deadline(
+        &self,
+        operation: foks_agent_proto::Operation,
+        _deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        self.call_cancellable(operation, cancelled)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        _header: foks_agent_proto::KvUploadHeader,
+        _reader: &mut dyn std::io::Read,
+        _deadline: &foks_local_deadline::Deadline,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        unreachable!("a read does not upload")
+    }
+    fn call(&self, _operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        Err(foks_desktop::AgentError::Protocol {
+            code: foks_agent_proto::ErrorCode::Conflict,
+            message: "the entry changed".to_owned(),
+            fields: Box::default(),
+        })
+    }
+    fn put_kv_stream(
+        &self,
+        _header: KvUploadHeader,
+        _reader: &mut dyn std::io::Read,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        unreachable!("a read does not upload")
+    }
+}
+
+/// The renderer answers `conflict` with the edit-conflict sheet, so a read
+/// the agent refuses with `conflict` reaches it as a stale listing instead.
+#[test]
+fn an_agent_conflict_on_a_read_is_a_stale_listing() {
+    let lock = crate::applock::AppLock::unlocked_for_test();
+    let error = read_text(
+        Arc::new(ConflictingRead),
+        &download_item(1),
+        &lock.interval_for_test(),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "item-version-mismatch");
+    assert!(error.retryable);
+    let other =
+        crate::commands::vault::stale_read(crate::agent::AgentError::new("busy", "busy", true));
+    assert_eq!(other.code, "busy");
 }

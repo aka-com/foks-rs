@@ -95,19 +95,26 @@ test('concurrent reads of one item version share a request until it settles', as
     storeId: 'acct:personal',
     path: '/logins/github.com',
     version: 9,
+    direntId: 'aa'.repeat(16),
   };
   const first = readOnce(reads.bridge, request, 1, session);
   const second = readOnce(reads.bridge, { ...request }, 1, session);
   assert.equal(first, second);
-  // Another access generation, or another version, is its own read.
+  // Another access generation, version or dirent is its own read.
   void readOnce(reads.bridge, request, 2, session);
   void readOnce(reads.bridge, { ...request, version: 10 }, 1, session);
-  assert.equal(reads.calls.length, 3);
+  void readOnce(
+    reads.bridge,
+    { ...request, direntId: 'bb'.repeat(16) },
+    1,
+    session,
+  );
+  assert.equal(reads.calls.length, 4);
   reads.settle(0);
   await first;
   // Once the first read settles, the next request reads again.
   void readOnce(reads.bridge, request, 1, session);
-  assert.equal(reads.calls.length, 4);
+  assert.equal(reads.calls.length, 5);
 });
 
 test('a read answering for another item or version is refused', () => {
@@ -115,6 +122,7 @@ test('a read answering for another item or version is refused', () => {
     storeId: 'acct:personal',
     path: '/logins/github.com',
     version: 9,
+    direntId: 'aa'.repeat(16),
   };
   const response: ReadItemResponse = {
     store: 'acct:personal',

@@ -19,6 +19,9 @@ pub(crate) struct AccountFixture {
     pub(crate) _server: foks_server_testkit::InProcessServer,
     pub(crate) credentials: ClientCredentials,
     pub(crate) registry: ProfileRegistry,
+    // Declared last so the record is removed after the credentials and
+    // registry are dropped.
+    native_cleanup: NativeManifestCleanup,
 }
 impl AccountFixture {
     pub(crate) fn start() -> Self {
@@ -69,11 +72,13 @@ impl AccountFixture {
                 trust: TrustRoot::CertificateDer { path: root },
             })
             .unwrap();
+        let native_cleanup = NativeManifestCleanup::for_credentials(&credentials);
         let f = Self {
             environment,
             _server: server,
             credentials,
             registry,
+            native_cleanup,
         };
         f.run(|s, _, _| {
             s.probe_and_pin()?;
@@ -84,7 +89,6 @@ impl AccountFixture {
     pub(crate) fn stop_client(self) -> StoppedAccountFixture {
         let root = self.credentials.root.clone();
         let state_id = self.credentials.state_id.clone();
-        let native = self.credentials.backend == CredentialBackend::Native;
         drop(self.registry);
         drop(self.credentials);
         StoppedAccountFixture {
@@ -92,7 +96,7 @@ impl AccountFixture {
             _server: self._server,
             root,
             state_id,
-            native,
+            _native_cleanup: self.native_cleanup,
         }
     }
     pub(crate) fn run<T>(
@@ -134,12 +138,28 @@ pub(crate) struct StoppedAccountFixture {
     pub(crate) _server: foks_server_testkit::InProcessServer,
     pub(crate) root: PathBuf,
     pub(crate) state_id: String,
-    native: bool,
+    _native_cleanup: NativeManifestCleanup,
 }
-impl Drop for StoppedAccountFixture {
+
+/// Removes the native credential manifest of a fixture's client state when
+/// the fixture is dropped, so native-backend tests do not leave a record in
+/// the developer's Keychain or Secret Service collection. The removal result
+/// is ignored: a test may already have removed the record itself.
+struct NativeManifestCleanup {
+    state_id: Option<String>,
+}
+impl NativeManifestCleanup {
+    fn for_credentials(credentials: &ClientCredentials) -> Self {
+        Self {
+            state_id: (credentials.backend == CredentialBackend::Native)
+                .then(|| credentials.state_id.clone()),
+        }
+    }
+}
+impl Drop for NativeManifestCleanup {
     fn drop(&mut self) {
-        if self.native {
-            if let Ok(mut store) = foks_keystore::NativeCredentialStore::open(&self.state_id) {
+        if let Some(state_id) = &self.state_id {
+            if let Ok(mut store) = foks_keystore::NativeCredentialStore::open(state_id) {
                 let _ = store.remove(crate::checkpoint::NATIVE_MANIFEST_RECORD);
             }
         }

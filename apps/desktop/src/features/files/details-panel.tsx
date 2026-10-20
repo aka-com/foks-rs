@@ -233,7 +233,12 @@ export function DetailsPanel({
   const request = useMemo<ItemRequest | null>(
     () =>
       item
-        ? { storeId: item.store, path: item.path, version: item.version }
+        ? {
+            storeId: item.store,
+            path: item.path,
+            version: item.version,
+            direntId: item.direntId,
+          }
         : null,
     [item],
   );
@@ -906,7 +911,8 @@ export function DetailsPanel({
         toasts.show(
           saved ? `Downloaded ${nameOf(item.path)}` : 'Download cancelled',
         ),
-      (error) => onCommandError(error, item),
+      // Without the item: a refused read is never an edit conflict.
+      (error) => onCommandError(error),
     );
   };
 

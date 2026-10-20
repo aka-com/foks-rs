@@ -16,6 +16,29 @@ import time
 import unittest
 from unittest import mock
 
+# The suite is bound to the macOS lab host: node.lock.json names interpreter
+# and library paths under the lab root and Homebrew, and the controllers
+# refuse anything but Darwin on arm64. Elsewhere the module reports one
+# skipped test. load_tests applies only when this module is loaded as a test
+# module, so test_check_graph can still import its fixtures.
+LAB_ROOT = Path("/private/tmp/foks-celld-lab")
+LAB_ONLY = f"lab-only suite: requires macOS on arm64 and the lab root {LAB_ROOT}"
+
+
+def load_tests(loader, tests, pattern):
+    import platform
+
+    if sys.platform == "darwin" and platform.machine() == "arm64" and LAB_ROOT.is_dir():
+        return tests
+
+    @unittest.skip(LAB_ONLY)
+    class LabHostRequired(unittest.TestCase):
+        def test_lab_host(self):
+            pass
+
+    return loader.loadTestsFromTestCase(LabHostRequired)
+
+
 ROOT = Path(__file__).resolve().parent
 SPEC = importlib.util.spec_from_file_location("a3a_run_node", ROOT / "run-node.py")
 node = importlib.util.module_from_spec(SPEC)

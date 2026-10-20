@@ -74,7 +74,12 @@ jobs:
         run: tools/foks-client/check.sh
       - name: Test macOS Keychain integration
         if: runner.os == 'macOS'
-        run: cargo test --locked -p foks-keystore --test native_credential_store -- --ignored
+        run: |
+          cargo test --locked -p foks-keystore --test native_credential_store -- --ignored
+          # The application tests that need the native credential backend,
+          # as in the Linux Secret Service step below.
+          cargo test --locked -p foks-client-app -- --ignored --test-threads=1 \
+            --skip default_refresh_registration_benchmark
       - name: Test the Linux client graph and Secret Service integration
         if: runner.os == 'Linux'
         shell: bash
@@ -86,6 +91,11 @@ jobs:
             printf "%s" "foks-ci-keyring" | gnome-keyring-daemon --unlock --components=secrets
             tools/foks-client/check.sh
             cargo test --locked -p foks-keystore --test native_credential_store -- --ignored
+            # Application tests that need the native credential backend are
+            # ignored by default and run here; the registration benchmark is
+            # the only ignored test in the crate that is not a native test.
+            cargo test --locked -p foks-client-app -- --ignored --test-threads=1 \
+              --skip default_refresh_registration_benchmark
           '
 
   server-fast:
@@ -171,6 +181,8 @@ jobs:
         run: tools/foks-v019-oracle/run-go-client-compat.sh
       - name: Test release client/server lifecycle
         run: tools/foks-server/test-client-server.sh
+      - name: Test crash recovery and stale-backup rejection against the release server
+        run: tools/foks-server/test-recovery.sh
       - name: Test small-team, restart, capacity, and backup behavior
         run: tools/foks-server/test-small-team.sh
       - name: Verify host-key rotation with pinned Go v0.1.9

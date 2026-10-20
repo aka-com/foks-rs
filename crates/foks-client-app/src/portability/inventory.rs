@@ -631,9 +631,6 @@ pub fn inspect_native_state(root: impl AsRef<Path>) -> Result<StateInventoryRepo
 mod tests {
     use super::*;
     use crate::{ClientCredentials, ProfileRegistry, ProfileSession, ProtocolPolicy, TrustRoot};
-    fn enabled() -> bool {
-        std::env::var_os("FOKS_TEST_NATIVE_PORTABILITY").is_some()
-    }
     fn native_root(root: &Path) -> String {
         let credentials = ClientCredentials::initialize(root, CredentialBackend::Native).unwrap();
         let mut registry = ProfileRegistry::open(root).unwrap();
@@ -658,10 +655,8 @@ mod tests {
         credentials.state_id.clone()
     }
     #[test]
+    #[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
     fn native_snapshot_accepts_initialized_and_registry_only_profiles_without_repair() {
-        if !enabled() {
-            return;
-        }
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("state");
         let id = native_root(&root);
@@ -681,10 +676,8 @@ mod tests {
             .unwrap();
     }
     #[test]
+    #[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
     fn normalization_binds_preview_bytes_and_shares_artifacts_across_profiles() {
-        if !enabled() {
-            return;
-        }
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("state");
         let id = native_root(&root);
@@ -738,10 +731,8 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
     fn native_snapshot_rejects_orphans_unknown_vaults_and_missing_claimed_databases() {
-        if !enabled() {
-            return;
-        }
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("state");
         let id = native_root(&root);
@@ -781,7 +772,7 @@ mod tests {
             .unwrap();
     }
     #[test]
-    fn native_copy_and_private_file_are_not_portability_authority() {
+    fn private_file_state_is_not_portability_authority() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("private");
         drop(ClientCredentials::initialize(&root, CredentialBackend::PrivateFile).unwrap());
@@ -790,9 +781,11 @@ mod tests {
             matches!(inspection, Err(Error::PortabilityUnsupported)),
             "unexpected private-file inspection result: {inspection:?}"
         );
-        if !enabled() {
-            return;
-        }
+    }
+    #[test]
+    #[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
+    fn a_copied_native_state_config_is_not_portability_authority() {
+        let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("native");
         let id = native_root(&source);
         let copy = dir.path().join("copy");
@@ -809,10 +802,8 @@ mod tests {
             .unwrap();
     }
     #[test]
+    #[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
     fn relocation_preserves_erased_uncertain_oidc_without_replay() {
-        if !enabled() {
-            return;
-        }
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("source");
         let destination = dir.path().join("destination");
@@ -876,10 +867,8 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
     fn relocation_uses_root_owned_custom_ca_after_external_file_is_gone() {
-        if !enabled() {
-            return;
-        }
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("source");
         let destination = dir.path().join("destination");

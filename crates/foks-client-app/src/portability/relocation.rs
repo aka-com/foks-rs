@@ -681,9 +681,6 @@ pub fn relocation_status(path: impl AsRef<Path>) -> Result<Option<RelocationStat
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn enabled() -> bool {
-        std::env::var_os("FOKS_TEST_NATIVE_PORTABILITY").is_some()
-    }
     fn initialize(root: &Path) -> String {
         let credentials =
             crate::ClientCredentials::initialize(root, crate::CredentialBackend::Native).unwrap();
@@ -708,10 +705,8 @@ mod tests {
             .unwrap();
     }
     #[test]
+    #[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
     fn relocation_preserves_native_namespace_and_rejects_destination_races() {
-        if !enabled() {
-            return;
-        }
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("source");
         let destination = dir.path().join("destination");
@@ -764,10 +759,8 @@ mod tests {
         remove_native(&id);
     }
     #[test]
+    #[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
     fn every_relocation_boundary_recovers_without_recreating_source() {
-        if !enabled() {
-            return;
-        }
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("baseline-source");
         let destination = dir.path().join("baseline-destination");
@@ -824,10 +817,8 @@ mod tests {
         }
     }
     #[test]
+    #[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
     fn stale_attempt_and_substituted_parent_never_authorize_rebinding() {
-        if !enabled() {
-            return;
-        }
         use std::os::unix::fs::symlink;
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("source");
@@ -873,11 +864,11 @@ mod tests {
         remove_native(&id);
     }
 
+    // The case needs a second file system: /dev/shm, a tmpfs on Linux.
+    #[cfg(target_os = "linux")]
     #[test]
+    #[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
     fn cross_filesystem_move_fails_before_publishing_intent() {
-        if !enabled() || !Path::new("/dev/shm").is_dir() {
-            return;
-        }
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("source");
         let id = initialize(&source);
@@ -901,10 +892,8 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
     fn recovery_rejects_wrong_nonce_substitution_and_torn_marker_temporary() {
-        if !enabled() {
-            return;
-        }
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("source");
         let destination = dir.path().join("destination");

@@ -36,6 +36,7 @@ export function useTrashOrigins(
           storeId: origin.store,
           path: origin.path,
           version: origin.version,
+          direntId: origin.direntId,
         })
         .then(
           (read) => originPath(read.value),

@@ -64,6 +64,14 @@ fn command_class(name: &str) -> Result<Option<DeadlineClass>, AgentError> {
         | "import_dropped_file"
         | "replace_dropped_file"
         | "resume_file_upload" => Some(DeadlineClass::Bulk),
+        // A catalog read walks every store of every profile it covers, one
+        // ListKv page after another, under this one budget. The agent caps
+        // each of those requests by its own class (Ordinary, 15 s), so the
+        // longer budget does not lengthen any single request; it lets a
+        // vault with many stores on a slow server finish loading.
+        "list_catalog" | "list_catalog_progressive" | "list_profile_catalog" => {
+            Some(DeadlineClass::Bulk)
+        }
         "accept_device_pairing"
         | "accept_go_profile_pairing"
         | "copy_go_profile_device"
@@ -109,14 +117,11 @@ fn command_class(name: &str) -> Result<Option<DeadlineClass>, AgentError> {
         | "list_account_devices"
         | "list_accounts"
         | "list_backup_enrollments"
-        | "list_catalog"
-        | "list_catalog_progressive"
         | "list_federation"
         | "list_file_uploads"
         | "list_group_details"
         | "list_parties"
         | "list_pending_operations"
-        | "list_profile_catalog"
         | "list_servers"
         | "list_stores"
         | "list_yubi_accounts"
@@ -196,6 +201,31 @@ mod tests {
         let nested = CommandState::admitted(&scoped, "describe_server_status").unwrap();
         assert_eq!(nested.deadline().unwrap().envelope(), &expected);
         assert!(base.deadline().is_err());
+    }
+
+    #[test]
+    fn catalog_reads_take_the_bulk_budget() {
+        for name in [
+            "list_catalog",
+            "list_catalog_progressive",
+            "list_profile_catalog",
+        ] {
+            assert_eq!(
+                command_class(name).unwrap(),
+                Some(DeadlineClass::Bulk),
+                "{name}"
+            );
+            let admitted = CommandState::admitted(&state(), name).unwrap();
+            assert!(
+                admitted
+                    .deadline()
+                    .unwrap()
+                    .instant()
+                    .saturating_duration_since(std::time::Instant::now())
+                    > std::time::Duration::from_secs(290),
+                "{name}"
+            );
+        }
     }
 
     #[test]

@@ -393,6 +393,23 @@ pub(super) fn clear_response(value: &mut serde_json::Value) {
     }
 }
 
+/// The agent answers `conflict` when the entry it finds at a read's path is
+/// no longer the listed version or dirent. For a read that is a stale
+/// listing, not an edit conflict, and the renderer answers `conflict` with
+/// the edit-conflict sheet, so the read commands report it as the host's own
+/// lookup does.
+pub(super) fn stale_read(error: AgentError) -> AgentError {
+    if error.code == "conflict" {
+        AgentError::new(
+            "item-version-mismatch",
+            "This item changed. Refresh the vault before reading it.",
+            true,
+        )
+    } else {
+        error
+    }
+}
+
 pub(super) fn read_text(
     transport: Arc<dyn foks_desktop::AgentTransport>,
     item: &CatalogItem,
@@ -409,7 +426,9 @@ pub(super) fn read_text(
         version,
         value,
         ..
-    } = result.map_err(AgentError::from_desktop)?;
+    } = result
+        .map_err(AgentError::from_desktop)
+        .map_err(stale_read)?;
     let value = match value {
         KvItemValue::File(bytes) => std::str::from_utf8(&bytes)
             .map(|text| Zeroizing::new(text.to_owned()))
@@ -1020,12 +1039,58 @@ pub(super) fn upload_file(
     result.map(|_| ()).map_err(|error| {
         let mut error = map_mutation_error(error, kind);
         if let Some(id) = upload_id {
-            error.message = format!(
-                "{} Upload handle: {id}. Open Uploads to inspect or resume prepared content.",
-                error.message
-            );
+            if let Some(hint) = upload_handle_hint(&error, &id) {
+                error.message = format!("{} {hint}", error.message);
+            }
         }
         error
+    })
+}
+
+/// What a failed upload's message says about its handle. The desktop issues
+/// the handle before the stream starts, and the agent records it only in
+/// `register_upload_intent`, after its admission, capability, credential,
+/// clock and capacity checks; refusals there leave nothing for the Uploads
+/// list to show. The hint is therefore given only for failures that can
+/// follow registration: an ambiguous outcome, a deadline or cancellation, a
+/// conflict, a full spool or an existing handle with another intent, and the
+/// server failures of the upload itself, reauthentication included (the
+/// agent does no network work before it registers the handle). A lost agent
+/// connection, a busy profile lock, `busy` (the worker pool before
+/// registration, the server's KV lock after it), `invalid-request` (a
+/// malformed request before, the server's BAD_ARGS after) and
+/// `rollback-detected` can come before or after registration, so their hint
+/// says that the agent may have recorded the handle.
+pub(super) fn upload_handle_hint(error: &AgentError, id: &str) -> Option<String> {
+    const RECORDED: &[&str] = &[
+        "ambiguous",
+        "deadline-exceeded",
+        "cancelled",
+        "conflict",
+        "already-exists",
+        "upload-spool-full",
+        "upload-identity-conflict",
+        "server-unavailable",
+        "rate-limited",
+        "quota-exceeded",
+        "operation-failed",
+        "reauthentication-required",
+    ];
+    const UNCERTAIN: &[&str] = &[
+        "agent-lost",
+        "profile-busy",
+        "busy",
+        "invalid-request",
+        "rollback-detected",
+    ];
+    let code = error.code.as_str();
+    if UNCERTAIN.contains(&code) {
+        return Some(format!(
+            "If the agent recorded upload handle {id} before the failure, open Uploads to inspect or resume prepared content."
+        ));
+    }
+    (error.ambiguous || RECORDED.contains(&code)).then(|| {
+        format!("Upload handle: {id}. Open Uploads to inspect or resume prepared content.")
     })
 }
 
@@ -1396,10 +1461,11 @@ pub async fn read_item(
     store_id: String,
     path: String,
     version: u64,
+    dirent_id: String,
 ) -> Result<ReadItemDto, AgentError> {
     let interval = crate::applock::unlocked_interval(&app)?;
     require_main_window(&webview)?;
-    let item = state.selected_item(&store_id, &path, version)?;
+    let item = state.selected_read_item(&store_id, &path, version, &dirent_id)?;
     let transport = state.transport()?;
     let worker_interval = interval.clone();
     let result = super::deadline::run(
@@ -1471,6 +1537,7 @@ pub async fn copy_item_value(
     store_id: String,
     path: String,
     version: u64,
+    dirent_id: String,
 ) -> Result<ClipboardAck, AgentError> {
     copy_item_field(
         app,
@@ -1479,6 +1546,7 @@ pub async fn copy_item_value(
         store_id,
         path,
         version,
+        dirent_id,
         ItemField::Value,
     )
     .await
@@ -1521,6 +1589,7 @@ pub(super) fn item_field(
 /// clipboard hygiene. No content crosses IPC; the response says when the
 /// clipboard is cleared.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn copy_item_field(
     app: tauri::AppHandle,
     webview: tauri::Webview,
@@ -1528,11 +1597,12 @@ pub async fn copy_item_field(
     store_id: String,
     path: String,
     version: u64,
+    dirent_id: String,
     field: ItemField,
 ) -> Result<ClipboardAck, AgentError> {
     let interval = crate::applock::unlocked_interval(&app)?;
     require_main_window(&webview)?;
-    let item = state.selected_item(&store_id, &path, version)?;
+    let item = state.selected_read_item(&store_id, &path, version, &dirent_id)?;
     let transport = state.transport()?;
     let worker_interval = interval.clone();
     let value = super::deadline::run(
@@ -1590,10 +1660,11 @@ pub async fn open_item_url(
     store_id: String,
     path: String,
     version: u64,
+    dirent_id: String,
 ) -> Result<CommandAck, AgentError> {
     let interval = crate::applock::unlocked_interval(&app)?;
     require_main_window(&webview)?;
-    let item = state.selected_item(&store_id, &path, version)?;
+    let item = state.selected_read_item(&store_id, &path, version, &dirent_id)?;
     let transport = state.transport()?;
     let worker_interval = interval.clone();
     let field = super::deadline::run(
@@ -1645,10 +1716,11 @@ pub async fn download_file(
     store_id: String,
     path: String,
     version: u64,
+    dirent_id: String,
 ) -> Result<DownloadResult, AgentError> {
     let interval = crate::applock::unlocked_interval(&app)?;
     require_main_window(&webview)?;
-    let item = state.selected_item(&store_id, &path, version)?;
+    let item = state.selected_read_item(&store_id, &path, version, &dirent_id)?;
     let suggested = item
         .metadata
         .path
@@ -1692,6 +1764,7 @@ pub async fn download_file(
                 &worker_interval,
                 &worker_deadline,
             )
+            .map_err(stale_read)
         },
         |_| {},
     )
@@ -1959,8 +2032,28 @@ pub async fn list_file_uploads(
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
     let state = state.for_store(&store_id)?;
-    let (store, _) = state.selected_store(&store_id)?;
-    let transport = state.transport()?;
+    list_file_uploads_in(
+        &state,
+        |state| state.transport(),
+        &store_id,
+        after,
+        || check_mutation_access(unlocked, crate::applock::unlocked_generation(&app)),
+    )
+    .await
+}
+
+/// [`list_file_uploads`] once the command is admitted: `transport` binds the
+/// agent transport and `access` checks that the application is still
+/// unlocked, which the listing must be when it answers.
+pub(super) async fn list_file_uploads_in(
+    state: &AppState,
+    transport: impl FnOnce(&AppState) -> Result<Arc<dyn foks_desktop::AgentTransport>, AgentError>,
+    store_id: &str,
+    after: Option<[u8; 32]>,
+    access: impl Fn() -> Result<(), AgentError>,
+) -> Result<serde_json::Value, AgentError> {
+    let (store, _) = state.selected_store(store_id)?;
+    let transport = transport(state)?;
     let result = {
         let deadline = state.deadline()?.clone();
         super::deadline::run(
@@ -1978,9 +2071,10 @@ pub async fn list_file_uploads(
         )
         .await
     }?;
-    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
+    access()?;
     Ok(result)
 }
+
 async fn change_file_upload(
     app: tauri::AppHandle,
     webview: tauri::Webview,
@@ -1992,12 +2086,39 @@ async fn change_file_upload(
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
     let state = state.for_store(&store_id)?;
+    change_file_upload_in(
+        &state,
+        |state| state.transport(),
+        &store_id,
+        &upload_id,
+        resume,
+        || check_mutation_access(unlocked, crate::applock::unlocked_generation(&app)),
+    )
+    .await
+}
+
+/// Resumes or cancels a recorded upload once the command is admitted. The
+/// upload reconciliation reservation is taken before anything else, and the
+/// store's catalog items are discarded before the agent is asked, since a
+/// resume can publish the file. `access` is checked before the agent call
+/// only: a lock taken while the agent resumed or cancelled the upload does
+/// not undo the change, and the report holds no plaintext, so answering
+/// `app-locked` afterwards would report an applied change as never
+/// submitted.
+pub(super) async fn change_file_upload_in(
+    state: &AppState,
+    transport: impl FnOnce(&AppState) -> Result<Arc<dyn foks_desktop::AgentTransport>, AgentError>,
+    store_id: &str,
+    upload_id: &str,
+    resume: bool,
+    access: impl Fn() -> Result<(), AgentError>,
+) -> Result<serde_json::Value, AgentError> {
     let _permit = state.begin_upload_reconciliation()?;
-    let (store, _) = state.selected_store(&store_id)?;
-    let upload_id = parse_upload_identity(&upload_id)?;
-    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
+    let (store, _) = state.selected_store(store_id)?;
+    let upload_id = parse_upload_identity(upload_id)?;
+    access()?;
     state.invalidate_catalog_items(&store);
-    let transport = state.transport()?;
+    let transport = transport(state)?;
     let operation = if resume {
         Operation::ResumeKvUpload {
             store: protocol_store(&store),
@@ -2024,7 +2145,6 @@ async fn change_file_upload(
             .mutation_requires_refresh()
             .store(true, Ordering::Release);
     }
-    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     result
 }
 #[tauri::command]

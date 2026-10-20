@@ -159,17 +159,24 @@ export function useTrashActions({
         // A hashed name keeps the original path in its `.origin` file. An
         // entry with no recorded location returns to the top level under the
         // name it has in Trash.
-        const destination =
-          entry.original ??
-          (entry.origin
-            ? (
-                await bridge.readItem({
-                  storeId: entry.origin.store,
-                  path: entry.origin.path,
-                  version: entry.origin.version,
-                })
-              ).value
-            : `/${entry.name}`);
+        let destination = entry.original ?? `/${entry.name}`;
+        if (entry.original === null && entry.origin) {
+          try {
+            destination = (
+              await bridge.readItem({
+                storeId: entry.origin.store,
+                path: entry.origin.path,
+                version: entry.origin.version,
+                direntId: entry.origin.direntId,
+              })
+            ).value;
+          } catch (error) {
+            // Reported without the item: a refused read of the origin
+            // record is never an edit conflict on the entry.
+            await mutationError(error);
+            return;
+          }
+        }
         await restoreItem(shown, entry.item, destination);
       })()
         .catch((error: unknown) => mutationError(error, { item: entry.item }))

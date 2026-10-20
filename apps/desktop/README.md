@@ -399,8 +399,13 @@ arguments. `list_catalog` returns profiles, stores, items, failures and
 `blockedProfiles`; `list_servers`, `list_parties` and `list_federation` supply
 the other facts needed by the Phase 2 shell; `read_item`,
 `copy_item_value`, `open_item_url` and `download_file` take
-`{storeId, path, version}`, and `copy_item_field` takes the same plus
-`field` (`password`, `username`, `url` or `value`). Both item copies answer
+`{storeId, path, version, direntId}`, and `copy_item_field` takes the same
+plus `field` (`password`, `username`, `url` or `value`). The host resolves
+the selection against its catalog by all three: an item that changed or was
+removed is refused with `item-version-mismatch` or `item-not-found`, and
+another dirent at the same path and version with `item-replaced`
+(retryable). None of these is `conflict`, which the shell answers with the
+edit-conflict sheet; a read refusal is shown as a notice. Both item copies answer
 `{ok, clearAfterSeconds}`: the seconds after which the host clears the
 clipboard if it still holds the copied value (`AUTO_CLEAR_SECONDS` in
 `src-tauri/src/clipboard.rs`: 15 on Linux, 30 elsewhere), which the copy toast
@@ -500,8 +505,10 @@ random id, replacing any import held before; it answers `null` when the
 picker is cancelled, or `{id, fileName, entries, skipped, ignoredColumns}`,
 where each entry is `{name, folder, document}` (encoded path components;
 `document` when the login is longer than 2,040 bytes and is stored as a
-file) and each skipped row is `{row, name?, reason}`. A file that is not
-UTF-8 or has no password column fails with `import-file`.
+file) and each skipped row is `{row, name?, reason}`. A row whose folder
+or group names more than 32 folders, or more than 1,024 bytes of them, is
+skipped with that reason. A file that is not UTF-8 or has no password
+column fails with `import-file`.
 `commit_password_import` takes the `importId`, the `entries` to save (indexes
 into the preview), a `storeId`, a destination `folder` outside Trash and, in
 a team, both roles, and an `onProgress` channel. It writes each login with a
@@ -528,6 +535,24 @@ plaintext_bytes, reserved_bytes, node_id, version}`, decoded by
 previous page. `resume_file_upload` and `cancel_file_upload` take `{storeId,
 uploadId}` and answer one upload. The Uploads button at the top of the Files
 list (`src/features/files/file-uploads.tsx`) reads them only when opened.
+It offers Resume only for states with work left, shows the node and version
+a verified or completed upload was saved as, and keeps the page it showed.
+After a resume or cancel it refreshes the store's server, also after a
+failed one unless another change held the reservation (`mutation-in-flight`),
+since the host discards the store's listed items before it asks the agent
+and the agent's own failures include `invalid-request`; after a failed one
+the reload shows no notice of its own.
+
+A failed `import_dropped_file` or `replace_dropped_file` names the upload
+handle the host issued and points to Uploads only after failures that can
+follow the agent's registration of the handle: an ambiguous outcome,
+`deadline-exceeded`, `cancelled`, `conflict`, `upload-spool-full`,
+`upload-identity-conflict`, `reauthentication-required` and the server
+failures of the upload itself. Refusals before registration (capability,
+credential, clock and capacity checks) name no handle; after a lost agent
+connection, `profile-busy`, `busy`, `invalid-request` or `rollback-detected`,
+which can come before or after registration, the message says that the
+agent may have recorded it.
 
 Every command that reaches the agent runs under a deadline from its entry in
 `command_class` (`src-tauri/src/commands/deadline.rs`); a command with no

@@ -1942,6 +1942,97 @@ fn seed_chain_plaintexts_bypass_the_non_zeroizing_prefix_decoder() {
     assert!(hybrid.contains("decode_prefix_sensitive(plaintext)"));
 }
 
+/// The ways `source` can reach foks_snowpack's general decoders under a name
+/// the plain-text guard does not see: a `use` of `decode` or
+/// `decode_prefix` (in nested groups, through a module path, renamed, or
+/// from `::foks_snowpack`), a glob import, an alias of the crate itself, and
+/// a call through a longer path such as `foks_snowpack::x::decode(`.
+fn snowpack_decoder_reaches(source: &str) -> Vec<String> {
+    const GENERAL: [&str; 2] = ["decode", "decode_prefix"];
+    let mut found = Vec::new();
+    for statement in source.split(';') {
+        let Some(start) = statement.lines().position(|line| {
+            let line = line.trim_start();
+            let line = line
+                .strip_prefix("pub(crate) ")
+                .or_else(|| line.strip_prefix("pub(super) "))
+                .or_else(|| line.strip_prefix("pub "))
+                .unwrap_or(line);
+            line.starts_with("use ")
+        }) else {
+            continue;
+        };
+        let item = statement.lines().skip(start).collect::<Vec<_>>().join(" ");
+        let item = item.replace("::foks_snowpack", "foks_snowpack");
+        if !item.contains("foks_snowpack") {
+            continue;
+        }
+        if item.contains("foks_snowpack as") {
+            found.push("an alias of foks_snowpack".to_owned());
+        }
+        if item.contains('*') {
+            found.push("a glob import from foks_snowpack".to_owned());
+        }
+        for piece in item.split(['{', '}', ',']) {
+            let path = piece.split(" as ").next().unwrap_or("").trim();
+            let name = path.rsplit("::").next().unwrap_or("").trim();
+            if GENERAL.contains(&name) {
+                found.push(format!("an import of {name}"));
+            }
+        }
+    }
+    let mut rest = source;
+    while let Some(start) = rest.find("foks_snowpack::") {
+        let path: String = rest[start..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == ':')
+            .collect();
+        let after = &rest[start + path.len()..];
+        let name = path.rsplit("::").next().unwrap_or("");
+        if GENERAL.contains(&name) && after.trim_start().starts_with('(') {
+            found.push(format!("a call of {path}"));
+        }
+        rest = &rest[start + "foks_snowpack::".len()..];
+    }
+    found
+}
+
+#[test]
+fn snowpack_decoder_scan_finds_every_import_form() {
+    assert!(snowpack_decoder_reaches("use foks_snowpack::{encode, Value};").is_empty());
+    for source in [
+        "use foks_snowpack::decode;",
+        "use foks_snowpack::{encode, decode as d};",
+        "use foks_snowpack::{codec::{decode_prefix}, Value};",
+        "use foks_snowpack::x::decode;",
+        "pub(crate) use ::foks_snowpack::decode;",
+        "use foks_snowpack::*;",
+        "use foks_snowpack as s;",
+        "fn f() { foks_snowpack::x::decode(b); }",
+    ] {
+        assert!(!snowpack_decoder_reaches(source).is_empty(), "{source}");
+    }
+}
+
+#[test]
+fn secret_plaintext_sites_avoid_the_general_decoder_and_unerased_encodings() {
+    // Opened PPE, SKMWK and KEX plaintexts are decoded by the foks-proto
+    // payload types, which use the sensitive decoder; these modules must not
+    // decode them with the general decoder themselves. The KEX cleartext
+    // encoding holds the SKMWK and the self token and is erased after sealing.
+    let general_decoder = ["foks_snowpack::", "decode("].concat();
+    let general_prefix_decoder = ["decode_prefix", "("].concat();
+    for source in [include_str!("passphrase.rs"), include_str!("kex.rs")] {
+        assert!(!source.contains(&general_decoder));
+        assert!(!source.contains(&general_prefix_decoder));
+        // Nor may they reach the general decoders under another name.
+        assert_eq!(snowpack_decoder_reaches(source), Vec::<String>::new());
+    }
+    let kex = include_str!("kex.rs");
+    assert!(kex.contains("let plaintext = Zeroizing::new(cleartext.encoded()?);"));
+    assert!(!kex.contains(&["cleartext.encoded()?", ".as_slice()"].concat()));
+}
+
 #[test]
 fn official_initial_signup_puk_box_opens() {
     let expected = UserLink::decode(&signup_fixture("eldest-link.snowp")).unwrap();

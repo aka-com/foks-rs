@@ -176,6 +176,12 @@ export interface ItemsScreenProps {
   onNewFolder?: (storeId: string, path: string) => void;
   /** Saves a file dropped on the vault's content area. */
   onUploadDroppedFile?: (upload: DropUpload) => Promise<void>;
+  /**
+   * Refreshes a store's server after the Uploads panel resumed or cancelled
+   * one of its uploads, with `message` for the notice, or `null` after a
+   * failed attempt, which shows no notice of its own.
+   */
+  onUploadsChanged?: (storeId: string, message: string | null) => Promise<void>;
   /** Cleared while a modal workflow owns the drop, such as the new-item sheet. */
   dropEnabled?: boolean;
 }
@@ -276,6 +282,7 @@ export function ItemsScreen({
   onTeamInfo,
   onNewFolder,
   onUploadDroppedFile,
+  onUploadsChanged,
   dropEnabled = true,
 }: ItemsScreenProps): ReactNode {
   const snapshot = useShellSnapshot();
@@ -748,6 +755,7 @@ export function ItemsScreen({
     storeId: item.store,
     path: item.path,
     version: item.version,
+    direntId: item.direntId,
   });
   const allowAction = (item: Item, write = false): boolean => {
     const problem = itemActionProblem(snapshot, item, write, accessNow());
@@ -779,7 +787,8 @@ export function ItemsScreen({
         toasts.show(
           saved ? `Downloaded ${nameOf(item.path)}` : 'Download cancelled',
         ),
-      (error: unknown) => onCommandError(error, item),
+      // Without the item: a refused read is never an edit conflict.
+      (error: unknown) => onCommandError(error),
     );
   };
 
@@ -1885,6 +1894,11 @@ export function ItemsScreen({
                 key={selectedStore.id}
                 bridge={bridge}
                 storeId={selectedStore.id}
+                onChanged={
+                  onUploadsChanged
+                    ? (message) => onUploadsChanged(selectedStore.id, message)
+                    : undefined
+                }
               />
             ) : null}
             <div className="lt">

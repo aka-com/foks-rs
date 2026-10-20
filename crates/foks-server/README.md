@@ -874,6 +874,12 @@ workspace package, a server crate that depends on a client, device, agent or
 front-end crate, any other edge the layer rules do not allow and no listed
 exception covers, and a production dependency, direct or transitive, on
 `foks-server-testkit`.
+It also builds `foks-metadata-core` for `wasm32-unknown-unknown`, the
+artifact celld loads, with and without its `read-token-qualification` and
+`list-allocation-qualification` features; `rust-toolchain.toml` lists that
+target so rustup installs it with the toolchain. A 1.95.0 toolchain installed
+before the target was listed may lack it; `rustup target add
+wasm32-unknown-unknown` adds it.
 The optional official-Go frame audit is
 `tools/foks-v019-oracle/run-live-team-compat.sh`; it needs a Go 1.25-compatible
 toolchain and may populate Go compiler/module caches, but does not use a state
@@ -884,6 +890,27 @@ baseline or policy update. The scheduled
 `tools/foks-server/diff-upstream-protocol.sh` audit compares the pinned artifact
 with upstream's immutable current commit, publishes semantic JSON/Markdown
 drift reports, and never edits the baseline or a lockfile.
+
+### Qualification features
+
+Two opt-in features carry the celld qualification code; no default build
+and no listener route uses it:
+
+- `foks-server/celld-proof` (enabled through `foks-server-testkit/celld-proof`)
+  compiles the `hosted_personal` helpers, `net::session::proof` and the
+  testkit's `celld_proof` module, together with the integration tests
+  `native_list_oracle`, `personal_authority`, `personal_list_domain`,
+  `celld_proof` and foks-server's `restricted_list_allocation`.
+- `foks-server-testkit/list-allocation-qualification` adds the
+  `list_allocation` tests and enables `celld-proof` and
+  `foks-metadata-core/list-allocation-qualification`.
+
+`tools/foks-server/check.sh` lints and tests both crates with
+`--features foks-server-testkit/list-allocation-qualification`. The tests that
+need lab resources stay `#[ignore]`d there: the deployed proof Worker and
+controller fault-marker cases in `celld_proof`, the pinned Go oracle gate in
+`personal_authority`, and the issued-certificate Wasm qualification in
+`list_allocation`.
 
 The standalone direct client, local agent, and desktop backend have a separate
 dependency-boundary and test gate:

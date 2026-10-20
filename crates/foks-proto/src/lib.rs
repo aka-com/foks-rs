@@ -135,6 +135,56 @@ mod tests {
         "../../foks-snowpack/tests/fixtures/foks-v0.1.9/foks.app/probe-response.snowp"
     );
 
+    /// Returns the `impl {type_name} {` block of `source`.
+    fn impl_block<'a>(source: &'a str, type_name: &str) -> &'a str {
+        let start = source
+            .find(&format!("\nimpl {type_name} {{\n"))
+            .unwrap_or_else(|| panic!("impl {type_name} not found"));
+        let end = start + source[start..].find("\n}\n").unwrap();
+        &source[start..end]
+    }
+
+    /// The generic decoder copies every binary into an ordinary `Value` that
+    /// is freed without erasure, and `Value::Binary(key.to_vec())` makes the
+    /// same kind of copy when encoding. Secret plaintext payloads use the
+    /// sensitive decoder and either borrow their secrets (`encode_ref`) or
+    /// erase the owned tree after encoding.
+    #[test]
+    fn secret_payloads_avoid_unerased_decode_and_encode_copies() {
+        let generic_decode = ["= ", "decode(bytes)"].concat();
+        let qualified_decode = ["crate::", "decode(bytes)"].concat();
+        let owned_encode = ["encode(&", "Value::"].concat();
+        for (source, type_name, erased_tree) in [
+            (include_str!("passphrase.rs"), "SkmwkList", false),
+            (
+                include_str!("passphrase.rs"),
+                "PpePassphraseBoxPayload",
+                false,
+            ),
+            (include_str!("passphrase.rs"), "PpePukBoxPayload", false),
+            (
+                include_str!("yubi.rs"),
+                "YubiManagementKeyBoxPayload",
+                false,
+            ),
+            (include_str!("kex.rs"), "KexCleartext", true),
+        ] {
+            let block = impl_block(source, type_name);
+            assert!(block.contains("decode_sensitive(bytes)"), "{type_name}");
+            assert!(!block.contains(&generic_decode), "{type_name}");
+            assert!(!block.contains(&qualified_decode), "{type_name}");
+            if erased_tree {
+                assert!(
+                    block.contains("encode(&zeroize::Zeroizing::new(Value::"),
+                    "{type_name}"
+                );
+            } else {
+                assert!(block.contains("encode_ref(&ValueRef::"), "{type_name}");
+                assert!(!block.contains(&owned_encode), "{type_name}");
+            }
+        }
+    }
+
     fn user_fixture(name: &str) -> Vec<u8> {
         std::fs::read(format!(
             "../foks-snowpack/tests/fixtures/foks-v0.1.9/user/{name}"

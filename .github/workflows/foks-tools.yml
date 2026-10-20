@@ -1,0 +1,30 @@
+name: FOKS qualification tools
+
+on:
+  push:
+    paths:
+      - "tools/foks-celld-guarded/**"
+      - "tools/foks-celld-proof/**"
+      - "tools/foks-hosted-transport-check/**"
+      - "tools/foks-metadata-spike/**"
+      - "tools/foks-schema-cookie-probe/**"
+      - "tools/foks-sqlite-policy/**"
+      - "tools/run-tool-tests.sh"
+      - ".node-version"
+      - ".github/workflows/foks-tools.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tools:
+    name: tool unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version-file: .node-version
+      - name: Run the Node and Python tests that need no lab artifacts
+        run: tools/run-tool-tests.sh

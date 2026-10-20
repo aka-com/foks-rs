@@ -20,32 +20,72 @@ const uploadLabels: Record<string, string> = {
   cancelled: 'Cancelled',
 };
 
-/** On-demand local inventory: opening the Files view does not fan out to servers. */
+/** States whose row offers Resume: work the agent can still do. */
+const resumable = [
+  'ready',
+  'uploading',
+  'content-complete',
+  'publishing',
+  'publication-rejected',
+  'verified',
+  'blocked',
+];
+/**
+ * The one refusal that comes before the host discards the store's listed
+ * items: another change holds the reservation. Every later failure, the
+ * agent's included, leaves the items to be read again.
+ */
+const refusedBeforeDispatch = ['mutation-in-flight'];
+/** States with nothing left to upload, whose cancel only frees the spool. */
+const settled = ['completed', 'cancelled', 'inline-untracked'];
+
+/**
+ * On-demand local inventory: opening the Files view does not fan out to
+ * servers. A resume or cancel can publish or remove the store's file, so
+ * `onChanged` refreshes the store's server afterwards, with the notice to
+ * show, or with `null` after a failed attempt, whose error the panel shows
+ * itself; the list stays on the page it showed.
+ */
 export function FileUploadsPanel({
   bridge,
   storeId,
+  onChanged,
 }: {
   bridge: Bridge;
   storeId: string;
+  onChanged?: (message: string | null) => Promise<void>;
 }): ReactNode {
   const [open, setOpen] = useState(false);
   const [inventory, setInventory] = useState<FileUploads | null>(null);
+  // The cursor of the page `inventory` shows; null is the first page.
+  const [page, setPage] = useState<number[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   async function act(
-    id?: string,
-    resume = true,
-    after?: number[] | null,
+    after: number[] | null,
+    change?: { id: string; resume: boolean; done: string },
   ): Promise<void> {
     if (busy) return;
     setBusy(true);
     setError(null);
     try {
-      if (id) {
-        if (resume) await bridge.resumeFileUpload(storeId, id);
-        else await bridge.cancelFileUpload(storeId, id);
+      if (change) {
+        try {
+          if (change.resume) await bridge.resumeFileUpload(storeId, change.id);
+          else await bridge.cancelFileUpload(storeId, change.id);
+        } catch (cause) {
+          // The host discards the store's listed items before it asks the
+          // agent, so any attempt it dispatched leaves them to be read again.
+          if (
+            !refusedBeforeDispatch.includes(normalizeCommandError(cause).code)
+          )
+            await onChanged?.(null);
+          throw cause;
+        }
+        await onChanged?.(change.done);
       }
       setInventory(await bridge.listFileUploads(storeId, after));
+      setPage(after);
     } catch (cause) {
       setError(normalizeCommandError(cause).message);
     } finally {
@@ -60,7 +100,7 @@ export function FileUploadsPanel({
         disabled={busy}
         onClick={() => {
           setOpen(!open);
-          if (!open) void act();
+          if (!open) void act(null);
         }}
       >
         Uploads
@@ -70,11 +110,11 @@ export function FileUploadsPanel({
           <p>
             Prepared uploads can resume without the source file. For uploads
             marked “Check destination,” inspect the destination to confirm the
-            result. Incomplete preparation needs a new upload. Refresh the vault
-            after completion. Encrypted local files are removed in the
-            background; reserved space remains charged until removal finishes.
+            result. Incomplete preparation needs a new upload. Encrypted local
+            files are removed in the background; reserved space remains charged
+            until removal finishes.
           </p>
-          <button type="button" disabled={busy} onClick={() => void act()}>
+          <button type="button" disabled={busy} onClick={() => void act(page)}>
             Refresh uploads
           </button>
           {error ? <p role="alert">{error}</p> : null}
@@ -97,34 +137,45 @@ export function FileUploadsPanel({
                       {uploadLabels[upload.state]} · {upload.acknowledgedChunks}
                       /{upload.preparedChunks} chunks acknowledged ·{' '}
                       {fmtSize(upload.reservedBytes)} reserved
-                      {![
-                        'awaiting-source',
-                        'needs-source',
-                        'cancelled',
-                        'inline-untracked',
-                      ].includes(upload.state) ? (
+                      {['verified', 'completed'].includes(upload.state) &&
+                      upload.nodeId !== null &&
+                      upload.version !== null ? (
+                        <>
+                          {' '}
+                          · saved as node <code>{upload.nodeId}</code>, version{' '}
+                          {upload.version}
+                        </>
+                      ) : null}
+                      {resumable.includes(upload.state) ? (
                         <button
                           type="button"
                           disabled={busy}
-                          onClick={() => void act(upload.uploadId)}
+                          onClick={() =>
+                            void act(page, {
+                              id: upload.uploadId,
+                              resume: true,
+                              done: 'Upload resumed',
+                            })
+                          }
                         >
-                          {' '}
-                          {upload.state === 'completed'
-                            ? 'Show saved receipt'
-                            : 'Resume'}
+                          Resume
                         </button>
                       ) : null}
                       {!['publishing', 'verified'].includes(upload.state) ? (
                         <button
                           type="button"
                           disabled={busy}
-                          onClick={() => void act(upload.uploadId, false)}
+                          onClick={() =>
+                            void act(page, {
+                              id: upload.uploadId,
+                              resume: false,
+                              done: settled.includes(upload.state)
+                                ? 'Local upload spool cleaned up'
+                                : 'Upload cancelled',
+                            })
+                          }
                         >
-                          {[
-                            'completed',
-                            'cancelled',
-                            'inline-untracked',
-                          ].includes(upload.state)
+                          {settled.includes(upload.state)
                             ? 'Clean up local spool'
                             : 'Cancel upload'}
                         </button>
@@ -137,7 +188,7 @@ export function FileUploadsPanel({
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={() => void act(undefined, true, inventory.next)}
+                  onClick={() => void act(inventory.next ?? null)}
                 >
                   Next uploads
                 </button>

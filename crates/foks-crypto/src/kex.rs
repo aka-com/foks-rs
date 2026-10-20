@@ -176,8 +176,9 @@ impl KexKeys {
         let mut full_nonce = [0u8; 24];
         full_nonce[..8].copy_from_slice(&KEX_CLEARTEXT_TYPE_ID.to_be_bytes());
         full_nonce[8..].copy_from_slice(&nonce);
+        let plaintext = Zeroizing::new(cleartext.encoded()?);
         let ciphertext = XSalsa20Poly1305::new((&*self.secretbox_key).into())
-            .encrypt((&full_nonce).into(), cleartext.encoded()?.as_slice())
+            .encrypt((&full_nonce).into(), plaintext.as_slice())
             .map_err(|_| Error::KvEncryption)?;
         Ok(SecretBox { nonce, ciphertext })
     }
