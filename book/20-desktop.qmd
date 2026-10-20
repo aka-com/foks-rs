@@ -251,8 +251,12 @@ Reads name the catalog entry by dirent id as well as path and version, and
 a result for another dirent is a `response-binding` error. The renderer's
 request carries the dirent id it listed as well, and the host refuses it
 with `item-replaced` when its catalog holds another dirent at that path and
-version. A read never answers `conflict`, which the shell reserves for the
-edit-conflict sheet.
+version. The agent itself answers `conflict` when the entry it finds is no
+longer the listed version or dirent; `read_item`, `copy_item_value`,
+`copy_item_field`, `open_item_url` and `download_file` report that as
+`item-version-mismatch`, and the renderer reports their failures without
+the item, so a refused read never opens the edit-conflict sheet the shell
+keeps for a `conflict` on an edit.
 
 The Uploads button above the Files list calls `list_file_uploads`, which
 returns the durable uploads the agent holds for the selected store and its

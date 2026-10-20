@@ -652,9 +652,6 @@ impl AppState {
     }
 }
 
-/// Refuses `item` with a `conflict` unless its dirent is `dirent_id`, the one
-/// the renderer selected, so that an item recreated at the same path and
-/// version is not used in its place.
 /// The dirent id of `item` as the renderer sends it: lowercase hex.
 fn listed_dirent(item: &CatalogItem) -> String {
     item.metadata
@@ -664,6 +661,9 @@ fn listed_dirent(item: &CatalogItem) -> String {
         .collect()
 }
 
+/// Refuses `item` with a `conflict` unless its dirent is `dirent_id`, the one
+/// the renderer selected, so that an item recreated at the same path and
+/// version is not used in its place.
 fn require_listed_dirent(
     item: &CatalogItem,
     dirent_id: &str,

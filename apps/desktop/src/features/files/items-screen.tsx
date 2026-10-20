@@ -786,7 +786,8 @@ export function ItemsScreen({
         toasts.show(
           saved ? `Downloaded ${nameOf(item.path)}` : 'Download cancelled',
         ),
-      (error: unknown) => onCommandError(error, item),
+      // Without the item: a refused read is never an edit conflict.
+      (error: unknown) => onCommandError(error),
     );
   };
 

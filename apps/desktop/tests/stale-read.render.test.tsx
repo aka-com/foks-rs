@@ -39,6 +39,15 @@ const STALE = [
     'item-replaced',
     'This item was replaced. Refresh the vault before reading it.',
   ),
+  // The host maps the agent's own read `conflict` to item-version-mismatch;
+  // the read paths do not route one into the edit-conflict sheet either.
+  {
+    ...refusal(
+      'conflict',
+      'This item changed. Refresh the vault before reading it.',
+    ),
+    retryable: false,
+  },
 ];
 
 /** The app with `path` selected in the details panel and every read refused. */

@@ -393,6 +393,23 @@ pub(super) fn clear_response(value: &mut serde_json::Value) {
     }
 }
 
+/// The agent answers `conflict` when the entry it finds at a read's path is
+/// no longer the listed version or dirent. For a read that is a stale
+/// listing, not an edit conflict, and the renderer answers `conflict` with
+/// the edit-conflict sheet, so the read commands report it as the host's own
+/// lookup does.
+pub(super) fn stale_read(error: AgentError) -> AgentError {
+    if error.code == "conflict" {
+        AgentError::new(
+            "item-version-mismatch",
+            "This item changed. Refresh the vault before reading it.",
+            true,
+        )
+    } else {
+        error
+    }
+}
+
 pub(super) fn read_text(
     transport: Arc<dyn foks_desktop::AgentTransport>,
     item: &CatalogItem,
@@ -409,7 +426,9 @@ pub(super) fn read_text(
         version,
         value,
         ..
-    } = result.map_err(AgentError::from_desktop)?;
+    } = result
+        .map_err(AgentError::from_desktop)
+        .map_err(stale_read)?;
     let value = match value {
         KvItemValue::File(bytes) => std::str::from_utf8(&bytes)
             .map(|text| Zeroizing::new(text.to_owned()))
@@ -1735,6 +1754,7 @@ pub async fn download_file(
                 &worker_interval,
                 &worker_deadline,
             )
+            .map_err(stale_read)
         },
         |_| {},
     )

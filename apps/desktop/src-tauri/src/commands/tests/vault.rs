@@ -2175,3 +2175,58 @@ fn a_catalog_walk_that_crosses_its_deadline_publishes_what_it_read() {
     let (whole, _) = walk_within(foks_agent_proto::DeadlineClass::Bulk.cap());
     assert!(whole.failures.is_empty(), "{:?}", whole.failures);
 }
+
+/// Answers every read with the agent's `conflict`, as it does when the entry
+/// at the path is no longer the listed version or dirent.
+struct ConflictingRead;
+
+impl foks_desktop::AgentTransport for ConflictingRead {
+    fn call_with_deadline(
+        &self,
+        operation: foks_agent_proto::Operation,
+        _deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        self.call_cancellable(operation, cancelled)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        _header: foks_agent_proto::KvUploadHeader,
+        _reader: &mut dyn std::io::Read,
+        _deadline: &foks_local_deadline::Deadline,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        unreachable!("a read does not upload")
+    }
+    fn call(&self, _operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        Err(foks_desktop::AgentError::Protocol {
+            code: foks_agent_proto::ErrorCode::Conflict,
+            message: "the entry changed".to_owned(),
+            fields: Box::default(),
+        })
+    }
+    fn put_kv_stream(
+        &self,
+        _header: KvUploadHeader,
+        _reader: &mut dyn std::io::Read,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        unreachable!("a read does not upload")
+    }
+}
+
+/// The renderer answers `conflict` with the edit-conflict sheet, so a read
+/// the agent refuses with `conflict` reaches it as a stale listing instead.
+#[test]
+fn an_agent_conflict_on_a_read_is_a_stale_listing() {
+    let lock = crate::applock::AppLock::unlocked_for_test();
+    let error = read_text(
+        Arc::new(ConflictingRead),
+        &download_item(1),
+        &lock.interval_for_test(),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "item-version-mismatch");
+    assert!(error.retryable);
+    let other =
+        crate::commands::vault::stale_read(crate::agent::AgentError::new("busy", "busy", true));
+    assert_eq!(other.code, "busy");
+}

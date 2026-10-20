@@ -911,7 +911,8 @@ export function DetailsPanel({
         toasts.show(
           saved ? `Downloaded ${nameOf(item.path)}` : 'Download cancelled',
         ),
-      (error) => onCommandError(error, item),
+      // Without the item: a refused read is never an edit conflict.
+      (error) => onCommandError(error),
     );
   };
 
