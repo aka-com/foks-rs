@@ -83,6 +83,8 @@ client at `tools/list` time instead of at first failure.
 | Catalog or roster rows per page | 1,000 |
 | Active calls | 4 |
 | Queued calls | 16 |
+| Wait for an active-call slot | 15 s |
+| Call deadline, from when it holds a slot | 5 min for `put`, 15 s for every other tool |
 | Stalled stdout timeout | 30 s |
 
 Concurrency is a semaphore of four permits; each backend call runs on a

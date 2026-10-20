@@ -95,11 +95,11 @@ impl<B: Backend> ServerHandler for Session<B> {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        // The same context covers parsing, admission, scope resolution and all IPC calls.
-        let deadline = Deadline::capture(
-            std::time::Instant::now() + foks_agent_proto::DeadlineClass::Ordinary.cap(),
-        )
-        .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        // Waiting for an active-call slot is bounded on its own. The call's
+        // deadline starts once it holds a slot, so queueing behind other
+        // calls does not consume the budget of its IPC.
+        let admission_until =
+            tokio::time::Instant::now() + foks_agent_proto::DeadlineClass::Ordinary.cap();
         let invocation = match self.set.parse(
             self.read_only,
             &request.name,
@@ -115,11 +115,14 @@ impl<B: Backend> ServerHandler for Session<B> {
             Err(error) => return Ok(tool_error(error.to_string()).into()),
         };
         let permit = tokio::select! {
-            _ = tokio::time::sleep_until(deadline.instant().into()) => return Ok(tool_error("request deadline exceeded before dispatch").into()),
+            _ = tokio::time::sleep_until(admission_until) => return Ok(tool_error("request deadline exceeded before dispatch").into()),
             _ = self.lifetime.cancelled() => return Ok(tool_error("session closed").into()),
             _ = context.ct.cancelled() => return Ok(tool_error("request cancelled").into()),
             permit = self.active.clone().acquire_owned() => permit.map_err(|_| ErrorData::internal_error("server closing", None))?,
         };
+        // The same deadline covers scope resolution and every IPC call.
+        let deadline = invocation_deadline(&invocation)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         let backend = self.backend.clone();
         let cancellation = self.lifetime.child_token();
         let request_cancel = cancellation.clone();
@@ -169,6 +172,19 @@ impl<B: Backend> ServerHandler for Session<B> {
         }
         Ok(guarded.result.take().expect("owned worker result").into())
     }
+}
+
+/// The deadline class of a tool call. A `put` streams up to 4 MiB to the
+/// agent, which is a bulk transfer; every other tool is an ordinary request.
+fn invocation_class(invocation: &Invocation) -> foks_agent_proto::DeadlineClass {
+    match invocation {
+        Invocation::Put(_) => foks_agent_proto::DeadlineClass::Bulk,
+        _ => foks_agent_proto::DeadlineClass::Ordinary,
+    }
+}
+
+fn invocation_deadline(invocation: &Invocation) -> Result<Deadline, foks_local_deadline::Error> {
+    Deadline::capture(std::time::Instant::now() + invocation_class(invocation).cap())
 }
 
 fn spawn_worker<B: Backend>(
@@ -333,6 +349,29 @@ mod deadline_tests {
             drop(guarded);
             assert_eq!(admission.available_permits(), 1);
         }
+    }
+
+    /// A `put` streams its body under the bulk budget; the ordinary
+    /// 15-second cap would cancel a 4 MiB upload on a slow link.
+    #[test]
+    fn put_calls_get_the_bulk_budget_and_reads_the_ordinary_one() {
+        let parse = |name: &str, arguments: serde_json::Value| {
+            let serde_json::Value::Object(arguments) = arguments else {
+                unreachable!()
+            };
+            ToolSet::Kv.parse(false, name, arguments).ok().unwrap()
+        };
+        let ordinary = foks_agent_proto::DeadlineClass::Ordinary.cap();
+        let put = parse("put", serde_json::json!({"path": "/a", "content": "body"}));
+        let started = Instant::now();
+        let deadline = invocation_deadline(&put).unwrap();
+        assert!(deadline.instant() > started + ordinary);
+        assert!(
+            deadline.instant()
+                >= started + foks_agent_proto::DeadlineClass::Bulk.cap() - Duration::from_secs(1)
+        );
+        let get = parse("get", serde_json::json!({"path": "/a"}));
+        assert!(invocation_deadline(&get).unwrap().instant() <= Instant::now() + ordinary);
     }
 
     #[test]
