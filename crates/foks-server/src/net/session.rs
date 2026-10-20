@@ -281,7 +281,17 @@ impl ServerData {
         let host = self.host().map_err(|_| RpcStatus::TransactionRetry)?;
         let hostchain_tail = self.hostchain_tail.clone();
         let signer = identity.device_id.clone();
+        let authenticated_credential = principal.device_id().to_vec();
+        let is_rename = matches!(&decoded, crate::identity::mutation::Argument::Rename(..));
+        drop(reader);
         let result = writer.call(move |database| {
+            if is_rename {
+                database.require_username_change_signer(
+                    &uid,
+                    &authenticated_credential,
+                    &signer,
+                )?;
+            }
             let now = clock.now_micros()?;
             let idempotency_expires_at = now
                 .checked_add(IDEMPOTENCY_RECORD_LIFETIME_MICROSECONDS)
@@ -487,6 +497,7 @@ impl ServerData {
                 username: command.username.as_ref(),
                 uid: &command.uid,
                 signer_device_id: &command.signer,
+                authenticated_credential_id: &authenticated_credential,
                 expected_sequence: command.sequence,
                 expected_tail_hash: &command.expected_tail_hash,
                 link_hash: &command.link_hash,
@@ -524,6 +535,9 @@ impl ServerData {
             Err(crate::Error::Database(foks_server_db::Error::Reservation)) => {
                 Err(bad_arguments("invalid rename reservation"))
             }
+            Err(crate::Error::Database(foks_server_db::Error::AuthorizationChanged)) => {
+                Err(permission_denied())
+            }
             Err(crate::Error::Database(foks_server_db::Error::NameInUse)) => {
                 Err(RpcStatus::NameInUse)
             }
@@ -544,6 +558,15 @@ impl ServerData {
     }
 
     fn reserve_username(&self, argument: &[u8]) -> std::result::Result<Vec<u8>, RpcStatus> {
+        self.reserve_username_for_principal(argument, None)
+    }
+
+    fn reserve_username_for_principal(
+        &self,
+        argument: &[u8],
+        principal: Option<&Principal>,
+    ) -> std::result::Result<Vec<u8>, RpcStatus> {
+        let actor = principal.map(|p| (p.uid().to_vec(), p.device_id().to_vec()));
         const RESERVATION_LIFETIME_MICROSECONDS: u64 = 10 * 60 * 1_000_000;
         let Value::Array(fields) = decode(argument).map_err(bad_arguments)? else {
             return Err(bad_arguments(
@@ -578,7 +601,18 @@ impl ServerData {
         let result = writer.call_with_current_time(
             Arc::clone(&self.clock),
             move |database, current_time| {
-                database.reserve_name(&normalized, &token, 1, current_time, expires_at)?;
+                if let Some((uid, credential)) = actor {
+                    database.reserve_name_for_username_change(
+                        &uid,
+                        &credential,
+                        &normalized,
+                        &token,
+                        current_time,
+                        expires_at,
+                    )?;
+                } else {
+                    database.reserve_name(&normalized, &token, 1, current_time, expires_at)?;
+                }
                 Ok(())
             },
         );
@@ -590,6 +624,9 @@ impl ServerData {
             }
             .encoded()
             .map_err(|_| RpcStatus::TransactionRetry),
+            Err(crate::Error::Database(foks_server_db::Error::AuthorizationChanged)) => {
+                Err(permission_denied())
+            }
             Err(crate::Error::Database(foks_server_db::Error::NameInUse)) => {
                 Err(RpcStatus::NameInUse)
             }

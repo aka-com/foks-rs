@@ -64,6 +64,9 @@ pub struct UserMutation<'a> {
     pub username: Option<&'a UsernameMutation>,
     pub uid: &'a [u8],
     pub signer_device_id: &'a [u8],
+    /// Actual TLS credential; for Yubi signatures this is the delegated subkey.
+    /// New renames bind it to the canonical signer inside the commit transaction.
+    pub authenticated_credential_id: &'a [u8],
     pub expected_sequence: u64,
     pub expected_tail_hash: &'a [u8; 32],
     pub link_hash: &'a [u8; 32],
@@ -119,6 +122,16 @@ impl Database {
             mutation.now,
         )? {
             return Ok(idempotency_record.response);
+        }
+        // A committed retry is still answered above; only new renames require
+        // current authority, in the same transaction that changes the name.
+        if mutation.username.is_some() {
+            crate::names::require_username_change_owner_for_signer(
+                &transaction,
+                mutation.uid,
+                mutation.authenticated_credential_id,
+                Some(mutation.signer_device_id),
+            )?;
         }
         let current: Option<(i64, Vec<u8>, i64, Vec<u8>)> = transaction
             .query_row(
