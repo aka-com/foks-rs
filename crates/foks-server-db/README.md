@@ -72,6 +72,17 @@ counter lookups instead of rescanning retained history. Upload ordering uses
 an indexed last-offset lookup. Migration still scans existing contents once
 and needs to complete before the server can accept traffic.
 
+The counters are maintained by AFTER INSERT and AFTER DELETE triggers. The
+writer connection leaves `recursive_triggers` off, and `INSERT OR REPLACE`
+then deletes a conflicting row without running its DELETE trigger, so the
+counters of kv_directories, kv_directory_heads, kv_roots, kv_dirents,
+kv_dirent_heads, kv_file_chunks and kv_locks drift under REPLACE; only
+kv_nodes and kv_file_uploads refuse a colliding insert. No write path uses
+REPLACE on these tables (they use plain INSERT or ON CONFLICT DO UPDATE).
+Making them REPLACE-safe, by enabling `recursive_triggers` on the writer or
+otherwise, is remaining work; `tests/kv_accounting.rs` records the current
+behaviour.
+
 `ReadDatabase::open` continues to validate stored synchronization limits.
 `ReadDatabaseOpener` validates once and opens additional readers with the same
 configuration and checked file identity, avoiding those scans when the server

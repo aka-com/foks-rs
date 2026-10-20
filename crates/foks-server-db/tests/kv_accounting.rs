@@ -147,9 +147,15 @@ fn accounting_tracks_history_updates_rollback_and_cascades() {
 
 /// The accounting triggers are AFTER INSERT/AFTER DELETE pairs. REPLACE
 /// deletes the conflicting row without its DELETE trigger unless
-/// recursive_triggers is on, which the writer connection does not set, so
-/// production writes use plain INSERT or ON CONFLICT DO UPDATE. kv_nodes and
-/// kv_file_uploads refuse a colliding INSERT outright.
+/// recursive_triggers is on. foks-server-db's writer connection leaves it off
+/// (restricted_list's bootstrap connection in foks-server turns it on, but
+/// does not write these tables through REPLACE), so production writes use
+/// plain INSERT or ON CONFLICT DO UPDATE. kv_nodes and kv_file_uploads refuse
+/// a colliding INSERT outright.
+///
+/// The drift assertions document the current hazard, recorded as remaining
+/// work in the README; they must change when a collision guard is added to a
+/// table or the writer enables recursive_triggers.
 #[test]
 fn replace_keeps_accounting_only_with_recursive_triggers() {
     for (table, guarded) in [
