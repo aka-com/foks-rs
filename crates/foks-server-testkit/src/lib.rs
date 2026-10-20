@@ -20,7 +20,8 @@ pub use account::TestAccountSpec;
 pub use binary::{BinaryExit, BinaryServer};
 pub use client::TestClient;
 pub use environment::{
-    TestEnvironment, TestFault, TestProfile, SHORT_REQUEST_TIMEOUT, WAITLIST_TEST_ENTRIES,
+    TestEnvironment, TestFault, TestProfile, FEW_REQUESTS_PER_CONNECTION, SHORT_REQUEST_TIMEOUT,
+    TIGHT_IO_IDLE_TIMEOUT, WAITLIST_TEST_ENTRIES,
 };
 pub use foks_server::web_admin::WebAdminConfig;
 pub use process::{InProcessServer, IsolatedTestServer, ProbeOverrideServer};

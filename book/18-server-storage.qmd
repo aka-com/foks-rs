@@ -224,6 +224,7 @@ mechanism differs by resource.
 | Working and response memory | 512 MiB and 128 MiB, charged by the codec, SQL results and chunk transfers | status 1012 during decoding or on a read-only route; on a route that may write, the connection closes unanswered |
 | Frame size | 16 MiB | rejected before allocation |
 | Request deadline | 30 s from the first frame byte | connection closed; a write still queued is skipped |
+| Idle time between requests | 330 s with no long poll pending (`idle_timeout_seconds`); reads and writes inside a frame have 15 s | connection closed |
 | I/O timeout | 15 s | connection closed |
 
 Handlers run on blocking threads under a semaphore, and they acquire their

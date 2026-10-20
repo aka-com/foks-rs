@@ -125,3 +125,48 @@ fn connect_without_client_certificate(
     .unwrap();
     rustls::StreamOwned::new(connection, tcp)
 }
+
+/// The I/O timeout bounds reads and writes inside a frame; a connection may
+/// stay idle between requests for the separate, longer idle timeout, as a Go
+/// server never closes an idle connection and a Go client closes its own
+/// after five minutes.
+#[test]
+fn an_idle_connection_outlives_the_io_timeout_until_the_idle_timeout() {
+    let environment = TestEnvironment::with_profile(TestProfile::TightIo).unwrap();
+    let server = environment.start_server().unwrap();
+    let mut tls = connect_without_client_certificate(
+        server.addresses().public_services,
+        server.service_roots(),
+    );
+    tls.sock
+        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .unwrap();
+    let call = |tls: &mut rustls::StreamOwned<rustls::ClientConnection, TcpStream>| {
+        let request = foks_rpc::encode_load_user_chain_request(&[1; 33], 0).unwrap();
+        tls.write_all(&request).unwrap();
+        tls.flush().unwrap();
+        assert!(matches!(
+            foks_rpc::read_void_response(tls, DEFAULT_MAX_FRAME_LENGTH, 0),
+            Err(Error::RemoteStatus { code: 1020, .. })
+        ));
+    };
+    call(&mut tls);
+    // Idle for three times the 500 ms I/O timeout, then use it again.
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    call(&mut tls);
+    // Past the idle timeout the server closes the connection.
+    std::thread::sleep(
+        foks_server_testkit::TIGHT_IO_IDLE_TIMEOUT + std::time::Duration::from_millis(500),
+    );
+    let mut byte = [0];
+    match tls.read(&mut byte) {
+        Ok(0) => {}
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
+            ) => {}
+        other => panic!("expected the idle connection to be closed: {other:?}"),
+    }
+    server.shutdown().unwrap();
+}

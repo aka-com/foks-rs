@@ -383,6 +383,9 @@ struct ServeArguments {
     maximum_realtime_polls_per_account: usize,
     #[arg(long, default_value_t = LimitsConfig::default().request_timeout_seconds)]
     request_timeout_seconds: u64,
+    /// Seconds a connection may stay idle between requests.
+    #[arg(long, default_value_t = LimitsConfig::default().idle_timeout_seconds)]
+    idle_timeout_seconds: u64,
     #[arg(long, default_value_t = LimitsConfig::default().maximum_pending_writes)]
     maximum_pending_writes: usize,
     #[arg(long, default_value_t = RateLimitConfig::default().connection_burst)]
@@ -680,6 +683,7 @@ fn serve_config(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         maximum_in_flight_requests: limits.maximum_in_flight_requests,
         maximum_realtime_polls_per_account: limits.maximum_realtime_polls_per_account,
         request_timeout_seconds: limits.request_timeout_seconds,
+        idle_timeout_seconds: limits.idle_timeout_seconds,
         maximum_pending_writes: limits.maximum_pending_writes,
         connection_rate_burst: rate_limits.connection_burst,
         connections_per_second: rate_limits.connections_per_second,
@@ -820,6 +824,7 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
         maximum_in_flight_requests: arguments.maximum_in_flight_requests,
         maximum_realtime_polls_per_account: arguments.maximum_realtime_polls_per_account,
         request_timeout_seconds: arguments.request_timeout_seconds,
+        idle_timeout_seconds: arguments.idle_timeout_seconds,
         maximum_pending_writes: arguments.maximum_pending_writes,
     }
     .session_limits();

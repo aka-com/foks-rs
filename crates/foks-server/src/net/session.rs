@@ -339,7 +339,7 @@ pub(crate) async fn serve(
                     limits.maximum_frame_bytes,
                     limits.request_timeout,
                 ),
-                Some(limits.io_timeout),
+                Some(limits.idle_timeout),
                 budget_spent,
                 &mut stop,
             )

@@ -160,8 +160,9 @@ the same default.
   `maximum_active_connections` (256), `maximum_pending_connections` (32),
   `maximum_kex_receive_polls` (32), `maximum_in_flight_requests` (64, at
   least 2), `maximum_realtime_polls_per_account` (8),
-  `request_timeout_seconds` (30) and `maximum_pending_writes` (64). The
-  `serve` flags of the same names set the same values.
+  `request_timeout_seconds` (30), `idle_timeout_seconds` (330) and
+  `maximum_pending_writes` (64). The `serve` flags of the same names set the
+  same values.
 - `[rate_limits]` sets the per-source admission limits: the token buckets
   `connection_burst` (512), `connections_per_second` (256), `request_burst`
   (2,000) and `requests_per_second` (1,000), `maximum_tracked_ips` (4,096),
@@ -241,6 +242,16 @@ duration, saturation, backup outcomes, transient `accept()` failures, and the
 configured capacity limits (see [Capacity limits](#capacity-limits)). They
 use fixed, non-user-derived names and never export paths, identities, request
 values, or key material.
+
+A connection may wait `idle_timeout_seconds` (330 s) between requests, with no
+long poll pending, before the server closes it. Reads and writes within a
+frame are bounded separately by the 15 s I/O timeout (`io_timeout`). A Go
+v0.1.9 server never closes an idle connection and a Go client closes its own
+after five minutes idle, so the default lets the client's close come first; a
+call that raced a server-side close would otherwise fail with an RPC EOF that
+the Go client does not retry. Idle connections count against
+`maximum_active_connections` and `maximum_connections_per_source` while they
+stay open.
 
 Each request has one deadline, `request_timeout_seconds` after the first byte
 of its frame arrives. Reading the rest of the frame, waiting for a handler

@@ -173,6 +173,8 @@ pub struct LimitsConfig {
     pub maximum_in_flight_requests: usize,
     pub maximum_realtime_polls_per_account: usize,
     pub request_timeout_seconds: u64,
+    /// Seconds a connection may stay idle between requests (330).
+    pub idle_timeout_seconds: u64,
     /// Writes queued for the SQLite writer before callers are refused.
     pub maximum_pending_writes: usize,
 }
@@ -189,6 +191,7 @@ impl Default for LimitsConfig {
             maximum_in_flight_requests: session.maximum_in_flight_requests,
             maximum_realtime_polls_per_account: session.maximum_realtime_polls_per_account,
             request_timeout_seconds: session.request_timeout.as_secs(),
+            idle_timeout_seconds: session.idle_timeout.as_secs(),
             maximum_pending_writes: 64,
         }
     }
@@ -205,6 +208,7 @@ impl LimitsConfig {
             maximum_in_flight_requests: self.maximum_in_flight_requests,
             maximum_realtime_polls_per_account: self.maximum_realtime_polls_per_account,
             request_timeout: Duration::from_secs(self.request_timeout_seconds),
+            idle_timeout: Duration::from_secs(self.idle_timeout_seconds),
             ..crate::SessionLimits::default()
         }
     }
@@ -217,6 +221,7 @@ impl LimitsConfig {
             || self.maximum_in_flight_requests == 0
             || self.maximum_realtime_polls_per_account == 0
             || self.request_timeout_seconds == 0
+            || self.idle_timeout_seconds == 0
             || self.maximum_pending_writes == 0
         {
             return Err(crate::Error::Config("[limits] values must be non-zero"));
@@ -778,6 +783,7 @@ mod tests {
             maximum_in_flight_requests = 13\n\
             maximum_realtime_polls_per_account = 3\n\
             request_timeout_seconds = 17\n\
+            idle_timeout_seconds = 23\n\
             maximum_pending_writes = 19\n\
             [rate_limits]\n\
             connection_burst = 23\n\
@@ -807,6 +813,7 @@ mod tests {
                 maximum_in_flight_requests: 13,
                 maximum_realtime_polls_per_account: 3,
                 request_timeout_seconds: 17,
+                idle_timeout_seconds: 23,
                 maximum_pending_writes: 19,
             }
         );

@@ -65,7 +65,13 @@ pub struct SessionLimits {
     /// Realtime inbox long polls one account can hold at once, across its
     /// devices and connections.
     pub maximum_realtime_polls_per_account: usize,
+    /// Reads and writes within a frame, and each response write.
     pub io_timeout: Duration,
+    /// How long a connection may wait between frames, with no long poll
+    /// pending, before the server closes it. A Go v0.1.9 server never closes
+    /// an idle connection, and a Go client closes its own after five minutes
+    /// idle, so the default is a little longer.
+    pub idle_timeout: Duration,
     pub request_timeout: Duration,
 }
 
@@ -86,6 +92,7 @@ impl Default for SessionLimits {
             maximum_in_flight_requests: 64,
             maximum_realtime_polls_per_account: 8,
             io_timeout: Duration::from_secs(15),
+            idle_timeout: Duration::from_secs(330),
             request_timeout: Duration::from_secs(30),
         }
     }
@@ -126,6 +133,7 @@ impl SessionLimits {
             || self.maximum_kex_receive_polls > tokio::sync::Semaphore::MAX_PERMITS
             || self.maximum_in_flight_requests > tokio::sync::Semaphore::MAX_PERMITS
             || self.io_timeout.is_zero()
+            || self.idle_timeout.is_zero()
             || self.request_timeout.is_zero()
         {
             return Err(crate::Error::Config("invalid session limit"));
