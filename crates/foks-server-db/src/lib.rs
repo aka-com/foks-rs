@@ -13,6 +13,7 @@ mod clock;
 pub use chunk_binding::{ChunkStorageBinding, ChunkStorageBindingState};
 pub use chunk_collection::ChunkDeletion;
 pub use chunk_ledger::{
+    ChunkPublicationPolicy,
     ChunkInventoryCheckpoint, ChunkInventoryEntry, ChunkObject, ChunkPhysicalUsage,
     ChunkReservation, ChunkReservationAction,
 };

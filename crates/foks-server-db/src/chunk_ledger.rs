@@ -9,6 +9,16 @@ use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
 type StoredChunkAdmission = (Vec<u8>, Option<Vec<u8>>, i64, i64, String, i64);
 
+/// Deployment policy recorded before a logical publication begins. This does not
+/// certify termination of physical PUT attempts, even when publication succeeds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(i64)]
+pub enum ChunkPublicationPolicy {
+    Unknown = 0,
+    SynchronousFilesystemV1 = 1,
+    RetryingS3V1 = 2,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ChunkReservationAction {
     Publish,
@@ -77,6 +87,12 @@ pub struct ChunkPhysicalUsage {
     pub uncertain_bytes: u64,
     pub objects: u64,
     pub unresolved_attempts: u64,
+    /// Unknown includes all pre-provenance migration history.
+    pub unknown_publication_attempts: u64,
+    /// Logical calls, not a count of physical HTTP PUT attempts.
+    pub retrying_remote_publications: u64,
+    /// Acknowledged publication is not a remote termination certificate.
+    pub acknowledged_remote_publications: u64,
     pub admission_rejections: u64,
     pub inventory_complete: bool,
     pub orphan_objects: u64,
@@ -156,6 +172,17 @@ fn usage(c: &Connection) -> Result<ChunkPhysicalUsage> {
         |r| r.budgeted_get(0),
     )?;
     value.oldest_attempt_micros = oldest.map(unsigned).transpose()?;
+    let (unknown, remote, acknowledged): (i64, i64, i64) = c.query_row(
+        "SELECT coalesce(sum(publication_policy=0),0),
+                coalesce(sum(publication_policy=2),0),
+                coalesce(sum(publication_policy=2 AND outcome=3),0)
+         FROM chunk_object_attempts",
+        [],
+        |r| Ok((r.budgeted_get(0)?, r.budgeted_get(1)?, r.budgeted_get(2)?)),
+    )?;
+    value.unknown_publication_attempts = unsigned(unknown)?;
+    value.retrying_remote_publications = unsigned(remote)?;
+    value.acknowledged_remote_publications = unsigned(acknowledged)?;
     let (bytes,objects,tombstones):(i64,i64,i64)=c.query_row("SELECT coalesce(sum(CASE WHEN state=4 THEN encoded_bytes ELSE 0 END),0),coalesce(sum(state=4),0),coalesce(sum(state=5),0) FROM chunk_objects",[],|r|Ok((r.budgeted_get(0)?,r.budgeted_get(1)?,r.budgeted_get(2)?)))?;
     value.deleting_bytes = unsigned(bytes)?;
     value.deleting_objects = unsigned(objects)?;
@@ -193,6 +220,24 @@ impl Database {
         encoded_bytes: u64,
         attempt_id: &[u8; 16],
         now: u64,
+    ) -> Result<ChunkReservation> {
+        self.reserve_chunk_object_with_policy(
+            digest,
+            encoded_bytes,
+            attempt_id,
+            now,
+            ChunkPublicationPolicy::Unknown,
+        )
+    }
+    /// Admission and immutable policy are committed atomically before PUT. A
+    /// pre-existing reservation is only verified; its policy is never upgraded.
+    pub fn reserve_chunk_object_with_policy(
+        &mut self,
+        digest: &[u8; 32],
+        encoded_bytes: u64,
+        attempt_id: &[u8; 16],
+        now: u64,
+        policy: ChunkPublicationPolicy,
     ) -> Result<ChunkReservation> {
         if !(1..=9438208).contains(&encoded_bytes) {
             return Err(Error::Invalid("physical object size"));
@@ -255,7 +300,7 @@ impl Database {
         let object_id: [u8; 32] = h.finalize().into();
         let key = format!("v2-{}", object_key(&object_id));
         tx.execute("INSERT INTO chunk_objects(object_id,namespace_id,object_key,digest,encoded_bytes,key_format,state,inventory_seen) VALUES(?1,?2,?3,?4,?5,2,1,(SELECT inventory_generation FROM chunk_object_totals WHERE singleton=1))",params![object_id.as_slice(),ns.as_slice(),key,digest.as_slice(),sql_integer(encoded_bytes)?])?;
-        tx.execute("INSERT INTO chunk_object_attempts(attempt_id,object_id,namespace_id,outcome,created_at) VALUES(?1,?2,?3,1,?4)",params![attempt_id.as_slice(),object_id.as_slice(),ns.as_slice(),sql_integer(now)?])?;
+        tx.execute("INSERT INTO chunk_object_attempts(attempt_id,object_id,namespace_id,outcome,created_at,publication_policy) VALUES(?1,?2,?3,1,?4,?5)",params![attempt_id.as_slice(),object_id.as_slice(),ns.as_slice(),sql_integer(now)?,policy as i64])?;
         tx.commit()?;
         Ok(ChunkReservation {
             object_id,
@@ -498,6 +543,105 @@ mod tests {
         db.connection.execute("INSERT INTO kv_file_uploads(uid,file_id,exact_metadata,created_at,updated_at) VALUES(?1,?2,X'',0,0)",params![[1u8;33].as_slice(),[2u8;16].as_slice()]).unwrap();
         db.connection.execute("INSERT INTO kv_file_chunks(uid,file_id,clear_offset,ciphertext,final_chunk,exact_upload_chunk,external_digest,external_ciphertext_bytes,external_encoded_bytes,external_object_id) VALUES(?1,?2,0,X'',0,X'',?3,1,10,(SELECT object_id FROM chunk_objects WHERE digest=?3 AND state=3))",params![[1u8;33].as_slice(),[2u8;16].as_slice(),digest.as_slice()]).unwrap();
     }
+    #[test]
+    fn publication_policy_is_durable_before_put_and_presence_never_upgrades_it() {
+        let (tmp, mut db) = fixture(crate::Config {
+            maximum_chunk_unresolved_attempts: 1,
+            ..Default::default()
+        });
+        let token = db
+            .reserve_chunk_object_with_policy(
+                &[1; 32],
+                10,
+                &[1; 16],
+                1,
+                ChunkPublicationPolicy::RetryingS3V1,
+            )
+            .unwrap();
+        let usage = db.chunk_physical_usage().unwrap();
+        assert_eq!(usage.retrying_remote_publications, 1);
+        assert_eq!(usage.acknowledged_remote_publications, 0);
+        assert_eq!(usage.unresolved_attempts, 1);
+        assert!(db
+            .connection
+            .execute("UPDATE chunk_object_attempts SET publication_policy=1", [],)
+            .is_err());
+        drop(db); // owner loss while physical PUT may still be outstanding
+        let mut db = Database::open(
+            tmp.path().join("db"),
+            crate::Config {
+                maximum_chunk_unresolved_attempts: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        db.recover_chunk_publications().unwrap();
+        let retry = db
+            .reserve_chunk_object_with_policy(
+                &[1; 32],
+                10,
+                &[2; 16],
+                2,
+                ChunkPublicationPolicy::SynchronousFilesystemV1,
+            )
+            .unwrap();
+        assert_eq!(retry.action, ChunkReservationAction::Verify);
+        assert_eq!(retry.attempt_id, None);
+        db.confirm_chunk_presence(&retry).unwrap();
+        let usage = db.chunk_physical_usage().unwrap();
+        assert_eq!(usage.retrying_remote_publications, 1);
+        assert_eq!(usage.acknowledged_remote_publications, 0);
+        assert_eq!(usage.unresolved_attempts, 1);
+        assert_eq!(usage.present_bytes, 10);
+        assert!(db
+            .reserve_chunk_object_with_policy(
+                &[2; 32],
+                10,
+                &[3; 16],
+                3,
+                ChunkPublicationPolicy::RetryingS3V1,
+            )
+            .is_err());
+        assert!(db.settle_chunk_publication(&token, true).is_err());
+    }
+
+    #[test]
+    fn remote_success_settles_admission_but_preserves_unqualified_history_and_bytes() {
+        let (_tmp, mut db) = fixture(crate::Config {
+            maximum_chunk_unresolved_attempts: 1,
+            ..Default::default()
+        });
+        // This would exhaust after one success if provenance were incorrectly
+        // conflated with the existing logical publication admission counter.
+        for index in 1..=3u8 {
+            let token = db
+                .reserve_chunk_object_with_policy(
+                    &[index; 32],
+                    10,
+                    &[index; 16],
+                    u64::from(index),
+                    ChunkPublicationPolicy::RetryingS3V1,
+                )
+                .unwrap();
+            db.settle_chunk_publication(&token, true).unwrap();
+        }
+        let usage = db.chunk_physical_usage().unwrap();
+        assert_eq!(usage.unresolved_attempts, 0);
+        assert_eq!(usage.retrying_remote_publications, 3);
+        assert_eq!(usage.acknowledged_remote_publications, 3);
+        assert_eq!(usage.present_bytes, 30);
+        assert_eq!(usage.orphan_bytes, 30);
+        assert_eq!(usage.unknown_publication_attempts, 0);
+        let legacy = db.reserve_chunk_object(&[4; 32], 10, &[4; 16], 4).unwrap();
+        db.settle_chunk_publication(&legacy, true).unwrap();
+        assert_eq!(
+            db.chunk_physical_usage()
+                .unwrap()
+                .unknown_publication_attempts,
+            1
+        );
+    }
+
     #[test]
     fn ambiguity_stays_charged_and_exact_positive_reconciliation_does_not_free_attempt() {
         let (_tmp, mut db) = fixture(crate::Config {

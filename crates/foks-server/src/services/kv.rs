@@ -481,6 +481,7 @@ fn put_file_chunk(
             principal.device_id(),
             upload.clone(),
             digest,
+            store.publication_policy(),
         )?
         else {
             return Ok(Response::Void); // authenticated exact metadata replay
@@ -534,6 +535,7 @@ fn reserve_file_chunk(
     credential: &[u8],
     upload: Arc<PendingFileChunk>,
     digest: [u8; 32],
+    policy: foks_server_db::ChunkPublicationPolicy,
 ) -> Result<Option<foks_server_db::ChunkReservation>, RpcStatus> {
     let device = credential.to_vec();
     let authority = authority.clone();
@@ -550,11 +552,12 @@ fn reserve_file_chunk(
             if database.kv_file_chunk_exists(&upload.uid, &upload.file_id, upload.chunk.offset)? {
                 return Ok(None);
             }
-            Ok(Some(database.reserve_chunk_object(
+            Ok(Some(database.reserve_chunk_object_with_policy(
                 &digest,
                 upload.exact_chunk.len() as u64,
                 &attempt,
                 now,
+                policy,
             )?))
         })
         .map_err(map_upload_error)

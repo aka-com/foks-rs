@@ -44,7 +44,13 @@ pub fn externalize_chunks(
         let mut attempt = [0; 16];
         crate::Entropy::fill(&crate::OsEntropy, &mut attempt)?;
         let now = foks_server_db::Clock::now_micros(&foks_server_db::SystemClock)?;
-        let token = database.reserve_chunk_object(&digest, exact.len() as u64, &attempt, now)?;
+        let token = database.reserve_chunk_object_with_policy(
+            &digest,
+            exact.len() as u64,
+            &attempt,
+            now,
+            store.publication_policy(),
+        )?;
         match token.action {
             foks_server_db::ChunkReservationAction::Publish => {
                 let published = store.put_object(&token.object(), exact);

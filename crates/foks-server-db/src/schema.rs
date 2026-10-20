@@ -4,7 +4,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::{Error, Result};
 
 pub const APPLICATION_ID: i64 = 0x464f_4b53;
-pub const SCHEMA_VERSION: i64 = 54;
+pub const SCHEMA_VERSION: i64 = 55;
 #[path = "schema/chunk_incarnations.rs"]
 mod chunk_incarnations;
 
@@ -46,19 +46,20 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
         transaction.execute_batch(SCHEMA)?;
         chunk_incarnations::migrate(&transaction)?;
         transaction.execute_batch(include_str!("schema/chunk_authority.sql"))?;
+        transaction.execute_batch(include_str!("schema/chunk_publication.sql"))?;
         transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
         transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         transaction.commit()?;
         return Ok(());
     }
-    if application_id == APPLICATION_ID && matches!(version, 43..=53) {
+    if application_id == APPLICATION_ID && matches!(version, 43..=54) {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Recheck under the write lock: another opener may already have upgraded.
         let application_id =
             transaction.pragma_query_value(None, "application_id", |r| r.budgeted_get(0))?;
         let version =
             transaction.pragma_query_value(None, "user_version", |r| r.budgeted_get(0))?;
-        if application_id == APPLICATION_ID && matches!(version, 43..=53) {
+        if application_id == APPLICATION_ID && matches!(version, 43..=54) {
             if version <= 47 {
                 if version == 43 {
                     transaction.execute_batch(
@@ -134,7 +135,10 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
             if version <= 52 {
                 chunk_incarnations::migrate(&transaction)?;
             }
-            transaction.execute_batch(include_str!("schema/chunk_authority.sql"))?;
+            if version <= 53 {
+                transaction.execute_batch(include_str!("schema/chunk_authority.sql"))?;
+            }
+            transaction.execute_batch(include_str!("schema/chunk_publication.sql"))?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         } else {
             validate(application_id, version)?;
@@ -163,4 +167,57 @@ fn validate(application_id: i64, version: i64) -> Result<()> {
         return Err(Error::SchemaVersion { found: version });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod publication_migration_tests {
+    use super::*;
+
+    #[test]
+    fn genuine_schema54_migration_preserves_unknown_success_and_schema_parity() {
+        let mut old = Connection::open_in_memory().unwrap();
+        old.pragma_update(None, "foreign_keys", true).unwrap();
+        let tx = old.transaction().unwrap();
+        tx.execute_batch(SCHEMA).unwrap();
+        chunk_incarnations::migrate(&tx).unwrap();
+        tx.execute_batch(include_str!("schema/chunk_authority.sql"))
+            .unwrap();
+        tx.pragma_update(None, "application_id", APPLICATION_ID)
+            .unwrap();
+        tx.pragma_update(None, "user_version", 54).unwrap();
+        tx.execute_batch(
+            "INSERT INTO chunk_objects(object_id,object_key,digest,encoded_bytes,state)
+            VALUES(zeroblob(32),'legacy',zeroblob(32),10,3);
+            INSERT INTO chunk_object_attempts(attempt_id,object_id,namespace_id,outcome,created_at)
+            VALUES(zeroblob(16),zeroblob(32),zeroblob(16),3,1);",
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        initialize(&mut old).unwrap();
+        let row: (i64, i64) = old
+            .query_row(
+                "SELECT publication_policy,outcome FROM chunk_object_attempts",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row, (0, 3));
+        initialize(&mut old).unwrap(); // reopen does not reseed provenance
+        let mut fresh = Connection::open_in_memory().unwrap();
+        initialize(&mut fresh).unwrap();
+        fn schema(c: &Connection) -> Vec<(String, Option<String>)> {
+            c.prepare("SELECT name,sql FROM sqlite_master ORDER BY name")
+                .unwrap()
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        }
+        assert_eq!(schema(&old), schema(&fresh));
+        assert_eq!(
+            old.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+                .unwrap(),
+            55
+        );
+    }
 }
