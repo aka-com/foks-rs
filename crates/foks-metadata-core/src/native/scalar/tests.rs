@@ -88,16 +88,25 @@ fn integer_and_cell_validation_preserve_error_categories_without_admission() {
                 Err(Error::Storage)
             ));
         }
+        // Text that does not parse as an i64 is stored data at fault, like
+        // non-canonical text, and the page decoder classifies it the same way.
         for bytes in [
             b"".as_slice(),
             b"1.0",
             b"9223372036854775808",
             b"-9223372036854775809",
+            b"+1",
+            b"01",
+            &[0xff],
         ] {
             assert!(matches!(
                 borrowed(ValueRef::Text(bytes), Kind::Integer),
-                Err(Error::IntegerRange)
+                Err(Error::Storage)
             ));
+            assert_eq!(integer_text(bytes), Err(Error::Storage));
+        }
+        for n in [i64::MIN, -1, 0, 1, i64::MAX] {
+            assert_eq!(integer_text(n.to_string().as_bytes()), Ok(n));
         }
         assert!(matches!(
             borrowed(ValueRef::Text(&[0xff]), Kind::Integer),

@@ -161,12 +161,7 @@ impl Sql for NativeSql<'_> {
                 cells.push(match (value, column.kind) {
                     (ValueRef::Null, _) if column.nullable => Cell::Null,
                     (ValueRef::Text(text), PageKind::Integer) if text.len() <= 20 => {
-                        let text = std::str::from_utf8(text).map_err(|_| Error::Bounds)?;
-                        let n: i64 = text.parse().map_err(|_| Error::Bounds)?;
-                        if crate::scalar::Decimal::new(n).bytes() != text.as_bytes() {
-                            return Err(Error::Bounds);
-                        }
-                        Cell::Integer(n)
+                        Cell::Integer(scalar::integer_text(text)?)
                     }
                     (ValueRef::Blob(bytes), PageKind::Blob)
                         if bytes.len() <= column.maximum_bytes as usize =>

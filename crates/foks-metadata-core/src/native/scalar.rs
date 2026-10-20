@@ -86,15 +86,22 @@ impl Borrowed<'_> {
         })
     }
 }
+/// Decodes the kernel's `CAST(x AS TEXT)` form of an INTEGER cell. Text that
+/// is not UTF-8, not an i64 or not canonical decimal is a stored value at
+/// fault, so every such case is `Storage`. The caller applies the length
+/// bound, which stays `Bounds`. Shared by the scalar and page decoders.
+pub(super) fn integer_text(bytes: &[u8]) -> Result<i64> {
+    let text = std::str::from_utf8(bytes).map_err(|_| Error::Storage)?;
+    let n: i64 = text.parse().map_err(|_| Error::Storage)?;
+    if Decimal::new(n).bytes() != bytes {
+        return Err(Error::Storage);
+    }
+    Ok(n)
+}
 fn borrowed(value: ValueRef<'_>, kind: Kind) -> Result<Borrowed<'_>> {
     Ok(match (value, kind) {
         (ValueRef::Text(bytes), Kind::Integer) if bytes.len() <= 20 => {
-            let text = std::str::from_utf8(bytes).map_err(|_| Error::Storage)?;
-            let n: i64 = text.parse().map_err(|_| Error::IntegerRange)?;
-            if Decimal::new(n).bytes() != bytes {
-                return Err(Error::Storage);
-            }
-            Borrowed::Integer(n)
+            Borrowed::Integer(integer_text(bytes)?)
         }
         (ValueRef::Blob(b), Kind::Blob | Kind::NullableBlob) if b.len() <= MAX_BLOB_BYTES => {
             Borrowed::Blob(b)
