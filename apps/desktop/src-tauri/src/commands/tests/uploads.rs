@@ -2,8 +2,8 @@ use super::support::{account_ref, phase_four_state};
 use crate::agent::AgentError;
 use crate::commands::context::AppState;
 use crate::commands::store_key::store_id;
-use crate::commands::vault::change_file_upload_in;
-use foks_agent_proto::{Operation, UploadHandle};
+use crate::commands::vault::{change_file_upload_in, list_file_uploads_in};
+use foks_agent_proto::{KvStoreRef, Operation, UploadHandle};
 use foks_desktop::CatalogStoreRef;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -138,4 +138,150 @@ fn a_lock_during_a_resume_or_cancel_does_not_discard_the_applied_report() {
     let error = change(&state, &transport, &handle(), true, &lock).unwrap_err();
     assert_eq!(error.code, "app-locked");
     assert!(transport.calls.lock().unwrap().is_empty());
+}
+
+fn list(
+    state: &AppState,
+    transport: &Arc<UploadOperations>,
+    after: Option<[u8; 32]>,
+    lock: &Lock,
+) -> Result<serde_json::Value, AgentError> {
+    let (_, id) = store();
+    let transport: Arc<dyn foks_desktop::AgentTransport> = transport.clone();
+    tauri::async_runtime::block_on(list_file_uploads_in(
+        state,
+        move |_| Ok(transport),
+        &id,
+        after,
+        || lock.check(),
+    ))
+}
+
+#[test]
+fn the_listing_passes_the_store_and_cursor_and_answers_only_while_unlocked() {
+    let state = phase_four_state(Vec::new());
+    let transport = UploadOperations::new(|| Ok(serde_json::json!({"uploads": []})));
+    let lock = Lock::default();
+    let value = list(&state, &transport, Some([5; 32]), &lock).unwrap();
+    assert_eq!(value["uploads"], serde_json::json!([]));
+    assert!(matches!(
+        transport.calls.lock().unwrap().as_slice(),
+        [Operation::ListKvUploads {
+            store: KvStoreRef::Account(account),
+            after: Some(after),
+        }] if account.account_alias == "personal" && *after == [5; 32]
+    ));
+    // A lock while the agent answered withholds the listing.
+    let during = lock.clone();
+    let transport = UploadOperations::with_hook(
+        || Ok(serde_json::json!({"uploads": []})),
+        Box::new(move || during.lock()),
+    );
+    assert_eq!(
+        list(&state, &transport, None, &lock).unwrap_err().code,
+        "app-locked"
+    );
+}
+
+#[test]
+fn a_change_takes_the_reservation_before_it_reads_the_handle() {
+    let state = phase_four_state(Vec::new());
+    let lock = Lock::default();
+    let transport = UploadOperations::new(report);
+    // Another change holds the reservation: refused before the handle is parsed.
+    let held = state
+        .for_profile("work.example")
+        .unwrap()
+        .begin_mutation()
+        .unwrap();
+    let error = change(
+        &state.for_profile("work.example").unwrap(),
+        &transport,
+        "not a handle",
+        true,
+        &lock,
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "mutation-in-flight");
+    drop(held);
+    let error = change(&state, &transport, "not a handle", true, &lock).unwrap_err();
+    assert_eq!(error.code, "invalid-request");
+    assert!(transport.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_change_discards_the_store_items_before_the_agent_is_asked() {
+    let state = phase_four_state(Vec::new());
+    let (store, _) = store();
+    let mut item = super::vault::download_item(1);
+    item.store = store.clone();
+    state
+        .catalog
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .items
+        .push(item);
+    let observed = state.clone();
+    let listed = Arc::new(Mutex::new(None));
+    let seen = listed.clone();
+    let transport = UploadOperations::with_hook(
+        report,
+        Box::new(move || {
+            let catalog = observed.catalog.lock().unwrap();
+            *seen.lock().unwrap() = Some(
+                catalog
+                    .as_ref()
+                    .unwrap()
+                    .items
+                    .iter()
+                    .filter(|item| item.store == store)
+                    .count(),
+            );
+        }),
+    );
+    change(&state, &transport, &handle(), false, &Lock::default()).unwrap();
+    assert!(matches!(
+        transport.calls.lock().unwrap().as_slice(),
+        [Operation::CancelKvUpload { upload_id, .. }] if upload_id.to_string() == handle()
+    ));
+    assert_eq!(*listed.lock().unwrap(), Some(0));
+}
+
+#[test]
+fn only_an_ambiguous_change_requires_a_refresh() {
+    let state = phase_four_state(Vec::new());
+    let lock = Lock::default();
+    let refused = UploadOperations::new(|| {
+        Err(foks_desktop::AgentError::Protocol {
+            code: foks_agent_proto::ErrorCode::UploadExpired,
+            message: "expired".to_owned(),
+            fields: Box::default(),
+        })
+    });
+    assert_eq!(
+        change(&state, &refused, &handle(), true, &lock)
+            .unwrap_err()
+            .code,
+        "upload-expired"
+    );
+    assert!(!state.mutation_requires_refresh().load(Ordering::Acquire));
+    let lost =
+        UploadOperations::new(|| Err(foks_desktop::AgentError::Ambiguous("reply lost".to_owned())));
+    assert!(
+        change(&state, &lost, &handle(), true, &lock)
+            .unwrap_err()
+            .ambiguous
+    );
+    assert!(state.mutation_requires_refresh().load(Ordering::Acquire));
+    // The flag does not stop another upload change: it acts on a handle only.
+    assert!(change(
+        &state,
+        &UploadOperations::new(report),
+        &handle(),
+        false,
+        &lock
+    )
+    .is_ok());
 }
