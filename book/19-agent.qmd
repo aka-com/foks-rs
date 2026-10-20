@@ -123,7 +123,7 @@ client operation onto a worker thread under a semaphore.
 | Chat poll timeout | 60 s |
 | Device pairing budget | 5 min, with 45 s reserved for completion |
 | Ownership re-check | every 5 s |
-| Retention pass | every 60 s |
+| Retention pass | 1 s for profile admission and session opens, then a 50 ms work slice; every 250 ms while work remains, else every 60 s |
 
 Above the worker semaphores sits *profile admission*, a queue of scopes
 in which reads may share a profile, mutations hold it exclusively, and

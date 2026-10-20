@@ -24,6 +24,25 @@ static FINAL: AtomicU64 = AtomicU64::new(0);
 static INVENTORY_SATURATED: AtomicU64 = AtomicU64::new(0);
 static DEFERRED: AtomicU64 = AtomicU64::new(0);
 static CLOCK_UNTRUSTED: AtomicU64 = AtomicU64::new(0);
+static LAST_ERROR: Mutex<Option<LastError>> = Mutex::new(None);
+
+/// The budget of one retention pass: profile admission, the registry,
+/// credential and profile-session opens and the checked-session entry. The
+/// maintenance slice is taken only after all of them, so a slow keystore or
+/// a short foreground hold does not consume the slice or fail the pass.
+pub(super) const PASS_BUDGET: std::time::Duration = std::time::Duration::from_secs(1);
+/// The work one pass does once the checked session has been entered.
+const SLICE: std::time::Duration = std::time::Duration::from_millis(50);
+/// A profile whose passes keep failing with the same error is logged at
+/// most this often.
+const ERROR_LOG_INTERVAL_MS: u64 = 10 * 60 * 1000;
+
+struct LastError {
+    profile: String,
+    message: String,
+    at_ms: u64,
+    logged_at_ms: u64,
+}
 
 #[derive(Default)]
 struct Cursors {
@@ -115,7 +134,40 @@ pub(super) fn snapshot() -> serde_json::Value {
         "unowned_final_removed":FINAL.load(Ordering::Relaxed),
         "inventory_saturated":INVENTORY_SATURATED.load(Ordering::Relaxed),
         "clock_untrusted":CLOCK_UNTRUSTED.load(Ordering::Relaxed),
+        "last_error": LAST_ERROR.lock().ok().and_then(|last| last.as_ref().map(|last| serde_json::json!({
+            "profile": last.profile,
+            "message": last.message,
+            "age_ms": now_ms().saturating_sub(last.at_ms),
+        }))),
     })
+}
+
+/// Records a failed pass for the status report, and logs it unless the same
+/// profile failed the same way within [`ERROR_LOG_INTERVAL_MS`].
+fn record_failure(profile: &str, error: &dyn std::error::Error) {
+    let message = error.to_string();
+    let now = now_ms();
+    let Ok(mut last) = LAST_ERROR.lock() else {
+        return;
+    };
+    let repeated = last.as_ref().filter(|last| {
+        last.profile == profile
+            && last.message == message
+            && now.saturating_sub(last.logged_at_ms) < ERROR_LOG_INTERVAL_MS
+    });
+    let logged_at_ms = match repeated {
+        Some(last) => last.logged_at_ms,
+        None => {
+            eprintln!("retention maintenance of profile {profile} failed: {message}");
+            now
+        }
+    };
+    *last = Some(LastError {
+        profile: profile.to_owned(),
+        message,
+        at_ms: now,
+        logged_at_ms,
+    });
 }
 
 pub(super) fn rejected(code: foks_agent_proto::ErrorCode) {
@@ -187,6 +239,9 @@ fn run(
     };
     cursors.after_profile = Some(profile.clone());
     let result = run_profile(state, &profile, &mut cursors.profiles);
+    if let Err(error) = &result {
+        record_failure(&profile, error.as_ref());
+    }
     cursors.schedule.finish(
         &profile,
         now_ms(),
@@ -201,17 +256,8 @@ fn run_profile(
     profile: &str,
     profiles: &mut BTreeMap<String, AdapterMaintenanceCursor>,
 ) -> Result<Option<foks_client_app::AdapterMaintenanceReport>, Box<dyn std::error::Error>> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
-    // Local maintenance participates in the same FIFO as foreground requests.
-    // It has a short admission budget and never holds a partial profile set.
-    let _admission = match super::profile_work::coordinator().acquire_blocking(
-        state,
-        super::profile_work::Scope::profile(profile),
-        deadline.saturating_duration_since(std::time::Instant::now()),
-        &foks_client_app::CancellationToken::new(),
-    ) {
-        Ok(permit) => permit,
-        Err(_) => return Ok(None),
+    let Some(_admission) = admit(state, profile) else {
+        return Ok(None);
     };
     // A root-scoped registry edit may have completed while admission waited.
     let registry = ProfileRegistry::open(state)?;
@@ -228,15 +274,77 @@ fn run_profile(
     let cursor = profiles.entry(profile.to_owned()).or_default();
     credentials.try_with_checked_session(&session, |checked| {
         let master = credentials.master_key()?;
+        let deadline = std::time::Instant::now() + SLICE;
         checked
             .maintain_adapter_state_until(cursor, &master, deadline)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
     })
 }
 
+/// Local maintenance participates in the same FIFO as foreground requests.
+/// It waits at most the pass budget and never holds a partial profile set.
+fn admit(state: &Path, profile: &str) -> Option<super::profile_work::Permit> {
+    super::profile_work::coordinator()
+        .acquire_blocking(
+            state,
+            super::profile_work::Scope::profile(profile),
+            PASS_BUDGET,
+            &foks_client_app::CancellationToken::new(),
+        )
+        .ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A foreground request that holds the profile for longer than the
+    /// maintenance slice delays the pass instead of failing its admission.
+    #[test]
+    fn admission_waits_past_the_slice_within_the_pass_budget() {
+        let state = tempfile::tempdir().unwrap();
+        let held = super::super::profile_work::coordinator()
+            .try_acquire(
+                state.path(),
+                super::super::profile_work::Scope::profile("p"),
+            )
+            .unwrap()
+            .unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(SLICE * 4);
+            drop(held);
+        });
+        let control = super::super::request_control::RequestControl::background(
+            PASS_BUDGET,
+            foks_client_app::CancellationToken::new(),
+        )
+        .unwrap();
+        let _scope = control.enter().unwrap();
+        let started = std::time::Instant::now();
+        assert!(admit(state.path(), "p").is_some());
+        assert!(started.elapsed() >= SLICE);
+        release.join().unwrap();
+    }
+
+    #[test]
+    fn repeated_failures_are_reported_and_logged_once() {
+        let error = std::io::Error::other("checked session refused");
+        record_failure("retention-log-test", &error);
+        let first = LAST_ERROR
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|last| last.logged_at_ms)
+            .unwrap();
+        record_failure("retention-log-test", &error);
+        let snapshot = snapshot();
+        assert_eq!(snapshot["last_error"]["profile"], "retention-log-test");
+        assert_eq!(snapshot["last_error"]["message"], "checked session refused");
+        assert_eq!(
+            LAST_ERROR.lock().unwrap().as_ref().unwrap().logged_at_ms,
+            first
+        );
+    }
     #[test]
     fn startup_discovers_last_profile_and_backoff_is_profile_local() {
         let names = vec!["a".into(), "b".into(), "c".into()];

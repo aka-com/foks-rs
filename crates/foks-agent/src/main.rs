@@ -379,7 +379,7 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
                 let run = timers::timers().begin(timers::RETENTION, now_ms);
                 tokio::task::spawn_blocking(move || {
                     let _permit=permit;
-                    match request_control::RequestControl::background(Duration::from_millis(50), CancellationToken::new())
+                    match request_control::RequestControl::background(retention::PASS_BUDGET, CancellationToken::new())
                         .map_err(foks_client_app::Error::from).and_then(|control| control.enter()) {
                         Ok(_scope) => retention::run_one_profile(&state),
                         Err(error) => eprintln!("retention deadline unavailable: {error}"),
