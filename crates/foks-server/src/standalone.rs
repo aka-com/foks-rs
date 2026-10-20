@@ -119,6 +119,7 @@ pub fn restore_backup(
 ) -> Result<()> {
     let database_path = database_path.as_ref();
     let key_directory = key_directory.as_ref();
+    refuse_restore_sidecars(database_path)?;
     if database_path.exists() || directory_has_entries(key_directory)? {
         return Err(crate::Error::Config("restore destination is not empty"));
     }
@@ -285,6 +286,47 @@ pub(crate) fn validate_completed_backup(
     database_config: foks_server_db::Config,
 ) -> Result<()> {
     read_validated_backup_artifacts(artifacts, database_config).map(drop)
+}
+
+/// Files that SQLite or the server keep next to a database. SQLite replays a
+/// `-wal` whose own header is valid into whichever main file sits beside it,
+/// so a sidecar left by an earlier installation would silently replace pages
+/// of the restored database on its first open. The lock files are refused as
+/// well so that a restore never shares a path with a live or stale server.
+const RESTORE_SIDECARS: [(&str, &str); 5] = [
+    (
+        "-wal",
+        "restore destination has a SQLite -wal sidecar; remove it or choose a new path",
+    ),
+    (
+        "-shm",
+        "restore destination has a SQLite -shm sidecar; remove it or choose a new path",
+    ),
+    (
+        "-journal",
+        "restore destination has a SQLite -journal sidecar; remove it or choose a new path",
+    ),
+    (
+        ".storage-lock",
+        "restore destination has a .storage-lock file; remove it or choose a new path",
+    ),
+    (
+        ".writer-lock",
+        "restore destination has a .writer-lock file; remove it or choose a new path",
+    ),
+];
+
+fn refuse_restore_sidecars(database_path: &Path) -> Result<()> {
+    for (suffix, message) in RESTORE_SIDECARS {
+        let mut sidecar = database_path.as_os_str().to_os_string();
+        sidecar.push(suffix);
+        match std::fs::symlink_metadata(PathBuf::from(sidecar)) {
+            Ok(_) => return Err(crate::Error::Config(message)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
 }
 
 fn directory_has_entries(path: &Path) -> std::io::Result<bool> {
@@ -1100,4 +1142,70 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
         management,
         fatal,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restore_refuses_each_sidecar_without_writing() {
+        for (suffix, message) in RESTORE_SIDECARS {
+            let root = tempfile::tempdir().unwrap();
+            let database = root.path().join("data").join("foks-server.sqlite");
+            let keys = root.path().join("keys");
+            std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+            let mut sidecar = database.as_os_str().to_os_string();
+            sidecar.push(suffix);
+            std::fs::write(PathBuf::from(&sidecar), b"stale").unwrap();
+            // The artifacts do not exist: the refusal must come before the
+            // backup is read and before anything is written.
+            let missing = root.path().join("backup");
+            let artifacts = BackupArtifacts {
+                database: missing.join("foks-server.sqlite"),
+                key_directory: missing.join("keys"),
+                key_manifest: missing.join("key-manifest.txt"),
+            };
+            match restore_backup(
+                &artifacts,
+                &database,
+                &keys,
+                foks_server_db::Config::default(),
+            ) {
+                Err(crate::Error::Config(found)) => assert_eq!(found, message, "{suffix}"),
+                other => panic!("{suffix}: unexpected result {other:?}"),
+            }
+            assert!(!database.exists(), "{suffix}");
+            assert!(!keys.exists(), "{suffix}");
+            let entries: Vec<_> = std::fs::read_dir(database.parent().unwrap())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            assert_eq!(entries.len(), 1, "{suffix}: {entries:?}");
+            assert_eq!(std::fs::read(PathBuf::from(&sidecar)).unwrap(), b"stale");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restore_refuses_a_dangling_sidecar_symlink() {
+        let root = tempfile::tempdir().unwrap();
+        let database = root.path().join("foks-server.sqlite");
+        std::os::unix::fs::symlink("absent", root.path().join("foks-server.sqlite-wal")).unwrap();
+        let missing = root.path().join("backup");
+        let artifacts = BackupArtifacts {
+            database: missing.join("foks-server.sqlite"),
+            key_directory: missing.join("keys"),
+            key_manifest: missing.join("key-manifest.txt"),
+        };
+        assert!(matches!(
+            restore_backup(
+                &artifacts,
+                &database,
+                root.path().join("keys"),
+                foks_server_db::Config::default(),
+            ),
+            Err(crate::Error::Config(message)) if message == RESTORE_SIDECARS[0].1
+        ));
+    }
 }

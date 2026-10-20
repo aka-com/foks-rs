@@ -720,7 +720,12 @@ foks-server restore \
 Backup authenticates every encrypted key generation with the root key and
 uses a read-only source connection. Restore accepts only a complete manifest,
 integrity-checked database, and exact declared key set, and requires empty
-destination paths. Both commands open the database with the compiled limits
+destination paths. It also refuses a destination where any of the database's
+`-wal`, `-shm` or `-journal` sidecars, or its `.storage-lock` or `.writer-lock`
+files, exists: SQLite replays a leftover `-wal` into whichever database file
+sits next to it, so deleting only `foks-server.sqlite` and restoring into the
+same path would silently replace pages of the restored database. Remove the
+whole old database directory, or restore to a new path. Both commands open the database with the compiled limits
 unless `--config /var/lib/foks/server.toml` supplies the `[storage]`,
 `[waitlist]` and `[chunk_capacity]` tables; the paths still come from the
 flags.
