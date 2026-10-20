@@ -188,7 +188,7 @@ pub(super) async fn handle_chat_poll(
             }
         }
     };
-    super::write_controlled_response(stream, response, &control).await?;
+    super::write_final_response(stream, response, &control).await?;
     Ok(close)
 }
 

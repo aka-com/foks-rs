@@ -154,10 +154,15 @@ client. The 60 seconds the desktop passes therefore lengthen those waits
 only; an ordinary desktop request still ends after at most 15 seconds.
 
 When an operation *does* exceed its deadline after starting, the agent
-closes the connection with the message that the deadline was exceeded and
-the connection was closed because completion is ambiguous. Closing is the
-honest signal: the caller cannot be told "it failed," because the
-mutation may have applied, and cannot be told "it succeeded." The
+answers `DeadlineExceeded` with the message that the deadline was exceeded
+and the connection was closed because completion is ambiguous, then closes
+the connection. Closing is the honest signal: the caller cannot be told
+"it failed," because the mutation may have applied, and cannot be told
+"it succeeded." That answer exists only once the request's deadline has
+passed, so it is written under its own 2-second budget rather than the
+request's; a refusal of work that never started is not, because its client
+has already given up. The same applies to a chat poll, a streaming upload,
+a profile reconciliation and a lease refresh that reach their deadline. The
 surviving blocking work keeps its worker permit until it exits, so a slow
 operation still counts against capacity. Cancellation is propagated into
 the synchronous network client, which polls its deadline and cancellation

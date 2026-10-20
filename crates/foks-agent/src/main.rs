@@ -68,6 +68,11 @@ const CANCELLATION_GRACE: Duration = Duration::from_secs(1);
 /// and the wait for a worker end this much earlier; a budget too short to
 /// spare it keeps a quarter for the work.
 const ADMISSION_REPLY_MARGIN: Duration = Duration::from_secs(2);
+/// The write budget of a `DeadlineExceeded` answer. That answer is built once
+/// the request's own deadline has passed, so it cannot be written under the
+/// request control; without its own budget the client saw a bare close and
+/// reported the agent as disconnected.
+const TERMINAL_RESPONSE_GRACE: Duration = Duration::from_secs(2);
 const MAXIMUM_COMPATIBILITY_ARTIFACT_BYTES: usize = 64 * 1024;
 const MAXIMUM_COMPATIBILITY_ARTIFACT_FETCHES: usize = 4;
 const MAXIMUM_CONCURRENT_READS: usize = 4;
@@ -1252,9 +1257,29 @@ async fn handle_connection(
             .await;
             let (value, timing) = match observed {
                 Ok(value) => value,
-                Err(_) => return Err(foks_client::Error::DeadlineExceeded.into()),
+                Err(_) => {
+                    write_final_response(
+                        &mut stream,
+                        Response::error(
+                            request.id,
+                            ErrorCode::DeadlineExceeded,
+                            "profile reconciliation deadline exceeded; connection closed because completion is ambiguous",
+                        ),
+                        &control,
+                    )
+                    .await?;
+                    return Ok(());
+                }
             };
-            control.check()?;
+            if let Err(error) = control.check() {
+                write_final_response(
+                    &mut stream,
+                    dispatch_error_response(request.id, &error),
+                    &control,
+                )
+                .await?;
+                return Ok(());
+            }
             write_controlled_response(
                 &mut stream,
                 Response::success(request.id, value).with_timing(timing),
@@ -1271,11 +1296,31 @@ async fn handle_connection(
                 )
                 .await
                 {
-                    Ok(result) => {
-                        control.check()?;
-                        result
+                    Ok(result) => match control.check() {
+                        Ok(()) => result,
+                        Err(error) => {
+                            write_final_response(
+                                &mut stream,
+                                dispatch_error_response(request.id, &error),
+                                &control,
+                            )
+                            .await?;
+                            return Ok(());
+                        }
+                    },
+                    Err(_) => {
+                        write_final_response(
+                            &mut stream,
+                            Response::error(
+                                request.id,
+                                ErrorCode::DeadlineExceeded,
+                                "lease refresh deadline exceeded; connection closed because completion is ambiguous",
+                            ),
+                            &control,
+                        )
+                        .await?;
+                        return Ok(());
                     }
-                    Err(_) => return Err(foks_client::Error::DeadlineExceeded.into()),
                 },
                 Err(error) => dispatch_error_response(request.id, &error).result,
             };
@@ -1460,7 +1505,7 @@ async fn handle_connection(
             &mut supervised.response,
             Response::success(0, serde_json::Value::Null),
         );
-        write_controlled_response(&mut stream, response, &control).await?;
+        write_final_response(&mut stream, response, &control).await?;
         let close_connection = supervised.close_connection;
         drop(supervised);
         if close_connection {
@@ -1818,7 +1863,7 @@ async fn handle_streaming_upload(
                 )
         }
     };
-    write_controlled_response(stream, response, &control).await?;
+    write_final_response(stream, response, &control).await?;
     drop(profile_permit);
     Ok(())
 }
@@ -2124,6 +2169,36 @@ async fn write_controlled_response(
     Ok(())
 }
 
+/// Writes the last response of a request. A `DeadlineExceeded` answer is
+/// written under [`TERMINAL_RESPONSE_GRACE`] without consulting `control`,
+/// which has expired by the time such an answer exists; every other response
+/// is written as [`write_controlled_response`] writes it. A rejection that
+/// started no work is not routed here: once its control has expired the
+/// client has given up, and the agent does not open a fresh budget for it.
+async fn write_final_response(
+    stream: &mut tokio::net::UnixStream,
+    response: impl Into<GuardedResponse>,
+    control: &request_control::RequestControl,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut response = response.into();
+    if !matches!(
+        response.response.result,
+        ResponseResult::Error {
+            code: ErrorCode::DeadlineExceeded,
+            ..
+        }
+    ) {
+        return write_controlled_response(stream, response, control).await;
+    }
+    let encoded = foks_agent_proto::encode(&response.response);
+    response.zeroize_plaintext();
+    let frame = Zeroizing::new(encoded?);
+    tokio::time::timeout(TERMINAL_RESPONSE_GRACE, stream.write_all(&frame))
+        .await
+        .map_err(|_| "agent write deadline exceeded")??;
+    Ok(())
+}
+
 struct CancelOnDrop(CancellationToken);
 
 impl Drop for CancelOnDrop {
@@ -2192,6 +2267,13 @@ fn dispatch_timed(
         Ok(scope) => scope,
         Err(error) => return dispatch_error_response(id, &error),
     };
+    #[cfg(test)]
+    if held_dispatch(state_dir) {
+        while !cancellation.is_cancelled() {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        return Response::success(id, serde_json::Value::Null);
+    }
     let initializes = matches!(request.operation, Operation::InitializeState { .. });
     let start = request_timing
         .spawned_at
@@ -10714,9 +10796,80 @@ fn test_request(id: u64, operation: Operation) -> Request {
     Request::new(id, operation, deadline.envelope().clone())
 }
 
+/// State directories whose dispatched operations run until cancelled, so a
+/// test can take a request past its deadline through `handle_connection`.
+#[cfg(test)]
+static HELD_DISPATCHES: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn held_dispatch(state_dir: &Path) -> bool {
+    HELD_DISPATCHES
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|held| held == state_dir)
+}
+
 #[cfg(test)]
 mod deadline_rejection_tests {
     use super::*;
+
+    /// A dispatched operation that outlives its deadline is answered with a
+    /// typed `DeadlineExceeded` before the connection closes. The answer is
+    /// built only after the request control expired, so a write gated on
+    /// that control sent nothing and the client read a bare end of stream.
+    #[tokio::test]
+    async fn dispatched_operation_past_its_deadline_is_answered_before_close() {
+        let temporary = tempfile::tempdir().unwrap();
+        let state_dir = temporary.path().to_path_buf();
+        HELD_DISPATCHES.lock().unwrap().push(state_dir.clone());
+        let capacity = ConnectionCapacity {
+            recovery: Arc::new(Semaphore::new(1)),
+            blocking: Arc::new(Semaphore::new(1)),
+            local: Arc::new(Semaphore::new(1)),
+            chat_polling: Arc::new(Semaphore::new(1)),
+            active_chat_polls: Arc::new(Mutex::new(std::collections::HashSet::new())),
+        };
+        let active = Arc::new(Semaphore::new(1));
+        let permit = active.clone().acquire_owned().await.unwrap();
+        let (mut client, server_stream) = tokio::net::UnixStream::pair().unwrap();
+        let server = tokio::spawn(handle_connection(
+            server_stream,
+            state_dir.clone(),
+            capacity,
+            Arc::new(AtomicBool::new(true)),
+            Duration::from_millis(300),
+            permit,
+        ));
+        let frame = foks_agent_proto::encode(&test_request(9, Operation::Ping)).unwrap();
+        client.write_all(&frame).await.unwrap();
+        let answered = tokio::time::timeout(Duration::from_secs(5), read_frame(&mut client))
+            .await
+            .expect("the agent answered or closed within the test budget");
+        HELD_DISPATCHES
+            .lock()
+            .unwrap()
+            .retain(|held| held != &state_dir);
+        let frame = answered
+            .unwrap()
+            .expect("a DeadlineExceeded frame before end of stream");
+        let response = foks_agent_proto::decode_response(&frame).unwrap();
+        assert_eq!(response.id, Some(9));
+        assert!(
+            matches!(
+                response.result,
+                ResponseResult::Error {
+                    code: ErrorCode::DeadlineExceeded,
+                    ..
+                }
+            ),
+            "the client saw {:?}",
+            response.result
+        );
+        // Completion is ambiguous, so the agent closes the connection.
+        assert!(read_frame(&mut client).await.unwrap().is_none());
+        server.await.unwrap().unwrap();
+    }
     #[test]
     fn discarded_worker_closure_erases_decoded_request() {
         let erased = Arc::new(AtomicBool::new(false));
