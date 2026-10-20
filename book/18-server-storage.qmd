@@ -130,8 +130,10 @@ queued behind a slow one records a time after the slow one finished.
 
 **A job whose request has timed out is skipped.** Each request has one
 deadline, the request timeout (30 s by default) after the first byte of its frame. Body
-reading, the handler, reader checkout, queued writes, external chunk transfers
-and the response write all consume it. The session stops waiting for the
+reading, the handler, reader checkout, queued writes and external chunk
+transfers all consume it; the response write of a completed request gets a
+fresh allowance of the I/O timeout (15 s), so finished work is not discarded
+because the deadline ran short. The session stops waiting for the
 handler at the deadline and closes the connection without a response, and the
 client treats the outcome as ambiguous. The handler runs inside a thread-local
 deadline scope, and `WriterHandle::call` records the scope's deadline with the

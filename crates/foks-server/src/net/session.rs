@@ -320,9 +320,9 @@ pub(crate) async fn serve(
 
     for _ in 0..limits.maximum_requests {
         // The request deadline starts at the first byte of the frame. Body
-        // reading, handler execution, queued writes and the response write
-        // all consume it; idle time between requests does not. A connection
-        // with a pending long poll is not idle.
+        // reading, handler execution and queued writes all consume it; idle
+        // time between requests does not, and the response write gets its
+        // own allowance. A connection with a pending long poll is not idle.
         let read = match responder
             .wait(
                 read_frame_ingress(
@@ -735,7 +735,7 @@ pub(crate) async fn serve(
             BoundedExecution::Stopped => break,
         };
         match responder
-            .write_outcome(outcome, family, sequence, deadline, &mut stop)
+            .write_outcome(outcome, family, sequence, &mut stop)
             .await?
         {
             Flow::Continue => {}
@@ -793,10 +793,7 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
                 }
                 completed = self.polls.next_completed(), if polls_pending => {
                     let (outcome, family, sequence) = completed?;
-                    // A long poll has waited on its own timeout; its response
-                    // write gets a fresh write allowance.
-                    let deadline = crate::deadline::Deadline::after(self.limits.io_timeout)?;
-                    match self.write_outcome(outcome, family, sequence, deadline, stop).await? {
+                    match self.write_outcome(outcome, family, sequence, stop).await? {
                         Flow::Continue => {}
                         Flow::End => return Ok(Waited::Ended),
                     }
@@ -841,7 +838,6 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
         outcome: RequestOutcome,
         family: &'static str,
         sequence: u64,
-        response_deadline: crate::deadline::Deadline,
         stop: &mut watch::Receiver<bool>,
     ) -> Result<Flow> {
         if outcome.disconnect_before_response {
@@ -861,7 +857,7 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
                 write_response_until(
                     &mut self.writer,
                     &response,
-                    crate::deadline::Deadline::after(self.limits.io_timeout)?,
+                    response_write_deadline(self.limits.io_timeout)?,
                     self.limits.io_timeout,
                 )
                 .await?;
@@ -872,6 +868,7 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
             return Ok(Flow::End);
         }
         let _memory = outcome._memory;
+        let response_deadline = response_write_deadline(self.limits.io_timeout)?;
         // A KEX receive keeps its budget permit until its response is written.
         let mut kex = outcome.kex;
         let response = outcome.response;
@@ -926,6 +923,16 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
         self.data.metrics.response_completed(family, status);
         Ok(Flow::Continue)
     }
+}
+
+/// The deadline for writing a completed request's response: a fresh
+/// `io_timeout` allowance. The request deadline bounds the body read, the
+/// handler and its queued writes; a long poll waits on its own timeout. In
+/// either case the work is done once the response exists, and a write that
+/// timed out on what remained would close the connection, discard the
+/// response and make the client repeat the work.
+fn response_write_deadline(io_timeout: std::time::Duration) -> Result<crate::deadline::Deadline> {
+    Ok(crate::deadline::Deadline::after(io_timeout)?)
 }
 
 async fn sleep_until_option(deadline: Option<tokio::time::Instant>) {
@@ -1911,6 +1918,43 @@ mod tests {
         assert_eq!((snapshot.kex.active, snapshot.kex.admitted), (0, 5));
         assert_eq!(budget.available_permits(), 4);
         assert_eq!(memory.available_permits(), 8);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_response_write_gets_the_io_allowance_after_the_request_deadline() {
+        let io_timeout = std::time::Duration::from_secs(2);
+        let request =
+            crate::deadline::Deadline::after(std::time::Duration::from_millis(1)).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let response = vec![0x5a; 64 * 1024];
+        let (mut writer, _reader) = tokio::io::duplex(1024);
+        // The request deadline has passed; a write bounded by it fails.
+        assert!(
+            write_response_until(&mut writer, &response, request, io_timeout)
+                .await
+                .is_err()
+        );
+        // A slow reader still receives the whole response within the fresh
+        // allowance that completed requests get.
+        let (mut writer, mut slow) = tokio::io::duplex(1024);
+        let forward = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let mut received = Vec::new();
+            tokio::io::AsyncReadExt::read_to_end(&mut slow, &mut received)
+                .await
+                .unwrap();
+            received.len()
+        });
+        write_response_until(
+            &mut writer,
+            &response,
+            response_write_deadline(io_timeout).unwrap(),
+            io_timeout,
+        )
+        .await
+        .unwrap();
+        drop(writer);
+        assert_eq!(forward.await.unwrap(), response.len());
     }
 
     #[tokio::test(flavor = "current_thread")]

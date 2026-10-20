@@ -244,9 +244,11 @@ values, or key material.
 
 Each request has one deadline, `request_timeout_seconds` after the first byte
 of its frame arrives. Reading the rest of the frame, waiting for a handler
-permit, reader checkout, the handler, its queued writes, external chunk
-transfers and the response write all consume it; idle time between requests
-does not. A request that reaches its deadline before the handler returns is
+permit, reader checkout, the handler, its queued writes and external chunk
+transfers all consume it; idle time between requests does not. Once the
+handler has returned, the response write gets a fresh `io_timeout` allowance,
+so a response whose work used most of the deadline is still delivered to a
+slow reader instead of being discarded. A request that reaches its deadline before the handler returns is
 closed without a response. If its write is still in the writer queue at that
 point, the writer does not run it: it opens no transaction for the job and
 counts it in `foks_writer_expired_total`. A write that the handler submits
@@ -257,7 +259,7 @@ of a committed SSO access-refresh claim. A rising count means that handlers,
 including their wait in the writer queue, take longer than the request timeout
 before their writes start. Long polls (OIDC completion, KEX receive and
 realtime inbox) wait on their own timeouts instead, and their response write
-gets a fresh `io_timeout` allowance.
+gets the same fresh allowance.
 
 A long poll does not block its connection. Go clients multiplex calls on one
 connection by sequence number, and go-foks device pairing issues further KEX
