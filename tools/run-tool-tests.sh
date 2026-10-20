@@ -2,8 +2,9 @@
 # Runs the Node and Python unit tests of the qualification tools. Tests that
 # need lab artifacts (Wasm builds, native vectors) report themselves as
 # skipped unless the environment variables they name are set.
-# tools/foks-celld-guarded is not included: its suite is bound to the macOS
-# lab host (see its README).
+# In tools/foks-celld-guarded, test_run_node.py and test_prepare_runtime.py
+# need the macOS lab host and report one skipped test elsewhere;
+# test_check_graph.py runs anywhere (see that directory's README).
 set -euo pipefail
 
 tools=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
@@ -22,6 +23,7 @@ python_suites=(
     "foks-schema-cookie-probe test*.py"
     "foks-sqlite-policy test*.py"
     "foks-hosted-transport-check test*.py"
+    "foks-celld-guarded test*.py"
 )
 for suite in "${python_suites[@]}"; do
     directory=${suite%% *}

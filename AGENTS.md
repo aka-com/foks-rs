@@ -38,6 +38,11 @@ desktop session, `scripts/test-native-portability.py` starts a disposable
 D-Bus session and GNOME Keyring (`gnome-keyring` and `dbus-run-session`
 must be installed) and runs the portability suite in it.
 
+The Node and Python unit tests of the qualification tools under `tools/` run
+with `tools/run-tool-tests.sh` (the `foks-tools` workflow runs it on changes
+there); tests that need lab artifacts or the macOS lab host report
+themselves as skipped.
+
 `tools/foks-server/check.sh` builds `foks-metadata-core` for
 `wasm32-unknown-unknown`. `rust-toolchain.toml` lists that target, but a
 1.95.0 toolchain installed before it did may lack it; add it with

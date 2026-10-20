@@ -3,6 +3,7 @@ name: FOKS qualification tools
 on:
   push:
     paths:
+      - "tools/foks-celld-guarded/**"
       - "tools/foks-celld-proof/**"
       - "tools/foks-hosted-transport-check/**"
       - "tools/foks-metadata-spike/**"
