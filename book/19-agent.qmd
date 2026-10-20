@@ -125,6 +125,14 @@ client operation onto a worker thread under a semaphore.
 | Ownership re-check | every 5 s |
 | Retention pass | 1 s for profile admission and session opens, then a 50 ms work slice; every 250 ms while work remains, else every 60 s |
 
+`RetentionStatus` (`foks-rs retention status`) reports the retention
+counters, the number of profiles whose latest pass failed
+(`failing_profiles`) and the most recent of those failures as a redacted
+kind (`deadline`, `keystore`, `database`, `io` or `other`) with its age
+(`latest_failure`). A profile's failure is cleared by its next successful
+pass. The profile name and error text go only to the agent's log, at most
+once every 10 minutes for the same profile and error.
+
 Above the worker semaphores sits *profile admission*, a queue of scopes
 in which reads may share a profile, mutations hold it exclusively, and
 registry changes reserve the whole state root. Disjoint profiles may pass

@@ -24,7 +24,7 @@ static FINAL: AtomicU64 = AtomicU64::new(0);
 static INVENTORY_SATURATED: AtomicU64 = AtomicU64::new(0);
 static DEFERRED: AtomicU64 = AtomicU64::new(0);
 static CLOCK_UNTRUSTED: AtomicU64 = AtomicU64::new(0);
-static LAST_ERROR: Mutex<Option<LastError>> = Mutex::new(None);
+static FAILING: Mutex<BTreeMap<String, Failure>> = Mutex::new(BTreeMap::new());
 
 /// The budget of one retention pass: profile admission, the registry,
 /// credential and profile-session opens and the checked-session entry. The
@@ -37,12 +37,17 @@ const SLICE: std::time::Duration = std::time::Duration::from_millis(50);
 /// most this often.
 const ERROR_LOG_INTERVAL_MS: u64 = 10 * 60 * 1000;
 
-struct LastError {
-    profile: String,
+/// The latest failed pass of a profile, kept until a pass of that profile
+/// succeeds. Only `kind` and the age leave the agent through
+/// RetentionStatus; the profile and message appear in the agent's log.
+struct Failure {
+    kind: &'static str,
     message: String,
     at_ms: u64,
     logged_at_ms: u64,
 }
+/// Failures are tracked for at most this many profiles.
+const FAILING_PROFILES: usize = 64;
 
 #[derive(Default)]
 struct Cursors {
@@ -124,6 +129,19 @@ pub(super) fn wake_profile(name: &str) {
 }
 
 pub(super) fn snapshot() -> serde_json::Value {
+    // Counters and a redacted failure kind only: no profile names or messages.
+    let (failing_profiles, latest_failure) = FAILING.lock().map_or((0, None), |failing| {
+        let latest = failing
+            .values()
+            .max_by_key(|failure| failure.at_ms)
+            .map(|failure| {
+                serde_json::json!({
+                    "kind": failure.kind,
+                    "age_ms": now_ms().saturating_sub(failure.at_ms),
+                })
+            });
+        (failing.len(), latest)
+    });
     serde_json::json!({
         "retention_full":RETENTION_FULL.load(Ordering::Relaxed),
         "active_full":ACTIVE_FULL.load(Ordering::Relaxed),
@@ -134,40 +152,75 @@ pub(super) fn snapshot() -> serde_json::Value {
         "unowned_final_removed":FINAL.load(Ordering::Relaxed),
         "inventory_saturated":INVENTORY_SATURATED.load(Ordering::Relaxed),
         "clock_untrusted":CLOCK_UNTRUSTED.load(Ordering::Relaxed),
-        "last_error": LAST_ERROR.lock().ok().and_then(|last| last.as_ref().map(|last| serde_json::json!({
-            "profile": last.profile,
-            "message": last.message,
-            "age_ms": now_ms().saturating_sub(last.at_ms),
-        }))),
+        "failing_profiles": failing_profiles,
+        "latest_failure": latest_failure,
     })
 }
 
-/// Records a failed pass for the status report, and logs it unless the same
-/// profile failed the same way within [`ERROR_LOG_INTERVAL_MS`].
-fn record_failure(profile: &str, error: &dyn std::error::Error) {
+/// A redacted classification of a failed pass, for the status report.
+fn failure_kind(error: &(dyn std::error::Error + 'static)) -> &'static str {
+    let mut next = Some(error);
+    while let Some(error) = next {
+        if error.is::<foks_local_deadline::Error>()
+            || matches!(
+                error.downcast_ref::<foks_client::Error>(),
+                Some(foks_client::Error::DeadlineExceeded)
+            )
+        {
+            return "deadline";
+        }
+        if error.is::<foks_keystore::Error>() {
+            return "keystore";
+        }
+        if error.is::<foks_client_db::Error>() {
+            return "database";
+        }
+        if error.is::<std::io::Error>() {
+            return "io";
+        }
+        next = error.source();
+    }
+    "other"
+}
+
+/// Records a failed pass of `profile`, and logs it unless that profile
+/// failed the same way within [`ERROR_LOG_INTERVAL_MS`].
+fn record_failure(profile: &str, error: &(dyn std::error::Error + 'static)) {
     let message = error.to_string();
     let now = now_ms();
-    let Ok(mut last) = LAST_ERROR.lock() else {
+    let Ok(mut failing) = FAILING.lock() else {
         return;
     };
-    let repeated = last.as_ref().filter(|last| {
-        last.profile == profile
-            && last.message == message
-            && now.saturating_sub(last.logged_at_ms) < ERROR_LOG_INTERVAL_MS
+    let repeated = failing.get(profile).filter(|failure| {
+        failure.message == message
+            && now.saturating_sub(failure.logged_at_ms) < ERROR_LOG_INTERVAL_MS
     });
     let logged_at_ms = match repeated {
-        Some(last) => last.logged_at_ms,
+        Some(failure) => failure.logged_at_ms,
         None => {
             eprintln!("retention maintenance of profile {profile} failed: {message}");
             now
         }
     };
-    *last = Some(LastError {
-        profile: profile.to_owned(),
-        message,
-        at_ms: now,
-        logged_at_ms,
-    });
+    if !failing.contains_key(profile) && failing.len() >= FAILING_PROFILES {
+        failing.pop_first();
+    }
+    failing.insert(
+        profile.to_owned(),
+        Failure {
+            kind: failure_kind(error),
+            message,
+            at_ms: now,
+            logged_at_ms,
+        },
+    );
+}
+
+/// A successful pass clears the profile's recorded failure.
+fn record_success(profile: &str) {
+    if let Ok(mut failing) = FAILING.lock() {
+        failing.remove(profile);
+    }
 }
 
 pub(super) fn rejected(code: foks_agent_proto::ErrorCode) {
@@ -239,8 +292,10 @@ fn run(
     };
     cursors.after_profile = Some(profile.clone());
     let result = run_profile(state, &profile, &mut cursors.profiles);
-    if let Err(error) = &result {
-        record_failure(&profile, error.as_ref());
+    match &result {
+        Ok(Some(_)) => record_success(&profile),
+        Ok(None) => (),
+        Err(error) => record_failure(&profile, error.as_ref()),
     }
     cursors.schedule.finish(
         &profile,
@@ -326,24 +381,31 @@ mod tests {
         release.join().unwrap();
     }
 
+    /// Failures are logged at most once per interval for each profile, even
+    /// when profiles alternate; the status carries a kind and an age, never
+    /// the profile or message; a later success clears the profile.
     #[test]
-    fn repeated_failures_are_reported_and_logged_once() {
-        let error = std::io::Error::other("checked session refused");
-        record_failure("retention-log-test", &error);
-        let first = LAST_ERROR
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|last| last.logged_at_ms)
-            .unwrap();
-        record_failure("retention-log-test", &error);
-        let snapshot = snapshot();
-        assert_eq!(snapshot["last_error"]["profile"], "retention-log-test");
-        assert_eq!(snapshot["last_error"]["message"], "checked session refused");
-        assert_eq!(
-            LAST_ERROR.lock().unwrap().as_ref().unwrap().logged_at_ms,
-            first
-        );
+    fn failures_are_redacted_rate_limited_per_profile_and_cleared() {
+        let logged_at = |profile: &str| FAILING.lock().unwrap()[profile].logged_at_ms;
+        let error = std::io::Error::other("checked session refused for private-name");
+        record_failure("retention-test-a", &error);
+        let first_a = logged_at("retention-test-a");
+        record_failure("retention-test-b", &error);
+        let first_b = logged_at("retention-test-b");
+        record_failure("retention-test-a", &error);
+        record_failure("retention-test-b", &error);
+        assert_eq!(logged_at("retention-test-a"), first_a);
+        assert_eq!(logged_at("retention-test-b"), first_b);
+        let status = snapshot();
+        assert!(status["failing_profiles"].as_u64().unwrap() >= 2);
+        assert_eq!(status["latest_failure"]["kind"], "io");
+        let text = status.to_string();
+        assert!(!text.contains("retention-test") && !text.contains("private-name"));
+        record_success("retention-test-a");
+        record_success("retention-test-b");
+        let failing = FAILING.lock().unwrap();
+        assert!(!failing.contains_key("retention-test-a"));
+        assert!(!failing.contains_key("retention-test-b"));
     }
     #[test]
     fn startup_discovers_last_profile_and_backoff_is_profile_local() {
