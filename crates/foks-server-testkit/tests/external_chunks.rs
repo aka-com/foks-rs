@@ -1318,3 +1318,60 @@ fn legacy_clone_collection_never_deletes_another_copy_live_or_stopped_reference(
     assert_files(&fresh, &fresh_host, &account, &[("retained.bin", &bytes)]);
     server.shutdown().unwrap();
 }
+
+#[test]
+fn restored_backup_refuses_the_previous_store_and_starts_on_a_new_one() {
+    let environment = TestEnvironment::new().unwrap();
+    environment.use_filesystem_chunks().unwrap();
+    let server = environment.start_server().unwrap();
+    let client = TestClient::new(&environment, "restore-store").unwrap();
+    let host = client.probe_and_pin().unwrap().pinned;
+    let account = client
+        .create_account(&host, &TestAccountSpec::new("restorestore", 0x5a))
+        .unwrap();
+    let external = vec![0x42; 4 * 1024 * 1024 + 17];
+    put(&client, &host, &account, "external.bin", &external).unwrap();
+    let backup = server.backup_named("restore-store").unwrap();
+    let addresses = server.addresses();
+    server.shutdown().unwrap();
+
+    // The previous installation's store survived; its marker belongs to the
+    // binding the backup dropped. Startup must refuse it without pinning the
+    // restored database to it.
+    let restored = TestEnvironment::restore_backup(&backup, addresses).unwrap();
+    restored
+        .set_chunk_store(environment.filesystem_chunk_store().unwrap())
+        .unwrap();
+    for _ in 0..2 {
+        let error = restored.start_server().err().unwrap().to_string();
+        assert!(error.contains("new empty directory or prefix"), "{error}");
+        assert!(restored
+            .read_database()
+            .unwrap()
+            .chunk_storage_binding()
+            .unwrap()
+            .is_none());
+    }
+    restored.use_filesystem_chunks().unwrap();
+    let server = restored.start_server().unwrap();
+    let client = TestClient::new(&environment, "restore-store").unwrap();
+    assert_files(&client, &host, &account, &[("external.bin", &external)]);
+    let new_external = vec![0x43; 4 * 1024 * 1024 + 3];
+    put(&client, &host, &account, "new.bin", &new_external).unwrap();
+    server.shutdown().unwrap();
+    let objects = restored
+        .root()
+        .join("chunks")
+        .read_dir()
+        .unwrap()
+        .filter(|entry| {
+            !entry
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("_foks_")
+        })
+        .count();
+    assert!(objects > 0);
+}

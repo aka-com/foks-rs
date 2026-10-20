@@ -683,6 +683,17 @@ fail backup creation. Hydration requires temporary disk and database capacity
 for the original duplicated inline representation and can be slow; it is not a
 15-second failover path. Scheduled shutdown checks cancellation between chunks.
 
+A restored database has no chunk store binding and no object ledger. If the
+restored installation is configured with a chunk store, that store must be a
+new empty directory or prefix. Startup refuses a namespace that already has a
+marker, such as the store of the installation the backup was taken from,
+before it records any binding, so the same database can then be started with a
+new store. A binding that was recorded but never activated (an earlier release
+recorded one before this check) is replaced when the configuration names a
+different store. Objects in the previous namespace are not referenced by the
+restored database and no collector of the restored installation deletes them;
+remove them separately once no installation uses that namespace.
+
 For the standalone `serve` and `backup` commands, `--chunk-store-config PATH`
 accepts a separate TOML file containing the same settings **without** the
 `[chunk_store]` table header. Supply it to `backup` for an external source;
