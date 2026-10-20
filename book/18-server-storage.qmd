@@ -299,9 +299,9 @@ coordinate), with the version stamped last. An upgrade runs the same steps. A
 file at version 43 through 59 is upgraded in one transaction as well (except a
 version-49 file written before the celld port, which lacks the KV accounting
 columns and is refused with a schema-version error; see the foks-server-db
-README), and every connection then compares the complete `sqlite_schema` with the contract
-compiled from a fresh reference schema. Two properties make
-that upgrade safe:
+README), and every connection then compares the complete `sqlite_schema` with
+the contract compiled from a fresh reference schema. Two properties make that
+upgrade safe:
 
 - The version is *re-read under the write lock* before acting. Another
   opener may already have upgraded the file between the first read and

@@ -52,9 +52,10 @@ commit together; any error leaves the previous schema and data intact.
 A version-49 store written before the celld port (where 49 was the waitlist
 step: `waitlist_count` and the unique email index, without the KV accounting
 columns) is refused with a schema-version error and must be recreated; the
-upgrade recognises it by the missing `kv_namespaces.accounted_bytes` column. Index
-creation can take time and disk/WAL space proportional to the existing tables,
-so allow for that work during a controlled writer restart and retain a backup.
+upgrade recognises it by the missing `kv_namespaces.accounted_bytes` column.
+Index creation can take time and disk/WAL space proportional to the existing
+tables, so allow for that work during a controlled writer restart and retain a
+backup.
 No upgrade runs inside recurring maintenance.
 
 `Database::open_existing` and `ReadDatabase::open` validate only: they refuse 43
