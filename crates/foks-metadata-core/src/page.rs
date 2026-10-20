@@ -275,9 +275,11 @@ fn reserved_header(
     }
     charge(capacity)?;
     let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(capacity)
-        .map_err(|_| Error::Bounds)?;
+    bytes.try_reserve_exact(capacity).map_err(|_| {
+        #[cfg(feature = "list-allocation-qualification")]
+        crate::allocation_trace::allocator_failed();
+        crate::Error::Bounds
+    })?;
     bytes.extend_from_slice(b"FKPG");
     bytes.extend_from_slice(&ABI_VERSION.to_le_bytes());
     bytes.extend_from_slice(&(kind as u16).to_le_bytes());
@@ -317,7 +319,11 @@ fn append_row(
     if total > bytes.capacity() {
         charge(total)?;
     }
-    bytes.try_reserve_exact(needed).map_err(|_| Error::Bounds)?;
+    bytes.try_reserve_exact(needed).map_err(|_| {
+        #[cfg(feature = "list-allocation-qualification")]
+        crate::allocation_trace::allocator_failed();
+        crate::Error::Bounds
+    })?;
     for cell in cells {
         match cell {
             Cell::Null => bytes.push(0),

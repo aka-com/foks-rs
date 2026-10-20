@@ -7,6 +7,7 @@ publish = false
 description = "Sealed isolated-process test composition for foks-server"
 
 [features]
+list-allocation-qualification = ["celld-proof", "foks-metadata-core/list-allocation-qualification"]
 celld-proof = ["dep:rusqlite", "dep:serde", "foks-server/celld-proof"]
 
 [[example]]

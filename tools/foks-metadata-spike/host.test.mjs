@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {bind,sameData,Kernel,KernelError} from './host.mjs';
+const bareKernel=()=>Object.assign(Object.create(Kernel.prototype),{poisoned:false,exportDepth:0,lastWipe:null});
 
 test('all signed integers use exact decimal text at the JS SQL boundary',()=>{
   for(const value of ['-9223372036854775808','9223372036854775807','9007199254740993','0'])assert.equal(bind({integer:value},'integer'),value);
@@ -32,7 +33,7 @@ test('fixture comparison ignores object key order but preserves all fields and e
 // These tests isolate the public nested-transaction contract. Actual Wasm/SQLite
 // equivalence is tested by the retained celld vector suites, not by this mock.
 function domainHarness({status=null,failure=null,rollbackError=null,calls=0}={}) {
-  const kernel=Object.create(Kernel.prototype), events=[];
+  const kernel=bareKernel(), events=[];
   Object.assign(kernel,{running:true,authority:true,domainActive:false,calls,deadline:Date.now()+60000});
   kernel.range=()=>new TextEncoder().encode('{}');
   kernel.invoke=(_command,_authority,statusError)=>{kernel.admit();events.push('effect');if(failure)throw failure;if(status)throw statusError(status);return {values:[]};};
@@ -85,7 +86,7 @@ test('domain cannot reset deadline or enter recursively or outside authority',()
   assert.equal(kernel.calls,0);assert.equal(kernel.running,false);
 });
 test('domain copies input and nested output across reentrant memory growth',()=>{
-  const kernel=Object.create(Kernel.prototype), memory=new WebAssembly.Memory({initial:1,maximum:3});
+  const kernel=bareKernel(), memory=new WebAssembly.Memory({initial:1,maximum:3});
   const encoder=new TextEncoder(), decoder=new TextDecoder(), command='{"operation":"probe"}';
   const reply={values:[{integer:'9007199254740993'}]}, replyBytes=encoder.encode(JSON.stringify(reply));
   Object.assign(kernel,{running:true,authority:true,domainActive:false,calls:0,deadline:Date.now()+60000});
@@ -98,21 +99,25 @@ test('domain copies input and nested output across reentrant memory growth',()=>
   assert.equal(memory.buffer.byteLength,3*65536);
 });
 test('only nonzero export status invokes the domain rejection factory',()=>{
-  const kernel=Object.create(Kernel.prototype), memory=new WebAssembly.Memory({initial:1});
+  const kernel=bareKernel(), memory=new WebAssembly.Memory({initial:1});
   const imported=new KernelError('conflict'), token={}, encoded=new TextEncoder().encode('"conflict"');
   let conversions=0;
   kernel.instance={exports:{memory,input_alloc:()=>128,run(){throw imported;},output_pointer:()=>1024,output_length:()=>encoded.length}};
   const factory=code=>{assert.equal(code,'conflict');conversions++;return token;};
   assert.throws(()=>kernel.invoke('{}',false,factory),value=>value===imported);
   assert.equal(conversions,0);
-  new Uint8Array(memory.buffer,1024,encoded.length).set(encoded);
-  kernel.instance.exports.run=()=>1;
-  assert.throws(()=>kernel.invoke('{}',false,factory),value=>value===token);
+  assert.equal(kernel.instance,null);assert.equal(kernel.poisoned,true);
+  assert.equal(kernel.lastWipe.complete,true);assert.ok(new Uint8Array(memory.buffer).every(v=>v===0));
+  const fresh=bareKernel(), freshMemory=new WebAssembly.Memory({initial:1});
+  new Uint8Array(freshMemory.buffer,1024,encoded.length).set(encoded);
+  fresh.instance={exports:{memory:freshMemory,input_alloc:()=>128,run:()=>1,output_pointer:()=>1024,output_length:()=>encoded.length}};
+  assert.throws(()=>fresh.invoke('{}',false,factory),value=>value===token);
+  assert.equal(fresh.poisoned,false);
   assert.equal(conversions,1);
 });
 
 test('personal entry is distinct and never converts typed outer failures to domain rejections',()=>{
-  const kernel=Object.create(Kernel.prototype), memory=new WebAssembly.Memory({initial:1});
+  const kernel=bareKernel(), memory=new WebAssembly.Memory({initial:1});
   const payload={kind:'stale_cache',exact_hex:'0102ff'}, bytes=new TextEncoder().encode(JSON.stringify(payload));
   let called=[];
   kernel.instance={exports:{memory,input_alloc:()=>128,run_personal(){called.push('personal');return 1;},read_personal(){called.push('point');return 1;},run_authority(){throw new Error('synthetic selector must not run');},output_pointer:()=>1024,output_length:()=>bytes.length}};

@@ -64,9 +64,11 @@ pub fn read_list_parent_key(
     // slice directly. No collection of pages or growing input-buffer copies.
     crate::page::charge(length)?;
     let mut exact = Vec::new();
-    exact
-        .try_reserve_exact(length)
-        .map_err(|_| crate::Error::Bounds)?;
+    exact.try_reserve_exact(length).map_err(|_| {
+        #[cfg(feature = "list-allocation-qualification")]
+        crate::allocation_trace::allocator_failed();
+        crate::Error::Bounds
+    })?;
     while exact.len() < length {
         let offset = exact.len();
         let requested = DIRECTORY_SLICE_BYTES.min(length - offset);

@@ -8,17 +8,22 @@ thread_local! {
 }
 #[no_mangle]
 pub extern "C" fn read_token_clear() {
+    if !crate::scalar::response::idle() {
+        return;
+    }
     AUTHORITY.with(|value| {
         value.borrow_mut().take();
     });
     SETUP.with(|value| value.borrow_mut().zeroize());
     super::INPUT.with(|value| value.borrow_mut().zeroize());
-    super::RESPONSE.with(|value| value.borrow_mut().zeroize());
-    super::PAGE_RESPONSE.with(|value| value.borrow_mut().zeroize());
+    crate::scalar::response::clear_idle();
     super::OUTPUT.with(|value| value.borrow_mut().zeroize());
 }
 #[no_mangle]
 pub extern "C" fn read_token_setup_alloc(length: u32) -> u32 {
+    if !crate::scalar::response::idle() {
+        return 0;
+    }
     read_token_clear();
     if length != 48 {
         return 0;
@@ -31,6 +36,9 @@ pub extern "C" fn read_token_setup_alloc(length: u32) -> u32 {
 }
 #[no_mangle]
 pub extern "C" fn read_token_setup() -> u32 {
+    if !crate::scalar::response::idle() {
+        return 1;
+    }
     AUTHORITY.with(|value| {
         value.borrow_mut().take();
     });
@@ -225,6 +233,9 @@ mod fixture {
     }
     #[no_mangle]
     pub extern "C" fn read_token_fixture_alloc(length: u32) -> u32 {
+        if !crate::scalar::response::idle() {
+            return 0;
+        }
         super::super::INPUT.with(|value| value.borrow_mut().zeroize());
         super::super::OUTPUT.with(|value| value.borrow_mut().zeroize());
         if length == 0 || length > 32768 || page::charge(length as usize).is_err() {
@@ -234,6 +245,9 @@ mod fixture {
     }
     #[no_mangle]
     pub extern "C" fn run_read_token_fixture() -> u32 {
+        if !crate::scalar::response::idle() {
+            return 1;
+        }
         let input = super::super::INPUT.with(|value| std::mem::take(&mut *value.borrow_mut()));
         let (status, bytes) = match run(&input) {
             Ok(bytes) => (0, bytes),

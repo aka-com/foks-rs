@@ -144,3 +144,76 @@ test('an allocation export trap poisons before request entry; a normal zero reje
   assert.throws(()=>kernel.runPage(command(probe)),/poisoned/);assert.throws(()=>kernel.run('{}'),/poisoned/);
   db.close();
 });
+
+// Delivery-only fault harness; exact expected bytes come from the immutable
+// native vectors above. The SQLite parity test separately exercises actual SQL.
+class PageDeliveryKernel extends Kernel {
+  constructor(){super(module,[],{},artifact);this.mode='ok';this.vector=probe;}
+  sqlPage(id,pointer,length){
+    this.admit();
+    assert.equal(id,new DataView(command(this.vector).buffer).getUint32(8,true));
+    assert.equal(Buffer.from(this.range(pointer,length,MAX_PARAMETERS)).toString('hex'),this.vector.command);
+    if(this.mode==='missing')return 0;
+    if(this.mode==='zero'||this.mode==='oversize'){
+      assert.equal(this.invokeExport('page_response_alloc',this.mode==='zero'?0:MAX_PAGE+1),0);return 0;
+    }
+    const bytes=new Uint8Array(Buffer.from(this.vector.reply,'hex'));
+    const destination=this.invokeExport('page_response_alloc',bytes.length);
+    assert.notEqual(destination,0);
+    this.range(destination,bytes.length,MAX_PAGE).set(bytes);
+    if(this.mode==='malformed')this.range(destination,bytes.length,MAX_PAGE)[0]=0;
+    if(this.mode==='duplicate')assert.equal(this.invokeExport('page_response_alloc',24),0);
+    if(this.mode==='wrong-scalar')assert.equal(this.invokeExport('response_alloc',1),0);
+    if(this.mode==='setup')assert.equal(this.invokeExport('read_token_setup_alloc',48),0);
+    if(this.mode==='getter')assert.equal(this.invokeExport('output_length'),0);
+    if(this.mode==='reentry')assert.equal(this.invokeExport('run_page'),1);
+    if(this.mode==='returned-error')return 1;
+    if(this.mode==='throw')throw new KernelError('bounds');
+    if(this.mode==='trap')this.invokeExport('trap');
+    return 0;
+  }
+  deliver(vector=probe){this.vector=vector;return this.runPage(command(vector),{deadline:Date.now()+60000});}
+}
+
+test('page delivery transfers large-small-large exact bytes without a second response owner',()=>{
+  const large=fixture.vectors.reduce((a,b)=>a.reply.length>b.reply.length?a:b);
+  assert.ok(large.reply.length>probe.reply.length);
+  const kernel=new PageDeliveryKernel();
+  try{
+    for(const vector of [large,probe,large,probe]){
+      assert.equal(Buffer.from(kernel.deliver(vector)).toString('hex'),vector.reply);
+      assert.equal(kernel.poisoned,false);
+      assert.ok(kernel.instance.exports.memory.buffer.byteLength<=64*1024*1024);
+    }
+  }finally{kernel.poisonAndDiscard();}
+});
+
+test('ordinary page delivery failures cannot retain or publish a prior successful page',()=>{
+  for(const mode of ['missing','zero','oversize','malformed','duplicate','wrong-scalar','setup','getter','reentry','returned-error']){
+    const kernel=new PageDeliveryKernel();
+    try{
+      assert.equal(Buffer.from(kernel.deliver()).toString('hex'),probe.reply);
+      kernel.mode=mode;
+      const expected=['zero','oversize','malformed'].includes(mode)?'bounds':'storage';
+      assert.throws(()=>kernel.deliver(),error=>error instanceof KernelError&&error.code===expected,mode);
+      assert.equal(kernel.poisoned,false,mode);
+      kernel.mode='ok';assert.equal(Buffer.from(kernel.deliver()).toString('hex'),probe.reply,mode);
+    }finally{kernel.poisonAndDiscard();}
+  }
+});
+
+test('page import failures and real callback traps wipe and discard before fresh recovery',()=>{
+  for(const mode of ['throw','trap','allocator-trap']){
+    const kernel=new PageDeliveryKernel(),memory=kernel.instance.exports.memory;
+    if(mode==='allocator-trap'){
+      const exports=kernel.instance.exports;
+      kernel.instance={exports:{...exports,page_response_alloc:()=>exports.trap()}};
+    }else kernel.mode=mode;
+    assert.throws(()=>kernel.deliver(),error=>mode==='throw'?error instanceof KernelError&&error.code==='bounds':error instanceof WebAssembly.RuntimeError);
+    assert.equal(kernel.poisoned,true);assert.equal(kernel.instance,null);
+    assert.equal(kernel.lastWipe.complete,true);assert.ok(new Uint8Array(memory.buffer).every(v=>v===0));
+    assert.throws(()=>kernel.deliver(),/poisoned/);
+    const fresh=new PageDeliveryKernel();
+    try{assert.equal(Buffer.from(fresh.deliver()).toString('hex'),probe.reply);}finally{fresh.poisonAndDiscard();}
+  }
+});
