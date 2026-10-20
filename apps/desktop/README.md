@@ -399,8 +399,11 @@ arguments. `list_catalog` returns profiles, stores, items, failures and
 `blockedProfiles`; `list_servers`, `list_parties` and `list_federation` supply
 the other facts needed by the Phase 2 shell; `read_item`,
 `copy_item_value`, `open_item_url` and `download_file` take
-`{storeId, path, version}`, and `copy_item_field` takes the same plus
-`field` (`password`, `username`, `url` or `value`). Both item copies answer
+`{storeId, path, version, direntId}`, and `copy_item_field` takes the same
+plus `field` (`password`, `username`, `url` or `value`). The host resolves
+the selection against its catalog by all three: an item that changed or was
+removed, or another dirent at the same path and version, is refused with
+`conflict`. Both item copies answer
 `{ok, clearAfterSeconds}`: the seconds after which the host clears the
 clipboard if it still holds the copied value (`AUTO_CLEAR_SECONDS` in
 `src-tauri/src/clipboard.rs`: 15 on Linux, 30 elsewhere), which the copy toast

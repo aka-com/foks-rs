@@ -97,6 +97,7 @@ export async function copyItem(
     storeId: item.store,
     path: item.path,
     version: item.version,
+    direntId: item.direntId,
   };
   const response = await (field === 'value'
     ? bridge.copyItemValue(request)
@@ -183,6 +184,7 @@ export async function openWebsiteAndAnnounce({
       storeId: item.store,
       path: item.path,
       version: item.version,
+      direntId: item.direntId,
     });
     rememberRecent(itemRefOf(item));
     toasts.show('Website opened in the browser');

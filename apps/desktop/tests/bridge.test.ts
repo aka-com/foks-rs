@@ -332,6 +332,7 @@ test('copyItemField sends the exact version and the field to the host', async ()
         storeId: 'opaque-store-ref',
         path: '/work/github.com',
         version: 4,
+        direntId: 'aa'.repeat(16),
         field: 'password',
       }),
       { ok: true, clearAfterSeconds: 15 },
@@ -343,6 +344,7 @@ test('copyItemField sends the exact version and the field to the host', async ()
           storeId: 'opaque-store-ref',
           path: '/work/github.com',
           version: 4,
+          direntId: 'aa'.repeat(16),
           field: 'password',
         },
       ],
@@ -378,13 +380,19 @@ test('openItemUrl sends the exact version and receives no address', async () => 
         storeId: 'opaque-store-ref',
         path: '/work/github.com',
         version: 4,
+        direntId: 'aa'.repeat(16),
       }),
       { ok: true },
     );
     assert.deepEqual(calls, [
       [
         'open_item_url',
-        { storeId: 'opaque-store-ref', path: '/work/github.com', version: 4 },
+        {
+          storeId: 'opaque-store-ref',
+          path: '/work/github.com',
+          version: 4,
+          direntId: 'aa'.repeat(16),
+        },
       ],
     ]);
   } finally {
@@ -2929,6 +2937,7 @@ test('mock createTextItem adds item to catalog and allows reading by specific ve
         storeId: created.store,
         path: created.path,
         version: created.version,
+        direntId: created.direntId,
       })
     ).value,
     'new value',
@@ -3125,6 +3134,7 @@ test('mock editTextItem increments item version and returns updated value on rea
         storeId: edited.store,
         path: edited.path,
         version: edited.version,
+        direntId: edited.direntId,
       })
     ).value,
     'user: marcus\npassword: replacement\nurl: https://github.com',

@@ -104,28 +104,36 @@ export const vaultCommands = (
   listProfileCatalog: (profile) =>
     transport.checked('list_profile_catalog', { profile }, decodeCatalog),
   listStores: () => transport.checked('list_stores', undefined, decodeCatalog),
-  readItem: ({ storeId, path, version }) =>
-    transport.checked('read_item', { storeId, path, version }, decodeReadItem),
+  readItem: ({ storeId, path, version, direntId }) =>
+    transport.checked(
+      'read_item',
+      { storeId, path, version, direntId },
+      decodeReadItem,
+    ),
   storeUsage: (storeId) =>
     transport.checked('store_usage', { storeId }, decodeStoreUsage),
-  copyItemValue: ({ storeId, path, version }) =>
+  copyItemValue: ({ storeId, path, version, direntId }) =>
     transport.checked(
       'copy_item_value',
-      { storeId, path, version },
+      { storeId, path, version, direntId },
       decodeClipboardCopy,
     ),
-  copyItemField: ({ storeId, path, version, field }) =>
+  copyItemField: ({ storeId, path, version, direntId, field }) =>
     transport.checked(
       'copy_item_field',
-      { storeId, path, version, field },
+      { storeId, path, version, direntId, field },
       decodeClipboardCopy,
     ),
-  openItemUrl: ({ storeId, path, version }) =>
-    transport.checked('open_item_url', { storeId, path, version }, decodeCopy),
-  downloadFile: ({ storeId, path, version }) =>
+  openItemUrl: ({ storeId, path, version, direntId }) =>
+    transport.checked(
+      'open_item_url',
+      { storeId, path, version, direntId },
+      decodeCopy,
+    ),
+  downloadFile: ({ storeId, path, version, direntId }) =>
     transport.checked(
       'download_file',
-      { storeId, path, version },
+      { storeId, path, version, direntId },
       decodeDownload,
     ),
   createTextItem: ({ storeId, path, value, readRole, writeRole }) =>

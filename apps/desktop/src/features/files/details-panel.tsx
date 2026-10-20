@@ -233,7 +233,12 @@ export function DetailsPanel({
   const request = useMemo<ItemRequest | null>(
     () =>
       item
-        ? { storeId: item.store, path: item.path, version: item.version }
+        ? {
+            storeId: item.store,
+            path: item.path,
+            version: item.version,
+            direntId: item.direntId,
+          }
         : null,
     [item],
   );

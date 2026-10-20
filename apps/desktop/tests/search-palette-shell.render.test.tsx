@@ -123,6 +123,7 @@ test('⌘C on a Password copies its password and says so', async () => {
       storeId: 'acct:personal',
       path: '/logins/github.com',
       version: 9,
+      direntId: '00000000000000000000000000000001',
       field: 'password',
     },
   ]);
@@ -155,7 +156,12 @@ test('⌘O on a Password opens its website through the host', async () => {
   await ui.waitFor(() => assert.match(toasts(), /Website opened/));
   assert.equal(document.querySelector('.pal'), null);
   assert.deepEqual(opens, [
-    { storeId: 'acct:personal', path: '/logins/github.com', version: 9 },
+    {
+      storeId: 'acct:personal',
+      path: '/logins/github.com',
+      version: 9,
+      direntId: '00000000000000000000000000000001',
+    },
   ]);
   assert.deepEqual(
     mockOpenedSites.slice(before).map(({ url }) => url),

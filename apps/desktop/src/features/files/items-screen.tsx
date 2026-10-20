@@ -754,6 +754,7 @@ export function ItemsScreen({
     storeId: item.store,
     path: item.path,
     version: item.version,
+    direntId: item.direntId,
   });
   const allowAction = (item: Item, write = false): boolean => {
     const problem = itemActionProblem(snapshot, item, write, accessNow());

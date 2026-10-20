@@ -42,7 +42,12 @@ test('the mock host answers through the bridge decoders and rejects what they re
       }),
     ),
   );
-  const request = { storeId: 'acct:personal', path: '/a', version: 1 };
+  const request = {
+    storeId: 'acct:personal',
+    path: '/a',
+    version: 1,
+    direntId: 'aa'.repeat(16),
+  };
   // Serialized as Tauri does, so an undefined field is not part of the reply.
   assert.deepEqual(await bridge.readItem(request), {
     store: 'acct:personal',
@@ -174,17 +179,41 @@ test('mock vault failures carry the host codes and the transport normalization',
       storeId: item.store,
       path: item.path,
       version: item.version + 1,
+      direntId: item.direntId,
     }),
     {
-      code: 'item-version-mismatch',
+      code: 'conflict',
+      message:
+        'This item changed or was removed. Refresh the vault before reading it.',
       origin: 'invoke',
-      retryable: true,
+      retryable: false,
       ambiguous: false,
     },
   );
   await assert.rejects(
-    bridge.readItem({ storeId: item.store, path: '/missing', version: 1 }),
-    { code: 'item-not-found', origin: 'invoke', ambiguous: false },
+    bridge.readItem({
+      storeId: item.store,
+      path: '/missing',
+      version: 1,
+      direntId: item.direntId,
+    }),
+    { code: 'conflict', origin: 'invoke', ambiguous: false },
+  );
+  // Another dirent at the same path and version: the listed entry was
+  // replaced, and the read refuses it.
+  await assert.rejects(
+    bridge.readItem({
+      storeId: item.store,
+      path: item.path,
+      version: item.version,
+      direntId: 'ff'.repeat(16),
+    }),
+    {
+      code: 'conflict',
+      message: 'This item was replaced. Refresh the vault before reading it.',
+      origin: 'invoke',
+      ambiguous: false,
+    },
   );
   await assert.rejects(
     bridge.editTextItem({

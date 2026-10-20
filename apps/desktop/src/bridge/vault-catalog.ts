@@ -93,6 +93,11 @@ export interface ItemRequest {
   storeId: StoreRef;
   path: string;
   version: number;
+  /**
+   * The dirent the catalog listed at `path`. The host refuses the request
+   * with `conflict` when the entry it holds there is another dirent.
+   */
+  direntId: string;
 }
 
 /** One field of an item for `copy_item_field`; `value` is the whole text. */

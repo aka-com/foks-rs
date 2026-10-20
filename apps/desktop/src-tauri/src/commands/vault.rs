@@ -1419,10 +1419,11 @@ pub async fn read_item(
     store_id: String,
     path: String,
     version: u64,
+    dirent_id: String,
 ) -> Result<ReadItemDto, AgentError> {
     let interval = crate::applock::unlocked_interval(&app)?;
     require_main_window(&webview)?;
-    let item = state.selected_item(&store_id, &path, version)?;
+    let item = state.selected_bound_item(&store_id, &path, version, &dirent_id, "reading")?;
     let transport = state.transport()?;
     let worker_interval = interval.clone();
     let result = super::deadline::run(
@@ -1494,6 +1495,7 @@ pub async fn copy_item_value(
     store_id: String,
     path: String,
     version: u64,
+    dirent_id: String,
 ) -> Result<ClipboardAck, AgentError> {
     copy_item_field(
         app,
@@ -1502,6 +1504,7 @@ pub async fn copy_item_value(
         store_id,
         path,
         version,
+        dirent_id,
         ItemField::Value,
     )
     .await
@@ -1544,6 +1547,7 @@ pub(super) fn item_field(
 /// clipboard hygiene. No content crosses IPC; the response says when the
 /// clipboard is cleared.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn copy_item_field(
     app: tauri::AppHandle,
     webview: tauri::Webview,
@@ -1551,11 +1555,12 @@ pub async fn copy_item_field(
     store_id: String,
     path: String,
     version: u64,
+    dirent_id: String,
     field: ItemField,
 ) -> Result<ClipboardAck, AgentError> {
     let interval = crate::applock::unlocked_interval(&app)?;
     require_main_window(&webview)?;
-    let item = state.selected_item(&store_id, &path, version)?;
+    let item = state.selected_bound_item(&store_id, &path, version, &dirent_id, "reading")?;
     let transport = state.transport()?;
     let worker_interval = interval.clone();
     let value = super::deadline::run(
@@ -1613,10 +1618,11 @@ pub async fn open_item_url(
     store_id: String,
     path: String,
     version: u64,
+    dirent_id: String,
 ) -> Result<CommandAck, AgentError> {
     let interval = crate::applock::unlocked_interval(&app)?;
     require_main_window(&webview)?;
-    let item = state.selected_item(&store_id, &path, version)?;
+    let item = state.selected_bound_item(&store_id, &path, version, &dirent_id, "reading")?;
     let transport = state.transport()?;
     let worker_interval = interval.clone();
     let field = super::deadline::run(
@@ -1668,10 +1674,11 @@ pub async fn download_file(
     store_id: String,
     path: String,
     version: u64,
+    dirent_id: String,
 ) -> Result<DownloadResult, AgentError> {
     let interval = crate::applock::unlocked_interval(&app)?;
     require_main_window(&webview)?;
-    let item = state.selected_item(&store_id, &path, version)?;
+    let item = state.selected_bound_item(&store_id, &path, version, &dirent_id, "reading")?;
     let suggested = item
         .metadata
         .path

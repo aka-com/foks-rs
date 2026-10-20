@@ -223,7 +223,12 @@ test('a bridge over an injected host decodes its responses and classifies reads 
   );
   respond = () => ({});
   await assert.rejects(
-    bridge.readItem({ storeId: 'store', path: '/a', version: 1 }),
+    bridge.readItem({
+      storeId: 'store',
+      path: '/a',
+      version: 1,
+      direntId: 'aa'.repeat(16),
+    }),
     { code: 'invalid-response', origin: 'response', ambiguous: false },
   );
   await assert.rejects(bridge.createFolder({ storeId: 'store', path: '/a' }), {

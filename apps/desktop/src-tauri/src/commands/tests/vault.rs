@@ -1972,3 +1972,41 @@ async fn expired_download_never_publishes_and_cleans_its_temporary_file() {
         }
     }
 }
+
+/// The read commands resolve the renderer's selection by dirent as well as
+/// path and version: an entry that replaced the listed one at the same path
+/// and version is refused rather than read in its place.
+#[test]
+fn a_read_refuses_another_dirent_at_the_listed_path_and_version() {
+    let state = super::support::phase_four_state(Vec::new());
+    let store = CatalogStoreRef::Account(super::support::account_ref("work.example", "personal"));
+    let id = crate::commands::store_key::store_id(&store);
+    let mut item = download_item(1);
+    item.store = store;
+    item.metadata.path = "/notes/plan".to_owned();
+    item.metadata.version = 4;
+    item.metadata.dirent_id = [9; 16];
+    state
+        .catalog
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .items
+        .push(item.clone());
+    let listed = "09".repeat(16);
+    assert_eq!(
+        state
+            .selected_bound_item(&id, "/notes/plan", 4, &listed, "reading")
+            .unwrap(),
+        item
+    );
+    let replaced = state
+        .selected_bound_item(&id, "/notes/plan", 4, &"0a".repeat(16), "reading")
+        .unwrap_err();
+    assert_eq!(replaced.code, "conflict");
+    assert_eq!(
+        replaced.message,
+        "This item was replaced. Refresh the vault before reading it."
+    );
+}

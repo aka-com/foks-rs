@@ -167,6 +167,7 @@ export function useTrashActions({
                   storeId: entry.origin.store,
                   path: entry.origin.path,
                   version: entry.origin.version,
+                  direntId: entry.origin.direntId,
                 })
               ).value
             : `/${entry.name}`);

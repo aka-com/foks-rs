@@ -148,17 +148,17 @@ export function mockVaultCommands(
       (candidate) =>
         candidate.store === request.storeId && candidate.path === request.path,
     );
-    // The codes and retry hints the host's item lookup answers with.
-    if (!item)
-      throw failure('item-not-found', 'This item is no longer in the vault.');
-    if (item.version !== request.version)
-      throw {
-        ...failure(
-          'item-version-mismatch',
-          'This item changed. Refresh the vault before reading it.',
-        ),
-        retryable: true,
-      };
+    // The codes the host's dirent-bound read lookup answers with.
+    if (!item || item.version !== request.version)
+      throw failure(
+        'conflict',
+        'This item changed or was removed. Refresh the vault before reading it.',
+      );
+    if (item.direntId !== request.direntId)
+      throw failure(
+        'conflict',
+        'This item was replaced. Refresh the vault before reading it.',
+      );
     return item;
   };
   const decodeCreateRole = (role: KvRoleInput): RoleWire => {

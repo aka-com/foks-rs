@@ -148,6 +148,7 @@ test('item menus use the existing read actions and restore keyboard focus', asyn
       storeId: 'acct:personal',
       path: '/logins/github.com',
       version: 9,
+      direntId: '00000000000000000000000000000001',
       field: 'password',
     },
   ]);

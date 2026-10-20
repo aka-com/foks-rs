@@ -95,6 +95,7 @@ test('concurrent reads of one item version share a request until it settles', as
     storeId: 'acct:personal',
     path: '/logins/github.com',
     version: 9,
+    direntId: 'aa'.repeat(16),
   };
   const first = readOnce(reads.bridge, request, 1, session);
   const second = readOnce(reads.bridge, { ...request }, 1, session);
@@ -115,6 +116,7 @@ test('a read answering for another item or version is refused', () => {
     storeId: 'acct:personal',
     path: '/logins/github.com',
     version: 9,
+    direntId: 'aa'.repeat(16),
   };
   const response: ReadItemResponse = {
     store: 'acct:personal',

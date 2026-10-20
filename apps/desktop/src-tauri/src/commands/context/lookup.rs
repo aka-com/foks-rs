@@ -18,6 +18,9 @@ use crate::commands::validation::{
 use foks_desktop::{CatalogItem, CatalogSnapshot, CatalogStoreRef, CatalogStoreSummary};
 
 impl AppState {
+    /// The listed version of the item at `path`. Commands resolve through
+    /// the dirent-bound selections below; tests use this one directly.
+    #[cfg(test)]
     pub(in crate::commands) fn selected_item(
         &self,
         store: &str,
