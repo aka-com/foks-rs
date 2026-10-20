@@ -800,6 +800,10 @@ workspace package, a server crate that depends on a client, device, agent or
 front-end crate, any other edge the layer rules do not allow and no listed
 exception covers, and a production dependency, direct or transitive, on
 `foks-server-testkit`.
+It also builds `foks-metadata-core` for `wasm32-unknown-unknown`, the
+artifact celld loads, with and without its `read-token-qualification` and
+`list-allocation-qualification` features; `rust-toolchain.toml` lists that
+target so rustup installs it with the toolchain.
 The optional official-Go frame audit is
 `tools/foks-v019-oracle/run-live-team-compat.sh`; it needs a Go 1.25-compatible
 toolchain and may populate Go compiler/module caches, but does not use a state
