@@ -38,6 +38,11 @@ desktop session, `scripts/test-native-portability.py` starts a disposable
 D-Bus session and GNOME Keyring (`gnome-keyring` and `dbus-run-session`
 must be installed) and runs the portability suite in it.
 
+`tools/foks-server/check.sh` builds `foks-metadata-core` for
+`wasm32-unknown-unknown`. `rust-toolchain.toml` lists that target, but a
+1.95.0 toolchain installed before it did may lack it; add it with
+`rustup target add wasm32-unknown-unknown`.
+
 If CLI integration readiness checks report an IPC protocol version mismatch
 while Cargo reports the standalone agent as fresh, force a relink with
 `cargo rustc --locked -j 2 -p foks-agent --bin foks-agent -- -C metadata=agent-readiness-recheck`
