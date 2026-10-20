@@ -1271,21 +1271,15 @@ async fn handle_connection(
                     return Ok(());
                 }
             };
-            if let Err(error) = control.check() {
-                write_final_response(
-                    &mut stream,
-                    dispatch_error_response(request.id, &error),
-                    &control,
-                )
-                .await?;
-                return Ok(());
-            }
-            write_controlled_response(
+            if write_final_response(
                 &mut stream,
                 Response::success(request.id, value).with_timing(timing),
                 &control,
             )
-            .await?;
+            .await?
+            {
+                return Ok(());
+            }
             continue;
         }
         if let Operation::RefreshLease { profile } = &request.operation {
@@ -1296,18 +1290,7 @@ async fn handle_connection(
                 )
                 .await
                 {
-                    Ok(result) => match control.check() {
-                        Ok(()) => result,
-                        Err(error) => {
-                            write_final_response(
-                                &mut stream,
-                                dispatch_error_response(request.id, &error),
-                                &control,
-                            )
-                            .await?;
-                            return Ok(());
-                        }
-                    },
+                    Ok(result) => result,
                     Err(_) => {
                         write_final_response(
                             &mut stream,
@@ -1345,7 +1328,9 @@ async fn handle_connection(
                     fields,
                 } => Response::error_with_fields(Some(request.id), code, message, fields),
             };
-            write_controlled_response(&mut stream, response, &control).await?;
+            if write_final_response(&mut stream, response, &control).await? {
+                return Ok(());
+            }
             continue;
         }
         if request.operation.is_chat_poll_wait() {
@@ -1505,8 +1490,11 @@ async fn handle_connection(
             &mut supervised.response,
             Response::success(0, serde_json::Value::Null),
         );
-        write_final_response(&mut stream, response, &control).await?;
-        let close_connection = supervised.close_connection;
+        let ambiguous = write_final_response(&mut stream, response, &control).await?;
+        // A DeadlineExceeded answer, including one that replaced a result
+        // completed too late, leaves the outcome ambiguous: close as the
+        // supervisor's own timeout does.
+        let close_connection = supervised.close_connection || ambiguous;
         drop(supervised);
         if close_connection {
             return Ok(());
@@ -1692,6 +1680,13 @@ async fn handle_streaming_upload(
     let worker_header = header.clone();
     let worker_control = control.clone();
     let worker = tokio::task::spawn_blocking(move || {
+        #[cfg(test)]
+        if held_dispatch(&state_dir) {
+            while !worker_cancellation.is_cancelled() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            return Err("held upload worker cancelled".into());
+        }
         let result = (|| {
             let _scope = worker_control.enter()?;
             profile_work::with_control(timeout, worker_cancellation.clone(), || {
@@ -1743,7 +1738,12 @@ async fn handle_streaming_upload(
     let mut worker = UploadWorker(Some(worker));
     let _cancel_on_drop = CancelOnDrop(cancellation.clone());
     if handshake {
-        match tokio::time::timeout(control.remaining()?, ready_receiver).await {
+        match tokio::time::timeout(
+            control.remaining().unwrap_or(Duration::ZERO),
+            ready_receiver,
+        )
+        .await
+        {
             Ok(Ok(())) => {
                 control.check()?;
                 write_controlled_response(
@@ -1755,29 +1755,39 @@ async fn handle_streaming_upload(
             }
             Ok(Err(_)) => {
                 drop(sender);
-                let (response, _profile_permit) = tokio::time::timeout_at(
+                let Ok(completed) = tokio::time::timeout_at(
                     tokio::time::Instant::from_std(control.deadline.instant()),
                     worker.wait(),
                 )
                 .await
-                .map_err(|_| foks_client::Error::DeadlineExceeded)???;
-                write_controlled_response(stream, response, &control).await?;
+                else {
+                    return answer_ambiguous_upload(stream, request_id, &cancellation, &control)
+                        .await;
+                };
+                let (response, _profile_permit) = completed??;
+                write_final_response(stream, response, &control).await?;
                 return Ok(());
             }
             Err(_) => {
-                cancellation.cancel();
-                return Err("upload readiness deadline exceeded".into());
+                return answer_ambiguous_upload(stream, request_id, &cancellation, &control).await;
             }
         }
     }
     let mut offset = 0u64;
     let mut committed = false;
     for _ in 0..MAXIMUM_STREAM_FRAMES {
-        let frame = match tokio::time::timeout(control.remaining()?, read_frame(stream)).await {
+        let frame = match tokio::time::timeout(
+            control.remaining().unwrap_or(Duration::ZERO),
+            read_frame(stream),
+        )
+        .await
+        {
             Ok(Ok(Some(frame))) => frame,
             Ok(Ok(None)) => return Ok(()),
             Ok(Err(error)) => return Err(error),
-            Err(_) => return Err("streaming upload frame deadline exceeded".into()),
+            Err(_) => {
+                return answer_ambiguous_upload(stream, request_id, &cancellation, &control).await
+            }
         };
         let bytes = Zeroizing::new(frame);
         let mut frame = foks_agent_proto::decode_upload_frame(&bytes)?;
@@ -1800,25 +1810,36 @@ async fn handle_streaming_upload(
                 if offset > header.total_length {
                     return Err("streaming upload exceeds its declared length".into());
                 }
-                if tokio::time::timeout(
-                    control.remaining()?,
+                match tokio::time::timeout(
+                    control.remaining().unwrap_or(Duration::ZERO),
                     sender.send(UploadMessage::Chunk(content)),
                 )
-                .await?
-                .is_err()
+                .await
                 {
-                    break;
+                    Ok(Ok(())) => {}
+                    Ok(Err(_)) => break,
+                    Err(_) => {
+                        return answer_ambiguous_upload(stream, request_id, &cancellation, &control)
+                            .await
+                    }
                 }
             }
             foks_agent_proto::KvUploadPayload::Commit => {
                 if offset != header.total_length {
                     return Err("streaming upload commit length mismatch".into());
                 }
-                if tokio::time::timeout(control.remaining()?, sender.send(UploadMessage::Commit))
-                    .await?
-                    .is_err()
+                match tokio::time::timeout(
+                    control.remaining().unwrap_or(Duration::ZERO),
+                    sender.send(UploadMessage::Commit),
+                )
+                .await
                 {
-                    break;
+                    Ok(Ok(())) => {}
+                    Ok(Err(_)) => break,
+                    Err(_) => {
+                        return answer_ambiguous_upload(stream, request_id, &cancellation, &control)
+                            .await
+                    }
                 }
                 committed = true;
                 break;
@@ -1829,42 +1850,58 @@ async fn handle_streaming_upload(
     if !committed {
         cancellation.cancel();
     }
-    let (response, profile_permit) = match tokio::time::timeout(control.remaining()?, worker.wait())
-        .await
-    {
-        Ok(Ok(Ok((response, profile_permit)))) => (response, Some(profile_permit)),
-        Ok(Ok(Err(error))) => (
-            Response::error(
-                request_id,
-                ErrorCode::OperationFailed,
-                format!("streaming upload worker failed: {error}"),
-            )
-            .into(),
-            None,
-        ),
-        Ok(Err(error)) => (
-            Response::error(
-                request_id,
-                ErrorCode::OperationFailed,
-                format!("streaming upload worker failed: {error}"),
-            )
-            .into(),
-            None,
-        ),
-        Err(_) => {
-            cancellation.cancel();
-            (
-                    Response::error(
-                        request_id,
-                        ErrorCode::DeadlineExceeded,
-                        "streaming upload outcome is ambiguous; refresh the store before another mutation",
-                    ).into(),
-                    None,
+    let (response, profile_permit) =
+        match tokio::time::timeout(control.remaining().unwrap_or(Duration::ZERO), worker.wait())
+            .await
+        {
+            Ok(Ok(Ok((response, profile_permit)))) => (response, Some(profile_permit)),
+            Ok(Ok(Err(error))) => (
+                Response::error(
+                    request_id,
+                    ErrorCode::OperationFailed,
+                    format!("streaming upload worker failed: {error}"),
                 )
-        }
-    };
+                .into(),
+                None,
+            ),
+            Ok(Err(error)) => (
+                Response::error(
+                    request_id,
+                    ErrorCode::OperationFailed,
+                    format!("streaming upload worker failed: {error}"),
+                )
+                .into(),
+                None,
+            ),
+            Err(_) => {
+                return answer_ambiguous_upload(stream, request_id, &cancellation, &control).await;
+            }
+        };
     write_final_response(stream, response, &control).await?;
     drop(profile_permit);
+    Ok(())
+}
+
+/// Ends a streaming upload that reached its deadline: the worker is
+/// cancelled and the client is told the outcome is ambiguous, so it
+/// refreshes the store rather than reading a bare close as a lost agent.
+async fn answer_ambiguous_upload(
+    stream: &mut tokio::net::UnixStream,
+    request_id: u64,
+    cancellation: &CancellationToken,
+    control: &request_control::RequestControl,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    cancellation.cancel();
+    write_final_response(
+        stream,
+        Response::error(
+            request_id,
+            ErrorCode::DeadlineExceeded,
+            "streaming upload outcome is ambiguous; refresh the store before another mutation",
+        ),
+        control,
+    )
+    .await?;
     Ok(())
 }
 
@@ -2169,34 +2206,61 @@ async fn write_controlled_response(
     Ok(())
 }
 
-/// Writes the last response of a request. A `DeadlineExceeded` answer is
-/// written under [`TERMINAL_RESPONSE_GRACE`] without consulting `control`,
-/// which has expired by the time such an answer exists; every other response
-/// is written as [`write_controlled_response`] writes it. A rejection that
-/// started no work is not routed here: once its control has expired the
-/// client has given up, and the agent does not open a fresh budget for it.
+/// Writes the last response of work that may have started, under
+/// [`TERMINAL_RESPONSE_GRACE`] rather than the request deadline: a
+/// `DeadlineExceeded` answer exists only once that deadline has passed, and
+/// a result that is written must not be cut off mid-frame by it. A result
+/// whose control has expired by the time it is written is erased and
+/// replaced by an ambiguous `DeadlineExceeded`, since the client may already
+/// have given up on it. Returns whether the written answer is
+/// `DeadlineExceeded`, after which the connection closes.
+///
+/// The request loop writes its own rejections of work it never started
+/// with [`write_controlled_response`], which writes nothing once the
+/// control has expired. A dispatched worker that fails to enter its
+/// request scope answers through here and is reported as ambiguous, which
+/// is conservative.
 async fn write_final_response(
     stream: &mut tokio::net::UnixStream,
     response: impl Into<GuardedResponse>,
     control: &request_control::RequestControl,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    let is_deadline = |response: &Response| {
+        matches!(
+            response.result,
+            ResponseResult::Error {
+                code: ErrorCode::DeadlineExceeded,
+                ..
+            }
+        )
+    };
     let mut response = response.into();
-    if !matches!(
-        response.response.result,
-        ResponseResult::Error {
-            code: ErrorCode::DeadlineExceeded,
-            ..
+    if !is_deadline(&response.response) {
+        match control.check() {
+            Ok(()) => {}
+            // An abandoned request has no reader left to answer.
+            Err(foks_client::Error::Cancelled) => return Err(foks_client::Error::Cancelled.into()),
+            Err(_) => {
+                let id = response.response.id;
+                response.zeroize_plaintext();
+                response = Response::error_with_fields(
+                    id,
+                    ErrorCode::DeadlineExceeded,
+                    "agent operation deadline exceeded; connection closed because completion is ambiguous",
+                    ErrorFields::default(),
+                )
+                .into();
+            }
         }
-    ) {
-        return write_controlled_response(stream, response, control).await;
     }
+    let ambiguous = is_deadline(&response.response);
     let encoded = foks_agent_proto::encode(&response.response);
     response.zeroize_plaintext();
     let frame = Zeroizing::new(encoded?);
     tokio::time::timeout(TERMINAL_RESPONSE_GRACE, stream.write_all(&frame))
         .await
         .map_err(|_| "agent write deadline exceeded")??;
-    Ok(())
+    Ok(ambiguous)
 }
 
 struct CancelOnDrop(CancellationToken);
@@ -10814,6 +10878,142 @@ fn held_dispatch(state_dir: &Path) -> bool {
 mod deadline_rejection_tests {
     use super::*;
 
+    /// Sends `operation` with a 300 ms deadline to a connection whose state
+    /// directory holds every dispatched operation, then any `frames`, and
+    /// returns the error code the client reads before end of stream.
+    async fn held_operation_answer(
+        operation: Operation,
+        frames: Vec<Zeroizing<Vec<u8>>>,
+    ) -> ErrorCode {
+        let temporary = tempfile::tempdir().unwrap();
+        let state_dir = temporary.path().to_path_buf();
+        HELD_DISPATCHES.lock().unwrap().push(state_dir.clone());
+        let capacity = ConnectionCapacity {
+            recovery: Arc::new(Semaphore::new(1)),
+            blocking: Arc::new(Semaphore::new(1)),
+            local: Arc::new(Semaphore::new(1)),
+            chat_polling: Arc::new(Semaphore::new(1)),
+            active_chat_polls: Arc::new(Mutex::new(std::collections::HashSet::new())),
+        };
+        let active = Arc::new(Semaphore::new(1));
+        let permit = active.clone().acquire_owned().await.unwrap();
+        let (mut client, server_stream) = tokio::net::UnixStream::pair().unwrap();
+        let server = tokio::spawn(handle_connection(
+            server_stream,
+            state_dir.clone(),
+            capacity,
+            Arc::new(AtomicBool::new(true)),
+            Duration::from_secs(15),
+            permit,
+        ));
+        let deadline =
+            foks_local_deadline::Deadline::capture(Instant::now() + Duration::from_millis(300))
+                .unwrap();
+        let request = Request::new(11, operation, deadline.envelope().clone());
+        client
+            .write_all(&foks_agent_proto::encode(&request).unwrap())
+            .await
+            .unwrap();
+        for frame in frames {
+            client.write_all(&frame).await.unwrap();
+        }
+        let answered = tokio::time::timeout(Duration::from_secs(5), read_frame(&mut client))
+            .await
+            .expect("the agent answered or closed within the test budget");
+        HELD_DISPATCHES
+            .lock()
+            .unwrap()
+            .retain(|held| held != &state_dir);
+        let frame = answered
+            .unwrap()
+            .expect("an answer frame before end of stream");
+        let response = foks_agent_proto::decode_response(&frame).unwrap();
+        assert_eq!(response.id, Some(11));
+        // Completion is ambiguous, so the agent closes the connection. Upload
+        // frames it never read make that close a reset.
+        assert!(!matches!(read_frame(&mut client).await, Ok(Some(_))));
+        server.await.unwrap().unwrap();
+        match response.result {
+            ResponseResult::Error { code, .. } => code,
+            other => panic!("the client saw {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn reconcile_and_lease_refresh_past_their_deadline_are_answered() {
+        for operation in [
+            Operation::ReconcileProfile {
+                profile: "held".to_owned(),
+            },
+            Operation::RefreshLease {
+                profile: "held".to_owned(),
+            },
+        ] {
+            assert_eq!(
+                held_operation_answer(operation, Vec::new()).await,
+                ErrorCode::DeadlineExceeded
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_poll_past_its_deadline_is_answered() {
+        let operation = Operation::Chat {
+            store: foks_agent_proto::TeamStoreRef {
+                profile: "held".into(),
+                account_alias: "me".into(),
+                team_alias: "team".into(),
+                team_id: format!("03{}", "ab".repeat(32)),
+            },
+            action: foks_agent_proto::chat::ChatAction::PollInbox {
+                since: "0".into(),
+                timeout_milliseconds: 25_000,
+            },
+        };
+        assert_eq!(
+            held_operation_answer(operation, Vec::new()).await,
+            ErrorCode::DeadlineExceeded
+        );
+    }
+
+    /// The upload worker does not consume chunks, so the agent's send of the
+    /// fifth chunk into its four-slot channel waits until the deadline. That
+    /// wait, the common case for a slow worker, ends in an answer.
+    #[tokio::test]
+    async fn streaming_upload_held_in_its_worker_is_answered_at_the_deadline() {
+        let header = KvUploadHeader {
+            store: foks_agent_proto::KvStoreRef::Account(foks_agent_proto::AccountStoreRef {
+                profile: "held".to_owned(),
+                account_alias: "me".to_owned(),
+            }),
+            path: "/file".into(),
+            total_length: 8 * 16,
+            precondition: foks_agent_proto::KvPrecondition::Create,
+            read_role: foks_agent_proto::KvRole::Owner,
+            write_role: foks_agent_proto::KvRole::Owner,
+            mkdir_p: false,
+            adapter: None,
+            upload_id: None,
+        };
+        let frames = (0..8u64)
+            .map(|index| {
+                foks_agent_proto::encode(&foks_agent_proto::KvUploadFrame {
+                    version: foks_agent_proto::PROTOCOL_VERSION,
+                    id: 11,
+                    payload: foks_agent_proto::KvUploadPayload::Chunk {
+                        offset: index * 16,
+                        content: vec![7; 16],
+                    },
+                })
+                .unwrap()
+            })
+            .collect();
+        assert_eq!(
+            held_operation_answer(Operation::PutKvStream { header }, frames).await,
+            ErrorCode::DeadlineExceeded
+        );
+    }
+
     /// A dispatched operation that outlives its deadline is answered with a
     /// typed `DeadlineExceeded` before the connection closes. The answer is
     /// built only after the request control expired, so a write gated on
@@ -10956,6 +11156,40 @@ mod deadline_rejection_tests {
         drop(response);
         assert_eq!(workers.available_permits(), 1);
     }
+    /// A result that completed but is written after its deadline is erased
+    /// and answered as ambiguous, and the caller is told to close.
+    #[tokio::test]
+    async fn late_definite_result_is_answered_as_ambiguous() {
+        let (mut writer, mut reader) = tokio::net::UnixStream::pair().unwrap();
+        let control = request_control::RequestControl::background(
+            Duration::from_millis(50),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        while Instant::now() < control.deadline.instant() {
+            tokio::task::yield_now().await;
+        }
+        let closes = write_final_response(
+            &mut writer,
+            Response::success(5, serde_json::json!({"plaintext": "late secret"})),
+            &control,
+        )
+        .await
+        .unwrap();
+        assert!(closes);
+        let frame = read_frame(&mut reader).await.unwrap().unwrap();
+        assert!(!String::from_utf8_lossy(&frame).contains("late secret"));
+        let response = foks_agent_proto::decode_response(&frame).unwrap();
+        assert_eq!(response.id, Some(5));
+        assert!(matches!(
+            response.result,
+            ResponseResult::Error {
+                code: ErrorCode::DeadlineExceeded,
+                ..
+            }
+        ));
+    }
+
     #[tokio::test]
     async fn expired_rejection_does_not_start_a_fresh_response_write_budget() {
         let (mut writer, reader) = tokio::net::UnixStream::pair().unwrap();

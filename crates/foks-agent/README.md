@@ -6,9 +6,14 @@ Unix-domain socket below an explicit `--state-dir`, defaulting to
 blocking client work through a bounded worker semaphore, limits active
 connections and requests per connection, and applies read/write/dispatch
 deadlines. Dispatch cancellation is propagated into the synchronous FOKS
-network client; a timed-out operation
-closes its local connection because its durable outcome can be ambiguous, and
-any surviving blocking work retains its worker permit until it exits.
+network client. An operation that reaches its deadline after it may have
+started (a dispatched operation, a streaming upload, a chat poll, a profile
+reconciliation or a lease refresh) is answered `DeadlineExceeded`, written
+under a 2-second grace because the request's own deadline has passed, and
+then its connection is closed, because its durable outcome can be ambiguous.
+A result that completes but cannot be written before the deadline is erased
+and answered the same way. Any surviving blocking work retains its worker
+permit until it exits.
 
 KV reads require the catalog version and large-file chunks echo the store,
 path, version, and offset they answer. Creating or updating account-store entries

@@ -131,6 +131,16 @@ pub(super) async fn handle_chat_poll(
     let worker_control = control.clone();
     let mut task = tokio::task::spawn_blocking(move || {
         let _guard = guard;
+        #[cfg(test)]
+        if super::held_dispatch(&state_dir) {
+            while !worker_cancellation.is_cancelled() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            return super::GuardedResponse::new(
+                Response::success(id, serde_json::Value::Null),
+                permit,
+            );
+        }
         let mut timing = ResponseTiming::default();
         let mut response = match foks_keystore::without_user_interaction(|| {
             let _scope = worker_control.enter()?;
@@ -188,8 +198,8 @@ pub(super) async fn handle_chat_poll(
             }
         }
     };
-    super::write_final_response(stream, response, &control).await?;
-    Ok(close)
+    let ambiguous = super::write_final_response(stream, response, &control).await?;
+    Ok(close || ambiguous)
 }
 
 /// Admission, session opens and work are timed into `timing` separately as
