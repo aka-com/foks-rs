@@ -847,7 +847,9 @@ authority and backup/restore rules. It is disabled by default.
 
 Scheduled backups and manual/periodic maintenance emit a bounded stderr record:
 `FOKS operation failed: phase=backup_retention, reason=schema_mismatch`.
-Backup phases are `backup_read`, `backup_create`, `backup_publish`, and
+Backup phases are `backup_lease` (the shared storage lease and, with a chunk
+store, the object namespace lease; `reason=busy` while an offline command
+holds them), `backup_read`, `backup_create`, `backup_publish`, and
 `backup_retention`. Maintenance phases are `maintenance_admission` (including
 clock sampling before dispatch), `maintenance_expiry`, `maintenance_admin`, and
 `maintenance_checkpoint`.

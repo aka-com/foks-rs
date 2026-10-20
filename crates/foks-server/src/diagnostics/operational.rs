@@ -7,6 +7,7 @@ use crate::Error;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Phase {
+    BackupLease,
     BackupRead,
     BackupCreate,
     BackupPublish,
@@ -20,6 +21,7 @@ pub(crate) enum Phase {
 impl Phase {
     pub(crate) fn code(self) -> &'static str {
         match self {
+            Self::BackupLease => "backup_lease",
             Self::BackupRead => "backup_read",
             Self::BackupCreate => "backup_create",
             Self::BackupPublish => "backup_publish",
@@ -78,7 +80,23 @@ fn reason(error: &Error) -> Reason {
         Error::Merkle(foks_merkle_store::Error::Storage(_)) => Reason::Storage,
         Error::WriterQueue | Error::DeadlineExceeded | Error::ReaderPool => Reason::Busy,
         Error::Key(_) | Error::KeyCrypto | Error::Config(_) => Reason::InvalidState,
+        Error::Chunk(message) => chunk_reason(message),
         _ => Reason::Internal,
+    }
+}
+
+/// The storage lease and the object namespace lease refuse with these exact
+/// messages while an offline command or another lease holder owns them.
+const CHUNK_BUSY: [&str; 2] = [
+    "storage is in use; retry after readers and backups finish",
+    "object namespace is in use",
+];
+
+fn chunk_reason(message: &str) -> Reason {
+    if CHUNK_BUSY.contains(&message) {
+        Reason::Busy
+    } else {
+        Reason::Storage
     }
 }
 
@@ -106,7 +124,25 @@ fn database_reason(error: &foks_server_db::Error) -> Reason {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static REPORTED: std::cell::RefCell<Vec<(&'static str, &'static str)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The (phase, reason) records this thread has reported since the last call.
+#[cfg(test)]
+pub(crate) fn take_reported() -> Vec<(&'static str, &'static str)> {
+    REPORTED.with(|reported| std::mem::take(&mut *reported.borrow_mut()))
+}
+
 pub(crate) fn report(phase: Phase, error: &Error) {
+    #[cfg(test)]
+    REPORTED.with(|reported| {
+        reported
+            .borrow_mut()
+            .push((phase.code(), reason(error).code()))
+    });
     eprintln!(
         "FOKS operation failed: phase={}, reason={}",
         phase.code(),
@@ -237,6 +273,15 @@ mod tests {
             (Error::Key("secret manifest"), "invalid_state"),
             (Error::WriterQueue, "busy"),
             (Error::Database(Db::QuotaExceeded), "capacity"),
+            (
+                Error::Chunk("storage is in use; retry after readers and backups finish"),
+                "busy",
+            ),
+            (Error::Chunk("object namespace is in use"), "busy"),
+            (
+                Error::Chunk("storage lock is not a regular file"),
+                "storage",
+            ),
         ];
         for (error, expected) in cases {
             assert_eq!(reason(&error).code(), expected);
