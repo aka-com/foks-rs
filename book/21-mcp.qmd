@@ -212,7 +212,8 @@ that status from local state, without contacting the server, so the check
 stays available offline. The repair is deliberately not an MCP tool, so an
 assistant cannot vouch for the clock it is being judged by: a person
 confirms the computer's current time in the desktop app's account
-settings, or with the two-step `foks-rs retention reanchor` command. Both
+settings (for this clock only), or with the two-step
+`foks-rs retention reanchor` command. Both
 send the agent a preview, which returns a digest of the displayed clock
 state, and then a confirmation carrying that digest. The agent pairs the
 confirmed time with its own monotonic reading at confirmation, so it
@@ -232,6 +233,8 @@ reading and the boot identifier, but each keeps its own anchor and rejection
 watermark (`kv_adapter_clocks` and `kv_upload_clocks`), and a repair of one
 leaves the other unchanged. The status and repair requests name the clock:
 `--domain adapter` (the default) or `--domain upload` on the CLI commands.
+The desktop app repairs only the adapter clock; an untrusted upload clock
+is repaired with the CLI.
 Only a write that needs a resumable upload identity consults the upload
 clock. A file write without an explicit upload handle claims an identity
 only once its first 4 MiB chunk shows a large file; a small file is

@@ -172,6 +172,21 @@ Required resolution:
 - The promotion and demotion ordering checks stay in the Tauri layer, because
   only it holds the member's current role from the authenticated roster.
 
+## Desktop repair of the upload receipt clock
+
+**Priority: low.** The desktop app's account settings repair only the adapter
+receipt clock (`ReceiptClockDomain::Adapter` in
+`apps/desktop/src-tauri/src/commands/account_conveniences.rs`). When the upload
+receipt clock is untrusted, large file writes that need a resumable upload
+identity are refused, and the only repair is
+`foks-rs retention reanchor --domain upload`; the agent's error names that
+command.
+
+Required resolution:
+
+- Offer the upload-clock status and the preview-then-confirm repair in the
+  desktop app, as for the adapter clock.
+
 ## Existing disclosed limitations
 
 These are real product or verification limits, but the reviewed plans already

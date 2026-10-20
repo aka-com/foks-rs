@@ -132,7 +132,11 @@ advice to issue a new handle.
 The agent reads this clock status from local state only. First use establishes
 the anchor. File uploads keep a separate receipt clock with the same rules;
 both sample one process clock, but each has its own anchor and watermark, and
-repairing one leaves the other unchanged.
+repairing one leaves the other unchanged. Only a file write that needs a
+resumable upload identity consults the upload clock: a small file written inline
+without an explicit upload handle is not refused when it is untrusted. The desktop
+app repairs only the adapter clock; the upload clock is repaired with the CLI
+(`--domain upload`).
 
 Repair runs in the resident agent and is not an MCP tool: a person confirms the
 time in the desktop app's account settings or with the CLI, which starts the
