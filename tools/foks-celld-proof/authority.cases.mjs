@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, statSync } from "node:fs";
-import { Authority, MAX_BYTES, hash, integer, typed, boundedJson } from "./authority.mjs";
+import { Authority, MAX_BYTES, integer, typed, boundedJson } from "./authority.mjs";
 import {nodeDecoder} from "./node-decoder.mjs";
 
 const path=process.env.FOKS_PROOF_VECTORS;
@@ -87,9 +87,9 @@ test("identical legacy NULL node is revalidated through exact bytes and trigger 
     const old=before.tables.find(t=>t.name==="kv_nodes").rows[0];
     const next=vectors.after.tables.find(t=>t.name==="kv_nodes").rows[0];
     assert.deepEqual(old[index],{kind:"null"});
-    const repair={...request,revision:"1",attempt:"revalidation_attempt",delta:{before_hash:hash(before),after_hash:hash(vectors.after),changes:[{table:"kv_nodes",old,new:next}]}};
+    const repair={...request,revision:"1",attempt:"revalidation_attempt",delta:{before_hash:authority.stateHash(before),after_hash:authority.stateHash(vectors.after),changes:[{table:"kv_nodes",old,new:next}]}};
     authority.apply(repair);
-    assert.deepEqual(authority.read({epoch:"1",owner}).snapshot,vectors.after);
+    assert.equal(authority.stateHash(authority.read({epoch:"1",owner}).snapshot),authority.stateHash(vectors.after));
     assert.equal(authority.meta().revision,"2");
     assert.equal(db.prepare("SELECT usage_unvalidated_small_count AS n FROM kv_namespaces").get().n,0);
   } finally {db.close();}
@@ -107,12 +107,12 @@ test("typed values preserve i64 boundaries and reject lossy or noncanonical inpu
 test("native schema and exact FOKS rows round trip through authoritative SQLite",()=>{
   const {db,authority,request}=fixture();
   try {
-    assert.equal(hash(vectors.before),vectors.delta.before_hash);
-    assert.equal(hash(vectors.after),vectors.delta.after_hash);
+    assert.equal(authority.stateHash(vectors.before),vectors.delta.before_hash);
+    assert.equal(authority.stateHash(vectors.after),vectors.delta.after_hash);
     assert.deepEqual(authority.read({epoch:"1",owner}).snapshot,vectors.before);
     const receipt=authority.apply(request);
     assert.equal(receipt.revision,"1");
-    assert.deepEqual(authority.read({epoch:"1",owner}).snapshot,vectors.after);
+    assert.equal(authority.stateHash(authority.read({epoch:"1",owner}).snapshot),authority.stateHash(vectors.after));
     assert.equal(db.prepare("SELECT CAST(creation_time AS TEXT) AS value FROM kv_dirents").get().value,"9007199254740993");
     // Trigger counters are compared against native SQL, never replayed twice.
     assert.equal(db.prepare("SELECT accounted_objects AS n FROM kv_namespaces").get().n,5);
@@ -133,7 +133,7 @@ test("current heads are rebuilt from native PutDirents and derived-only tamperin
     const column=vectors.schema.tables.find(t=>t.name===table.name).columns.findIndex(c=>c.name==="creation_time");
     table.rows[0][column]={kind:"integer",value:"1"};
     const forged=structuredClone(request);
-    forged.delta.after_hash=hash(tampered);
+    forged.delta.after_hash=authority.stateHash(tampered);
     assert.throws(()=>authority.apply(forged));
     assert.deepEqual(authority.read({epoch:"1",owner}).snapshot,vectors.before);
     assert.equal(db.prepare("SELECT count(*) AS n FROM proof_receipts").get().n,0);
@@ -142,10 +142,10 @@ test("current heads are rebuilt from native PutDirents and derived-only tamperin
     assert.throws(()=>authority.apply(direct));
     assert.deepEqual(authority.read({epoch:"1",owner}).snapshot,vectors.before);
     authority.apply(request);
-    assert.deepEqual(authority.read({epoch:"1",owner}).snapshot,vectors.after);
-    const derivedOnly={...request,revision:"1",attempt:"derived_only_attempt",delta:{before_hash:hash(vectors.after),after_hash:hash(tampered),changes:[]}};
+    assert.equal(authority.stateHash(authority.read({epoch:"1",owner}).snapshot),authority.stateHash(vectors.after));
+    const derivedOnly={...request,revision:"1",attempt:"derived_only_attempt",delta:{before_hash:authority.stateHash(vectors.after),after_hash:authority.stateHash(tampered),changes:[]}};
     assert.throws(()=>authority.apply(derivedOnly));
-    assert.deepEqual(authority.read({epoch:"1",owner}).snapshot,vectors.after);
+    assert.equal(authority.stateHash(authority.read({epoch:"1",owner}).snapshot),authority.stateHash(vectors.after));
     assert.equal(db.prepare("SELECT count(*) AS n FROM proof_receipts").get().n,1);
   } finally {db.close();}
 });
@@ -161,9 +161,9 @@ test("all semantic Usage counters remain derived and cannot change through a has
       const index=schema.columns.findIndex(c=>c.name===name);
       assert.ok(index>=0);
       table.rows[0][index]={kind:"integer",value:(BigInt(table.rows[0][index].value)+1n).toString()};
-      const delta={before_hash:hash(vectors.after),after_hash:hash(forged),changes:[]};
+      const delta={before_hash:authority.stateHash(vectors.after),after_hash:authority.stateHash(forged),changes:[]};
       assert.throws(()=>authority.apply({...request,revision:"1",attempt:"usage_forgery_attempt",delta}),name);
-      assert.deepEqual(authority.read({epoch:"1",owner}).snapshot,vectors.after);
+      assert.equal(authority.stateHash(authority.read({epoch:"1",owner}).snapshot),authority.stateHash(vectors.after));
       assert.equal(authority.meta().revision,"1");
       assert.equal(db.prepare("SELECT count(*) AS n FROM proof_receipts").get().n,1);
     }
@@ -179,7 +179,7 @@ test("failure after dirent insertion rolls back node, dirent, head, counters and
     assert.equal(db.prepare("SELECT count(*) AS n FROM proof_receipts").get().n,0);
     db.exec("DROP TRIGGER proof_inject_failure");
     authority.apply(request);
-    assert.deepEqual(authority.read({epoch:"1",owner}).snapshot,vectors.after);
+    assert.equal(authority.stateHash(authority.read({epoch:"1",owner}).snapshot),authority.stateHash(vectors.after));
   } finally {db.close();}
 });
 
@@ -194,8 +194,8 @@ test("stale owner and revision, conflicting retry and forged derived state fail 
     assert.throws(()=>authority.apply({...request,output_hash:"c".repeat(64)}));
     authority.claim({expected_epoch:"1",owner:nextOwner});
     assert.throws(()=>authority.apply(request));
-    assert.throws(()=>authority.prove({epoch:"1",owner,revision:"1",state_hash:hash(vectors.after)}));
-    assert.deepEqual(authority.read({epoch:"2",owner:nextOwner}).snapshot,vectors.after);
+    assert.throws(()=>authority.prove({epoch:"1",owner,revision:"1",state_hash:authority.stateHash(vectors.after)}));
+    assert.equal(authority.stateHash(authority.read({epoch:"2",owner:nextOwner}).snapshot),authority.stateHash(vectors.after));
     assert.equal(authority.claim({expected_epoch:"1",owner:nextOwner}).epoch,"2");
   } finally {db.close();}
 });

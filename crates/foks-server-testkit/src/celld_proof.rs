@@ -41,6 +41,13 @@ const NAMESPACE_COUNTERS: &[&str] = &[
     "usage_unvalidated_small_count",
 ];
 const READ_DEPENDENCY_COUNTERS: &[&str] = &["revision"];
+/// Trigger-owned counters that count trigger firings rather than describe the
+/// resulting rows: the authority's replay writes a kv_nodes row in two
+/// statements, so it advances them a different number of times than the
+/// native write. They are left out of the state hash ([`Schema::state_digest`]);
+/// the authority checks that they advanced. Must match UNHASHED_COUNTERS in
+/// tools/foks-celld-proof/authority.mjs.
+const UNHASHED_COUNTERS: &[(&str, &str)] = &[("metadata_read_dependency", "revision")];
 
 fn invalid(message: &'static str) -> Box<dyn std::error::Error + Send + Sync> {
     std::io::Error::other(message).into()
@@ -531,6 +538,32 @@ impl Schema {
         Ok(())
     }
 
+    /// The hash of `snapshot` that a proof compares: [`digest`] with the
+    /// [`UNHASHED_COUNTERS`] columns set to null.
+    pub fn state_digest(&self, snapshot: &Snapshot) -> Result<String> {
+        let mut normalized = snapshot.clone();
+        for (table, rows) in self.tables.iter().zip(&mut normalized.tables) {
+            for (name, column) in UNHASHED_COUNTERS {
+                if table.name != *name {
+                    continue;
+                }
+                let index = table
+                    .columns
+                    .iter()
+                    .position(|c| c.name == *column)
+                    .ok_or_else(|| invalid("proof counter column missing"))?;
+                for row in &mut rows.rows {
+                    let cell = row
+                        .0
+                        .get_mut(index)
+                        .ok_or_else(|| invalid("proof row width"))?;
+                    *cell = CellValue::Null;
+                }
+            }
+        }
+        digest(&normalized)
+    }
+
     pub fn delta(&self, before: &Snapshot, after: &Snapshot) -> Result<Delta> {
         self.validate_snapshot(before)?;
         self.validate_snapshot(after)?;
@@ -634,8 +667,8 @@ impl Schema {
                 .expect("allowed base table")
         });
         let delta = Delta {
-            before_hash: digest(before)?,
-            after_hash: digest(after)?,
+            before_hash: self.state_digest(before)?,
+            after_hash: self.state_digest(after)?,
             changes,
         };
         digest(&delta)?;
@@ -694,7 +727,7 @@ mod tests {
         let delta = schema.delta(&before, &after).unwrap();
         assert_eq!(delta.changes.len(), 1);
         assert_eq!(delta.changes[0].table, "kv_nodes");
-        assert_eq!(delta.after_hash, digest(&after).unwrap());
+        assert_eq!(delta.after_hash, schema.state_digest(&after).unwrap());
         for name in [
             "usage_small_count",
             "usage_small_bytes",
@@ -730,7 +763,7 @@ mod tests {
     }
 
     #[test]
-    fn read_dependency_revision_is_derived_and_its_incarnation_is_frozen() {
+    fn read_dependency_revision_is_unhashed_and_its_incarnation_is_frozen() {
         let (_directory, connection, schema) = fixture();
         let before = schema.snapshot(&connection).unwrap();
         connection
@@ -742,7 +775,9 @@ mod tests {
         let after = schema.snapshot(&connection).unwrap();
         let delta = schema.delta(&before, &after).unwrap();
         assert!(delta.changes.is_empty());
-        assert_ne!(delta.before_hash, delta.after_hash);
+        // The revision counts trigger firings, so the state hash leaves it out.
+        assert_eq!(delta.before_hash, delta.after_hash);
+        assert_ne!(digest(&before).unwrap(), digest(&after).unwrap());
         connection
             .execute(
                 "UPDATE metadata_read_dependency SET incarnation=?",
@@ -752,6 +787,207 @@ mod tests {
         assert!(schema
             .delta(&after, &schema.snapshot(&connection).unwrap())
             .is_err());
+    }
+
+    /// Applies `delta` to a materialized `before` as the authority in
+    /// tools/foks-celld-proof/authority.mjs does: a new kv_nodes row is
+    /// inserted with ciphertext_bytes NULL and then updated, other rows are
+    /// inserted, updated or deleted with one statement each.
+    fn replay_as_authority(
+        schema: &Schema,
+        before: &Snapshot,
+        delta: &Delta,
+        path: &Path,
+    ) -> (Connection, Snapshot) {
+        schema.materialize(before, path).unwrap();
+        let connection = Connection::open(path).unwrap();
+        connection.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        for change in &delta.changes {
+            let table = schema
+                .tables
+                .iter()
+                .find(|t| t.name == change.table)
+                .unwrap();
+            let values = |row: &Row| {
+                row.0
+                    .iter()
+                    .map(CellValue::sql)
+                    .collect::<Result<Vec<_>>>()
+                    .unwrap()
+            };
+            let length_index = (change.table == "kv_nodes")
+                .then(|| {
+                    table
+                        .columns
+                        .iter()
+                        .position(|c| c.name == "ciphertext_bytes")
+                })
+                .flatten();
+            let mut written = change.new.as_ref().map(values);
+            let length = match (&mut written, length_index) {
+                (Some(row), Some(index)) => Some(std::mem::replace(
+                    &mut row[index],
+                    rusqlite::types::Value::Null,
+                )),
+                _ => None,
+            };
+            let name = identifier(&table.name).unwrap();
+            let changed = match (&change.old, &written) {
+                (None, Some(row)) => connection
+                    .execute(
+                        &format!(
+                            "INSERT INTO {name} VALUES ({})",
+                            vec!["?"; row.len()].join(",")
+                        ),
+                        params_from_iter(row),
+                    )
+                    .unwrap(),
+                (Some(old), next) => {
+                    let old = values(old);
+                    let filter = table
+                        .columns
+                        .iter()
+                        .map(|c| format!("{} IS ?", identifier(&c.name).unwrap()))
+                        .collect::<Vec<_>>()
+                        .join(" AND ");
+                    match next {
+                        Some(row) => {
+                            let set = table
+                                .columns
+                                .iter()
+                                .map(|c| format!("{}=?", identifier(&c.name).unwrap()))
+                                .collect::<Vec<_>>()
+                                .join(",");
+                            connection
+                                .execute(
+                                    &format!("UPDATE {name} SET {set} WHERE {filter}"),
+                                    params_from_iter(row.iter().chain(&old)),
+                                )
+                                .unwrap()
+                        }
+                        None => connection
+                            .execute(
+                                &format!("DELETE FROM {name} WHERE {filter}"),
+                                params_from_iter(&old),
+                            )
+                            .unwrap(),
+                    }
+                }
+                (None, None) => unreachable!(),
+            };
+            assert_eq!(changed, 1);
+            if let Some(length) = length {
+                let new = change.new.as_ref().unwrap();
+                let column = |name: &str| {
+                    new.0[table.columns.iter().position(|c| c.name == name).unwrap()]
+                        .sql()
+                        .unwrap()
+                };
+                let updated = connection
+                    .execute(
+                        "UPDATE kv_nodes SET ciphertext_bytes=? WHERE uid=? AND node_id=? AND exact_node=? AND ciphertext_bytes IS NULL",
+                        rusqlite::params![length, column("uid"), column("node_id"), column("exact_node")],
+                    )
+                    .unwrap();
+                assert_eq!(updated, 1);
+            }
+        }
+        let snapshot = schema.snapshot(&connection).unwrap();
+        (connection, snapshot)
+    }
+
+    fn read_dependency_revision(snapshot: &Snapshot, schema: &Schema) -> String {
+        let table = schema
+            .tables
+            .iter()
+            .position(|t| t.name == "metadata_read_dependency")
+            .unwrap();
+        let column = schema.tables[table]
+            .columns
+            .iter()
+            .position(|c| c.name == "revision")
+            .unwrap();
+        match &snapshot.tables[table].rows[0].0[column] {
+            CellValue::Integer(value) => value.clone(),
+            other => panic!("revision {other:?}"),
+        }
+    }
+
+    /// The authority accepts a delta when its replay reaches `after_hash`.
+    /// The replay fires the read-dependency triggers a different number of
+    /// times than the native write, which the state hash must not see.
+    #[test]
+    fn an_authority_style_replay_reaches_the_native_after_hash() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.sqlite");
+        let mut database =
+            foks_server_db::Database::open(&path, foks_server_db::Config::default()).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch("PRAGMA foreign_keys=ON;
+          INSERT INTO names(normalized_name,reservation_sequence,uid) VALUES(X'70726f6f66',1,zeroblob(33));
+          INSERT INTO users(uid,normalized_name,username_utf8,username_sequence,username_commitment_key,created_at) VALUES(zeroblob(33),X'70726f6f66',X'70726f6f66',1,zeroblob(16),0);
+          INSERT INTO host_metadata VALUES(1,zeroblob(33),'proof.invalid',X'00',X'00');
+          INSERT INTO kv_namespaces(namespace_id,party_kind,host_id) VALUES(zeroblob(33),1,zeroblob(33));
+          INSERT INTO kv_directories VALUES(zeroblob(33),zeroblob(16),1,3,0,1,0,X'010203');
+          INSERT INTO kv_directory_heads VALUES(zeroblob(33),zeroblob(16),1);
+          INSERT INTO kv_roots VALUES(zeroblob(33),1,zeroblob(16),1,X'0405');").unwrap();
+        let schema = Schema::export(&connection).unwrap();
+        let before = schema.snapshot(&connection).unwrap();
+        let exact = foks_proto::KvSmallFileBox {
+            key: foks_proto::RoleAndGeneration {
+                role: foks_proto::Role::OWNER,
+                generation: 1,
+            },
+            ciphertext: vec![0xa5; 4],
+        }
+        .encode()
+        .unwrap();
+        let mut node = [0_u8; 17];
+        node[0] = 3;
+        database
+            .put_kv_node(&foks_server_db::KvNodeMutation {
+                uid: &[0; 33],
+                id: &node,
+                node_type: 3,
+                exact: &exact,
+            })
+            .unwrap();
+        database
+            .put_kv_dirents(
+                &[0; 33],
+                None,
+                foks_proto::Role::OWNER,
+                &[foks_server_db::KvDirentMutation {
+                    parent: &[0; 16],
+                    id: &[0; 16],
+                    version: 1,
+                    directory_version: 1,
+                    node_id: &node,
+                    name_mac: &[0; 32],
+                    creation_time: 1,
+                    exact: &[7, 8, 9],
+                }],
+            )
+            .unwrap();
+        let after = schema.snapshot(&connection).unwrap();
+        let delta = schema.delta(&before, &after).unwrap();
+        assert!(!delta.changes.is_empty());
+
+        let (_replayed, replayed) = replay_as_authority(
+            &schema,
+            &before,
+            &delta,
+            &directory.path().join("replay.sqlite"),
+        );
+        assert_eq!(schema.state_digest(&replayed).unwrap(), delta.after_hash);
+        let start: i64 = read_dependency_revision(&before, &schema).parse().unwrap();
+        let native: i64 = read_dependency_revision(&after, &schema).parse().unwrap();
+        let replay: i64 = read_dependency_revision(&replayed, &schema)
+            .parse()
+            .unwrap();
+        assert!(native > start && replay > start);
+        // The two counts differ, which is why the revision is not hashed.
+        assert_ne!(digest(&replayed).unwrap(), digest(&after).unwrap());
     }
 
     #[test]
@@ -792,7 +1028,8 @@ mod tests {
         let derived_only = schema.delta(&after, &tampered).unwrap();
         assert!(derived_only.changes.is_empty());
         // The Worker must reject this after-hash mismatch: no base mutations
-        // could reproduce it. Its actual SQL replay is tested in authority.test.mjs.
+        // could reproduce it. Its actual SQL replay is tested in authority.cases.mjs
+        // (run through authority.test.mjs) and in an_authority_style_replay_reaches_the_native_after_hash.
         assert_ne!(derived_only.before_hash, derived_only.after_hash);
     }
 
