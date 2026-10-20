@@ -278,8 +278,14 @@ impl CheckedProfileSession<'_> {
         cursor.burst = cursor.burst.saturating_add(1);
         if !owner_progress && !report.blocked && Instant::now() >= deadline {
             // The turn ran out before this owner's first erasure. That is
-            // not a blocked owner: keep it active for the next turn.
+            // not a blocked owner, so it is not backed off; it keeps the
+            // next turn, but after the burst cap it yields like an owner
+            // that makes progress, so one whose turns keep running out
+            // cannot starve the others.
             report.more_work = true;
+            if cursor.burst >= 4 {
+                cursor.active = None;
+            }
         } else if !owner_progress || report.blocked {
             if cursor.blocked.len() >= 128 {
                 cursor.blocked.pop_first();
@@ -650,6 +656,37 @@ mod tests {
             assert!(report.more_work);
             s.maintain_upload_state(&mut cursor, master)?;
             assert_ne!(hard.upload_cleanup(&id)?, before);
+            Ok(())
+        });
+    }
+
+    /// An owner whose turns keep running out before its first erasure
+    /// yields to the next owner after the burst cap, without a back-off.
+    #[test]
+    fn repeated_deadline_misses_rotate_to_the_next_owner() {
+        let f = crate::test_support::AccountFixture::start();
+        f.run(|s, _, master| {
+            let sample = s.adapter_clock.sample()?;
+            let first = cancelled_fixture(s, master, 1, 4, sample)?;
+            let second = cancelled_fixture(s, master, 2, 4, sample)?;
+            let mut cursor = UploadMaintenanceCursor::default();
+            let mut selected = Vec::new();
+            STALL_AFTER_SELECTION.set(true);
+            let turns = (0..5).try_for_each(|_| {
+                s.maintain_upload_state_until(
+                    &mut cursor,
+                    master,
+                    Instant::now() + Duration::from_millis(500),
+                )?;
+                selected.push(cursor.active);
+                Ok::<_, Error>(())
+            });
+            STALL_AFTER_SELECTION.set(false);
+            turns?;
+            assert!(cursor.blocked.is_empty(), "a deadline miss is not a block");
+            assert_eq!(&selected[..3], &[Some(first); 3]);
+            assert_ne!(selected[3], Some(first), "the burst cap rotates the owner");
+            assert_eq!(selected[4], Some(second));
             Ok(())
         });
     }
