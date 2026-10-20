@@ -211,6 +211,25 @@ fn revocation_during_external_put_prevents_publication_without_blocking_writer()
             "revoked upload must not publish"
         );
     });
+    // The client can see its upload fail before the server's handler, which
+    // was blocked in put_object until the gate opened, has finished: a client
+    // or server timeout under load ends the request first. Wait until the
+    // handler has settled the publication attempt, then stop the server,
+    // which drains or stops the handler before its metadata write, and only
+    // then check that nothing was published.
+    let settled = Instant::now() + Duration::from_secs(30);
+    while environment
+        .read_database()
+        .unwrap()
+        .chunk_physical_usage()
+        .unwrap()
+        .unresolved_attempts
+        != 0
+        && Instant::now() < settled
+    {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    server.shutdown().unwrap();
     let usage = environment
         .read_database()
         .unwrap()
@@ -218,22 +237,11 @@ fn revocation_during_external_put_prevents_publication_without_blocking_writer()
         .unwrap();
     assert_eq!(usage.large.base.number, 0);
     assert_eq!(usage.large.chunks, 0);
-    // The client can see its upload fail before the server's handler, which
-    // was blocked in put_object until the gate opened, settles the
-    // publication attempt: a client or server timeout under load ends the
-    // request first. Wait for the settlement rather than racing it.
-    let settled = Instant::now() + Duration::from_secs(30);
-    let physical = loop {
-        let physical = environment
-            .read_database()
-            .unwrap()
-            .chunk_physical_usage()
-            .unwrap();
-        if physical.unresolved_attempts == 0 || Instant::now() >= settled {
-            break physical;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    };
+    let physical = environment
+        .read_database()
+        .unwrap()
+        .chunk_physical_usage()
+        .unwrap();
     assert_eq!(
         (
             physical.objects,
@@ -243,7 +251,6 @@ fn revocation_during_external_put_prevents_publication_without_blocking_writer()
         (1, 1, 0)
     );
     assert!(physical.present_bytes > 0);
-    server.shutdown().unwrap();
 }
 
 #[test]
