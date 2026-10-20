@@ -210,7 +210,14 @@ looks the command's name up in `command_class`, which gives an agent
 `DeadlineClass`: Ordinary (15 s), Bulk (300 s) or Pairing (300 s). The host
 captures a `foks_local_deadline::Deadline` that far ahead before the command
 body runs, and a command missing from the table fails with
-`missing-deadline-policy` before its body runs. The test
+`missing-deadline-policy` before its body runs. The catalog reads
+(`list_catalog`, `list_catalog_progressive` and `list_profile_catalog`) are
+Bulk: one read walks every store of the profiles it covers, one `ListKv`
+page after another, under that single budget, while the agent still caps
+each of those requests at 15 s. The catalog repair that a mutation runs
+when its profile's catalog is missing or retired shares the mutation's own
+Ordinary budget, so on a slow server with many stores that mutation can
+end with `deadline-exceeded` before it writes. The test
 `deadline_policies_name_exactly_the_commands_that_take_command_state` in
 `src/command_signatures.rs` compares the table with the commands whose
 signature takes `CommandState`. Commands whose first step waits on a person,
