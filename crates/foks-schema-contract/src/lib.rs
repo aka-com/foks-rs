@@ -249,3 +249,5 @@ impl SchemaVerifier<'_, '_> {
 
 #[cfg(test)]
 mod tests;
+
+pub mod storage;
