@@ -308,5 +308,26 @@ fn allocate_kind_with(
     })
 }
 
+/// Zero-filled request input buffer. The reservation is fallible so that an
+/// allocation failure is a refusal (0 at the Wasm ABI), as for the page,
+/// response and scalar buffers, rather than an abort that traps and retires
+/// the instance.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn zeroed_input(length: usize) -> Option<Vec<u8>> {
+    zeroed_input_with(length, |bytes, length| {
+        bytes.try_reserve_exact(length).map_err(|_| ())
+    })
+}
+#[cfg(any(target_arch = "wasm32", test))]
+fn zeroed_input_with(
+    length: usize,
+    reserve: impl FnOnce(&mut Vec<u8>, usize) -> std::result::Result<(), ()>,
+) -> Option<Vec<u8>> {
+    let mut bytes = Vec::new();
+    reserve(&mut bytes, length).ok()?;
+    bytes.resize(length, 0);
+    Some(bytes)
+}
+
 #[cfg(test)]
 mod tests;
