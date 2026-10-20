@@ -1,5 +1,6 @@
 import copy,json,os,pathlib,tempfile,unittest
 from schema_fixtures import prepare,validate,verify
+@unittest.skipUnless(os.environ.get('FOKS_SCHEMA_ENUMERATION_VECTORS'),'set FOKS_SCHEMA_ENUMERATION_VECTORS to the reviewed native schema vectors')
 class SchemaFixtures(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
