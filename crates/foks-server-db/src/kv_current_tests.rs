@@ -253,7 +253,7 @@ fn schema(c: &Connection) -> Vec<(String, String, Option<String>)> {
         .unwrap()
 }
 fn data(c: &Connection) -> Vec<(String, Vec<String>)> {
-    let tables:Vec<String>=c.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name!='kv_dirent_current' ORDER BY name").unwrap().query_map([],|r|r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+    let tables:Vec<String>=c.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name!='metadata_read_dependency' AND name!='kv_dirent_current' ORDER BY name").unwrap().query_map([],|r|r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
     tables
         .into_iter()
         .map(|table| {
@@ -279,6 +279,7 @@ fn data(c: &Connection) -> Vec<(String, Vec<String>)> {
 }
 fn downgrade(c: &Connection) {
     c.execute_batch(concat!(
+        include_str!("../tests/fixtures/remove_read_dependency.sql"),
         include_str!("../tests/fixtures/remove_kv_usage.sql"),
         include_str!("../tests/fixtures/remove_kv_current.sql")
     ))

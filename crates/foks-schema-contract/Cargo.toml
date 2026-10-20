@@ -1,0 +1,12 @@
+[package]
+name = "foks-schema-contract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pure streaming equality and hashing for qualified SQL schema contracts"
+
+[dependencies]
+sha2 = { workspace = true }
+
+[lints]
+workspace = true

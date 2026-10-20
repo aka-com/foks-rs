@@ -14,6 +14,8 @@ pub enum PageStatement {
     ListTimeContinue,
     DirectoryProbe,
     DirectorySlice,
+    SchemaObjects,
+    RoleGenerations,
 }
 
 const INTEGER: Column = Column {
@@ -34,6 +36,140 @@ const fn text(maximum_bytes: u32) -> Column {
         maximum_bytes,
         nullable: false,
     }
+}
+const fn nullable_text(maximum_bytes: u32) -> Column {
+    Column {
+        kind: PageKind::Text,
+        maximum_bytes,
+        nullable: true,
+    }
+}
+const ROLE_PARAMETERS: &[Column] = &[
+    blob(33, false),
+    INTEGER,
+    INTEGER,
+    INTEGER,
+    INTEGER,
+    INTEGER,
+    INTEGER,
+    INTEGER,
+    INTEGER,
+    INTEGER,
+    INTEGER,
+    INTEGER,
+    INTEGER,
+    INTEGER,
+    INTEGER,
+    INTEGER,
+];
+const ROLE_COLUMNS: &[Column] = &[INTEGER, INTEGER, text(7), INTEGER];
+/// Seven point lookups, independent of the number of stored roles/generations.
+/// Selecting rowid preserves the distinction between absent and malformed NULL.
+pub const ROLE_GENERATIONS_SQL: &str = "WITH requested(ordinal,role,visibility) AS (VALUES (0,CAST(?3 AS INTEGER),CAST(?4 AS INTEGER)),(1,CAST(?5 AS INTEGER),CAST(?6 AS INTEGER)),(2,CAST(?7 AS INTEGER),CAST(?8 AS INTEGER)),(3,CAST(?9 AS INTEGER),CAST(?10 AS INTEGER)),(4,CAST(?11 AS INTEGER),CAST(?12 AS INTEGER)),(5,CAST(?13 AS INTEGER),CAST(?14 AS INTEGER)),(6,CAST(?15 AS INTEGER),CAST(?16 AS INTEGER))) SELECT CAST(r.ordinal AS TEXT),CASE WHEN k.rowid IS NULL THEN '0' ELSE '1' END,typeof(k.generation),CASE WHEN typeof(k.generation)='integer' THEN CAST(k.generation AS TEXT) ELSE '0' END FROM requested r LEFT JOIN shared_keys k ON k.rowid=(SELECT rowid FROM shared_keys WHERE uid=?1 AND role_type=r.role AND visibility=r.visibility ORDER BY generation DESC LIMIT 1) WHERE r.ordinal<CAST(?2 AS INTEGER) ORDER BY r.ordinal";
+
+/// Structurally typed parameters, not proof that a caller owns this namespace.
+pub fn role_generation_parameters(
+    uid: &[u8],
+    roles: &[foks_proto::Role],
+) -> crate::Result<[crate::Value; 16]> {
+    use crate::{Error, Value};
+    if uid.len() != 33
+        || uid[0] != foks_proto::ENTITY_USER
+        || roles.is_empty()
+        || roles.len() > 7
+        || roles.contains(&foks_proto::Role::NONE)
+    {
+        return Err(Error::Invalid("role generation arguments"));
+    }
+    crate::page::charge(uid.len())?;
+    let mut parameters = std::array::from_fn(|_| Value::Integer(0));
+    parameters[0] = Value::Blob(uid.to_vec());
+    parameters[1] = Value::Integer(roles.len() as i64);
+    for (index, role) in roles.iter().enumerate() {
+        parameters[2 + index * 2] = Value::Integer(role.protocol_value() as i64);
+        parameters[3 + index * 2] = Value::Integer(i64::from(role.visibility().unwrap_or(0)));
+    }
+    PageStatement::RoleGenerations
+        .spec()
+        .validate_parameters(&parameters)?;
+    Ok(parameters)
+}
+
+const SCHEMA_PARAMETERS: &[Column] = &[INTEGER, text(8), text(256), INTEGER];
+const SCHEMA_COLUMNS: &[Column] = &[
+    text(7),
+    INTEGER,
+    nullable_text(8),
+    text(7),
+    INTEGER,
+    nullable_text(256),
+    text(7),
+    INTEGER,
+    nullable_text(256),
+    text(7),
+    INTEGER,
+    nullable_text(65536),
+];
+macro_rules! schema_field {
+    ($field:literal, $cap:literal) => {
+        concat!(
+            "typeof(",
+            $field,
+            "),CASE WHEN typeof(",
+            $field,
+            ")='text' THEN CAST(length(CAST(",
+            $field,
+            " AS BLOB)) AS TEXT) ELSE '-1' END,CASE WHEN typeof(",
+            $field,
+            ")='text' AND length(CAST(",
+            $field,
+            " AS BLOB))<=",
+            $cap,
+            " THEN ",
+            $field,
+            " ELSE NULL END"
+        )
+    };
+}
+/// Every non-internal object is visible, including unexpected NULL SQL. Guarded
+/// fields preserve type/length errors without copying oversized SQL or names.
+pub const SCHEMA_OBJECTS_SQL: &str = concat!(
+    "SELECT ", schema_field!("type", "8"), ",", schema_field!("name", "256"),
+    ",", schema_field!("tbl_name", "256"), ",", schema_field!("sql", "65536"),
+    " FROM sqlite_schema WHERE (typeof(name)!='text' OR substr(name,1,7) != 'sqlite_' COLLATE NOCASE) AND (CAST(?1 AS INTEGER)=1 OR (type COLLATE BINARY,name COLLATE BINARY)>(?2 COLLATE BINARY,?3 COLLATE BINARY)) ORDER BY type COLLATE BINARY,name COLLATE BINARY LIMIT CAST(?4 AS INTEGER)"
+);
+
+/// Activation-owned cursor construction. Generic PageSpec admission checks only
+/// types/bounds; it does not prove this initial/continuation relationship or that
+/// a cursor came from the last successfully validated schema page.
+pub fn schema_objects_parameters(
+    after: Option<(&str, &str)>,
+    limit: u16,
+) -> crate::Result<[crate::Value; 4]> {
+    use crate::{Error, Value};
+    let (initial, kind, name) = match after {
+        None => (1, "", ""),
+        Some((kind, name)) => {
+            if !matches!(kind, "table" | "index" | "trigger" | "view")
+                || name.is_empty()
+                || name.len() > 256
+            {
+                return Err(Error::Bounds);
+            }
+            (0, kind, name)
+        }
+    };
+    crate::page::charge(kind.len() + name.len())?;
+    let parameters = [
+        Value::Integer(initial),
+        Value::Text(kind.into()),
+        Value::Text(name.into()),
+        Value::Integer(i64::from(limit)),
+    ];
+    PageStatement::SchemaObjects
+        .spec()
+        .validate_parameters(&parameters)?;
+    Ok(parameters)
 }
 
 // Probes precede payloads, distinguishing a missing optional row from a
@@ -134,7 +270,7 @@ const TIME_CONTINUE: &str = concat!(list_projection!(),
     "WHERE c.uid=?1 AND c.parent_id=?2 AND (c.creation_time,c.dirent_id)>(CAST(?3 AS INTEGER),?4) ORDER BY c.creation_time,c.dirent_id LIMIT CAST(?6 AS INTEGER)");
 
 impl PageStatement {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::ProbeTypes,
         Self::ListInitial,
         Self::ListMacStart,
@@ -143,6 +279,8 @@ impl PageStatement {
         Self::ListTimeContinue,
         Self::DirectoryProbe,
         Self::DirectorySlice,
+        Self::SchemaObjects,
+        Self::RoleGenerations,
     ];
     pub fn from_id(id: u32) -> Option<Self> {
         Self::ALL
@@ -151,6 +289,12 @@ impl PageStatement {
     }
     pub fn spec(self) -> PageSpec {
         let (sql,parameters,columns,integer_ranges,limit_parameter):(_, &'static [_], &'static [_], &'static [_], _) = match self {
+            Self::RoleGenerations => (
+                ROLE_GENERATIONS_SQL, ROLE_PARAMETERS, ROLE_COLUMNS,
+                &[IntegerRange{parameter:1,minimum:1,maximum:7}], None),
+            Self::SchemaObjects => (
+                SCHEMA_OBJECTS_SQL, SCHEMA_PARAMETERS, SCHEMA_COLUMNS,
+                &[IntegerRange{parameter:0,minimum:0,maximum:1}], Some(3)),
             Self::DirectoryProbe => (
                 "SELECT CAST(d.version AS TEXT),typeof(d.exact_directory),CAST(length(CAST(d.exact_directory AS BLOB)) AS TEXT) FROM kv_directory_heads h JOIN kv_directories d ON d.uid=h.uid AND d.directory_id=h.directory_id AND d.version=h.version WHERE h.uid=?1 AND h.directory_id=?2 AND CAST(?3 AS INTEGER)>0",
                 DIRECTORY_PROBE_PARAMETERS,DIRECTORY_PROBE_COLUMNS,
@@ -175,12 +319,16 @@ impl PageStatement {
             sql,
             parameters,
             columns,
-            maximum_rows: if matches!(self, Self::DirectoryProbe | Self::DirectorySlice) {
-                1
-            } else {
-                64
+            maximum_rows: match self {
+                Self::DirectoryProbe | Self::DirectorySlice => 1,
+                Self::RoleGenerations => 7,
+                _ => 64,
             },
-            maximum_bytes: 1_048_576,
+            maximum_bytes: if self == Self::RoleGenerations {
+                512
+            } else {
+                1_048_576
+            },
             integer_ranges,
             limit_parameter,
         }

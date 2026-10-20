@@ -335,16 +335,59 @@ fn actual_initialized_schema_put_dirents_matches_existing_repository_and_exports
             "{name}"
         );
         let oracle_connection = Connection::open(&baseline_copy).unwrap();
-        assert_eq!(
-            json(&snapshot(&c)),
-            json(&snapshot(&oracle_connection)),
-            "{name}"
-        );
+        let after = snapshot(&c);
+        let mut oracle_comparison = snapshot(&oracle_connection);
+        if matches!(
+            name,
+            "late_batch_conflict"
+                | "stored_role_denied"
+                | "precondition_before_quota"
+                | "duplicate_name"
+        ) {
+            assert!(expected.is_err(), "{name}");
+            assert_eq!(json(&after), json(&before), "kernel rollback: {name}");
+            // Native namespace admission is an equal-value UPSERT outside its
+            // later domain transaction. The hosted transaction rolls both back.
+            // Verify that exact private difference before normalizing only the
+            // comparison copy; exported kernel snapshots retain the full row.
+            let prior = before
+                .iter()
+                .find(|table| table.name == "metadata_read_dependency")
+                .unwrap();
+            assert_eq!(prior.columns, ["singleton", "incarnation", "revision"]);
+            let [row] = prior.rows.as_slice() else {
+                panic!("dependency singleton: {name}");
+            };
+            let [Value::Integer(1), Value::Blob(incarnation), Value::Integer(revision)] =
+                row.as_slice()
+            else {
+                panic!("dependency shape: {name}");
+            };
+            assert_eq!(incarnation.len(), 32);
+            assert_ne!(incarnation.as_slice(), &[0; 32]);
+            assert!(*revision > 0);
+            let oracle_dependency = oracle_comparison
+                .iter_mut()
+                .find(|table| table.name == "metadata_read_dependency")
+                .unwrap();
+            assert_eq!(oracle_dependency.columns, prior.columns);
+            assert_eq!(
+                oracle_dependency.rows,
+                vec![vec![
+                    Value::Integer(1),
+                    Value::Blob(incarnation.clone()),
+                    Value::Integer(revision.checked_add(1).unwrap()),
+                ]],
+                "native namespace admission: {name}"
+            );
+            oracle_dependency.rows[0][2] = Value::Integer(*revision);
+        }
+        assert_eq!(json(&after), json(&oracle_comparison), "{name}");
         vectors.push(Vector {
             name: name.into(),
             command,
             before,
-            after: snapshot(&c),
+            after,
             outcome,
             reply,
             fail_after: 0,

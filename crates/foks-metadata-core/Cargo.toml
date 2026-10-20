@@ -13,6 +13,7 @@ native = ["dep:rusqlite", "dep:getrandom"]
 read-token-qualification = []
 
 [dependencies]
+foks-schema-contract = { workspace = true }
 foks-proto = { workspace = true }
 foks-snowpack = { workspace = true }
 serde = { workspace = true }

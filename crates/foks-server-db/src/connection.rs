@@ -10,12 +10,14 @@ use rusqlite::{Connection, OpenFlags, Transaction};
 use crate::{schema, Config, Result};
 
 pub struct Database {
+    pub(crate) dependency_schema: crate::ReadDependencySchema,
     pub(crate) connection: Connection,
     pub(crate) config: Config,
     pub(crate) path: PathBuf,
 }
 
 pub struct ReadDatabase {
+    pub(crate) dependency_schema: crate::ReadDependencySchema,
     pub(crate) connection: Connection,
     pub(crate) config: Config,
 }
@@ -163,6 +165,7 @@ impl DatabasePathIdentity {
 /// reader can delay WAL checkpoints.
 #[must_use = "repository reads are pinned only while the snapshot is alive"]
 pub struct ReadSnapshot<'connection> {
+    pub(crate) dependency_schema: &'connection crate::ReadDependencySchema,
     transaction: Transaction<'connection>,
 }
 
@@ -204,7 +207,9 @@ impl Database {
         configure(&connection, &config)?;
         schema::initialize(&mut connection)?;
         crate::kv::validate_kv_tree_capacity(&connection, &config)?;
+        let dependency_schema = crate::read_dependency::verify(&connection)?;
         Ok(Self {
+            dependency_schema,
             connection,
             config,
             path,
@@ -224,7 +229,9 @@ impl Database {
         configure(&connection, &config)?;
         schema::validate_connection(&connection)?;
         crate::kv::validate_kv_tree_capacity(&connection, &config)?;
+        let dependency_schema = crate::read_dependency::verify(&connection)?;
         Ok(Self {
+            dependency_schema,
             connection,
             config,
             path,
@@ -239,6 +246,8 @@ impl Database {
         let connection = Connection::open_with_flags(identity.path(), flags)?;
         identity.recheck()?;
         configure_reader(&connection, &self.config)?;
+        schema::validate_connection(&connection)?;
+        crate::read_dependency::verify(&connection)?;
         Ok(connection)
     }
 
@@ -282,7 +291,12 @@ impl ReadDatabase {
         identity.recheck()?;
         configure_reader(&connection, &config)?;
         schema::validate_connection(&connection)?;
-        Ok(Self { connection, config })
+        let dependency_schema = crate::read_dependency::verify(&connection)?;
+        Ok(Self {
+            connection,
+            config,
+            dependency_schema,
+        })
     }
 
     pub fn integrity_check(&self) -> Result<bool> {
@@ -299,6 +313,7 @@ impl ReadDatabase {
     /// Pins subsequent repository reads to one database state.
     pub fn snapshot(&self) -> Result<ReadSnapshot<'_>> {
         Ok(ReadSnapshot {
+            dependency_schema: &self.dependency_schema,
             transaction: self.connection.unchecked_transaction()?,
         })
     }

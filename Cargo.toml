@@ -21,6 +21,7 @@ members = [
     "crates/foks-proto",
     "crates/foks-protocol-metadata",
     "crates/foks-rpc",
+    "crates/foks-schema-contract",
     "crates/foks-server",
     "crates/foks-server-db",
     "crates/foks-server-testkit",
@@ -70,6 +71,7 @@ foks-oidc = { path = "crates/foks-oidc" }
 foks-proto = { path = "crates/foks-proto" }
 foks-protocol-metadata = { path = "crates/foks-protocol-metadata" }
 foks-rpc = { path = "crates/foks-rpc" }
+foks-schema-contract = { path = "crates/foks-schema-contract" }
 foks-server = { path = "crates/foks-server" }
 foks-server-db = { path = "crates/foks-server-db" }
 foks-server-testkit = { path = "crates/foks-server-testkit" }

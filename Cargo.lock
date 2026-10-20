@@ -2097,6 +2097,7 @@ dependencies = [
  "foks-merkle-store",
  "foks-proto",
  "foks-rpc",
+ "foks-schema-contract",
  "foks-server-db",
  "foks-snowpack",
  "getrandom 0.4.3",
@@ -2161,6 +2162,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "foks-schema-contract"
+version = "0.4.0"
+dependencies = [
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "foks-server"
 version = "0.4.0"
 dependencies = [
@@ -2213,7 +2221,9 @@ dependencies = [
  "foks-crypto",
  "foks-merkle-store",
  "foks-proto",
+ "foks-schema-contract",
  "foks-snowpack",
+ "getrandom 0.4.3",
  "libc",
  "rusqlite",
  "sha2 0.11.0",

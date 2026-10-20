@@ -711,6 +711,7 @@ fn legacy_external_adoption_is_explicit_resumable_and_preserves_wire_reads() {
     let connection = rusqlite::Connection::open(environment.database_path()).unwrap();
     connection
         .execute_batch(concat!(
+            include_str!("../../foks-server-db/tests/fixtures/remove_read_dependency.sql"),
             include_str!("../../foks-server-db/tests/fixtures/remove_kv_usage.sql"),
             include_str!("../../foks-server-db/tests/fixtures/remove_kv_current.sql")
         ))

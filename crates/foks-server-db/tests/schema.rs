@@ -142,6 +142,7 @@ fn predecessor(connection: &Connection, version: i64) {
     assert!(matches!(version, 43..=49));
     connection
         .execute_batch(concat!(
+            include_str!("fixtures/remove_read_dependency.sql"),
             include_str!("fixtures/remove_kv_usage.sql"),
             include_str!("fixtures/remove_kv_current.sql")
         ))

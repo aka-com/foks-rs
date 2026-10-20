@@ -215,6 +215,11 @@ fn read_validated_backup_artifacts(
         return Err(crate::Error::Chunk("backup is not self-contained"));
     }
     migrated.clear_private_chunk_storage_binding()?;
+    // This private copy is a new installation interval even when restoring the
+    // same public identity and history. Previously issued private read tokens
+    // must not bind to a coordinate recovered from the archive.
+    let previous_dependency = migrated.read_dependency()?;
+    migrated.rotate_private_read_dependency(&previous_dependency)?;
     if migrated.checkpoint()?.outcome() != foks_server_db::CheckpointOutcome::Complete {
         return Err(crate::Error::Database(foks_server_db::Error::Invalid(
             "backup migration checkpoint incomplete",
