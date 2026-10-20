@@ -85,11 +85,12 @@ fn reason(error: &Error) -> Reason {
     }
 }
 
-/// The storage lease and the object namespace lease refuse with these exact
-/// messages while an offline command or another lease holder owns them.
+/// The storage lease and the object namespace lease refuse with these
+/// messages only when the lock is held (WouldBlock); an I/O failure while
+/// locking is reported as `Error::Io`.
 const CHUNK_BUSY: [&str; 2] = [
-    "storage is in use; retry after readers and backups finish",
-    "object namespace is in use",
+    crate::storage_lease::STORAGE_IN_USE,
+    crate::chunks::NAMESPACE_IN_USE,
 ];
 
 fn chunk_reason(message: &str) -> Reason {
@@ -274,11 +275,6 @@ mod tests {
             (Error::WriterQueue, "busy"),
             (Error::Database(Db::QuotaExceeded), "capacity"),
             (
-                Error::Chunk("storage is in use; retry after readers and backups finish"),
-                "busy",
-            ),
-            (Error::Chunk("object namespace is in use"), "busy"),
-            (
                 Error::Chunk("storage lock is not a regular file"),
                 "storage",
             ),
@@ -297,6 +293,33 @@ mod tests {
             )));
             assert_eq!(reason(&error).code(), expected);
         }
+    }
+
+    #[test]
+    fn held_storage_and_namespace_leases_are_busy() {
+        let root = tempfile::tempdir().unwrap();
+        let database = root.path().join("foks-server.sqlite");
+        std::fs::write(&database, b"").unwrap();
+        let held = crate::storage_lease::StorageLease::exclusive(&database).unwrap();
+        let Err(error) = crate::storage_lease::StorageLease::shared(&database) else {
+            panic!("a held storage lease must refuse");
+        };
+        assert_eq!(reason(&error).code(), "busy");
+        drop(held);
+        let store = crate::chunks::ChunkStoreConfig::Filesystem {
+            directory: root.path().join("objects"),
+        }
+        .build()
+        .unwrap();
+        let held = store.namespace_lease(true).unwrap();
+        let Err(error) = store.namespace_lease(false) else {
+            panic!("a held namespace lease must refuse");
+        };
+        assert_eq!(reason(&error).code(), "busy");
+        drop(held);
+        // A lock attempt that fails with I/O is not reported as contention.
+        let error = Error::Io(std::io::Error::from_raw_os_error(libc::ENOLCK));
+        assert_eq!(reason(&error).code(), "io");
     }
 
     #[test]

@@ -2,6 +2,10 @@
 //! distributed ownership fence. Cloned owners retain the OS lock through I/O.
 use crate::{Error, Result};
 use std::path::Path;
+/// Another process or lease holder holds the storage lock in a conflicting
+/// mode. Operational diagnostics report it as `busy`.
+pub(crate) const STORAGE_IN_USE: &str = "storage is in use; retry after readers and backups finish";
+
 pub(crate) struct StorageLease {
     _file: std::fs::File,
     identity: foks_server_db::DatabasePathIdentity,
@@ -81,7 +85,10 @@ impl StorageLease {
         } else {
             file.try_lock_shared()
         }
-        .map_err(|_| Error::Chunk("storage is in use; retry after readers and backups finish"))?;
+        .map_err(|error| match error {
+            std::fs::TryLockError::WouldBlock => Error::Chunk(STORAGE_IN_USE),
+            std::fs::TryLockError::Error(error) => Error::Io(error),
+        })?;
         identity.recheck()?;
         let namespace = store
             .map(|s| s.namespace_lease(exclusive))
