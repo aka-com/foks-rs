@@ -86,6 +86,11 @@ jobs:
             printf "%s" "foks-ci-keyring" | gnome-keyring-daemon --unlock --components=secrets
             tools/foks-client/check.sh
             cargo test --locked -p foks-keystore --test native_credential_store -- --ignored
+            # Application tests that need the native credential backend are
+            # ignored by default and run here; the registration benchmark is
+            # the only ignored test in the crate that is not a native test.
+            cargo test --locked -p foks-client-app -- --ignored --test-threads=1 \
+              --skip default_refresh_registration_benchmark
           '
 
   server-fast:

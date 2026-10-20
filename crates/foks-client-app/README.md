@@ -95,6 +95,20 @@ internal modules; the crate's existing public API remains the frontend seam.
 Tests use temporary state roots and loopback fixtures. No API infers a state
 path from the user's home directory.
 
+Tests that use the native credential backend need an unlocked macOS Keychain
+or a Linux Secret Service session, so they are marked `#[ignore]` and a plain
+`cargo test` reports them as ignored. Their fixtures remove the native
+manifest record they create when they are dropped. Run them serially, on Linux
+inside a D-Bus session with an unlocked default collection:
+
+```console
+cargo test --locked -p foks-client-app -- --ignored --test-threads=1 \
+  --skip default_refresh_registration_benchmark
+```
+
+The standalone FOKS workflow runs this command in a private GNOME Keyring
+session after `tools/foks-client/check.sh`.
+
 ## Build and platform boundary
 
 The workspace builds these crates with stable Rust/Cargo (the current gate was
