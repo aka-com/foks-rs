@@ -350,7 +350,7 @@ fn entity(entity_type: u8, key: &SecretKey) -> Result<EntityId> {
     Ok(EntityId::from_bytes(bytes)?)
 }
 
-fn validate_generation_ledger_against_probe(
+pub(crate) fn validate_generation_ledger_against_probe(
     generations: &[foks_server_db::HostKeyGeneration],
     stored_host_id: &[u8],
     probe: &ProbeResponse,

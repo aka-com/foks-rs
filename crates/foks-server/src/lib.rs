@@ -35,6 +35,8 @@ mod operations;
 pub mod pki;
 mod rate_limit;
 mod read_pool;
+#[cfg(unix)]
+pub mod restricted_storage;
 pub mod rpc;
 mod services;
 pub mod sso;

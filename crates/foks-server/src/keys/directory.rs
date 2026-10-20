@@ -28,6 +28,26 @@ impl DirectoryKeyProvider {
         Self::open_with_lock(directory, root_key, false)
     }
 
+    /// Qualification importer only: never create a wrapping key or purpose key.
+    #[cfg(any(test, feature = "celld-proof"))]
+    pub(crate) fn open_existing(directory: &Path, root_key: Zeroizing<[u8; 32]>) -> Result<Self> {
+        let metadata = std::fs::symlink_metadata(directory)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(Error::Key("existing import key directory"));
+        }
+        let process_lock = open_rotation_lock(directory)?;
+        process_lock
+            .try_lock_shared()
+            .map_err(|_| Error::Config("key directory rotation is active"))?;
+        let wrapping_key = load_wrapping_key(&directory.join(WRAPPING_KEY_FILE), &root_key)?;
+        Ok(Self {
+            directory: directory.to_path_buf(),
+            wrapping_key,
+            exclusive: false,
+            _process_lock: process_lock,
+        })
+    }
+
     /// Opens the key directory exclusively for an offline public-key
     /// rotation. This fails while a server or backup process has it open.
     pub fn open_for_rotation(directory: impl AsRef<Path>, root_key: [u8; 32]) -> Result<Self> {
