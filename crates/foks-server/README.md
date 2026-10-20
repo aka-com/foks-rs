@@ -294,13 +294,13 @@ been answered, and closes after the last one.
 `foks_requests_total{family,status}` counts written responses by route family
 (the protocol name, such as `KvStore` or `Reg`) and wire status code (`0` for
 a success). Responses written before a route is resolved have
-`family="unrouted"`: per-address rate-limit refusals, authentication
-failures on the authenticated listener, unknown methods, methods on the wrong
-listener and oversized arguments. A request whose client certificate is not
-bound to an active credential, such as one from a revoked device whose
-certificate has not expired, receives status 1006 (`AUTH_ERROR`, as on a Go
-host) and the connection stays open; a storage fault during that lookup is
-reported with site `authenticate`. A request that ends without a
+`family="unrouted"`: per-address rate-limit refusals, unknown methods,
+methods on the wrong listener and oversized arguments. A request whose client
+certificate is not bound to an active credential, such as one from a revoked
+device whose certificate has not expired, receives status 1006 (`AUTH_ERROR`,
+as on a Go host), counted under its route's family, and the connection stays
+open; this holds for ordinary routes and the realtime inbox poll. A storage
+fault during that lookup is reported with site `authenticate`. A request that ends without a
 response, for example on a handler timeout, appears only in
 `foks_requests_started_total`. `foks_request_internal_errors_total{site,reason}`
 counts server faults that a handler reported as status 1014 (transaction
