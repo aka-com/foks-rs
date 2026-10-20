@@ -408,6 +408,26 @@ pub(crate) async fn serve(
             // A control frame over the request bucket has no sequence to
             // answer at, so the connection closes without a response.
             Inbound::Cancel(_) | Inbound::Control if !request_allowed => return Ok(()),
+            // The call's argument did not fit the working memory budget
+            // while it was decoded. No handler ran, so the refusal is a
+            // definite rejection and is answered at the call's sequence.
+            Inbound::OverBudget(sequence) => {
+                drop(request_memory);
+                if service_data.proof_enabled() {
+                    return Ok(());
+                }
+                service_data.metrics.request_started();
+                let _request_timer =
+                    crate::ServerMetrics::request_timer(Arc::clone(&service_data.metrics));
+                service_data
+                    .metrics
+                    .request_rate_limited(crate::AdmissionRejection::RequestMemory);
+                let memory = service_data.memory.request(None);
+                responder
+                    .refuse(&memory, sequence, crate::metrics::UNROUTED, deadline)
+                    .await?;
+                return Ok(());
+            }
             // go-snowpack-rpc cancels a call whose context ended, as go-foks
             // KEX does for the receive it no longer needs. A pending long
             // poll for that sequence ends without a response, releasing its
@@ -715,7 +735,7 @@ pub(crate) async fn serve(
             BoundedExecution::Stopped => break,
         };
         match responder
-            .write_outcome(outcome, family, deadline, &mut stop)
+            .write_outcome(outcome, family, sequence, deadline, &mut stop)
             .await?
         {
             Flow::Continue => {}
@@ -772,11 +792,11 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
                     return Ok(Waited::Ended);
                 }
                 completed = self.polls.next_completed(), if polls_pending => {
-                    let (outcome, family) = completed?;
+                    let (outcome, family, sequence) = completed?;
                     // A long poll has waited on its own timeout; its response
                     // write gets a fresh write allowance.
                     let deadline = crate::deadline::Deadline::after(self.limits.io_timeout)?;
-                    match self.write_outcome(outcome, family, deadline, stop).await? {
+                    match self.write_outcome(outcome, family, sequence, deadline, stop).await? {
                         Flow::Continue => {}
                         Flow::End => return Ok(Waited::Ended),
                     }
@@ -820,13 +840,35 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
         &mut self,
         outcome: RequestOutcome,
         family: &'static str,
+        sequence: u64,
         response_deadline: crate::deadline::Deadline,
         stop: &mut watch::Receiver<bool>,
     ) -> Result<Flow> {
-        // An operation may already have committed before output allocation
-        // failed. Preserve that ambiguity: never translate the admission
-        // failure into a status that implies a known non-write.
-        if outcome.disconnect_before_response || outcome._memory.failed() {
+        if outcome.disconnect_before_response {
+            return Ok(Flow::End);
+        }
+        // An operation may already have committed before a working or output
+        // allocation failed. Preserve that ambiguity: never translate the
+        // failure into a status that implies a known non-write. A route that
+        // only reads has nothing to leave ambiguous and is refused instead.
+        if outcome._memory.failed() {
+            let refusal = memory_failure_refusal(outcome.route, sequence, &self.data.memory)?;
+            drop(outcome);
+            if let Some(response) = refusal {
+                self.data
+                    .metrics
+                    .request_rate_limited(crate::AdmissionRejection::RequestMemory);
+                write_response_until(
+                    &mut self.writer,
+                    &response,
+                    crate::deadline::Deadline::after(self.limits.io_timeout)?,
+                    self.limits.io_timeout,
+                )
+                .await?;
+                self.data
+                    .metrics
+                    .response_completed(family, STATUS_RATE_LIMIT_ERROR);
+            }
             return Ok(Flow::End);
         }
         let _memory = outcome._memory;
@@ -1156,7 +1198,7 @@ impl<'a> PendingPolls<'a> {
     /// Waits for any pending poll to complete and returns its outcome and
     /// route family. Cancellation safe: the polls stay pending when the
     /// returned future is dropped.
-    async fn next_completed(&mut self) -> Result<(RequestOutcome, &'static str)> {
+    async fn next_completed(&mut self) -> Result<(RequestOutcome, &'static str, u64)> {
         let (index, result) = std::future::poll_fn(|context| {
             for (index, poll) in self.polls.iter_mut().enumerate() {
                 if let std::task::Poll::Ready(result) = poll.future.as_mut().poll(context) {
@@ -1176,7 +1218,7 @@ impl<'a> PendingPolls<'a> {
                 completion: polled.kex_completion,
             });
         }
-        Ok((outcome, poll.family))
+        Ok((outcome, poll.family, poll.sequence))
     }
 }
 
@@ -1186,6 +1228,60 @@ impl Drop for PendingPolls<'_> {
             poll.abandon(self.closing);
         }
     }
+}
+
+/// For a request whose working or output memory reservation failed, the
+/// `RateLimited` response at `sequence` when its route only reads, built
+/// from a fresh control reservation; `None` for any other route, whose
+/// connection closes unanswered because a write may have committed.
+fn memory_failure_refusal(
+    route: Option<&'static RouteSpec>,
+    sequence: u64,
+    pools: &Arc<super::memory::Pools>,
+) -> Result<Option<Vec<u8>>> {
+    if !route.is_some_and(|route| read_only_route(route.id)) {
+        return Ok(None);
+    }
+    let memory = pools.request(None);
+    Ok(Some(memory.sync(|| {
+        encode_status_response_at(&RpcStatus::RateLimited, sequence)
+    })?))
+}
+
+/// Routes that read without changing server state, so that a request
+/// refused after its handler ran has no ambiguous outcome.
+fn read_only_route(id: RouteId) -> bool {
+    matches!(
+        id,
+        RouteId::KvStoreGetRoot
+            | RouteId::KvStoreGet
+            | RouteId::KvStoreGetNode
+            | RouteId::KvStoreGetEncryptedChunk
+            | RouteId::KvStoreGetDir
+            | RouteId::KvStoreCacheCheck
+            | RouteId::KvStoreList
+            | RouteId::KvStoreUsage
+            | RouteId::RegLoadUserChain
+            | RouteId::UserLoadUserChain
+            | RouteId::UserLoadGenericChain
+            | RouteId::UserGetPukForRole
+            | RouteId::TeamLoaderLoadTeamChain
+            | RouteId::TeamLoaderLoadTeamMembershipChain
+            | RouteId::TeamAdminLoadTeamRawInbox
+            | RouteId::MerkleQueryLookup
+            | RouteId::MerkleQueryGetHistoricalRoots
+            | RouteId::MerkleQueryGetCurrentRoot
+            | RouteId::MerkleQueryGetCurrentRootHash
+            | RouteId::MerkleQueryCheckKeyExists
+            | RouteId::MerkleQueryGetCurrentRootSigned
+            | RouteId::MerkleQueryMLookup
+            | RouteId::RealTimeRtGetChannel
+            | RouteId::RealTimeRtListAllChannelsForTeam
+            | RouteId::RealTimeRtGetThread
+            | RouteId::RealTimeRtGetInboxVersion
+            | RouteId::RealTimeRtGetChangedThreads
+            | RouteId::RealTimeRtGetThreadRecents
+    )
 }
 
 /// The KEX receives one source can hold at once: an eighth of the global
@@ -1240,6 +1336,9 @@ enum Inbound {
     Cancel(u64),
     /// Any other control message.
     Control,
+    /// A call whose argument could not be decoded within the working memory
+    /// budget, with its sequence number.
+    OverBudget(u64),
 }
 
 async fn read_call_body_async<R: AsyncRead + Unpin>(
@@ -1272,7 +1371,18 @@ async fn read_call_body_async<R: AsyncRead + Unpin>(
     reader.read_exact(&mut content).await?;
     let memory = memory.request(Some(permit));
     memory.classify_input(length);
-    let message = memory.sync(|| foks_rpc::decode_message(&content))?;
+    let message = match memory.sync(|| foks_rpc::decode_message(&content)) {
+        Ok(message) => message,
+        // A shortfall of the shared budget is not a malformed frame. Its
+        // sequence comes from the call's first two elements, which need no
+        // allocation.
+        Err(error) => {
+            return match foks_rpc::call_sequence(&content) {
+                Some(sequence) if memory.failed() => Ok((Inbound::OverBudget(sequence), memory)),
+                _ => Err(error),
+            };
+        }
+    };
     let message = match message {
         foks_rpc::InboundMessage::Call(call) => Inbound::Call(call),
         foks_rpc::InboundMessage::Control => match foks_rpc::cancelled_sequence(&content) {
@@ -1620,6 +1730,64 @@ mod tests {
     }
 
     #[test]
+    fn a_memory_failure_is_refused_on_read_routes_and_closes_mutations() {
+        let pools = super::super::memory::pools(crate::SessionLimits::default()).unwrap();
+        let refusal = memory_failure_refusal(Some(route_spec(RouteId::KvStoreList)), 9, &pools)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            foks_rpc::read_response(&mut refusal.as_slice(), 4096, 9),
+            Err(foks_rpc::Error::RemoteStatus { code: 1012, .. })
+        ));
+        for route in [Some(route_spec(RouteId::KvStorePut)), None] {
+            assert!(memory_failure_refusal(route, 9, &pools).unwrap().is_none());
+        }
+        for id in [
+            RouteId::KvStorePut,
+            RouteId::KvStoreFileUploadChunk,
+            RouteId::KexReceive,
+            RouteId::RealTimeRtSend,
+            RouteId::RealTimeRtPollInbox,
+            RouteId::UserRevokeDevice,
+        ] {
+            assert!(!read_only_route(id), "{id:?}");
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_call_that_cannot_be_decoded_within_the_working_budget_is_over_budget() {
+        let pools = super::super::memory::pools(crate::SessionLimits::default()).unwrap();
+        // Another request holds every byte of the working pool.
+        let holder = pools.request(None);
+        let working = foks_hosted_transport::memory::test_support::snapshot(&pools).working;
+        assert!(foks_snowpack::AllocationBudget::reserve(&*holder, working));
+        let argument = foks_snowpack::encode(&Value::Binary(vec![0x41; 8192])).unwrap();
+        let request = foks_rpc::encode_call(17, 23, &argument, 41).unwrap();
+        let (mut sender, mut reader) = tokio::io::duplex(request.len());
+        sender.write_all(&request).await.unwrap();
+        let length = read_frame_ingress(
+            &mut reader,
+            foks_rpc::DEFAULT_MAX_FRAME_LENGTH,
+            std::time::Duration::from_secs(15),
+        )
+        .await
+        .unwrap()
+        .0;
+        let (message, _memory) = read_call_body_async(
+            &mut reader,
+            length,
+            foks_rpc::DEFAULT_MAX_FRAME_LENGTH,
+            Arc::new(Semaphore::new(length * 2)),
+            Arc::clone(&pools),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(message, Inbound::OverBudget(41)), "{message:?}");
+        assert_eq!(foks_rpc::call_sequence(&[0x95, 0x05, 0x2a]), Some(42));
+        assert_eq!(foks_rpc::call_sequence(&[0x94, 0x01, 0x2a]), None);
+    }
+
+    #[test]
     fn one_source_holds_at_most_its_share_of_kex_receives() {
         let metrics = Arc::new(crate::ServerMetrics::default());
         let capacity = 16;
@@ -1685,7 +1853,8 @@ mod tests {
         // The later call completes first and is answered first, at its own
         // sequence.
         second_release.send(Ok(b"second".to_vec())).unwrap();
-        let (mut outcome, family) = polls.next_completed().await.unwrap();
+        let (mut outcome, family, sequence) = polls.next_completed().await.unwrap();
+        assert_eq!(sequence, 1);
         assert_eq!(
             (outcome.response.as_slice(), family),
             (&b"second"[..], "Kex")
@@ -1705,7 +1874,7 @@ mod tests {
                 completion: Completion::TimedOut,
             }))
             .unwrap();
-        let (mut outcome, _) = polls.next_completed().await.unwrap();
+        let (mut outcome, _, _) = polls.next_completed().await.unwrap();
         assert_eq!(
             outcome.response,
             encode_status_response_at(&RpcStatus::RateLimited, 0).unwrap()

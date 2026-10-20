@@ -219,7 +219,7 @@ mechanism differs by resource.
 | Realtime poll state reads | 16 readers (half the reader pool) | reads wait for a permit |
 | KEX receives | 32, at most half the active sessions; 4 (an eighth) per source | status 1012, not queued |
 | Request memory | 64 MiB, 2 × frame length reserved per frame; frames up to 4 KiB use a separate 1 MiB budget | frames wait for permits |
-| Working and response memory | 512 MiB and 128 MiB, charged by the codec, SQL results and chunk transfers | status 1012, or the connection closes once a handler may have written |
+| Working and response memory | 512 MiB and 128 MiB, charged by the codec, SQL results and chunk transfers | status 1012 during decoding or on a read-only route; on a route that may write, the connection closes unanswered |
 | Frame size | 16 MiB | rejected before allocation |
 | Request deadline | 30 s from the first frame byte | connection closed; a write still queued is skipped |
 | I/O timeout | 15 s | connection closed |

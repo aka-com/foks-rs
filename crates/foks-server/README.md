@@ -303,8 +303,15 @@ cause: `connection_rate` and `request_rate` (the per-source token buckets),
 `source_connections` (the per-source connection limit), `admission_queue` (a
 full queue of accepted connections), `request_handlers` (every handler permit
 in use), `account_realtime_polls` (the per-account realtime inbox poll limit),
-`kex_receive_polls` (the global KEX receive limit) and `request_memory` (the
-shared request working-memory budget). `foks_kex_active_polls`,
+`kex_receive_polls` (the global KEX receive limit and each source's share
+of it), `connection_long_polls` (more than four long polls pending on one
+connection) and `request_memory` (the shared request input, working and
+response memory budgets). A request whose working or response memory runs
+out is answered with status 1012 when the shortfall comes while its argument
+is decoded, before any handler runs, or when its route only reads (KV reads
+and listings, chain and Merkle loads, realtime reads). On any other route the
+handler may already have committed a write, so the connection closes without
+a response and the client keeps the outcome as unknown. `foks_kex_active_polls`,
 `foks_kex_admitted_total`, `foks_kex_rejected_total` and
 `foks_kex_completed_total{reason}` (`delivered`, `timeout`, `disconnected`,
 `shutdown`, `failed`) describe KEX receives.

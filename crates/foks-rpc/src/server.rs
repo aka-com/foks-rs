@@ -103,6 +103,21 @@ pub fn decode_message(content: &[u8]) -> Result<InboundMessage> {
     }
 }
 
+/// Returns the sequence number of an unframed `CALL_V2` message from its
+/// first two elements alone, without decoding its argument. A server uses
+/// it to answer a call whose argument it could not decode within its memory
+/// budget.
+pub fn call_sequence(content: &[u8]) -> Option<u64> {
+    let mut cursor = Cursor::new(content);
+    if !matches!(cursor.byte().ok()?, 0x95 | 0x96) {
+        return None;
+    }
+    if unsigned(cursor.value().ok()?).ok()? != METHOD_CALL_V2 {
+        return None;
+    }
+    unsigned(cursor.value().ok()?).ok()
+}
+
 /// Returns the sequence number that a `CANCEL` or `CANCEL_V2` control message
 /// cancels, or `None` for any other message. go-snowpack-rpc sends one when
 /// the context of a call it is waiting on ends; the message is
