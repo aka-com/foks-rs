@@ -78,11 +78,28 @@ fn starts_fresh(binding: Option<&ChunkStorageBinding>, locator: &str) -> bool {
 /// to start against another store.
 fn refuse_marked_namespace(store: &dyn ChunkStore) -> Result<()> {
     if store.read_namespace_marker()?.is_some() {
-        return Err(Error::Chunk(
-            "chunk store namespace belongs to another binding; configure a new empty directory or prefix",
-        ));
+        return Err(Error::Chunk(FOREIGN_NAMESPACE));
     }
     Ok(())
+}
+
+const FOREIGN_NAMESPACE: &str =
+    "chunk store namespace belongs to another binding; configure a new empty directory or prefix";
+
+/// Publishes the marker of a binding that is not yet active. A marker that is
+/// already present and differs belongs to another binding, for example a
+/// database left PendingNew by an earlier release on the store of the
+/// installation it was restored from; report the remedy rather than the bare
+/// marker conflict.
+fn publish_marker(store: &dyn ChunkStore, binding: &ChunkStorageBinding) -> Result<()> {
+    let expected = marker(binding)?;
+    if store
+        .read_namespace_marker()?
+        .is_some_and(|present| present != expected)
+    {
+        return Err(Error::Chunk(FOREIGN_NAMESPACE));
+    }
+    store.create_namespace_marker_if_absent(&expected)
 }
 
 /// Validate a snapshot before it can be served or hydrated. No snapshot is held
@@ -164,7 +181,7 @@ pub(crate) fn initialize_online(
             source,
         )?;
     } else {
-        store.create_namespace_marker_if_absent(&marker(&binding)?)?;
+        publish_marker(store, &binding)?;
         writer.call(move |db| {
             db.activate_chunk_storage_binding(&binding)?;
             Ok(())
@@ -203,7 +220,7 @@ pub(crate) fn initialize_offline(
             source,
         )?;
     } else {
-        store.create_namespace_marker_if_absent(&marker(&binding)?)?;
+        publish_marker(store, &binding)?;
         database.activate_chunk_storage_binding(&binding)?;
     }
     crate::chunk_ledger::initialize_offline(database, store)
@@ -486,7 +503,7 @@ mod tests {
                 .unwrap();
         assert!(matches!(
             initialize_online(&writer.handle(), Some(old_store.as_ref()), &source),
-            Err(Error::Chunk(message)) if message.contains("new empty directory or prefix")
+            Err(Error::Chunk(FOREIGN_NAMESPACE))
         ));
         assert!(writer
             .call(|db| Ok(db.chunk_storage_binding()?))
@@ -553,7 +570,12 @@ mod tests {
         let source =
             crate::storage_lease::StorageLease::with_store(&path, Some(old_store.as_ref()), false)
                 .unwrap();
-        assert!(initialize_online(&writer.handle(), Some(old_store.as_ref()), &source).is_err());
+        // Restarted on the same old store, the pinned database gets the remedy,
+        // not the bare marker conflict.
+        assert!(matches!(
+            initialize_online(&writer.handle(), Some(old_store.as_ref()), &source),
+            Err(Error::Chunk(FOREIGN_NAMESPACE))
+        ));
         drop(source);
         let new_store = crate::chunks::ChunkStoreConfig::Filesystem {
             directory: dir.path().join("new-objects"),

@@ -1099,7 +1099,7 @@ fn restore(arguments: RestoreArguments) -> Result<(), Box<dyn std::error::Error>
         database_limits,
     )?;
     eprintln!(
-        "Restore complete. The restored database has no chunk store binding: if the installation uses a chunk store, configure a new empty directory or prefix. Objects in the previous store are not used by the restored database and are never collected."
+        "Restore complete. The restored database has no chunk store binding: if the installation uses a chunk store, configure a new empty directory or prefix. Objects in the previous store are not referenced by the restored database, and no collector of the restored installation deletes them."
     );
     Ok(())
 }

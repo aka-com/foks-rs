@@ -812,6 +812,10 @@ addresses, and all user/team KV namespaces. Plaintext bearer tokens are never st
 envelopes remain bound to their exact target/viewer/key generation and tokens
 still undergo foreground expiry and current-authority checks.
 
+A restored database has no chunk store binding: if the installation uses a
+chunk store, start it against a new empty directory or prefix (see "External
+encrypted chunks" above).
+
 For restore, stop the process, retain the damaged directory, place the backed-up
 database and key directory at new explicit paths, supply the matching operator
 root key, and start the server. Startup revalidates the database application and
