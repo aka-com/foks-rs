@@ -22,7 +22,7 @@ clap = { workspace = true }
 foks-crypto = { workspace = true }
 foks-local-deadline = { workspace = true, features = ["clock"] }
 foks-merkle-store = { workspace = true }
-foks-metadata-core = { workspace = true }
+foks-metadata-core = { workspace = true, features = ["owned-list"] }
 foks-proto = { workspace = true }
 foks-rpc = { workspace = true }
 foks-schema-contract = { workspace = true }
@@ -52,6 +52,7 @@ x509-parser = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+foks-metadata-core = { workspace = true, features = ["native"] }
 foks-oidc = { workspace = true, features = ["test-support"] }
 foks-client-db = { workspace = true }
 

@@ -48,17 +48,93 @@ impl Pools {
         Arc::new(Request {
             pools: self.clone(),
             _input: input,
-            reservations: Mutex::new(Vec::new()),
+            reservations: Mutex::new(PermitSlots::default()),
             failed: AtomicBool::new(false),
             small_request: AtomicBool::new(true),
         })
     }
 }
 
+// One slot per concrete pool: repeated charges retain permits without growing
+// a bookkeeping allocation. Input ownership stays separate from these slots.
+#[derive(Default)]
+struct PermitSlots {
+    working: Option<OwnedSemaphorePermit>,
+    small: Option<OwnedSemaphorePermit>,
+    output: Option<OwnedSemaphorePermit>,
+    control: Option<OwnedSemaphorePermit>,
+    bulk: Option<OwnedSemaphorePermit>,
+}
+
+#[derive(Clone, Copy)]
+enum PoolId {
+    Working,
+    Small,
+    Output,
+    Control,
+    Bulk,
+}
+
+impl PoolId {
+    fn semaphore(self, pools: &Pools) -> &Arc<Semaphore> {
+        match self {
+            Self::Working => &pools.working,
+            Self::Small => &pools.small,
+            Self::Output => &pools.output,
+            Self::Control => &pools.control,
+            Self::Bulk => &pools.bulk,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ReserveFailure {
+    Capacity,
+    Invariant,
+}
+
+fn merged_count(held: usize, added: usize) -> Result<u32, ReserveFailure> {
+    held.checked_add(added)
+        .and_then(|count| u32::try_from(count).ok())
+        .ok_or(ReserveFailure::Invariant)
+}
+
+impl PermitSlots {
+    fn insert(
+        &mut self,
+        pool: PoolId,
+        semaphore: &Arc<Semaphore>,
+        permit: OwnedSemaphorePermit,
+    ) -> Result<(), ReserveFailure> {
+        let slot = match pool {
+            PoolId::Working => &mut self.working,
+            PoolId::Small => &mut self.small,
+            PoolId::Output => &mut self.output,
+            PoolId::Control => &mut self.control,
+            PoolId::Bulk => &mut self.bulk,
+        };
+        if !Arc::ptr_eq(permit.semaphore(), semaphore) {
+            return Err(ReserveFailure::Invariant);
+        }
+        if let Some(held) = slot {
+            if !Arc::ptr_eq(held.semaphore(), semaphore) {
+                return Err(ReserveFailure::Invariant);
+            }
+            // Tokio merge asserts pool identity and adds an internal u32.
+            // Validate both before mutating either retained count.
+            merged_count(held.num_permits(), permit.num_permits())?;
+            held.merge(permit);
+        } else {
+            *slot = Some(permit);
+        }
+        Ok(())
+    }
+}
+
 pub(crate) struct Request {
     pools: Arc<Pools>,
     _input: Option<OwnedSemaphorePermit>,
-    reservations: Mutex<Vec<OwnedSemaphorePermit>>,
+    reservations: Mutex<PermitSlots>,
     failed: AtomicBool,
     small_request: AtomicBool,
 }
@@ -68,24 +144,50 @@ impl Request {
         self.failed.load(Ordering::Relaxed)
     }
 
-    fn reserve_from(&self, pool: &Arc<Semaphore>, bytes: usize) -> bool {
-        let Ok(count) = u32::try_from(bytes) else {
-            return false;
-        };
-        let Ok(permit) = pool.clone().try_acquire_many_owned(count) else {
-            return false;
-        };
-        let Ok(mut reservations) = self.reservations.lock() else {
-            return false;
-        };
-        reservations.push(permit);
-        true
+    fn reserve_from(&self, pool: PoolId, bytes: usize) -> Result<(), ReserveFailure> {
+        let count = u32::try_from(bytes).map_err(|_| ReserveFailure::Capacity)?;
+        let semaphore = pool.semaphore(&self.pools);
+        let permit = semaphore
+            .clone()
+            .try_acquire_many_owned(count)
+            .map_err(|_| ReserveFailure::Capacity)?;
+        self.retain_permit(pool, permit)
+    }
+
+    fn retain_permit(
+        &self,
+        pool: PoolId,
+        permit: OwnedSemaphorePermit,
+    ) -> Result<(), ReserveFailure> {
+        let result = self
+            .reservations
+            .lock()
+            .map_err(|_| ReserveFailure::Invariant)
+            .and_then(|mut reservations| {
+                reservations.insert(pool, pool.semaphore(&self.pools), permit)
+            });
+        if result.is_err() {
+            self.failed.store(true, Ordering::Relaxed);
+        }
+        result
+    }
+
+    fn reserve_with_small_fallback(&self, pool: PoolId, bytes: usize, eligible: bool) -> bool {
+        match self.reserve_from(pool, bytes) {
+            Ok(()) => true,
+            Err(ReserveFailure::Capacity) if eligible => {
+                self.reserve_from(PoolId::Small, bytes).is_ok()
+            }
+            Err(_) => false,
+        }
     }
 
     fn reserve_working(&self, bytes: usize) -> bool {
-        self.reserve_from(&self.pools.working, bytes)
-            || (self.small_request.load(Ordering::Relaxed)
-                && self.reserve_from(&self.pools.small, bytes))
+        self.reserve_with_small_fallback(
+            PoolId::Working,
+            bytes,
+            self.small_request.load(Ordering::Relaxed),
+        )
     }
 
     pub(crate) fn classify_input(&self, length: usize) {
@@ -97,7 +199,7 @@ impl Request {
         self.small_request.store(small, Ordering::Relaxed);
         // Bulk calls cannot occupy every execution slot, including while an
         // object store is stalled. The permit follows detached work and output.
-        if !small && !self.reserve_from(&self.pools.bulk, 1) {
+        if !small && self.reserve_from(PoolId::Bulk, 1).is_err() {
             return false;
         }
         // Generic trees/results are admitted separately by codec/SQL hooks.
@@ -137,16 +239,15 @@ impl Request {
 
 impl foks_rpc::ResponseAllocationBudget for Request {
     fn reserve(&self, bytes: usize, control: bool) -> bool {
-        let accepted = self.reserve_from(
+        let accepted = self.reserve_with_small_fallback(
             if control {
-                &self.pools.control
+                PoolId::Control
             } else {
-                &self.pools.output
+                PoolId::Output
             },
             bytes,
-        ) || (!control
-            && self.small_request.load(Ordering::Relaxed)
-            && self.reserve_from(&self.pools.small, bytes));
+            !control && self.small_request.load(Ordering::Relaxed),
+        );
         if !accepted {
             self.failed.store(true, Ordering::Relaxed);
         }
@@ -163,6 +264,26 @@ impl foks_snowpack::AllocationBudget for Request {
         accepted
     }
 }
+
+// Reuse the original request and fixed permit slots. Page-local credits never
+// release these permits; retained bytes and physical work keep this Arc alive.
+impl foks_metadata_core::owned_list::ListRetainedOwner for Request {
+    fn reserve_retained(&self, bytes: usize) -> bool {
+        !self.failed() && foks_snowpack::AllocationBudget::reserve(self, bytes) && !self.failed()
+    }
+    fn reserve_page_workspace(&self, bytes: usize) -> bool {
+        !self.failed() && foks_snowpack::AllocationBudget::reserve(self, bytes) && !self.failed()
+    }
+    fn failed(&self) -> bool {
+        Request::failed(self)
+    }
+    fn fail(&self) {
+        self.failed.store(true, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod owned_list_tests;
 
 // Field order also matters if a task is cancelled before its first poll/run.
 // Keep the whole owner in spawned closures instead of separately captured fields.
@@ -242,6 +363,213 @@ mod tests {
         })
     }
 
+    fn balanced_pools(count: usize) -> Arc<Pools> {
+        Arc::new(Pools {
+            output: Arc::new(Semaphore::new(count)),
+            working: Arc::new(Semaphore::new(count)),
+            control: Arc::new(Semaphore::new(count)),
+            small: Arc::new(Semaphore::new(count)),
+            bulk: Arc::new(Semaphore::new(count)),
+        })
+    }
+
+    const ALL_POOLS: [PoolId; 5] = [
+        PoolId::Working,
+        PoolId::Small,
+        PoolId::Output,
+        PoolId::Control,
+        PoolId::Bulk,
+    ];
+
+    #[test]
+    fn repeated_charges_merge_into_five_fixed_slots_and_keep_input_separate() {
+        let pools = balanced_pools(100);
+        let input_pool = Arc::new(Semaphore::new(3));
+        let input = input_pool.clone().try_acquire_many_owned(3).unwrap();
+        let request = pools.request(Some(input));
+        for pool in ALL_POOLS {
+            assert_eq!(request.reserve_from(pool, 0), Ok(()));
+            for _ in 0..20 {
+                assert_eq!(request.reserve_from(pool, 2), Ok(()));
+            }
+            assert_eq!(pool.semaphore(&pools).available_permits(), 60);
+        }
+        let slots = request.reservations.lock().unwrap();
+        for slot in [
+            &slots.working,
+            &slots.small,
+            &slots.output,
+            &slots.control,
+            &slots.bulk,
+        ] {
+            assert_eq!(slot.as_ref().unwrap().num_permits(), 40);
+        }
+        assert_eq!(
+            std::mem::size_of::<PermitSlots>(),
+            5 * std::mem::size_of::<Option<OwnedSemaphorePermit>>()
+        );
+        // Exact preceding field layout, for target-local size qualification only.
+        #[allow(dead_code)]
+        struct PriorRequest {
+            pools: Arc<Pools>,
+            _input: Option<OwnedSemaphorePermit>,
+            reservations: Mutex<Vec<OwnedSemaphorePermit>>,
+            failed: AtomicBool,
+            small_request: AtomicBool,
+        }
+        // The fixed owner may be larger; the removed Vec capacity was unbounded.
+        eprintln!(
+            "Request bytes: prior={}, fixed={}, fixed slots={}, old Vec header={}",
+            std::mem::size_of::<PriorRequest>(),
+            std::mem::size_of::<Request>(),
+            std::mem::size_of::<PermitSlots>(),
+            std::mem::size_of::<Vec<OwnedSemaphorePermit>>()
+        );
+        drop(slots);
+        assert_eq!(input_pool.available_permits(), 0);
+        drop(request);
+        assert_eq!(input_pool.available_permits(), 3);
+        for pool in ALL_POOLS {
+            assert_eq!(pool.semaphore(&pools).available_permits(), 100);
+        }
+    }
+
+    #[test]
+    fn capacity_fallback_is_eligible_only_and_control_never_uses_small() {
+        let pools = balanced_pools(10);
+        let request = pools.request(None);
+        assert!(request.reserve_from(PoolId::Working, 10).is_ok());
+        assert!(request.reserve_from(PoolId::Output, 10).is_ok());
+        assert!(request.reserve_from(PoolId::Control, 10).is_ok());
+        assert!(request.reserve_working(2));
+        assert!(foks_rpc::ResponseAllocationBudget::reserve(
+            &*request, 3, false
+        ));
+        assert_eq!(pools.small.available_permits(), 5);
+        assert!(!foks_rpc::ResponseAllocationBudget::reserve(
+            &*request, 1, true
+        ));
+        assert_eq!(pools.small.available_permits(), 5);
+        request.classify_input(4097);
+        assert!(!request.reserve_working(1));
+        assert!(!foks_rpc::ResponseAllocationBudget::reserve(
+            &*request, 1, false
+        ));
+        assert_eq!(pools.small.available_permits(), 5);
+    }
+
+    #[test]
+    fn wrong_pool_and_poison_release_only_new_attempt_without_fallback() {
+        let pools = balanced_pools(10);
+        let request = pools.request(None);
+        assert!(request.reserve_from(PoolId::Working, 3).is_ok());
+        let wrong = pools.output.clone().try_acquire_many_owned(2).unwrap();
+        assert_eq!(
+            request.retain_permit(PoolId::Working, wrong),
+            Err(ReserveFailure::Invariant)
+        );
+        assert!(request.failed());
+        assert_eq!(pools.output.available_permits(), 10);
+        assert_eq!(pools.working.available_permits(), 7);
+        let poisoned = request.clone();
+        assert!(std::thread::spawn(move || {
+            let _guard = poisoned.reservations.lock().unwrap();
+            panic!("fixture poisons bookkeeping");
+        })
+        .join()
+        .is_err());
+        assert!(!request.reserve_working(2));
+        assert_eq!(pools.working.available_permits(), 7);
+        assert_eq!(pools.small.available_permits(), 10);
+        drop(request);
+        assert_eq!(pools.working.available_permits(), 10);
+    }
+
+    #[test]
+    fn checked_merge_count_never_wraps() {
+        assert_eq!(merged_count(u32::MAX as usize, 0), Ok(u32::MAX));
+        assert_eq!(
+            merged_count(u32::MAX as usize, 1),
+            Err(ReserveFailure::Invariant)
+        );
+        assert_eq!(merged_count(usize::MAX, 1), Err(ReserveFailure::Invariant));
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn overflow_drops_new_permit_without_mutating_held_slot() {
+        let semaphore = Arc::new(Semaphore::new(u32::MAX as usize + 1));
+        let mut slots = PermitSlots::default();
+        let held = semaphore.clone().try_acquire_many_owned(u32::MAX).unwrap();
+        slots.insert(PoolId::Working, &semaphore, held).unwrap();
+        let added = semaphore.clone().try_acquire_owned().unwrap();
+        assert_eq!(
+            slots.insert(PoolId::Working, &semaphore, added),
+            Err(ReserveFailure::Invariant)
+        );
+        assert_eq!(
+            slots.working.as_ref().unwrap().num_permits(),
+            u32::MAX as usize
+        );
+        assert_eq!(semaphore.available_permits(), 1);
+        drop(slots);
+        assert_eq!(semaphore.available_permits(), u32::MAX as usize + 1);
+    }
+
+    #[test]
+    fn working_failure_keeps_previously_acquired_bulk_until_drop() {
+        let pools = balanced_pools(10);
+        let request = pools.request(None);
+        assert!(!request.admit_working(8192, false));
+        assert_eq!(pools.bulk.available_permits(), 9);
+        assert_eq!(pools.working.available_permits(), 10);
+        assert_eq!(pools.small.available_permits(), 10);
+        drop(request);
+        assert_eq!(pools.bulk.available_permits(), 10);
+    }
+
+    #[test]
+    fn detached_physical_output_retains_all_five_slots() {
+        let pools = balanced_pools(10);
+        let request = pools.request(None);
+        for pool in ALL_POOLS {
+            assert!(request.reserve_from(pool, 2).is_ok());
+        }
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (output_tx, output_rx) = std::sync::mpsc::channel();
+        let work = request.sync(|| {
+            retain_work(move || {
+                entered_tx.send(()).unwrap();
+                release_rx
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                7u8
+            })
+        });
+        let worker = std::thread::spawn(move || assert!(output_tx.send(work.run()).is_ok()));
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        drop(worker);
+        drop(request);
+        for pool in ALL_POOLS {
+            assert_eq!(pool.semaphore(&pools).available_permits(), 8);
+        }
+        release_tx.send(()).unwrap();
+        let output = output_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(output.value, 7);
+        for pool in ALL_POOLS {
+            assert_eq!(pool.semaphore(&pools).available_permits(), 8);
+        }
+        drop(output);
+        for pool in ALL_POOLS {
+            assert_eq!(pool.semaphore(&pools).available_permits(), 10);
+        }
+    }
+
     #[test]
     fn unstarted_work_and_future_drop_payloads_before_allowances() {
         struct Check(Arc<Pools>);
@@ -289,7 +617,9 @@ mod tests {
             .clone()
             .try_acquire_many_owned(pools.working.available_permits() as u32)
             .unwrap();
-        assert!(bulk.reserve_from(&pools.output, pools.output.available_permits()));
+        assert!(bulk
+            .reserve_from(PoolId::Output, pools.output.available_permits())
+            .is_ok());
         let small = pools.request(None);
         assert!(small.admit_working(100, false));
         assert!(small

@@ -1,10 +1,15 @@
-//! Qualification ownership boundary, not a scratch budget or authority proof.
+//! Allocation ownership only: not transaction, authentication or publication proof.
 use super::{ListEncoder, Retention};
 use crate::{Error, Result};
 use foks_proto::{KvDirent, KvSmallFileBox};
 use std::sync::Arc;
 
-pub(crate) trait ListRetainedOwner: Send + Sync {
+/// The original invocation's cumulative allocation owner, retained through bytes.
+/// Implementations must keep accepted reservations until their final destruction.
+/// This trait provides no SQL, authentication, durability or serving authority.
+pub trait ListRetainedOwner:
+    foks_snowpack::AllocationBudget + foks_rpc::ResponseAllocationBudget
+{
     fn reserve_retained(&self, bytes: usize) -> bool;
     /// One held page/control reservation, separate from cumulative retained work.
     fn reserve_page_workspace(&self, _bytes: usize) -> bool {
@@ -12,6 +17,31 @@ pub(crate) trait ListRetainedOwner: Send + Sync {
     }
     fn failed(&self) -> bool;
     fn fail(&self);
+}
+
+// This guard is declared outside hook scopes. Restoration runs first on unwind;
+// normal domain errors disarm it and preserve the established failure semantics.
+pub(crate) struct UnwindFailure {
+    owner: Arc<dyn ListRetainedOwner>,
+    complete: bool,
+}
+impl UnwindFailure {
+    pub(crate) fn new(owner: Arc<dyn ListRetainedOwner>) -> Self {
+        Self {
+            owner,
+            complete: false,
+        }
+    }
+    pub(crate) fn complete(&mut self) {
+        self.complete = true;
+    }
+}
+impl Drop for UnwindFailure {
+    fn drop(&mut self) {
+        if !self.complete {
+            self.owner.fail();
+        }
+    }
 }
 
 pub(crate) struct OwnedListEncoder {
@@ -61,46 +91,63 @@ impl OwnedListEncoder {
     }
 }
 
-pub(crate) struct OwnedListBytes {
+/// Exact List bytes retaining their original allocation owner.
+pub struct OwnedListBytes {
     bytes: Vec<u8>,
     owner: Arc<dyn ListRetainedOwner>,
 }
 impl OwnedListBytes {
-    pub(crate) fn as_bytes(&self) -> &[u8] {
+    pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.bytes.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
     }
 }
 
-pub(crate) struct OwnedFrameBytes {
+/// Exact framed bytes retaining their original allocation owner.
+pub struct OwnedFrameBytes {
     bytes: Vec<u8>,
     _owner: Arc<dyn ListRetainedOwner>,
 }
 impl OwnedFrameBytes {
-    pub(crate) fn as_bytes(&self) -> &[u8] {
+    pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.bytes.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
     }
 }
 
-/// The original response hook remains installed by the invocation. Never expose
-/// a bare Vec transfer or reset/refund the retained owner during framing.
-pub(crate) fn frame_owned_list(
-    value: OwnedListBytes,
-    sequence: u64,
-) -> foks_rpc::Result<OwnedFrameBytes> {
+/// Frame using the captured owner's working and response hooks, restoring any
+/// unrelated ambient owner afterward. This confers no publication authority;
+/// callers must still complete their transaction, durability and freshness gates.
+/// No bare Vec transfer or reservation refund occurs.
+pub fn frame_owned_list(value: OwnedListBytes, sequence: u64) -> foks_rpc::Result<OwnedFrameBytes> {
     let owner = value.owner;
     let raw = value.bytes;
     if owner.failed() {
         drop(raw);
         return Err(foks_rpc::Error::Io(std::io::ErrorKind::WouldBlock.into()));
     }
-    // Preserve the original framing error if framing itself fails.
-    let bytes = match foks_rpc::encode_success_response_owned_at(raw, sequence) {
+    let mut unwind = UnwindFailure::new(owner.clone());
+    let allocation: Arc<dyn foks_snowpack::AllocationBudget> = owner.clone();
+    let response: Arc<dyn foks_rpc::ResponseAllocationBudget> = owner.clone();
+    // Preserve the original framing error; neither budget may come from a
+    // different ambient invocation. Arc upcasts allocate no adapter/control box.
+    let result = foks_snowpack::with_allocation_budget(allocation, || {
+        foks_rpc::with_response_budget(response, || {
+            foks_rpc::encode_success_response_owned_at(raw, sequence)
+        })
+    });
+    unwind.complete();
+    let bytes = match result {
         Ok(bytes) => bytes,
         Err(error) => {
             owner.fail();
