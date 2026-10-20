@@ -471,18 +471,6 @@ pub(crate) async fn serve(
                 .await?;
             return Ok(());
         }
-        if budget_spent {
-            // The frame budget is spent; only the pending polls are served.
-            service_data.metrics.request_started();
-            let _request_timer =
-                crate::ServerMetrics::request_timer(Arc::clone(&service_data.metrics));
-            let sequence = call.sequence();
-            drop(call);
-            responder
-                .refuse(&request_memory, sequence, crate::metrics::UNROUTED)
-                .await?;
-            continue;
-        }
         service_data.metrics.request_started();
         let request_timer = crate::ServerMetrics::request_timer(Arc::clone(&service_data.metrics));
         let sequence = call.sequence();
@@ -509,8 +497,10 @@ pub(crate) async fn serve(
             service_data
                 .metrics
                 .request_rate_limited(crate::AdmissionRejection::RequestMemory);
+            // The frame was read in full, so the session can go on serving
+            // the peer's other calls, including its pending long polls.
             responder.refuse(&request_memory, sequence, family).await?;
-            return Ok(());
+            continue;
         }
         deadline.remaining()?;
         let long_poll = !proof
@@ -530,7 +520,14 @@ pub(crate) async fn serve(
                 // completes, in completion order.
                 // A refused poll is answered at its sequence and the session
                 // goes on: the frame was read in full, and the peer's other
-                // calls on this connection stay pending.
+                // calls on this connection stay pending. Once the frame
+                // budget is spent no new poll is admitted, so the connection
+                // ends when the polls admitted before it have been answered;
+                // ordinary calls are still served meanwhile.
+                if budget_spent {
+                    responder.refuse(&request_memory, sequence, family).await?;
+                    continue;
+                }
                 if responder.polls.len() >= MAXIMUM_PENDING_POLLS {
                     service_data
                         .metrics
@@ -736,7 +733,7 @@ pub(crate) async fn serve(
                     .request_rate_limited(crate::AdmissionRejection::RequestHandlers);
                 let memory = service_data.memory.request(None);
                 responder.refuse(&memory, sequence, family).await?;
-                return Ok(());
+                continue;
             }
             BoundedExecution::TimedOut => {
                 // A durable mutation may still be reconciling in the bounded
@@ -755,6 +752,9 @@ pub(crate) async fn serve(
             Flow::Continue => {}
             Flow::End => return Ok(()),
         }
+    }
+    if !*stop.borrow() {
+        responder.finish(reader).await;
     }
     Ok(())
 }
@@ -834,6 +834,34 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
                 }
             }
         }
+    }
+
+    /// Ends a session that is closing in order: sends TLS close_notify and a
+    /// TCP FIN, then reads and discards what the peer still sends until it
+    /// closes, for at most two seconds and 1 MiB. Closing a socket with
+    /// unread input resets the connection, which can destroy the last
+    /// response before the peer reads it; a pipelining peer may have sent
+    /// more frames after it.
+    async fn finish<R: AsyncRead + Unpin>(mut self, mut reader: R) {
+        use tokio::io::AsyncWriteExt as _;
+        let allowance = self
+            .limits
+            .io_timeout
+            .min(std::time::Duration::from_secs(2));
+        let _ = tokio::time::timeout(allowance, async {
+            self.writer.shutdown().await?;
+            let mut discard = [0_u8; 4096];
+            let mut total = 0_usize;
+            while total < 1024 * 1024 {
+                let read = reader.read(&mut discard).await?;
+                if read == 0 {
+                    break;
+                }
+                total += read;
+            }
+            Ok::<(), std::io::Error>(())
+        })
+        .await;
     }
 
     /// Answers `sequence` with `RateLimited` for a refused request, under

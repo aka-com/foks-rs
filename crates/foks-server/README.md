@@ -286,11 +286,16 @@ connection holds at most four pending long polls; a fifth is answered with
 status 1012 at its sequence number, counted as
 `foks_admission_rejected_total{reason="connection_long_polls"}`, and the
 connection goes on serving the peer's other calls. A long poll refused by the
-KEX receive budget is answered the same way. A connection with a pending long
-poll is not idle. When a connection reaches its frame budget
-(`maximum_requests`, 4,096 frames), it answers further calls with status 1012
-but keeps reading cancels and end of stream until its pending long polls have
-been answered, and closes after the last one.
+KEX receive budget is answered the same way, and so are a request refused
+because every handler permit is in use or its working memory cannot be
+admitted. A connection with a pending long poll is not idle. Each connection
+serves at most 4,096 frames, a compiled limit. After that it still serves
+ordinary calls and reads cancels and end of stream, but answers any new long
+poll with status 1012 (counted only in `foks_requests_total`), and it closes
+in order once the long polls admitted before the limit have been answered:
+the server sends TLS close_notify and a TCP FIN and reads what the peer still
+sends for up to two seconds, so that the last response is not lost to a
+reset.
 
 `foks_requests_total{family,status}` counts written responses by route family
 (the protocol name, such as `KvStore` or `Reg`) and wire status code (`0` for
