@@ -1,8 +1,5 @@
 use super::*;
 use crate::portability::prepare_state_export;
-fn enabled() -> bool {
-    std::env::var_os("FOKS_TEST_NATIVE_PORTABILITY").is_some()
-}
 fn export(fixture: &crate::test_support::StoppedAccountFixture) -> (PathBuf, StateTransferKey) {
     let path = fixture
         .environment
@@ -29,10 +26,8 @@ fn cleanup(root: &Path) {
         .unwrap();
 }
 #[test]
+#[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
 fn independent_imports_rekey_accounts_preserve_database_identity_and_deny_use() {
-    if !enabled() {
-        return;
-    }
     let fixture = crate::test_support::AccountFixture::start_native();
     fixture.run(|s, v, k| s.create_account("work", "stateimport", "laptop", "", "", None, v, k));
     fixture.run(|s, v, k| s.create_named_team("work", "team", "importteam", v, k));
@@ -182,10 +177,8 @@ fn independent_imports_rekey_accounts_preserve_database_identity_and_deny_use() 
     assert!(crate::ClientCredentials::open(&fixture.root).is_ok());
 }
 #[test]
+#[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
 fn import_recovery_at_each_durable_boundary() {
-    if !enabled() {
-        return;
-    }
     let fixture = crate::test_support::AccountFixture::start_native().stop_client();
     let (archive, key) = export(&fixture);
     let mut points = Vec::new();
@@ -248,10 +241,8 @@ fn import_recovery_at_each_durable_boundary() {
     }
 }
 #[test]
+#[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
 fn corrupt_archive_and_nonempty_destination_never_publish_native_state() {
-    if !enabled() {
-        return;
-    }
     let fixture = crate::test_support::AccountFixture::start_native().stop_client();
     let (archive, key) = export(&fixture);
     let dest = archive.parent().unwrap().join("destination");
@@ -269,10 +260,8 @@ fn corrupt_archive_and_nonempty_destination_never_publish_native_state() {
 }
 
 #[test]
+#[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
 fn imported_hardware_and_bot_accounts_require_the_original_credentials() {
-    if !enabled() {
-        return;
-    }
     use foks_yubi::{MockYubiProvider, Pin, SlotId, YubiProvider as _};
     let fixture = crate::test_support::AccountFixture::start_native();
     fixture.run(|s, v, k| s.create_account("work", "importbot", "laptop", "", "", None, v, k));
@@ -387,10 +376,8 @@ fn security_rows(path: &Path) -> BTreeMap<String, Vec<Vec<rusqlite::types::Value
 }
 
 #[test]
+#[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
 fn imported_oidc_requires_reauthentication_and_never_allows_signup_replay() {
-    if !enabled() {
-        return;
-    }
     use crate::portability::{
         reauthenticate_imported_account, verify_imported_profile,
         ImportReauthenticationAction as Action,
@@ -518,10 +505,8 @@ fn imported_oidc_requires_reauthentication_and_never_allows_signup_replay() {
 }
 
 #[test]
+#[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
 fn later_source_revocation_keeps_an_old_import_gated() {
-    if !enabled() {
-        return;
-    }
     let fixture = crate::test_support::AccountFixture::start_native();
     fixture.run(|s, v, k| s.create_account("work", "importrevoked", "first", "", "", None, v, k));
     fixture.run(|s, v, k| s.provision_owner_device("work", "survivor", "second", 1, v, k));
@@ -586,10 +571,8 @@ fn later_source_revocation_keeps_an_old_import_gated() {
 }
 
 #[test]
+#[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
 fn native_cli_transcript_keeps_transfer_key_out_of_output() {
-    if !enabled() {
-        return;
-    }
     let fixture = crate::test_support::AccountFixture::start_native();
     fixture.run(|s, v, k| s.create_account("work", "clitransfer", "laptop", "", "", None, v, k));
     let fixture = fixture.stop_client();
@@ -657,10 +640,8 @@ fn native_cli_transcript_keeps_transfer_key_out_of_output() {
 }
 
 #[test]
+#[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
 fn account_rekey_interruptions_and_forged_retry_metadata_preserve_authority() {
-    if !enabled() {
-        return;
-    }
     let fixture = crate::test_support::AccountFixture::start_native();
     fixture.run(|s, v, k| s.create_account("work", "rekeyrecovery", "laptop", "", "", None, v, k));
     let fixture = fixture.stop_client();

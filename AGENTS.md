@@ -31,6 +31,13 @@ A parallel run can intermittently fail the first-run receipt-lock release
 assertion; rerun that test in isolation and the native suite serially before
 attributing the failure to a code change.
 
+Tests that need the native credential backend (a macOS Keychain or Linux
+Secret Service) are `#[ignore]`d; run them with `-- --ignored` as
+crates/foks-client-app/README.md describes. In a container without a
+desktop session, `scripts/test-native-portability.py` starts a disposable
+D-Bus session and GNOME Keyring (`gnome-keyring` and `dbus-run-session`
+must be installed) and runs the portability suite in it.
+
 If CLI integration readiness checks report an IPC protocol version mismatch
 while Cargo reports the standalone agent as fresh, force a relink with
 `cargo rustc --locked -j 2 -p foks-agent --bin foks-agent -- -C metadata=agent-readiness-recheck`

@@ -97,7 +97,8 @@ path from the user's home directory.
 
 Tests that use the native credential backend need an unlocked macOS Keychain
 or a Linux Secret Service session, so they are marked `#[ignore]` and a plain
-`cargo test` reports them as ignored. Their fixtures remove the native
+`cargo test` reports them as ignored. They include the state export, import,
+verification and relocation suite under `src/portability`. Their fixtures remove the native
 manifest record they create when they are dropped. Run them serially, on Linux
 inside a D-Bus session with an unlocked default collection:
 
@@ -106,8 +107,13 @@ cargo test --locked -p foks-client-app -- --ignored --test-threads=1 \
   --skip default_refresh_registration_benchmark
 ```
 
-The standalone FOKS workflow runs this command in a private GNOME Keyring
-session after `tools/foks-client/check.sh`.
+The CLI transcript test among them runs the debug `foks-rs` binary from the
+workspace `target` directory, or the one `FOKS_PORTABILITY_CLI` names. The
+standalone FOKS workflow runs this command in a private GNOME Keyring
+session after `tools/foks-client/check.sh`, which builds that binary. On a
+Linux desktop, `scripts/test-native-portability.py` builds the binary and
+runs the portability tests in a disposable keyring session instead of the
+user's own collection.
 
 ## Build and platform boundary
 
