@@ -2050,3 +2050,128 @@ fn a_read_refuses_another_dirent_at_the_listed_path_and_version() {
         .unwrap_err();
     assert_eq!(missing.code, "item-not-found");
 }
+
+/// One profile with `accounts` account vaults whose every ListKv page takes
+/// `delay`, as a fresh read on a slow server does.
+struct SlowListKv {
+    accounts: usize,
+    delay: std::time::Duration,
+}
+
+impl foks_desktop::AgentTransport for SlowListKv {
+    fn call_with_deadline(
+        &self,
+        mut operation: foks_agent_proto::Operation,
+        deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        if let Err(error) = deadline.check() {
+            operation.zeroize_plaintext();
+            return Err(foks_desktop::local_deadline_error(error));
+        }
+        self.call_cancellable(operation, cancelled)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        _header: foks_agent_proto::KvUploadHeader,
+        _reader: &mut dyn std::io::Read,
+        _deadline: &foks_local_deadline::Deadline,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        unreachable!("a catalog read does not upload")
+    }
+    fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        match operation {
+            Operation::ListKnownStores { .. } => Ok(serde_json::json!([])),
+            Operation::ListProfileOverview { profile } => {
+                let accounts = (0..self.accounts)
+                    .map(|index| {
+                        serde_json::json!({
+                            "profile": profile, "alias": format!("vault{index}"),
+                            "username": format!("user{index}"),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                Ok(serde_json::to_value(foks_agent_proto::ProfileOverview {
+                    profile: profile.clone(),
+                    accounts: foks_agent_proto::ResponseResult::Success {
+                        value: serde_json::Value::Array(accounts),
+                    },
+                    teams: foks_agent_proto::ResponseResult::Success {
+                        value: serde_json::json!([]),
+                    },
+                    server_status: foks_agent_proto::ResponseResult::Success {
+                        value: serde_json::json!({
+                            "profile": profile, "configured_probe": profile, "host": null,
+                            "compatibility": {"status": "not-required"}, "chat_supported": null,
+                        }),
+                    },
+                })
+                .unwrap())
+            }
+            Operation::ListKv { .. } => {
+                std::thread::sleep(self.delay);
+                Ok(serde_json::to_value(foks_agent_proto::KvPage {
+                    snapshot_version: 1,
+                    entries: vec![],
+                    next_cursor: None,
+                })
+                .unwrap())
+            }
+            other => panic!("unexpected catalog operation {other:?}"),
+        }
+    }
+    fn put_kv_stream(
+        &self,
+        _header: KvUploadHeader,
+        _reader: &mut dyn std::io::Read,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        unreachable!("a catalog read does not upload")
+    }
+}
+
+/// Walks the catalog through a transport bound to a deadline `budget` away,
+/// publishing progressively, and answers the snapshot and the number of
+/// partial publications.
+fn walk_within(budget: std::time::Duration) -> (foks_desktop::CatalogSnapshot, usize) {
+    let transport = foks_desktop::bind_transport_deadline(
+        Arc::new(SlowListKv {
+            accounts: 12,
+            delay: std::time::Duration::from_millis(40),
+        }),
+        foks_local_deadline::Deadline::capture(std::time::Instant::now() + budget).unwrap(),
+    )
+    .unwrap();
+    let published = Mutex::new(0);
+    let snapshot = foks_desktop::load_catalog_progressive_with_profiles(
+        transport,
+        vec!["slow.example".to_owned()],
+        foks_desktop::CatalogLoadToken::default(),
+        true,
+        |_| *published.lock().unwrap() += 1,
+    )
+    .unwrap();
+    let count = *published.lock().unwrap();
+    (snapshot, count)
+}
+
+/// The serial walk of one profile's stores shares the command's single
+/// budget: twelve 40 ms ListKv pages do not fit in 200 ms, so the read
+/// publishes the stores it reached and records the rest as failed with
+/// deadline-exceeded, while a Bulk-sized budget loads them all.
+#[test]
+fn a_catalog_walk_that_crosses_its_deadline_publishes_what_it_read() {
+    let (short, published) = walk_within(std::time::Duration::from_millis(200));
+    assert!(published > 0, "the read published before the deadline");
+    let failed: Vec<_> = short
+        .failures
+        .iter()
+        .map(|failure| crate::agent::AgentError::from_desktop(failure.error.clone()).code)
+        .collect();
+    assert!(!failed.is_empty(), "stores past the deadline are not read");
+    assert!(
+        failed.iter().all(|code| code == "deadline-exceeded"),
+        "{failed:?}"
+    );
+    let (whole, _) = walk_within(foks_agent_proto::DeadlineClass::Bulk.cap());
+    assert!(whole.failures.is_empty(), "{:?}", whole.failures);
+}

@@ -214,7 +214,10 @@ body runs, and a command missing from the table fails with
 (`list_catalog`, `list_catalog_progressive` and `list_profile_catalog`) are
 Bulk: one read walks every store of the profiles it covers, one `ListKv`
 page after another, under that single budget, while the agent still caps
-each of those requests at 15 s. The catalog repair that a mutation runs
+each of those requests at 15 s. A slow profile's 30 s catalog job can
+therefore hold one of the two slots of the renderer's reconciliation
+scheduler (`src/scheduling/reconciliation.ts`) for up to that 300 s budget,
+leaving one slot for the other jobs. The catalog repair that a mutation runs
 when its profile's catalog is missing or retired shares the mutation's own
 Ordinary budget, so on a slow server with many stores that mutation can
 end with `deadline-exceeded` before it writes. The test
