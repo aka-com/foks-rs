@@ -68,7 +68,7 @@ function page(uploads: FileUpload[], next: number[] | null): FileUploads {
   };
 }
 
-async function mount() {
+async function mount(resumeFailure?: { code: string; message: string }) {
   const { FileUploadsPanel } =
     await import('../src/features/files/file-uploads');
   const { mockBridge } = await import('../src/mock/mock-bridge');
@@ -88,6 +88,13 @@ async function mount() {
     },
     resumeFileUpload: async (_storeId, uploadId) => {
       calls.push(`resume ${uploadId}`);
+      if (resumeFailure)
+        throw {
+          ...resumeFailure,
+          retryable: false,
+          ambiguous: false,
+          fatal: false,
+        };
       return upload(20, 'completed');
     },
     cancelFileUpload: async (_storeId, uploadId) => {
@@ -175,4 +182,26 @@ test('a resume or cancel refreshes the server and keeps the page', async () => {
     'list second',
   ]);
   assert.deepEqual(refreshed, ['Upload resumed', 'Upload cancelled']);
+});
+
+test('a failed resume refreshes the server unless the host refused it before the agent call', async () => {
+  for (const [code, refreshes] of [
+    ['upload-expired', true],
+    ['ambiguous', true],
+    ['mutation-in-flight', false],
+    ['invalid-request', false],
+  ] as const) {
+    const { calls, refreshed } = await mount({ code, message: `${code}.` });
+    const ready = upload(STATES.indexOf('ready'), 'ready').uploadId;
+    const row = ui.screen.getByText(ready).closest('li')!;
+    ui.fireEvent.click(ui.within(row).getByRole('button', { name: 'Resume' }));
+    await ui.screen.findByRole('alert');
+    assert.deepEqual(calls, ['list first', `resume ${ready}`], code);
+    assert.deepEqual(
+      refreshed,
+      refreshes ? ['The upload change failed; the vault was refreshed.'] : [],
+      code,
+    );
+    ui.cleanup();
+  }
 });

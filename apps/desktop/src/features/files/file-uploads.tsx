@@ -28,6 +28,17 @@ const resumable = [
   'verified',
   'blocked',
 ];
+/**
+ * Refusals the host answers before it discards the store's listed items and
+ * asks the agent: another change's reservation, a malformed handle, the
+ * application lock and a command without a deadline policy.
+ */
+const refusedBeforeDispatch = [
+  'mutation-in-flight',
+  'invalid-request',
+  'app-locked',
+  'missing-deadline-policy',
+];
 /** States with nothing left to upload, whose cancel only frees the spool. */
 const settled = ['completed', 'cancelled', 'inline-untracked'];
 
@@ -61,8 +72,20 @@ export function FileUploadsPanel({
     setError(null);
     try {
       if (change) {
-        if (change.resume) await bridge.resumeFileUpload(storeId, change.id);
-        else await bridge.cancelFileUpload(storeId, change.id);
+        try {
+          if (change.resume) await bridge.resumeFileUpload(storeId, change.id);
+          else await bridge.cancelFileUpload(storeId, change.id);
+        } catch (cause) {
+          // The host discards the store's listed items before it asks the
+          // agent, so any attempt it dispatched leaves them to be read again.
+          if (
+            !refusedBeforeDispatch.includes(normalizeCommandError(cause).code)
+          )
+            await onChanged?.(
+              'The upload change failed; the vault was refreshed.',
+            );
+          throw cause;
+        }
         await onChanged?.(change.done);
       }
       setInventory(await bridge.listFileUploads(storeId, after));
