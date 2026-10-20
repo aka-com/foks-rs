@@ -410,8 +410,9 @@ its domain records device and inode 0. Where `/proc/thread-self/ns` cannot
 be read at all, as in some sandboxes and on kernels before 3.17, which have
 no `/proc/thread-self`, the clock is reported unavailable and every CLI
 command and agent request is refused, since a hidden time namespace cannot
-be told from a missing one. Linux 3.17 is therefore the minimum kernel. On macOS the clock is
-`CLOCK_UPTIME_RAW` and the domain is the boot session.
+be told from a missing one. Linux 3.17 is therefore the minimum kernel for
+the client's deadline clock. On macOS the clock is `CLOCK_UPTIME_RAW` and
+the domain is the boot session.
 
 Frames are held in zeroizing buffers. Chapter 19 covers the security checks
 on the socket itself: ownership, permissions, and peer credentials.
