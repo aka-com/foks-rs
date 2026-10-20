@@ -5,6 +5,12 @@ use foks_client_db::{UploadCleanupPhase, UploadState};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
+#[cfg(test)]
+thread_local! {
+    /// Holds a maintenance turn after it selected an owner until its deadline.
+    static STALL_AFTER_SELECTION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 #[derive(Default)]
 pub(crate) struct UploadMaintenanceCursor {
     database_id: Option<[u8; 16]>,
@@ -100,6 +106,10 @@ impl CheckedProfileSession<'_> {
             summary.internal_id
         };
         report.examined += 1;
+        #[cfg(test)]
+        if STALL_AFTER_SELECTION.get() {
+            std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+        }
         let before = hard.upload_cleanup(&id)?;
         let before_revision = hard.metadata()?;
         let mut scanned = false;
@@ -266,7 +276,11 @@ impl CheckedProfileSession<'_> {
             && !report.blocked
             && after.is_some_and(|p| p.phase != UploadCleanupPhase::Complete);
         cursor.burst = cursor.burst.saturating_add(1);
-        if !owner_progress || report.blocked {
+        if !owner_progress && !report.blocked && Instant::now() >= deadline {
+            // The turn ran out before this owner's first erasure. That is
+            // not a blocked owner: keep it active for the next turn.
+            report.more_work = true;
+        } else if !owner_progress || report.blocked {
             if cursor.blocked.len() >= 128 {
                 cursor.blocked.pop_first();
             }
@@ -608,6 +622,35 @@ mod tests {
                 "bounded cleanup failed to drain: {:?}",
                 hard.upload_cleanup(&big)?
             );
+        });
+    }
+
+    /// An owner whose turn expired before its first erasure is kept active
+    /// and reported as more work, not backed off as blocked for 60 s.
+    #[test]
+    fn deadline_before_first_erasure_does_not_block_the_owner() {
+        let f = crate::test_support::AccountFixture::start();
+        f.run(|s, _, master| {
+            let sample = s.adapter_clock.sample()?;
+            let id = cancelled_fixture(s, master, 1, 4, sample)?;
+            let hard = HardStateStore::open(&s.paths.hard_database)?;
+            let before = hard.upload_cleanup(&id)?;
+            let mut cursor = UploadMaintenanceCursor::default();
+            STALL_AFTER_SELECTION.set(true);
+            let report = s.maintain_upload_state_until(
+                &mut cursor,
+                master,
+                Instant::now() + Duration::from_secs(1),
+            );
+            STALL_AFTER_SELECTION.set(false);
+            let report = report?;
+            assert_eq!(hard.upload_cleanup(&id)?, before, "nothing was erased");
+            assert!(!cursor.blocked.contains_key(&id));
+            assert_eq!(cursor.active, Some(id));
+            assert!(report.more_work);
+            s.maintain_upload_state(&mut cursor, master)?;
+            assert_ne!(hard.upload_cleanup(&id)?, before);
+            Ok(())
         });
     }
 
