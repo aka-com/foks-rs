@@ -1257,17 +1257,8 @@ fn only_failures_after_upload_admission_point_to_the_uploads_list() {
             "capability-denied",
         ),
         (
-            || protocol_error(ErrorCode::InvalidRequest),
-            "invalid-request",
-        ),
-        (|| protocol_error(ErrorCode::Busy), "busy"),
-        (
             || protocol_error(ErrorCode::CredentialsRequired),
             "credentials-required",
-        ),
-        (
-            || protocol_error(ErrorCode::ReauthenticationRequired),
-            "reauthentication-required",
         ),
         (
             || protocol_error(ErrorCode::UploadClockUntrusted),
@@ -1304,6 +1295,10 @@ fn only_failures_after_upload_admission_point_to_the_uploads_list() {
             || foks_desktop::AgentError::Ambiguous("lost reply".to_owned()),
             "ambiguous",
         ),
+        (
+            || protocol_error(ErrorCode::ReauthenticationRequired),
+            "reauthentication-required",
+        ),
     ] {
         let error = upload(refusal);
         assert_eq!(error.code, code);
@@ -1316,16 +1311,32 @@ fn only_failures_after_upload_admission_point_to_the_uploads_list() {
             error.message
         );
     }
-    // A busy profile lock can come before or after registration.
-    let error = upload(|| protocol_error(ErrorCode::ProfileBusy));
-    assert_eq!(error.code, "profile-busy");
-    assert!(
-        error
-            .message
-            .contains("If the agent recorded upload handle "),
-        "{}",
-        error.message
-    );
+    // These can come before or after registration.
+    for (refusal, code) in [
+        (
+            (|| protocol_error(ErrorCode::ProfileBusy)) as fn() -> _,
+            "profile-busy",
+        ),
+        (|| protocol_error(ErrorCode::Busy), "busy"),
+        (
+            || protocol_error(ErrorCode::InvalidRequest),
+            "invalid-request",
+        ),
+        (
+            || protocol_error(ErrorCode::RollbackDetected),
+            "rollback-detected",
+        ),
+    ] {
+        let error = upload(refusal);
+        assert_eq!(error.code, code);
+        assert!(
+            error
+                .message
+                .contains("If the agent recorded upload handle "),
+            "{}",
+            error.message
+        );
+    }
 }
 
 pub(super) struct ResizeDuringUpload {
