@@ -1942,6 +1942,39 @@ fn seed_chain_plaintexts_bypass_the_non_zeroizing_prefix_decoder() {
     assert!(hybrid.contains("decode_prefix_sensitive(plaintext)"));
 }
 
+/// The names `source` imports from foks_snowpack in its `use` items, with
+/// any `as` rename resolved to the imported name.
+fn imported_snowpack_names(source: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut rest = source;
+    while let Some(start) = rest.find("use foks_snowpack::") {
+        let item = &rest[start + "use foks_snowpack::".len()..];
+        let end = item.find(';').expect("use item ends");
+        let list = item[..end]
+            .trim()
+            .trim_start_matches('{')
+            .trim_end_matches('}');
+        for name in list.split(',') {
+            let name = name.split_whitespace().next().unwrap_or("");
+            if !name.is_empty() {
+                names.push(name.trim_start_matches("self::").to_owned());
+            }
+        }
+        rest = &item[end..];
+    }
+    names
+}
+
+#[test]
+fn snowpack_import_scan_finds_plain_and_renamed_names() {
+    assert_eq!(
+        imported_snowpack_names(
+            "use foks_snowpack::{encode, Value};\nuse foks_snowpack::decode as d;"
+        ),
+        ["encode", "Value", "decode"]
+    );
+}
+
 #[test]
 fn secret_plaintext_sites_avoid_the_general_decoder_and_unerased_encodings() {
     // Opened PPE, SKMWK and KEX plaintexts are decoded by the foks-proto
@@ -1953,6 +1986,13 @@ fn secret_plaintext_sites_avoid_the_general_decoder_and_unerased_encodings() {
     for source in [include_str!("passphrase.rs"), include_str!("kex.rs")] {
         assert!(!source.contains(&general_decoder));
         assert!(!source.contains(&general_prefix_decoder));
+        // Nor may they import the general decoders under their plain names.
+        for import in imported_snowpack_names(source) {
+            assert!(
+                !matches!(import.as_str(), "decode" | "decode_prefix"),
+                "imports foks_snowpack::{import}"
+            );
+        }
     }
     let kex = include_str!("kex.rs");
     assert!(kex.contains("let plaintext = Zeroizing::new(cleartext.encoded()?);"));
