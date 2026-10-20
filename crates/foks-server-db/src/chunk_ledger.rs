@@ -7,11 +7,6 @@ use crate::{
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
-/// Name prefix of a filesystem chunk backend's own temporary files. They are
-/// never objects, so inventory refuses them rather than charging them as
-/// unknown objects that no collection could delete.
-pub const CHUNK_TEMPORARY_PREFIX: &str = "_foks_tmp-";
-
 type StoredChunkAdmission = (Vec<u8>, Option<Vec<u8>>, i64, i64, String, i64);
 
 /// Deployment policy recorded before a logical publication begins. This does not
@@ -418,11 +413,7 @@ impl Database {
             return Err(Error::Invalid("inventory cursor changed"));
         }
         for entry in entries {
-            if entry.key.is_empty()
-                || entry.key.len() > 1024
-                || entry.key == "_foks_namespace_v1"
-                || entry.key.starts_with(CHUNK_TEMPORARY_PREFIX)
-            {
+            if entry.key.is_empty() || entry.key.len() > 1024 || entry.key == "_foks_namespace_v1" {
                 return Err(Error::Invalid("inventory object key"));
             }
             let stored: Option<(Vec<u8>, i64, i64)> = tx
@@ -803,19 +794,16 @@ mod tests {
         drop(db);
         let mut db = Database::open(tmp.path().join("db"), Default::default()).unwrap();
         assert_eq!(db.begin_chunk_inventory(false).unwrap(), next);
-        // A backend's own temporary is never charged as an unknown object.
-        for key in ["_foks_namespace_v1", "_foks_tmp-a1B2c3"] {
-            assert!(db
-                .record_chunk_inventory_page(
-                    &next,
-                    &[ChunkInventoryEntry {
-                        key: key.into(),
-                        encoded_bytes: 7,
-                    }],
-                    None,
-                )
-                .is_err());
-        }
+        assert!(db
+            .record_chunk_inventory_page(
+                &next,
+                &[ChunkInventoryEntry {
+                    key: "_foks_namespace_v1".into(),
+                    encoded_bytes: 7,
+                }],
+                None,
+            )
+            .is_err());
         db.record_chunk_inventory_page(
             &next,
             &[ChunkInventoryEntry {

@@ -15,7 +15,7 @@ pub use chunk_binding::{ChunkStorageBinding, ChunkStorageBindingState};
 pub use chunk_collection::ChunkDeletion;
 pub use chunk_ledger::{
     ChunkInventoryCheckpoint, ChunkInventoryEntry, ChunkObject, ChunkPhysicalUsage,
-    ChunkPublicationPolicy, ChunkReservation, ChunkReservationAction, CHUNK_TEMPORARY_PREFIX,
+    ChunkPublicationPolicy, ChunkReservation, ChunkReservationAction,
 };
 mod config;
 mod connection;

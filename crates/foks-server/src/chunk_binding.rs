@@ -320,6 +320,9 @@ mod tests {
         lose: AtomicBool,
     }
     impl ChunkStore for LostMarkerReply {
+        fn remove_stale_temporaries(&self) -> Result<u64> {
+            self.inner.remove_stale_temporaries()
+        }
         fn namespace_lease(
             &self,
             exclusive: bool,

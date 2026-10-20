@@ -9,6 +9,9 @@ pub struct ChunkCollectionReport {
     pub deleted_objects: u64,
     pub deleted_bytes: u64,
     pub backend_qualified: bool,
+    /// Temporary files of interrupted filesystem writes removed by this run.
+    /// They are never objects and were never charged.
+    pub removed_temporaries: u64,
     pub usage: foks_server_db::ChunkPhysicalUsage,
 }
 /// Reclaims at most one bounded batch under exclusive local ownership. Repeat
@@ -30,7 +33,6 @@ pub fn collect_chunk_store(
     let writer = crate::DatabaseWriterGuard::acquire(path.as_ref())?;
     let _storage =
         crate::storage_lease::StorageLease::with_store(path.as_ref(), Some(store), true)?;
-    store.remove_stale_temporaries()?;
     let mut db = writer.open_database(config)?;
     crate::chunk_binding::initialize_offline(&mut db, store, &_storage)?;
     let qualified = store.supports_collection()
@@ -45,11 +47,16 @@ pub fn collect_chunk_store(
         deleted_objects: 0,
         deleted_bytes: 0,
         backend_qualified: qualified,
+        removed_temporaries: 0,
         usage: db.chunk_physical_usage()?,
     };
     if dry_run || !report.backend_qualified {
         return Ok(report);
     }
+    // The binding is verified, this database's authority owns the namespace
+    // and the exclusive namespace lease is held, so no publisher can be
+    // between creating and persisting a temporary.
+    report.removed_temporaries = store.remove_stale_temporaries()?;
     let mut token = [0; 16];
     crate::Entropy::fill(&crate::OsEntropy, &mut token)?;
     for deletion in db.begin_chunk_collection(&token, maximum_objects, maximum_bytes)? {

@@ -1081,7 +1081,7 @@ fn collect_chunk_store(
         maximum_bytes,
         dry_run,
     )?;
-    println!("report_only={} backend_qualified={} ledger_candidates={} deleted_objects={} deleted_bytes={} charged_objects={} deleting_objects={} deleting_bytes={} tombstones={} unresolved_attempts={} unknown_objects={}",report.report_only,report.backend_qualified,report.eligible_objects,report.deleted_objects,report.deleted_bytes,report.usage.objects,report.usage.deleting_objects,report.usage.deleting_bytes,report.usage.tombstones,report.usage.unresolved_attempts,report.usage.unknown_objects);
+    println!("report_only={} backend_qualified={} ledger_candidates={} deleted_objects={} deleted_bytes={} removed_temporaries={} charged_objects={} deleting_objects={} deleting_bytes={} tombstones={} unresolved_attempts={} unknown_objects={}",report.report_only,report.backend_qualified,report.eligible_objects,report.deleted_objects,report.deleted_bytes,report.removed_temporaries,report.usage.objects,report.usage.deleting_objects,report.usage.deleting_bytes,report.usage.tombstones,report.usage.unresolved_attempts,report.usage.unknown_objects);
     println!("unknown_publication_attempts={} retrying_remote_publications={} acknowledged_remote_publications={} remote_termination_qualified=false",report.usage.unknown_publication_attempts,report.usage.retrying_remote_publications,report.usage.acknowledged_remote_publications);
     Ok(())
 }

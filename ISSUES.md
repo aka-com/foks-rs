@@ -172,6 +172,22 @@ Required resolution:
 - The promotion and demotion ordering checks stay in the Tauri layer, because
   only it holds the member's current role from the authenticated roster.
 
+## Chunk temporaries left by earlier releases stay charged
+
+**Priority: low.** Before the filesystem chunk store named its temporaries
+`_foks_tmp-*`, it used the tempfile default (`.tmp` plus six random
+characters). A process killed between creating and persisting one left a file
+that inventory cannot tell from a foreign object. Inventory records it as an
+unknown object, which stays charged against `maximum_chunk_physical_bytes` and
+`maximum_chunk_objects`, and collection never deletes unknown objects.
+
+Required resolution:
+
+- Decide whether an operator command may remove `.tmp??????` files from a
+  filesystem namespace, with the same writer guard, exclusive namespace lease
+  and authority checks as collection, and release their ledger rows; or keep
+  them charged and document how to remove them by hand.
+
 ## Existing disclosed limitations
 
 These are real product or verification limits, but the reviewed plans already

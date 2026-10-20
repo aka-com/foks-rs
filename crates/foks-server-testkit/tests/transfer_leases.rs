@@ -38,6 +38,9 @@ impl Gated {
     }
 }
 impl ChunkStore for Gated {
+    fn remove_stale_temporaries(&self) -> foks_server::Result<u64> {
+        self.inner.remove_stale_temporaries()
+    }
     fn namespace_lease(
         &self,
         exclusive: bool,

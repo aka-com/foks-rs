@@ -693,10 +693,17 @@ an installation bound before authority identities were recorded, and every S3
 store, is report-only, because the termination of late S3 PUT retries is not
 qualified. It never deletes unknown objects (those it did not publish and
 record with a digest), objects with an unresolved or retrying publication
-attempt, or objects of another namespace. Both commands also remove
-temporary files (named `_foks_tmp-*`) that a filesystem write interrupted by a
-process kill left in the directory; such files are never recorded or charged
-as objects.
+attempt, or objects of another namespace.
+
+A filesystem write that a process kill interrupts can leave a temporary file
+named `_foks_tmp-*` in the directory. Inventory and the empty-namespace check
+skip these files, so they are never recorded or charged. `collect-chunk-store`
+removes them when it is allowed to delete (not with `--dry-run`, and only with
+a matching authority identity), after it has verified the binding and while it
+holds the exclusive namespace lease. Temporaries left by earlier releases are
+named `.tmp` followed by six random characters; they are indistinguishable
+from foreign objects, so inventory records them as unknown objects that stay
+charged against physical capacity, and nothing deletes them automatically.
 
 Once collection has run, a copy of the SQLite database whose external
 chunks were not hydrated is not a backup: its references can name objects

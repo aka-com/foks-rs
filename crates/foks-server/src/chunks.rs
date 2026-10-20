@@ -169,12 +169,12 @@ pub trait ChunkStore: Send + Sync {
         Err(Error::Chunk("collection is not qualified for this backend"))
     }
     /// Removes temporary files that this backend's own interrupted writes left
-    /// in the namespace. Only called by offline commands that hold the
-    /// installation writer guard, so no publisher is writing. Returns the
-    /// number removed; backends without local temporaries remove nothing.
-    fn remove_stale_temporaries(&self) -> Result<u64> {
-        Ok(0)
-    }
+    /// in the namespace and returns how many it removed. Only collection calls
+    /// it, after the binding is verified and while it holds the installation
+    /// writer guard and the exclusive namespace lease, so no publisher can be
+    /// writing. Every implementation decides: a wrapper must forward it, and a
+    /// backend without local temporaries returns 0.
+    fn remove_stale_temporaries(&self) -> Result<u64>;
 }
 
 pub fn chunk_digest(bytes: &[u8]) -> [u8; 32] {
@@ -294,7 +294,7 @@ pub(crate) const NAMESPACE_IN_USE: &str = "object namespace is in use";
 /// Prefix of the filesystem backend's temporaries before they are persisted
 /// under their final name. A process killed between create and persist leaves
 /// one behind; such a file is never an object.
-pub(crate) const TEMPORARY_PREFIX: &str = foks_server_db::CHUNK_TEMPORARY_PREFIX;
+pub(crate) const TEMPORARY_PREFIX: &str = "_foks_tmp-";
 const MAXIMUM_MARKER_BYTES: usize = 1024;
 
 fn check_marker_size(bytes: &[u8]) -> Result<()> {
@@ -762,6 +762,10 @@ async fn read_remote_marker(
 }
 
 impl ChunkStore for S3Chunks {
+    /// S3 puts are single requests with no temporary object.
+    fn remove_stale_temporaries(&self) -> Result<u64> {
+        Ok(0)
+    }
     fn publication_policy(&self) -> foks_server_db::ChunkPublicationPolicy {
         // object_store retries can leave an earlier physical PUT outstanding.
         // A later conditional-write conflict plus successful GET proves presence
@@ -1007,7 +1011,9 @@ mod tests {
         assert!(store.namespace_is_empty().unwrap());
         {
             let mut objects = mock.state.objects.lock().unwrap();
-            for key in ["a", "b", "c", "d"] {
+            // An S3 object with the filesystem temporary prefix is foreign
+            // data, listed and charged like any other unknown object.
+            for key in ["_foks_tmp-synced", "a", "b", "c", "d"] {
                 objects.insert(format!("/test-bucket/tenant/chunks/{key}"), vec![1; 3]);
             }
             objects.insert("/test-bucket/another-tenant/secret".into(), vec![9; 9]);
@@ -1025,7 +1031,8 @@ mod tests {
             }
             assert!(cursor.as_ref().unwrap().starts_with("opaque:"));
         }
-        assert_eq!(keys, ["a", "b", "c", "d"]);
+        assert_eq!(keys, ["_foks_tmp-synced", "a", "b", "c", "d"]);
+        assert_eq!(store.remove_stale_temporaries().unwrap(), 0);
         mock.state.redirect.store(true, Ordering::Release);
         assert!(store.inventory_page(None, 2).is_err());
     }
