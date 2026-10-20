@@ -5,6 +5,11 @@ mod capture;
 mod import;
 mod scan;
 #[cfg(feature = "celld-proof")]
+pub use import::list::{
+    start_native_personal_list_qualification, CertificateParserQualification,
+    CertificateQualification, NativeListQualification, NativeListQualificationReport,
+};
+#[cfg(feature = "celld-proof")]
 pub use import::{qualify_personal_list_import, ImportQualification};
 #[cfg(test)]
 mod tests;

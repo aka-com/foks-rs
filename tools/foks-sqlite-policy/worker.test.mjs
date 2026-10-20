@@ -63,6 +63,33 @@ test('only the exact pinned pragma program can normalize one virtual-table point
   assert.throws(()=>normalize([[0,'VOpen',0,0,0,'vtab:unknown',0,null]],new Map(),query),/virtual-table/);
 });
 
+test('attachment inventory has its own exact builtin identity and multiplicity',()=>{
+  const query={id:'connection/no_attachments',sql:"SELECT CASE WHEN EXISTS(SELECT 1 FROM pragma_table_list WHERE schema NOT IN ('main','temp')) THEN '1' ELSE '0' END AS value"};
+  const row=[0,'VOpen',0,0,0,'vtab:AB123',0,null];
+  assert.equal(normalize([row],new Map(),query)[0][5],'vtab/builtin/pragma_table_list');
+  assert.equal(row[5],'vtab:AB123');
+  for(const [rows,q] of [[[],query],[[row,row],query],[[row],{...query,id:'connection/other'}],
+    [[row],{...query,sql:'SELECT * FROM pragma_table_list'}]])
+    assert.throws(()=>normalize(rows,new Map(),q),/virtual-table/);
+});
+
+test('temp schema normalization admits only one exact readonly root',()=>{
+  const query={id:'connection/empty_temp',sql:"SELECT CASE WHEN EXISTS(SELECT 1 FROM temp.sqlite_schema) THEN '1' ELSE '0' END"};
+  const row=[0,'OpenRead',0,1,1,'0',0,null],roots=new Map([[1,'table/sqlite_schema']]);
+  assert.deepEqual(normalize([row],roots,query),[[0,'OpenRead',0,'table/temp.sqlite_schema',1,'0',0,null]]);
+  assert.equal(row[3],1);
+  for(const [index,value] of [[1,'OpenWrite'],[1,'ReopenIdx'],[3,2],[4,2],[6,16]]){
+    const changed=[...row];changed[index]=value;
+    assert.throws(()=>normalize([changed],roots,query),/root operand|temp schema/);
+  }
+  for(const [rows,q] of [[[],query],[[row,row],query],[[row],undefined],
+    [[row],{...query,id:'connection/other'}],[[row],{...query,sql:'SELECT 1'}]])
+    assert.throws(()=>normalize(rows,roots,q),/root operand|temp schema/);
+  const main=[...row];main[4]=0;
+  assert.equal(normalize([main],roots)[0][3],'table/sqlite_schema');
+  assert.throws(()=>normalize([main],roots,query),/temp schema/);
+});
+
 
 test('compiler provenance remains explicit and only its reviewed pair is separated',()=>{
   const expected=['A','COMPILER=clang-21.0.0','Z'],actual=['A','COMPILER=clang-15.0.0','Z'];

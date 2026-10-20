@@ -1,14 +1,15 @@
-//! Real native import qualification. No public readiness capability or serving route.
+//! Real native import qualification. No public readiness capability or production route.
+mod certificates;
 mod copy;
 mod keys;
+#[path = "../../restricted_list/mod.rs"]
+pub(crate) mod list;
 mod policy;
 mod semantic;
 #[cfg(test)]
 mod tests;
 
-use super::{
-    capture, scan, Result, ScanControl, ScanError, StorageScanComplete, StorageSummary,
-};
+use super::{capture, scan, Result, ScanControl, ScanError, StorageScanComplete, StorageSummary};
 use foks_schema_contract::storage::{Component, HOSTED_SMALL_V1};
 use rusqlite::{types::ValueRef, Connection, OpenFlags};
 use std::{path::PathBuf, sync::Arc};
@@ -73,6 +74,14 @@ pub(crate) struct NativePersonalListImport {
     storage: crate::storage_lease::StorageLease,
     directory: tempfile::TempDir,
     qualification: ImportQualification,
+    binding: ImportBinding,
+}
+/// Created only after the real imported key inventory and public host are verified.
+/// This remains inside the consumed owner; no digest or identity getter mints readiness.
+struct ImportBinding {
+    host: [u8; 33],
+    canonical_name: String,
+    key_bundle_digest: [u8; 32],
 }
 impl NativePersonalListImport {
     fn verify_owned(&self) -> Result<()> {
@@ -80,9 +89,9 @@ impl NativePersonalListImport {
             .recheck()
             .map_err(|_| unsupported("import destination identity"))?;
         self.database.control().check()?;
-        // All retained resources are intentional, not borrowed readiness. F3's future
-        // consuming constructor must move these together and replace the job hook
-        // before its first SQL request; no such serving constructor exists here.
+        // All retained resources are intentional, not borrowed readiness. The
+        // consuming List constructor keeps the original job through construction
+        // and moves the connection and these leases together into its closed owner.
         let _retained = (
             &self.config,
             &self.keys,
@@ -334,10 +343,10 @@ pub(crate) fn import_personal_list(
     source._package.copy_keys(&key_path, &job)?;
     let keys =
         crate::keys::DirectoryKeyProvider::open_existing(&key_path, root_key).map_err(server)?;
-    keys::validate_existing_import(&target, &keys, &source._package)?;
+    let (host, canonical_name) = keys::validate_existing_import(&target, &keys, &source._package)?;
     #[cfg(test)]
     tests::stage(tests::Stage::Keys, &path)?;
-    source._package.verify(&job)?;
+    let key_bundle_digest = source._package.key_bundle_digest(&job)?;
     identity
         .recheck()
         .map_err(|_| unsupported("import final identity"))?;
@@ -359,6 +368,11 @@ pub(crate) fn import_personal_list(
         storage,
         directory,
         qualification,
+        binding: ImportBinding {
+            host,
+            canonical_name,
+            key_bundle_digest,
+        },
     };
     owner.verify_owned()?;
     Ok(owner)

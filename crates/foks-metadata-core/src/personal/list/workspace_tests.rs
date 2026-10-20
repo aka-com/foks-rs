@@ -12,7 +12,7 @@ fn credential() -> CurrentCredential {
     CurrentCredential {
         uid: [1; 33],
         credential: EntityId::from_bytes(id.clone()).unwrap(),
-        owner: EntityId::from_bytes(id).unwrap(),
+        owner: EntityId::from_bytes(id).unwrap().into_bytes(),
         role: Role::OWNER,
         kind: super::super::CredentialKind::SoftwareDevice,
         expires_at_micros: 100,
@@ -300,7 +300,7 @@ fn owned_entry_fails_before_sql_only_when_owner_failed() {
 }
 
 #[test]
-fn owned_page_latches_late_errors_after_preserving_role_query_precedence() {
+fn owned_page_retires_late_corruption_and_latches_other_errors_after_role_query_precedence() {
     use crate::list_encoder::owned::{ListRetainedOwner, OwnedListEncoder};
     use std::sync::{
         atomic::{AtomicBool, Ordering},
@@ -362,7 +362,7 @@ fn owned_page_latches_late_errors_after_preserving_role_query_precedence() {
         assert!(matches!(result,Err(error) if error == expected));
         assert_eq!(sql.calls, [P::ListInitial, P::RoleGenerations]);
         assert!(!work.active.get());
-        assert!(owner.failed());
+        assert_eq!(owner.failed(), role_error);
         let before = sql.calls.len();
         assert!(matches!(
             process_page(
@@ -377,5 +377,6 @@ fn owned_page_latches_late_errors_after_preserving_role_query_precedence() {
             Err(PageFault::Bounds)
         ));
         assert_eq!(sql.calls.len(), before);
+        assert!(owner.failed());
     }
 }

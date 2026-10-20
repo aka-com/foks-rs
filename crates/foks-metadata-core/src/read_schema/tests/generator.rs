@@ -131,7 +131,7 @@ fn generate() -> BTreeMap<String, Vec<u8>> {
     let page_bytes = crate::page::catalog_artifact().unwrap();
     assert_eq!(
         hex(&hash(&scalar_bytes)),
-        "f148c7aad3859b8bc633c1cfd19adc3700f54f3779f2bddca049d88d46dd3b53"
+        "07b52d5b3405ec6d6826a3cb66c8f7a41422edd890179c6615d46d469af1f705"
     );
     assert_eq!(
         hex(&hash(&page_bytes)),

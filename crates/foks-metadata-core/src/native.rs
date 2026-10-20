@@ -1,5 +1,5 @@
 //! Synchronous host for an already-open native transaction. It does not commit.
-use crate::{Error, Result, Sql, Statement, Value, MAX_SQL_CALLS};
+use crate::{Error, Result, Sql, SqlCallBudget, Statement, Value, MAX_SQL_CALLS};
 
 use rusqlite::{
     types::{Value as SqlValue, ValueRef},
@@ -10,7 +10,35 @@ mod scalar;
 
 pub struct NativeSql<'a> {
     connection: &'a Connection,
-    calls: usize,
+    calls: Counter<'a>,
+}
+
+enum Counter<'a> {
+    Local(usize),
+    Borrowed(&'a mut SqlCallBudget),
+}
+
+impl Counter<'_> {
+    fn before_validation(&mut self) -> Result<()> {
+        match self {
+            Self::Local(_) => Ok(()),
+            Self::Borrowed(budget) => budget.attempt(),
+        }
+    }
+
+    fn after_validation(&mut self) -> Result<()> {
+        match self {
+            // Preserve the qualification host's existing local ordering.
+            Self::Local(calls) => {
+                *calls += 1;
+                if *calls > MAX_SQL_CALLS {
+                    return Err(Error::Bounds);
+                }
+                Ok(())
+            }
+            Self::Borrowed(_) => Ok(()),
+        }
+    }
 }
 impl<'a> NativeSql<'a> {
     pub fn new(connection: &'a Connection) -> Result<Self> {
@@ -19,11 +47,33 @@ impl<'a> NativeSql<'a> {
         }
         Ok(Self {
             connection,
-            calls: 0,
+            calls: Counter::Local(0),
         })
     }
+
+    /// Borrow the enclosing operation's original budget. Constructing another
+    /// adapter for a later interval cannot reset that operation's accounting.
+    pub fn new_with_budget(
+        connection: &'a Connection,
+        budget: &'a mut SqlCallBudget,
+    ) -> Result<Self> {
+        if connection.is_autocommit() {
+            return Err(Error::Storage);
+        }
+        if budget.failed() {
+            return Err(Error::Bounds);
+        }
+        Ok(Self {
+            connection,
+            calls: Counter::Borrowed(budget),
+        })
+    }
+
     pub fn calls(&self) -> usize {
-        self.calls
+        match &self.calls {
+            Counter::Local(calls) => *calls,
+            Counter::Borrowed(budget) => budget.attempts(),
+        }
     }
     fn admit(
         &mut self,
@@ -31,9 +81,10 @@ impl<'a> NativeSql<'a> {
         parameters: &[Value],
         write: bool,
     ) -> Result<Vec<SqlValue>> {
+        self.calls.before_validation()?;
         statement.validate_parameters(parameters)?;
-        self.calls += 1;
-        if self.calls > MAX_SQL_CALLS || statement.spec().write != write {
+        self.calls.after_validation()?;
+        if statement.spec().write != write {
             return Err(Error::Bounds);
         }
         scalar::bindings(parameters)
@@ -47,11 +98,9 @@ impl Sql for NativeSql<'_> {
     ) -> Result<crate::page::PageBuffer> {
         use crate::page::{Cell, PageEncoder, PageKind};
         let spec = statement.spec();
+        self.calls.before_validation()?;
         spec.validate_parameters(parameters)?;
-        self.calls += 1;
-        if self.calls > MAX_SQL_CALLS {
-            return Err(Error::Bounds);
-        }
+        self.calls.after_validation()?;
         let limit = spec.requested_rows(parameters)?;
         // Admit bindings and one bounded cursor payload before cloning parameters
         // or preparing/advancing SQLite. Fixed row/container overhead and every
@@ -164,6 +213,9 @@ impl Sql for NativeSql<'_> {
         Ok(count as u64)
     }
 }
+
+#[cfg(test)]
+mod sql_budget_tests;
 
 #[cfg(test)]
 mod page_decimal_tests {

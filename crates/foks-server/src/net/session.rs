@@ -1926,7 +1926,7 @@ async fn read_frame_length_async<R: AsyncRead + Unpin>(
     read_frame_length_after_marker(reader, maximum, marker).await
 }
 
-async fn read_frame_ingress<R: AsyncRead + Unpin>(
+pub(crate) async fn read_frame_ingress<R: AsyncRead + Unpin>(
     reader: &mut R,
     maximum: usize,
     budget: std::time::Duration,
@@ -2050,7 +2050,7 @@ fn phase_deadline(
     Ok(deadline.instant().min(phase.instant()).into())
 }
 
-async fn write_response_until<W: tokio::io::AsyncWrite + Unpin>(
+pub(crate) async fn write_response_until<W: tokio::io::AsyncWrite + Unpin>(
     writer: &mut W,
     response: &[u8],
     deadline: crate::deadline::Deadline,

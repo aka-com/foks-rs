@@ -292,7 +292,7 @@ fn parameter_mode_and_call_limit_fail_before_binding_charge() {
             Err(Error::Bounds)
         );
         assert_eq!(host.calls(), 1);
-        host.calls = crate::MAX_SQL_CALLS;
+        host.calls = super::super::Counter::Local(crate::MAX_SQL_CALLS);
         assert_eq!(
             host.execute(Statement::AuthorityClock, &[Value::Integer(1)]),
             Err(Error::Bounds)

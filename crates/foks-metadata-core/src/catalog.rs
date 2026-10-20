@@ -83,6 +83,8 @@ pub enum Statement {
     PublicUsage,
     ReadDependency,
     ReadSchemaCookie,
+    ListIssuedCredential,
+    ListCurrentOwner,
 }
 
 #[derive(Serialize)]
@@ -96,7 +98,7 @@ pub struct Spec {
 }
 
 impl Statement {
-    pub const ALL: [Self; 44] = [
+    pub const ALL: [Self; 46] = [
         Self::NamespaceParty,
         Self::NamespaceEnsure,
         Self::Head,
@@ -141,6 +143,8 @@ impl Statement {
         Self::PublicUsage,
         Self::ReadDependency,
         Self::ReadSchemaCookie,
+        Self::ListIssuedCredential,
+        Self::ListCurrentOwner,
     ];
 
     pub fn from_id(id: u32) -> Result<Self> {
@@ -210,6 +214,8 @@ impl Statement {
                 | Self::PersonalDirectory
                 | Self::PersonalSmallNode
                 | Self::PublicUsage
+                | Self::ListIssuedCredential
+                | Self::ListCurrentOwner
         ) {
             return crate::personal::catalog::spec(self);
         }

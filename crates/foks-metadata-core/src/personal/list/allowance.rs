@@ -348,7 +348,15 @@ impl Budget {
         // Restore owns the previous hook until f and every page-local owner has
         // dropped. It restores before Scope clears occupancy, also on unwind.
         let result = foks_snowpack::with_allocation_budget(self.clone(), f);
-        if result.is_err() {
+        if matches!(result, Err(PageFault::Corrupt)) && !self.failed() {
+            // A normal data/range error ends List immediately: its caller drops
+            // the partial encoder before framing the native retry status. Retire
+            // this workspace without poisoning that status's original owner.
+            // The held reservation is never refunded, and any later run/reserve
+            // on this retired child still fails the parent. Existing allocation
+            // refusal or parent failure must never take this exception.
+            self.state.failed.store(true, Ordering::SeqCst);
+        } else if result.is_err() {
             self.fail();
         }
         let result = match result {

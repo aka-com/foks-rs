@@ -286,7 +286,7 @@ pub(super) fn validate_existing_import(
     db: &scan::Database,
     provider: &crate::keys::DirectoryKeyProvider,
     package: &capture::Package,
-) -> Result<()> {
+) -> Result<([u8; 33], String)> {
     db.control().check()?;
     let stored = bootstrap(db)?;
     if stored.key_manifest != package.manifest()? {
@@ -440,5 +440,11 @@ pub(super) fn validate_existing_import(
     if !identity.tls_ca_certificates().iter().any(|v| v == &der) {
         return Err(unsupported("import delegated TLS key"));
     }
-    db.control().check()
+    db.control().check()?;
+    let host = stored
+        .host_id
+        .as_slice()
+        .try_into()
+        .map_err(|_| unsupported("import verified host width"))?;
+    Ok((host, stored.canonical_name))
 }

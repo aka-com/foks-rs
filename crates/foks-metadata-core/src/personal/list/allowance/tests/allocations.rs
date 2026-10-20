@@ -141,8 +141,18 @@ fn measure(input: &[u8], small: bool) {
         "peak {peak} exceeds page allowance"
     );
     assert!(result.is_err());
-    assert!(parent.failed());
+    if matches!(result, Err(PageFault::Corrupt)) {
+        assert!(!parent.failed());
+    } else {
+        assert!(parent.failed());
+    }
+    assert!(budget.state.failed.load(Ordering::SeqCst));
     assert!(!budget.state.occupied.load(Ordering::SeqCst));
+    assert_eq!(
+        parent.held.load(Ordering::SeqCst),
+        budget.terms.workspace_bytes + budget.terms.control_bytes
+    );
+    assert_eq!(parent.reservations.load(Ordering::SeqCst), 1);
 }
 #[test]
 fn malformed_decoder_requested_peak_and_error_cleanup_fit_held_workspace() {

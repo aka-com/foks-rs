@@ -76,6 +76,22 @@ impl Database {
     pub(super) fn control(&self) -> Arc<Control> {
         Arc::clone(&self.control)
     }
+    /// Consume the private database with its original, still-live import job.
+    /// The old progress hook remains installed until the closed owner replaces it.
+    #[cfg(any(test, feature = "celld-proof"))]
+    pub(super) fn into_owned_connection(
+        self,
+        control: &super::ScanControl,
+    ) -> Result<(Connection, Arc<Control>)> {
+        self.control.check()?;
+        self.control.intersect(control)?;
+        self.control.check()?;
+        let Self {
+            connection,
+            control,
+        } = self;
+        Ok((connection, control))
+    }
     fn configure(connection: Connection, control: Arc<Control>, readonly: bool) -> Result<Self> {
         // These C API settings do not prepare SQL or trust source DDL. Extension
         // loading is never enabled and no functions/modules are registered.

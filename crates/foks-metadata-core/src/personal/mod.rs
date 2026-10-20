@@ -6,6 +6,8 @@ pub(crate) mod admission;
 pub(crate) mod catalog;
 mod generations;
 mod list;
+#[cfg(feature = "owned-list")]
+pub mod native_list;
 #[cfg(feature = "list-allocation-qualification")]
 pub(crate) use list::allowance::{target_terms as page_allowance_terms, PageAllowanceTerms};
 #[cfg(feature = "list-allocation-qualification")]
@@ -162,7 +164,7 @@ pub enum CredentialKind {
 pub struct CurrentCredential {
     uid: [u8; 33],
     credential: EntityId,
-    owner: EntityId,
+    owner: Vec<u8>,
     role: Role,
     kind: CredentialKind,
     expires_at_micros: u64,
@@ -175,7 +177,7 @@ impl CurrentCredential {
         self.credential.as_bytes()
     }
     pub fn owner_id(&self) -> &[u8] {
-        self.owner.as_bytes()
+        &self.owner
     }
     pub fn role(&self) -> Role {
         self.role
@@ -312,7 +314,7 @@ pub fn authenticate_peer(
         found = Some(CurrentCredential {
             uid,
             credential,
-            owner,
+            owner: owner.into_bytes(),
             role,
             kind,
             expires_at_micros: peer.expires_at_micros,

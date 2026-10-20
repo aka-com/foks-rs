@@ -23,12 +23,14 @@ pub mod read_schema;
 pub mod read_token;
 #[cfg(any(feature = "native", target_arch = "wasm32", test))]
 mod scalar;
+mod sql_budget;
 #[cfg(target_arch = "wasm32")]
 mod wasm;
 pub mod wire;
 
 pub use catalog::{Statement, Value};
 pub use dirents::{normalize_creation_times, put_dirents, Limits, Mutation};
+pub use sql_budget::SqlCallBudget;
 
 pub const MAX_INPUT_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_BLOB_BYTES: usize = 4096;
