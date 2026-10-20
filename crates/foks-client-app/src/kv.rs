@@ -435,6 +435,8 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<KvWriteReport> {
+        let mut reader = self.upload_reader(reader)?;
+        let upload_sample = self.adapter_clock.sample()?;
         self.put_kv_node_checked(
             alias,
             path,
@@ -445,10 +447,11 @@ impl CheckedProfileSession<'_> {
             vault,
             master_key,
             |session, parent, name, options| {
+                session.bind_upload_admission_time(upload_sample);
                 session.put_file_with_size_bound(
                     parent,
                     name,
-                    reader,
+                    &mut reader,
                     expected_size,
                     options,
                     precondition.dirent_id(),
@@ -464,7 +467,7 @@ impl CheckedProfileSession<'_> {
         path: &str,
         reader: &mut R,
         expected_size: Option<u64>,
-        upload_id: [u8; 16],
+        upload_id: foks_proto::UploadHandle,
         precondition: KvMutationPrecondition,
         read_role: KvRoleSummary,
         write_role: KvRoleSummary,
@@ -472,6 +475,17 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<KvWriteReport> {
+        let intent = KvUploadIntent::checked(
+            path,
+            expected_size,
+            precondition,
+            read_role,
+            write_role,
+            mkdir_p,
+        );
+        let claim = self.claim_upload(alias, None, upload_id, &intent, vault)?;
+        let mut reader = self.upload_reader(reader)?;
+        let upload_sample = self.adapter_clock.sample()?;
         self.put_kv_node_checked(
             alias,
             path,
@@ -482,11 +496,12 @@ impl CheckedProfileSession<'_> {
             vault,
             master_key,
             |session, parent, name, options| {
-                session.bind_file_upload(upload_id)?;
+                session.bind_file_upload(claim)?;
+                session.bind_upload_admission_time(upload_sample);
                 session.put_file_with_size_bound(
                     parent,
                     name,
-                    reader,
+                    &mut reader,
                     expected_size,
                     options,
                     precondition.dirent_id(),
@@ -542,6 +557,8 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<KvWriteReport> {
+        let mut reader = self.upload_reader(reader)?;
+        let upload_sample = self.adapter_clock.sample()?;
         self.put_team_kv_node_checked(
             account_alias,
             team_alias,
@@ -554,10 +571,11 @@ impl CheckedProfileSession<'_> {
             vault,
             master_key,
             |session, parent, name, options| {
+                session.bind_upload_admission_time(upload_sample);
                 session.put_file_with_size_bound(
                     parent,
                     name,
-                    reader,
+                    &mut reader,
                     expected_size,
                     options,
                     precondition.dirent_id(),
@@ -575,7 +593,7 @@ impl CheckedProfileSession<'_> {
         path: &str,
         reader: &mut R,
         expected_size: Option<u64>,
-        upload_id: [u8; 16],
+        upload_id: foks_proto::UploadHandle,
         precondition: KvMutationPrecondition,
         read_role: KvRoleSummary,
         write_role: KvRoleSummary,
@@ -583,6 +601,18 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<KvWriteReport> {
+        let intent = KvUploadIntent::checked(
+            path,
+            expected_size,
+            precondition,
+            read_role,
+            write_role,
+            mkdir_p,
+        );
+        let claim =
+            self.claim_upload(account_alias, Some(team_id_hex), upload_id, &intent, vault)?;
+        let mut reader = self.upload_reader(reader)?;
+        let upload_sample = self.adapter_clock.sample()?;
         self.put_team_kv_node_checked(
             account_alias,
             team_alias,
@@ -595,11 +625,12 @@ impl CheckedProfileSession<'_> {
             vault,
             master_key,
             |session, parent, name, options| {
-                session.bind_file_upload(upload_id)?;
+                session.bind_file_upload(claim)?;
+                session.bind_upload_admission_time(upload_sample);
                 session.put_file_with_size_bound(
                     parent,
                     name,
-                    reader,
+                    &mut reader,
                     expected_size,
                     options,
                     precondition.dirent_id(),
@@ -926,6 +957,7 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<KvWriteReport> {
+        let mut reader = self.upload_reader(reader)?;
         self.profile.require(Capability::Kv)?;
         let (parent_path, name) = split_parent(path)?;
         let loaded = vault.account(alias)?;
@@ -953,10 +985,11 @@ impl CheckedProfileSession<'_> {
             KvRoleSummary::Owner,
             Some((Role::OWNER, Role::OWNER)),
         )?;
+        session.bind_upload_admission_time(self.adapter_clock.sample()?);
         let result = session.put_file(
             parent,
             &name,
-            reader,
+            &mut reader,
             KvWriteOptions {
                 read_role: Role::OWNER,
                 write_role: Role::OWNER,
@@ -977,13 +1010,24 @@ impl CheckedProfileSession<'_> {
         alias: &str,
         path: &str,
         reader: &mut R,
-        upload_id: [u8; 16],
+        upload_id: foks_proto::UploadHandle,
         overwrite: bool,
         mkdir_p: bool,
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<KvWriteReport> {
-        self.prepare_kv_upload(alias, None, upload_id, vault)?;
+        let intent = KvUploadIntent {
+            path: path.into(),
+            expected_size: None,
+            overwrite,
+            expected_version: None,
+            selected_dirent: None,
+            read_role: KvRoleSummary::Owner,
+            write_role: KvRoleSummary::Owner,
+            mkdir_p,
+        };
+        let claim = self.claim_upload(alias, None, upload_id, &intent, vault)?;
+        let mut reader = self.upload_reader(reader)?;
         let (parent_path, name) = split_parent(path)?;
         let loaded = vault.account(alias)?;
         let host = self.pinned_host()?;
@@ -1010,11 +1054,12 @@ impl CheckedProfileSession<'_> {
             KvRoleSummary::Owner,
             Some((Role::OWNER, Role::OWNER)),
         )?;
-        session.bind_file_upload(upload_id)?;
+        session.bind_file_upload(claim)?;
+        session.bind_upload_admission_time(self.adapter_clock.sample()?);
         let result = session.put_file(
             parent,
             &name,
-            reader,
+            &mut reader,
             KvWriteOptions {
                 read_role: Role::OWNER,
                 write_role: Role::OWNER,

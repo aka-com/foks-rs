@@ -1,5 +1,7 @@
 //! Durable immutable upload preparation and namespace-publication ownership.
 use crate::*;
+mod receipts;
+pub use receipts::*;
 
 pub(crate) const SCHEMA: &str = r#"
 CREATE TABLE kv_upload_limits (
@@ -50,7 +52,7 @@ CREATE TABLE kv_upload_chunks (
 "#;
 
 #[cfg(test)]
-pub(crate) const REMOVE_SCHEMA:&str="DROP TRIGGER kv_upload_parent_live; DROP TABLE kv_upload_chunks; DROP TABLE kv_uploads; DROP TABLE kv_upload_limits;";
+pub(crate) const REMOVE_SCHEMA:&str="DROP TABLE kv_upload_children; DROP TABLE kv_upload_cleanup; DROP TABLE kv_upload_clocks; DROP TABLE kv_upload_handles; DROP TABLE kv_upload_receipt_limits; DROP TRIGGER kv_upload_parent_live; DROP TABLE kv_upload_chunks; DROP TABLE kv_uploads; DROP TABLE kv_upload_limits;";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -246,36 +248,17 @@ fn admit(c: &Connection, bytes: u64, new: bool) -> Result<()> {
         .is_none_or(|v| v > limits.max_reserved_bytes)
         || (new && pending >= limits.max_pending)
     {
-        return Err(invalid("local upload spool capacity exhausted"));
+        return Err(if new && pending >= limits.max_pending {
+            Error::UploadPendingFull
+        } else {
+            Error::UploadSpoolFull
+        });
     }
     Ok(())
 }
 impl HardStateStore {
-    /// Reserve the identity and pending slot before the source or IPC stream is read.
-    pub fn record_upload_intent(
-        &mut self,
-        id: [u8; 16],
-        host: &[u8],
-        uid: &[u8],
-        party: &[u8],
-        created_at: u64,
-    ) -> Result<()> {
-        let tx = self.write_transaction()?;
-        admit(&tx, 0, true)?;
-        let count: u32 = tx.query_row("SELECT count(*) FROM kv_uploads", [], |r| r.get(0))?;
-        if count >= 1024 {
-            return Err(invalid("upload receipt capacity exhausted"));
-        }
-        tx.execute("INSERT INTO kv_uploads(operation_id,host_id,uid,party_id,file_id,manifest_hash,state,reserved_bytes,created_at) VALUES(?1,?2,?3,?4,zeroblob(17),zeroblob(32),10,0,?5)",params![id.as_slice(),host,uid,party,sqlite_integer("upload creation",created_at)?])?;
-        tx.commit()?;
-        Ok(())
-    }
     pub fn finish_inline_upload_identity(&mut self, id: &[u8; 16]) -> Result<()> {
         if self.connection.execute("UPDATE kv_uploads SET state=11 WHERE operation_id=?1 AND state=0 AND file_id=zeroblob(17) AND reserved_bytes=0",[id.as_slice()])?!=1{return Err(invalid("inline upload identity has content"))}
-        Ok(())
-    }
-    pub fn begin_upload_source(&mut self, id: &[u8; 16]) -> Result<()> {
-        if self.connection.execute("UPDATE kv_uploads SET state=0 WHERE operation_id=?1 AND state=10 AND file_id=zeroblob(17)",[id.as_slice()])?!=1{return Err(invalid("upload source already consumed; resume or cancel the original upload"))}
         Ok(())
     }
     pub fn upload(&self, id: &[u8; 16]) -> Result<Option<UploadOperation>> {
@@ -285,7 +268,7 @@ impl HardStateStore {
         let id: Option<[u8; 16]> = self
             .connection
             .query_row(
-                "SELECT operation_id FROM kv_uploads WHERE namespace_child=?1",
+                "SELECT upload_id FROM kv_upload_children WHERE child_id=?1",
                 [child.as_slice()],
                 |r| r.get(0),
             )
@@ -335,27 +318,9 @@ impl HardStateStore {
         tx.commit()?;
         Ok(())
     }
-    pub fn uploads(&self, host: &[u8], uid: &[u8]) -> Result<Vec<UploadOperation>> {
-        let mut q=self.connection.prepare("SELECT operation_id FROM kv_uploads WHERE host_id=?1 AND uid=?2 ORDER BY operation_id LIMIT 1025")?;
-        let ids = q
-            .query_map(params![host, uid], |r| r.get::<_, [u8; 16]>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        if ids.len() > 1024 {
-            return Err(invalid("upload receipt inventory needs cleanup"));
-        }
-        ids.iter()
-            .map(|id| self.upload(id)?.ok_or(invalid("upload disappeared")))
-            .collect()
-    }
     pub fn preflight_upload(&self, bytes: u64) -> Result<()> {
         admit(&self.connection, bytes, true)?;
-        let total: u32 = self
-            .connection
-            .query_row("SELECT count(*) FROM kv_uploads", [], |r| r.get(0))?;
-        if total >= 1024 {
-            return Err(invalid("upload receipt capacity exhausted"));
-        }
-        Ok(())
+        receipts::receipt_admit(&self.connection)
     }
     /// Charge and bind the manifest before filesystem installation. No remote content exists yet.
     pub fn record_upload(&mut self, op: &UploadOperation) -> Result<()> {
@@ -378,12 +343,10 @@ impl HardStateStore {
             admit(&tx, op.reserved_bytes, false)?;
             tx.execute("UPDATE kv_uploads SET file_id=?2,manifest_hash=?3,reserved_bytes=?4,adapter_parent=?5 WHERE operation_id=?1",params![op.id.as_slice(),op.file_id.as_slice(),op.manifest_hash.as_slice(),sqlite_integer("upload reservation",op.reserved_bytes)?,op.adapter_parent.as_ref().map(|v|v.as_slice())])?;
         } else {
-            admit(&tx, op.reserved_bytes, true)?;
-            let total: u32 = tx.query_row("SELECT count(*) FROM kv_uploads", [], |r| r.get(0))?;
-            if total >= 1024 {
-                return Err(invalid("upload receipt capacity exhausted"));
-            }
-            tx.execute("INSERT INTO kv_uploads(operation_id,host_id,uid,party_id,file_id,manifest_hash,reserved_bytes,adapter_parent,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![op.id.as_slice(),op.host_id,op.uid,op.party_id,op.file_id.as_slice(),op.manifest_hash.as_slice(),sqlite_integer("upload reservation",op.reserved_bytes)?,op.adapter_parent.as_ref().map(|v|v.as_slice()),sqlite_integer("upload creation",op.created_at)?])?;
+            return Err(Error::UploadIdentityConflict);
+        }
+        if let Some(parent) = op.adapter_parent {
+            tx.execute("INSERT INTO kv_upload_children(upload_id,child_id) SELECT ?1,child_id FROM mutation_children WHERE parent_id=?2",params![op.id,parent])?;
         }
         tx.commit()?;
         Ok(())
@@ -513,27 +476,6 @@ impl HardStateStore {
         tx.commit()?;
         Ok(())
     }
-    /// Call only after protected material and temporary files have been durably erased.
-    /// Retain identity and receipt, removing the no-longer-needed per-chunk bindings.
-    pub fn release_upload_spool(&mut self, id: &[u8; 16], manifest_bytes: u64) -> Result<()> {
-        let tx = self.write_transaction()?;
-        if tx.execute(
-            "UPDATE kv_uploads SET reserved_bytes=?2 WHERE operation_id=?1 AND state IN (6,9,11)",
-            params![
-                id.as_slice(),
-                sqlite_integer("upload manifest bytes", manifest_bytes)?
-            ],
-        )? != 1
-        {
-            return Err(invalid("upload cleanup is not terminal"));
-        }
-        tx.execute(
-            "DELETE FROM kv_upload_chunks WHERE operation_id=?1",
-            [id.as_slice()],
-        )?;
-        tx.commit()?;
-        Ok(())
-    }
     pub fn verify_upload(
         &mut self,
         id: &[u8; 16],
@@ -564,7 +506,19 @@ impl HardStateStore {
         {
             return Err(invalid("namespace does not match prepared upload"));
         }
+        let children: u32 = tx.query_row(
+            "SELECT count(*) FROM kv_upload_children WHERE upload_id=?1",
+            [upload.as_slice()],
+            |r| r.get(0),
+        )?;
+        if children >= 256 {
+            return Err(invalid("upload child budget exhausted"));
+        }
         super::journals::record_mutation_on(&tx, op)?;
+        tx.execute(
+            "INSERT INTO kv_upload_children(upload_id,child_id) VALUES(?1,?2)",
+            params![upload.as_slice(), op.operation_id],
+        )?;
         if let Some((id, completion)) = adapter {
             let valid:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM mutation_operations WHERE operation_id=?1 AND operation_kind=?2 AND state IN (2,3) AND host_id=?3 AND scope_id=?4 AND CASE WHEN length(subject_id)=0 THEN scope_id ELSE subject_id END=?5)",params![id.as_slice(),MutationKind::KvAdapter as u8,parent.host_id,parent.uid,parent.party_id],|r|r.get(0))?;
             if !valid {
@@ -597,6 +551,17 @@ impl HardStateStore {
                 "INSERT INTO mutation_children(parent_id,child_id,completion) VALUES(?1,?2,?3)",
                 params![id.as_slice(), op.operation_id.as_slice(), completion],
             )?;
+        }
+        if let Some((adapter_id, _)) = adapter {
+            tx.execute("INSERT OR IGNORE INTO kv_upload_children(upload_id,child_id) SELECT ?1,child_id FROM mutation_children WHERE parent_id=?2",params![upload.as_slice(),adapter_id])?;
+            let count: u32 = tx.query_row(
+                "SELECT count(*) FROM kv_upload_children WHERE upload_id=?1",
+                [upload.as_slice()],
+                |r| r.get(0),
+            )?;
+            if count > 256 {
+                return Err(invalid("upload child budget exhausted"));
+            }
         }
         tx.execute(
             "UPDATE kv_uploads SET state=4,namespace_child=?2 WHERE operation_id=?1",

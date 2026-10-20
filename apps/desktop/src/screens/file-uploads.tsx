@@ -31,7 +31,11 @@ export function FileUploadsPanel({
   const [inventory, setInventory] = useState<FileUploads | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  async function act(id?: string, resume = true): Promise<void> {
+  async function act(
+    id?: string,
+    resume = true,
+    after?: number[] | null,
+  ): Promise<void> {
     if (busy) return;
     setBusy(true);
     setError(null);
@@ -40,7 +44,7 @@ export function FileUploadsPanel({
         if (resume) await bridge.resumeFileUpload(storeId, id);
         else await bridge.cancelFileUpload(storeId, id);
       }
-      setInventory(await bridge.listFileUploads(storeId));
+      setInventory(await bridge.listFileUploads(storeId, after));
     } catch (cause) {
       setError(normalizeCommandError(cause).message);
     } finally {
@@ -66,7 +70,8 @@ export function FileUploadsPanel({
             Prepared uploads can resume without the source file. For uploads
             marked “Check destination,” inspect the destination to confirm the
             result. Incomplete preparation needs a new upload. Refresh the vault
-            after completion.
+            after completion. Encrypted local files are removed in the
+            background; reserved space remains charged until removal finishes.
           </p>
           <button type="button" disabled={busy} onClick={() => void act()}>
             Refresh uploads
@@ -78,7 +83,8 @@ export function FileUploadsPanel({
               <p>
                 Local encrypted spool limit:{' '}
                 {fmtSize(inventory.capacity.maxReservedBytes)} ·{' '}
-                {inventory.capacity.maxPending} pending uploads
+                {inventory.capacity.maxPending} pending uploads ·{' '}
+                {inventory.capacity.maxReceipts} retained receipts
               </p>
               {inventory.uploads.length === 0 ? (
                 <p>No recorded uploads.</p>
@@ -103,7 +109,7 @@ export function FileUploadsPanel({
                         >
                           {' '}
                           {upload.state === 'completed'
-                            ? 'Verify receipt'
+                            ? 'Show saved receipt'
                             : 'Resume'}
                         </button>
                       ) : null}
@@ -126,6 +132,15 @@ export function FileUploadsPanel({
                   ))}
                 </ul>
               )}
+              {inventory.next ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void act(undefined, true, inventory.next)}
+                >
+                  Next uploads
+                </button>
+              ) : null}
             </>
           ) : null}
         </div>

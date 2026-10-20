@@ -387,7 +387,9 @@ impl HardStateStore {
             "SELECT EXISTS(SELECT 1 FROM mutation_operations WHERE operation_id=?1 AND state NOT IN (5,6))
                OR EXISTS(SELECT 1 FROM mutation_children e JOIN mutation_operations m ON m.operation_id=e.child_id
                  WHERE e.parent_id=?1 AND (m.state NOT IN (5,6) OR m.operation_kind NOT IN (5,6,7)))
-               OR EXISTS(SELECT 1 FROM mutation_children WHERE child_id=?1)",
+               OR EXISTS(SELECT 1 FROM mutation_children WHERE child_id=?1)
+               OR EXISTS(SELECT 1 FROM kv_upload_children u JOIN mutation_children c ON c.child_id=u.child_id WHERE c.parent_id=?1 AND u.protected_erased=0)
+               OR EXISTS(SELECT 1 FROM kv_uploads u JOIN kv_upload_cleanup c ON c.operation_id=u.operation_id WHERE u.adapter_parent=?1 AND c.parent_erased=0)",
             [id], |r| r.get(0),
         )?;
         if blocked {
@@ -410,6 +412,10 @@ impl HardStateStore {
         )?;
         tx.execute("DELETE FROM mutation_children WHERE parent_id=?1", [id])?;
         for child in children {
+            tx.execute(
+                "UPDATE kv_upload_children SET compacted=1 WHERE child_id=?1",
+                [child],
+            )?;
             // child_id is globally unique and foreign keys prevent deleting any
             // row still referenced by an additional durable owner.
             tx.execute(

@@ -289,6 +289,7 @@ impl KvWriteSession<'_> {
         if let Some(id) = expected_dirent_id {
             require_selected_entry(&tree, parent, name, id, options.expected_version)?;
         }
+        self.ensure_file_upload_claim(parent, name, expected_size, options, expected_dirent_id)?;
         let (first, carry, first_is_final) = read_kv_upload_chunk(reader)?;
         let first_len = first.len();
         let node_type = if first_is_final && first.len() <= Self::SMALL_FILE_BYTES {
@@ -321,7 +322,9 @@ impl KvWriteSession<'_> {
         if let Some(id) = self.upload_identity.take() {
             // The existing inline protocol does not participate in content replay.
             // Retain an explicit unused-for-recovery tombstone, never a success claim.
-            HardStateStore::open(&self.host.database_path)?.finish_inline_upload_identity(&id)?;
+            let mut hard = HardStateStore::open(&self.host.database_path)?;
+            hard.finish_inline_upload_identity(&id)?;
+            hard.record_upload_terminal(&id, None)?;
         }
         let (content_seed, key) = self.current_content_key(options.read_role)?;
         if expected_size.is_some_and(|expected| expected != first_len as u64) {

@@ -41,8 +41,8 @@ export const vaultCommands: Pick<
   | 'replaceDroppedFile'
   | 'pickAndReplaceFile'
 > = {
-  listFileUploads: (storeId) =>
-    checked('list_file_uploads', { storeId }, decodeFileUploads),
+  listFileUploads: (storeId, after = null) =>
+    checked('list_file_uploads', { storeId, after }, decodeFileUploads),
   resumeFileUpload: (storeId, uploadId) =>
     checkedMutation(
       'resume_file_upload',

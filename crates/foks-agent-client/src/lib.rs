@@ -155,6 +155,7 @@ impl AgentClient {
                     Operation::PrepareKvUpload {
                         store: header.store.clone(),
                         upload_id,
+                        intent: (&header).into(),
                     },
                     cancelled,
                 )?;
@@ -164,10 +165,7 @@ impl AgentClient {
                 ) {
                     return Ok(prepared);
                 }
-                let expected_upload = upload_id
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>();
+                let expected_upload = upload_id.to_string();
                 match &prepared.result {
                     foks_agent_proto::ResponseResult::Success { value }
                         if value.get("state").and_then(|value| value.as_str())
@@ -883,13 +881,13 @@ mod tests {
             let (mut stream, _) = listener.accept().unwrap();
             let request = foks_agent_proto::decode_request(&read_frame(&mut stream)).unwrap();
             assert!(
-                matches!(request.operation,Operation::PrepareKvUpload{upload_id,..} if upload_id==[4;16])
+                matches!(request.operation,Operation::PrepareKvUpload{upload_id,..} if upload_id==foks_agent_proto::UploadHandle::new([1;16],1,[4;16]))
             );
             stream
                 .write_all(
                     &foks_agent_proto::encode(&Response::success(
                         request.id,
-                        serde_json::json!({"state":"awaiting-source","upload_id":"04".repeat(16)}),
+                        serde_json::json!({"state":"awaiting-source","upload_id":foks_agent_proto::UploadHandle::new([1;16],1,[4;16]).to_string()}),
                     ))
                     .unwrap(),
                 )
@@ -944,7 +942,7 @@ mod tests {
             }
         }
         let header = KvUploadHeader {
-            upload_id: Some([4; 16]),
+            upload_id: Some(foks_agent_proto::UploadHandle::new([1; 16], 1, [4; 16])),
             adapter: None,
             store: KvStoreRef::Account(AccountStoreRef {
                 profile: "local".into(),

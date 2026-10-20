@@ -7,7 +7,8 @@
 
 #![forbid(unsafe_code)]
 
-pub use repositories::uploads::{UploadChunkRecord, UploadLimits, UploadOperation, UploadState};
+pub use foks_proto::UploadHandle;
+pub use repositories::uploads::*;
 mod chat_limits;
 pub use chat_limits::ChatLimits;
 mod merkle_checkpoint;
@@ -637,6 +638,27 @@ pub enum Error {
     #[error("adapter cleanup is deferred while protected material or child evidence remains")]
     AdapterCleanupDeferred,
 
+    #[error("upload handle is bound to different inputs or authority")]
+    UploadIdentityConflict,
+    #[error("legacy uploads may only recover existing prepared work or cancel")]
+    UploadLegacyReadOnly,
+    #[error("upload handle belongs to a different profile generation")]
+    UploadGenerationMismatch,
+    #[error("upload handle expired; a new explicit write requires a new handle")]
+    UploadExpired,
+    #[error("upload handle is too far in the future")]
+    UploadFutureHandle,
+    #[error("upload clock is untrusted; re-anchor it before new writes")]
+    UploadClockUntrusted,
+    #[error("upload pending capacity is full; recover existing work first")]
+    UploadPendingFull,
+    #[error("upload receipt capacity is full; retained evidence cannot be discarded")]
+    UploadRetentionFull,
+    #[error("upload spool capacity is full; complete protected cleanup first")]
+    UploadSpoolFull,
+    #[error("upload cleanup is deferred while protected material or dependencies remain")]
+    UploadCleanupDeferred,
+
     #[error("OIDC flow state: {0}")]
     SsoState(&'static str),
     #[error("chat state conflict: {0}")]
@@ -797,6 +819,7 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         transaction.execute_batch(SCHEMA)?;
         transaction.execute_batch(repositories::uploads::SCHEMA)?;
+        repositories::uploads::migrate42(&transaction)?;
         transaction.execute(
             "INSERT INTO hard_state_metadata
                  (singleton, database_id, hard_state_revision, write_token)
@@ -851,7 +874,21 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
             for table in ["kv_uploads", "kv_upload_chunks", "kv_upload_limits"] {
                 install_table_revision_triggers(&tx, table)?;
             }
-            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            tx.pragma_update(None, "user_version", 41)?;
+        }
+        tx.commit()?;
+        return initialize_or_verify(connection);
+    }
+    if version == 41 {
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if current == 41 {
+            repositories::uploads::migrate42(&tx)?;
+            for table in repositories::uploads::TABLES42 {
+                install_table_revision_triggers(&tx, table)?;
+            }
+            tx.execute("UPDATE hard_state_metadata SET hard_state_revision=hard_state_revision+1,write_token=randomblob(16) WHERE singleton=1",[])?;
+            tx.pragma_update(None, "user_version", 42)?;
         }
         tx.commit()?;
         return initialize_or_verify(connection);

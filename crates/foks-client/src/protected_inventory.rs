@@ -268,10 +268,13 @@ fn descriptors(owner: ProtectedRecordOwner) -> Vec<ProtectedRecordDescriptor> {
                     presence,
                 ));
             }
-            if matches!(
-                op.state,
-                foks_client_db::UploadState::Preparing | foks_client_db::UploadState::NeedsSource
-            ) && op.chunk_count < 256
+            if (op.state.terminal()
+                || matches!(
+                    op.state,
+                    foks_client_db::UploadState::Preparing
+                        | foks_client_db::UploadState::NeedsSource
+                ))
+                && op.chunk_count < 256
             {
                 keys.push((
                     K::UploadChunk(&op.id, op.chunk_count).encoded(),

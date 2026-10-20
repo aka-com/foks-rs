@@ -1,7 +1,12 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 41;
+pub(crate) const VERSION: u32 = 42;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
+    "kv_upload_receipt_limits",
+    "kv_upload_handles",
+    "kv_upload_clocks",
+    "kv_upload_cleanup",
+    "kv_upload_children",
     "kv_uploads",
     "kv_upload_chunks",
     "kv_upload_limits",

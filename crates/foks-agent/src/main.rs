@@ -100,7 +100,7 @@ const MAXIMUM_CACHED_CATALOG_BYTES: usize = 128 * 1024 * 1024;
 const MAXIMUM_SINGLE_CATALOG_BYTES: usize = 64 * 1024 * 1024;
 const CATALOG_CACHE_LIFETIME: Duration = Duration::from_secs(60);
 /// The background loops whose period is fixed rather than configured.
-const RETENTION_PERIOD: Duration = Duration::from_secs(60);
+const RETENTION_PERIOD: Duration = Duration::from_millis(250);
 const OWNERSHIP_PERIOD: Duration = Duration::from_secs(5);
 /// The soonest the scheduler wakes after a pass. A job that is due but could
 /// not run — its profile was busy, or its own backoff moved it — must not
@@ -360,7 +360,7 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
                     scheduler_cancellation.cancel();
                     break;
                 }
-                if !ready.load(Ordering::Acquire) {
+                if !ready.load(Ordering::Acquire) || !retention::due() {
                     timers::timers().skipped(timers::RETENTION);
                     continue;
                 }
@@ -2097,6 +2097,23 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
                 );
             }
             let code = match retention {
+                foks_client_db::Error::UploadExpired => Some(ErrorCode::UploadExpired),
+                foks_client_db::Error::UploadIdentityConflict => {
+                    Some(ErrorCode::UploadIdentityConflict)
+                }
+                foks_client_db::Error::UploadGenerationMismatch => {
+                    Some(ErrorCode::UploadGenerationMismatch)
+                }
+                foks_client_db::Error::UploadLegacyReadOnly => {
+                    Some(ErrorCode::UploadLegacyReadOnly)
+                }
+                foks_client_db::Error::UploadPendingFull => Some(ErrorCode::UploadPendingFull),
+                foks_client_db::Error::UploadRetentionFull => Some(ErrorCode::UploadRetentionFull),
+                foks_client_db::Error::UploadSpoolFull => Some(ErrorCode::UploadSpoolFull),
+                foks_client_db::Error::UploadClockUntrusted => {
+                    Some(ErrorCode::UploadClockUntrusted)
+                }
+                foks_client_db::Error::UploadFutureHandle => Some(ErrorCode::UploadFuture),
                 foks_client_db::Error::AdapterRetentionFull => Some(ErrorCode::RetentionFull),
                 foks_client_db::Error::AdapterClockUntrusted => Some(ErrorCode::ClockUntrusted),
                 foks_client_db::Error::AdapterActiveFull => Some(ErrorCode::SubmissionActiveFull),
@@ -2108,7 +2125,12 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
             };
             if let Some(code) = code {
                 retention::rejected(code);
-                return Response::error(id, code, retention.to_string());
+                let message = if code == ErrorCode::UploadClockUntrusted {
+                    "Upload time needs confirmation. Use `foks-rs --state-dir <state directory> retention reanchor --domain upload --profile <profile> --account-alias <account> --unix-seconds <current time>` to preview a repair, then repeat with its --confirm-digest.".to_owned()
+                } else {
+                    retention.to_string()
+                };
+                return Response::error(id, code, message);
             }
         }
         if let Some(chat) = candidate.downcast_ref::<foks_client_db::Error>() {
@@ -3078,7 +3100,7 @@ fn put_kv_reader<R: std::io::Read>(
     path: &str,
     mut reader: R,
     expected_size: Option<u64>,
-    upload_id: Option<[u8; 16]>,
+    upload_id: Option<foks_agent_proto::UploadHandle>,
     precondition: KvPrecondition,
     read_role: KvRole,
     write_role: KvRole,
@@ -5003,7 +5025,19 @@ fn dispatch_result_inner(
                 mkdir_p,
             )
         }
-        Operation::PrepareKvUpload { store, upload_id } => {
+        Operation::PrepareKvUpload {
+            store,
+            upload_id,
+            intent,
+        } => {
+            let intent = foks_client_app::KvUploadIntent::checked(
+                &intent.path,
+                Some(intent.total_length),
+                wire_precondition(intent.precondition),
+                wire_role_to_app(intent.read_role),
+                wire_role_to_app(intent.write_role),
+                intent.mkdir_p,
+            );
             let session = read_cache::open_profile_session(
                 &registry,
                 kv_store_profile(&store),
@@ -5012,20 +5046,25 @@ fn dispatch_result_inner(
             )?;
             with_vault_and_master(state_dir, &session, |session, vault, _| {
                 let report = match &store {
-                    KvStoreRef::Account(s) => {
-                        session.prepare_kv_upload(&s.account_alias, None, upload_id, vault)?
-                    }
+                    KvStoreRef::Account(s) => session.prepare_kv_upload(
+                        &s.account_alias,
+                        None,
+                        upload_id,
+                        &intent,
+                        vault,
+                    )?,
                     KvStoreRef::Team(s) => session.prepare_kv_upload(
                         &s.account_alias,
                         Some(&s.team_id),
                         upload_id,
+                        &intent,
                         vault,
                     )?,
                 };
                 Ok(serde_json::to_value(report)?)
             })
         }
-        Operation::ListKvUploads { store } => {
+        Operation::KvUploadIssuance { store } => {
             let session = read_cache::open_profile_session(
                 &registry,
                 kv_store_profile(&store),
@@ -5033,13 +5072,37 @@ fn dispatch_result_inner(
                 cancellation,
             )?;
             with_vault_and_master(state_dir, &session, |session, vault, _| {
-                let uploads = match &store {
-                    KvStoreRef::Account(s) => session.list_kv_uploads(&s.account_alias, vault)?,
+                let context = match &store {
+                    KvStoreRef::Account(s) => {
+                        session.kv_upload_issuance(&s.account_alias, None, vault)?
+                    }
                     KvStoreRef::Team(s) => {
-                        session.list_team_kv_uploads(&s.account_alias, &s.team_id, vault)?
+                        session.kv_upload_issuance(&s.account_alias, Some(&s.team_id), vault)?
                     }
                 };
-                Ok(serde_json::json!({"uploads":uploads,"capacity":session.kv_upload_capacity()?}))
+                Ok(serde_json::to_value(foks_agent_proto::KvUploadIssuance {
+                    database_id: context.database_id,
+                    issued_at: context.issued_at,
+                })?)
+            })
+        }
+        Operation::ListKvUploads { store, after } => {
+            let session = read_cache::open_profile_session(
+                &registry,
+                kv_store_profile(&store),
+                timeout,
+                cancellation,
+            )?;
+            with_vault_and_master(state_dir, &session, |session, vault, _| {
+                let page = match &store {
+                    KvStoreRef::Account(s) => {
+                        session.kv_upload_page(&s.account_alias, None, after, vault)?
+                    }
+                    KvStoreRef::Team(s) => {
+                        session.kv_upload_page(&s.account_alias, Some(&s.team_id), after, vault)?
+                    }
+                };
+                Ok(serde_json::to_value(page)?)
             })
         }
         Operation::ResumeKvUpload { store, upload_id } => {
@@ -6187,6 +6250,13 @@ fn checked_session<T>(
     session: &ProfileSession,
     operation: impl FnOnce(&CheckedProfileSession<'_>) -> Result<T, Box<dyn std::error::Error>>,
 ) -> Result<T, Box<dyn std::error::Error>> {
+    struct Wake<'a>(&'a str);
+    impl Drop for Wake<'_> {
+        fn drop(&mut self) {
+            retention::wake_profile(self.0);
+        }
+    }
+    let _wake = (!profile_work::session_is_shared()).then(|| Wake(&session.profile().name));
     let mut operation = Some(operation);
     if profile_work::session_is_shared() {
         // Admitted beside other reads: the session shares the profile's

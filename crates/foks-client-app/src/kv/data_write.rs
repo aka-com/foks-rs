@@ -341,10 +341,13 @@ impl CheckedProfileSession<'_> {
                 )?,
             };
             session.bind_adapter_intent(id)?;
+            session.bind_upload_admission_time(self.adapter_clock.sample()?);
+            let mut plaintext = body.as_slice();
+            let mut checkpointed = self.upload_reader(&mut plaintext)?;
             apply_write(
                 &mut session,
                 &spec,
-                &mut body.as_slice(),
+                &mut checkpointed,
                 team.is_some(),
                 &mut remote_possible,
             )
@@ -451,6 +454,18 @@ impl CheckedProfileSession<'_> {
         master: &[u8; 32],
         deadline: std::time::Instant,
     ) -> Result<()> {
+        let mut remaining = usize::MAX;
+        self.compact_data_write_budgeted(hard, entry, master, deadline, &mut remaining)
+    }
+
+    pub(crate) fn compact_data_write_budgeted(
+        &self,
+        hard: &mut HardStateStore,
+        entry: &AdapterSubmission,
+        master: &[u8; 32],
+        deadline: std::time::Instant,
+        remaining: &mut usize,
+    ) -> Result<()> {
         let Some(id) = entry.internal_id else {
             return Ok(());
         };
@@ -477,14 +492,23 @@ impl CheckedProfileSession<'_> {
             } else if !upload.state.terminal() {
                 return Err(foks_client_db::Error::AdapterCleanupDeferred.into());
             }
-            foks_client::cleanup_file_upload(&self.paths.hard_database, &mut protected, upload.id)?;
+            // Upload maintenance durably erases each retained dependency under
+            // its eight-record budget before adapter compaction is permitted.
+            if !hard.upload_parent_erased(&upload.id)?
+                || hard.next_upload_child_cleanup(&upload.id)?.is_some()
+            {
+                return Err(foks_client_db::Error::AdapterCleanupDeferred.into());
+            }
+            hard.compact_adapter_submission(entry.handle)?;
+            return Ok(());
         }
         for operation in std::iter::once(&parent).chain(children.iter().map(|(child, _)| child)) {
-            if std::time::Instant::now() >= deadline {
+            if std::time::Instant::now() >= deadline || *remaining == 0 {
                 return Err(foks_client_db::Error::AdapterCleanupDeferred.into());
             }
             match protected.remove(&operation.material_ref) {
-                Ok(()) | Err(foks_client::ProtectedStoreError::Missing) => (),
+                Ok(()) => *remaining -= 1,
+                Err(foks_client::ProtectedStoreError::Missing) => (),
                 Err(error) => return Err(error.into()),
             }
         }

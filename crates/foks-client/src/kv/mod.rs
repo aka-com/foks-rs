@@ -16,7 +16,10 @@ mod support;
 mod sync;
 pub(crate) mod uploads;
 mod write;
-pub use uploads::{cleanup_file_upload, verified_file_upload, KvUploadReceipt, KvUploadResult};
+pub use uploads::{
+    claim_file_upload, cleanup_file_upload_records, upload_time_sample, verified_file_upload,
+    ClaimedFileUpload, KvUploadReceipt, KvUploadResult,
+};
 
 // FOKS v0.1.9 applies the same limits to both sides of the large-file
 // protocol. Keep them in one place so a file accepted by the writer can
@@ -68,6 +71,7 @@ pub struct KvWriteSession<'a> {
     client: &'a FoksClient,
     actor_uid: Vec<u8>,
     upload_identity: Option<[u8; 16]>,
+    upload_admission_time: Option<foks_client_db::UploadTimeSample>,
     upload_parent: Option<[u8; 16]>,
     host: PinnedHost,
     party: KvParty,

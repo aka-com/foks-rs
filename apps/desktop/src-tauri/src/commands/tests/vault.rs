@@ -807,8 +807,13 @@ pub(super) struct UploadTransport {
 
 impl foks_desktop::AgentTransport for UploadTransport {
     fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        let issuance = matches!(operation, Operation::KvUploadIssuance { .. });
         self.calls.lock().unwrap().push(operation);
-        Ok(serde_json::Value::Null)
+        Ok(if issuance {
+            serde_json::json!({"database_id":vec![1;16],"issued_at":1})
+        } else {
+            serde_json::Value::Null
+        })
     }
 
     fn put_kv_stream(
@@ -859,7 +864,10 @@ fn eighty_four_megabyte_drop_uses_only_the_bounded_stream_boundary() {
         file_create_header(&store, "/bundle.tar", 0, Some("Member:0"), Some("Admin")).unwrap();
     upload_file(&transport, header, source.path(), MutationKind::Create).unwrap();
 
-    assert!(transport.calls.lock().unwrap().is_empty());
+    assert!(matches!(
+        transport.calls.lock().unwrap().as_slice(),
+        [Operation::KvUploadIssuance { .. }]
+    ));
     let header = transport.header.lock().unwrap().clone().unwrap();
     assert_eq!(header.store, KvStoreRef::Team(team));
     assert_eq!(header.read_role, KvRole::Member { visibility: 0 });
@@ -874,7 +882,7 @@ pub(super) struct EarlyUploadLoss;
 
 impl foks_desktop::AgentTransport for EarlyUploadLoss {
     fn call(&self, _operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
-        unreachable!("file upload must use put_kv_stream")
+        Ok(serde_json::json!({"database_id":vec![1;16],"issued_at":1}))
     }
 
     fn put_kv_stream(
@@ -921,7 +929,7 @@ pub(super) struct ResizeDuringUpload {
 
 impl foks_desktop::AgentTransport for ResizeDuringUpload {
     fn call(&self, _operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
-        unreachable!("file upload must use put_kv_stream")
+        Ok(serde_json::json!({"database_id":vec![1;16],"issued_at":1}))
     }
 
     fn put_kv_stream(

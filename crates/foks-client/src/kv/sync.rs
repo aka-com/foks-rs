@@ -606,6 +606,7 @@ impl FoksClient {
             client: self,
             actor_uid: credential.uid.as_bytes().to_vec(),
             upload_identity: None,
+            upload_admission_time: None,
             upload_parent: None,
             host: host.clone(),
             party: KvParty {
@@ -655,6 +656,7 @@ impl FoksClient {
             client: self,
             actor_uid: credential.uid.as_bytes().to_vec(),
             upload_identity: None,
+            upload_admission_time: None,
             upload_parent: None,
             host: host.clone(),
             party: KvParty {
@@ -729,6 +731,7 @@ impl FoksClient {
             client: self,
             actor_uid: actor_uid.to_vec(),
             upload_identity: None,
+            upload_admission_time: None,
             upload_parent: None,
             host: host.clone(),
             party: KvParty {

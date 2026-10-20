@@ -718,7 +718,12 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
     },
     listFileUploads: async () => ({
       uploads: [],
-      capacity: { maxReservedBytes: 268435456, maxPending: 16 },
+      capacity: {
+        maxReservedBytes: 268435456,
+        maxPending: 16,
+        maxReceipts: 8192,
+        maxReceiptBytes: 16777216,
+      },
     }),
     resumeFileUpload: async () => {
       throw failure('not-recorded', 'Upload is not recorded.');

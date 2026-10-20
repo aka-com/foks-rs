@@ -12,12 +12,15 @@ pub use chat_intent::{LegacyChatIntent, LocalChatIntent, LocalChatIntentStore};
 pub use pending_chat::{PendingChatBinding, PendingChatStore};
 mod adapter_maintenance;
 mod merkle_maintenance;
+mod upload_maintenance;
 pub use adapter_maintenance::{AdapterMaintenanceCursor, AdapterMaintenanceReport};
 mod auth_cache;
 pub use auth_cache::{
     AuthCacheKey, AuthenticatedUserCache, KvNodeCache, KvNodeCacheEntry, KvNodeCacheKey,
     ReadCaches, TeamViewCacheKey, TeamViewTokenCache,
 };
+mod upload_clock;
+pub use upload_clock::{UploadClockPreview, UploadClockRepair};
 mod adapter_clock;
 pub use adapter_clock::{
     AdapterClock, AdapterClockPreview, AdapterClockRepair, SystemAdapterClock,
@@ -274,7 +277,7 @@ pub use kv::{
     DataMembershipReport, DataMembershipsReport, DataStatReport, DataWriteKind, DataWriteOutcome,
     DataWriteSpec, DataWriteStatus, KvCatalogEntry, KvCatalogReport, KvChunkReport, KvEntrySummary,
     KvListReport, KvMutationPrecondition, KvReadReport, KvRoleSummary, KvUploadCapacity,
-    KvUploadReport, KvWriteReport,
+    KvUploadIntent, KvUploadReport, KvUploadsPage, KvWriteReport,
 };
 pub use registry::{
     normalize_profile_label, Capability, CapabilityDenial, CheckedProfileSession,
@@ -746,7 +749,7 @@ mod tests {
         assert!(ClientCredentials::is_initialized(&root).unwrap());
         assert!(fs::read_to_string(root.join(STATE_CONFIG_FILE))
             .unwrap()
-            .contains("version = 3"));
+            .contains("version = 4"));
         let expected = initialized.master_key().unwrap();
         drop(initialized);
         let reopened = ClientCredentials::open(&root).unwrap();
@@ -1242,10 +1245,15 @@ mod tests {
         )
         .unwrap();
 
+        drop(credentials);
+
         // The master key is unreadable. The exact preview refuses; the
         // best-effort one describes what is on disk and says why the
         // resumables inside the credential store could not be listed.
         std::fs::write(root.join("master.key"), b"short").unwrap();
+        // Metadata handles must remain available after restart for the explicit
+        // best-effort reset; normal checked work still requires the authority.
+        let credentials = ClientCredentials::open(&root).unwrap();
         assert!(matches!(
             credentials.describe_reset_state(&session),
             Err(Error::Keystore(foks_keystore::Error::InvalidMasterKey))
@@ -1279,9 +1287,9 @@ mod tests {
         let outcome = credentials
             .reset_hard_state_best_effort_if_matches(&session, preview.state_digest())
             .unwrap();
-        // A private-file state keeps no records outside the profile directory,
-        // so nothing was left behind.
-        assert_eq!(outcome.credential_records_retained, None);
+        // v4 retains the unreadable root authority, and reports that fact.
+        assert!(outcome.credential_records_retained.is_some());
+        assert!(root.join("checkpoint-authority").exists());
         assert!(!session.paths().hard_database.exists());
         assert!(!session.paths().credential_store.exists());
         assert!(!session
@@ -1289,6 +1297,13 @@ mod tests {
             .directory
             .join(".reset-credentials")
             .exists());
+        assert!(credentials
+            .with_checked_session(&session, |_| {
+                panic!("unreadable authority admitted normal work after reset");
+                #[allow(unreachable_code)]
+                Ok::<_, Error>(())
+            })
+            .is_err());
     }
 
     #[test]
@@ -1740,9 +1755,12 @@ mod tests {
             ),
         )
         .unwrap();
-        HardStateStore::open(&session.paths().hard_database)
-            .unwrap()
-            .accept_verified_host(&verified.snapshot)
+        credentials
+            .with_checked_session(&session, |checked| {
+                HardStateStore::open(&checked.paths().hard_database)?
+                    .accept_verified_host(&verified.snapshot)?;
+                Ok::<_, Error>(())
+            })
             .unwrap();
         assert!(session.server_status_without_pinned_host().is_err());
 

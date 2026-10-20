@@ -7,11 +7,13 @@ use crate::{
     ProtectedStoreError, Result,
 };
 use foks_client_db::{
-    HardStateStore, KvDirectoryProjection, MutationState, UploadChunkRecord, UploadOperation,
-    UploadState,
+    HardStateStore, KvDirectoryProjection, MutationState, UploadChunkRecord, UploadIntentBinding,
+    UploadOperation, UploadScope, UploadState, UploadTimeSample,
 };
 use foks_crypto::{derive_kv_keys, prefixed_hash, seal_kv_chunk};
-use foks_proto::{KvLargeFileMetadata, KvNodeId, KvNodeType, KvUploadChunk, Role, SecretSeed};
+use foks_proto::{
+    KvLargeFileMetadata, KvNodeId, KvNodeType, KvUploadChunk, Role, SecretSeed, UploadHandle,
+};
 use foks_snowpack::{decode, encode, Value};
 use std::io::Read;
 use std::path::Path;
@@ -22,6 +24,48 @@ const CHUNK_HASH: u64 = 0xe8c3_61f4_75b8_91a2;
 // The canonical chunk tuple (including u64 offsets/final totals) fits the128-byte margin.
 const MAX_CHUNK_RECORD: u64 = 8 * 1024 * 1024 + 128;
 const PROTECTED_OVERHEAD: u64 = 48;
+
+/// A source claim is consumed by one in-process write session. It is deliberately
+/// not Clone/serializable: persisted Preparing work never authorizes a new read.
+pub struct ClaimedFileUpload {
+    id: [u8; 16],
+}
+
+/// The application owns intent canonicalization and must execute exactly that
+/// intent with this token. This core boundary binds account/store and source
+/// consumption; it does not resolve an application path into a directory ID.
+pub fn claim_file_upload(
+    database: &Path,
+    handle: UploadHandle,
+    scope: UploadScope<'_>,
+    intent: UploadIntentBinding,
+) -> Result<ClaimedFileUpload> {
+    let id = HardStateStore::open(database)?.claim_upload_source(handle, scope, intent)?;
+    Ok(ClaimedFileUpload { id })
+}
+
+pub fn upload_time_sample() -> Result<UploadTimeSample> {
+    use std::{
+        sync::OnceLock,
+        time::{Instant, SystemTime, UNIX_EPOCH},
+    };
+    static PROCESS: OnceLock<([u8; 16], Instant)> = OnceLock::new();
+    let (id, started) = if let Some(value) = PROCESS.get() {
+        value
+    } else {
+        let candidate = (crate::random_bytes()?, Instant::now());
+        let _ = PROCESS.set(candidate);
+        PROCESS.get().expect("upload clock initialized")
+    };
+    Ok(UploadTimeSample {
+        process_id: *id,
+        wall_seconds: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| invalid("upload clock precedes epoch"))?
+            .as_secs(),
+        monotonic_seconds: started.elapsed().as_secs(),
+    })
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KvUploadReceipt {
@@ -235,37 +279,77 @@ fn receipt(op: &UploadOperation) -> Result<KvUploadReceipt> {
 }
 fn remove(store: &mut dyn ProtectedMutationStore, key: &[u8]) -> Result<()> {
     match store.remove(key) {
-        Ok(()) | Err(ProtectedStoreError::Missing) => Ok(()),
+        Ok(()) | Err(ProtectedStoreError::Missing) => store.sync().map_err(protected_error),
         Err(e) => Err(protected_error(e)),
     }
 }
 
-/// Cleanup is local, bounded and idempotent; a failed erasure retains its reservation.
-pub fn cleanup_file_upload(
+/// Erase at most the caller's remaining record budget. Temporary sweeping and
+/// adapter receipt compaction are coordinated by checked application maintenance.
+pub fn cleanup_file_upload_records(
     database: &Path,
     store: &mut dyn ProtectedMutationStore,
     id: [u8; 16],
+    remaining: &mut usize,
+    deadline: std::time::Instant,
 ) -> Result<()> {
+    use foks_client_db::UploadCleanupPhase;
     let mut hard = HardStateStore::open(database)?;
-    let op = hard.upload(&id)?.ok_or(invalid("upload not recorded"))?;
-    if !op.state.terminal() {
-        return Err(invalid("upload cleanup is not terminal"));
+    loop {
+        if *remaining == 0 || std::time::Instant::now() >= deadline {
+            return Ok(());
+        }
+        let Some(progress) = hard.upload_cleanup(&id)? else {
+            return Ok(());
+        };
+        match progress.phase {
+            UploadCleanupPhase::Chunks => {
+                if progress.last_chunk.is_some() {
+                    remove(
+                        store,
+                        &ProtectedRecordKey::UploadChunk(&id, progress.next_chunk).encoded(),
+                    )?;
+                    *remaining -= 1;
+                }
+                hard.advance_upload_cleanup(&id, &progress)?;
+            }
+            UploadCleanupPhase::Manifest => {
+                remove(store, &ProtectedRecordKey::UploadManifest(&id).encoded())?;
+                *remaining -= 1;
+                hard.advance_upload_cleanup(&id, &progress)?;
+            }
+            UploadCleanupPhase::Dependencies => {
+                if let Some(child) = hard.next_upload_child_cleanup(&id)? {
+                    let op = hard
+                        .mutation(&child)?
+                        .ok_or(invalid("upload child disappeared before erasure"))?;
+                    if !op.state.is_terminal() {
+                        return Ok(());
+                    }
+                    remove(store, &op.material_ref)?;
+                    *remaining -= 1;
+                    hard.mark_upload_child_erased(&id, &child)?;
+                    continue;
+                }
+                if !hard.upload_parent_erased(&id)? {
+                    let op = hard.upload(&id)?.ok_or(invalid("upload disappeared"))?;
+                    if let Some(parent) = op.adapter_parent {
+                        let parent = hard
+                            .mutation(&parent)?
+                            .ok_or(invalid("upload parent disappeared"))?;
+                        if !parent.state.is_terminal() {
+                            return Ok(());
+                        }
+                        remove(store, &parent.material_ref)?;
+                        *remaining -= 1;
+                    }
+                    hard.mark_upload_parent_erased(&id)?;
+                }
+                return Ok(());
+            }
+            UploadCleanupPhase::Temporaries | UploadCleanupPhase::Complete => return Ok(()),
+        }
     }
-    // The unjournaled next record can exist after fsync-before-insert, so include it.
-    for sequence in 0..=op.chunk_count.min(255) {
-        remove(
-            store,
-            &ProtectedRecordKey::UploadChunk(&id, sequence).encoded(),
-        )?;
-    }
-    remove(store, &ProtectedRecordKey::UploadManifest(&id).encoded())?;
-    if store
-        .cleanup_upload_temporaries()
-        .map_err(protected_error)?
-    {
-        hard.release_upload_spool(&id, 0)?;
-    }
-    Ok(())
 }
 /// Resolve already verified local success before acquiring fresh network credentials.
 pub fn verified_file_upload(
@@ -333,12 +417,17 @@ pub fn verified_file_upload(
         }
     }
     hard.advance_upload(&id, UploadState::Finalized)?;
-    // Successful receipt survives cleanup errors; pending bytes remain charged.
-    let _ = cleanup_file_upload(database, store, id);
+    hard.record_upload_terminal(&id, None)?;
+    // Maintenance owns erasure; successful status never removes the spool inline.
     Ok(Some(result))
 }
 
 impl KvWriteSession<'_> {
+    /// Applications supply their injected clock for implicit upload admission.
+    pub fn bind_upload_admission_time(&mut self, sample: UploadTimeSample) {
+        self.upload_admission_time = Some(sample);
+    }
+
     pub fn resume_adapter_file_upload(&mut self) -> Result<Option<KvUploadReceipt>> {
         let Some(parent) = self.adapter_parent else {
             return Ok(None);
@@ -352,11 +441,12 @@ impl KvWriteSession<'_> {
             .map(|result| Some(result.receipt))
     }
 
-    pub fn bind_file_upload(&mut self, id: [u8; 16]) -> Result<()> {
+    pub fn bind_file_upload(&mut self, claim: ClaimedFileUpload) -> Result<()> {
         if self.upload_identity.is_some() {
             return Err(invalid("session already has an upload identity"));
         }
-        let mut hard = HardStateStore::open(&self.host.database_path)?;
+        let id = claim.id;
+        let hard = HardStateStore::open(&self.host.database_path)?;
         if let Some(op) = hard.upload(&id)? {
             if op.host_id != self.host.host_id.as_bytes()
                 || op.uid != self.actor_uid
@@ -364,18 +454,63 @@ impl KvWriteSession<'_> {
             {
                 return Err(invalid("upload belongs to another account or store"));
             }
+            if op.state != UploadState::Preparing {
+                return Err(invalid("upload source claim is no longer active"));
+            }
         } else {
-            hard.record_upload_intent(
-                id,
-                self.host.host_id.as_bytes(),
-                &self.actor_uid,
-                self.party.party.as_bytes(),
-                crate::now_microseconds()?,
-            )?;
+            return Err(invalid("upload source claim disappeared"));
         }
-        hard.begin_upload_source(&id)?;
         self.upload_identity = Some(id);
         Ok(())
+    }
+
+    pub(super) fn ensure_file_upload_claim(
+        &mut self,
+        parent: [u8; 16],
+        name: &str,
+        expected_size: Option<u64>,
+        options: KvWriteOptions,
+        selected: Option<[u8; 16]>,
+    ) -> Result<()> {
+        if self.upload_identity.is_some() {
+            return Ok(());
+        }
+        let mut bytes = parent.to_vec();
+        bytes.extend_from_slice(&(name.len() as u64).to_be_bytes());
+        bytes.extend_from_slice(name.as_bytes());
+        for value in [expected_size, options.expected_version] {
+            bytes.push(u8::from(value.is_some()));
+            bytes.extend_from_slice(&value.unwrap_or_default().to_be_bytes());
+        }
+        bytes.push(u8::from(options.overwrite));
+        for role in [options.read_role, options.write_role] {
+            bytes.push(role.kind() as u8);
+            bytes.extend_from_slice(&role.visibility().unwrap_or_default().to_be_bytes());
+        }
+        bytes.push(u8::from(selected.is_some()));
+        bytes.extend_from_slice(&selected.unwrap_or_default());
+        let intent = UploadIntentBinding {
+            fingerprint: prefixed_hash(0x755d_2841_9f6a_8c13, &bytes),
+        };
+        let scope = UploadScope {
+            host_id: self.host.host_id.as_bytes(),
+            uid: &self.actor_uid,
+            party_id: self.party.party.as_bytes(),
+        };
+        let mut hard = HardStateStore::open(&self.host.database_path)?;
+        let sample = match self.upload_admission_time.take() {
+            Some(sample) => sample,
+            None => upload_time_sample()?,
+        };
+        let context = hard.upload_issuance_context(scope, sample)?;
+        let handle = UploadHandle::new(
+            context.database_id,
+            context.issued_at,
+            crate::random_bytes()?,
+        );
+        hard.register_upload_intent(handle, crate::random_bytes()?, scope, intent, sample)?;
+        let claim = claim_file_upload(&self.host.database_path, handle, scope, intent)?;
+        self.bind_file_upload(claim)
     }
     #[allow(clippy::too_many_arguments)]
     pub(super) fn prepare_and_submit_large_file<R: Read>(
@@ -391,10 +526,10 @@ impl KvWriteSession<'_> {
         first_final: bool,
         tree: Vec<KvDirectoryProjection>,
     ) -> Result<KvWriteResult> {
-        let id = match self.upload_identity.take() {
-            Some(id) => id,
-            None => crate::random_bytes()?,
-        };
+        let id = self
+            .upload_identity
+            .take()
+            .ok_or(invalid("upload source was not claimed"))?;
         let selected = if options.overwrite {
             let entry = tree
                 .iter()
