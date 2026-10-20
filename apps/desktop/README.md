@@ -531,6 +531,12 @@ previous page. `resume_file_upload` and `cancel_file_upload` take `{storeId,
 uploadId}` and answer one upload. The Uploads button at the top of the Files
 list (`src/features/files/file-uploads.tsx`) reads them only when opened.
 
+A failed `import_dropped_file` or `replace_dropped_file` names the upload
+handle the host issued and points to Uploads, except when the agent refused
+the upload before recording the handle (`capability-denied`,
+`invalid-request`, `busy`, `profile-busy`); after a lost agent connection the
+message says that the agent may have recorded it.
+
 Every command that reaches the agent runs under a deadline from its entry in
 `command_class` (`src-tauri/src/commands/deadline.rs`); a command with no
 entry fails with `missing-deadline-policy`, and an expired one with

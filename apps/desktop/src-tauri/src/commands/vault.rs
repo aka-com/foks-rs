@@ -1020,12 +1020,35 @@ pub(super) fn upload_file(
     result.map(|_| ()).map_err(|error| {
         let mut error = map_mutation_error(error, kind);
         if let Some(id) = upload_id {
-            error.message = format!(
-                "{} Upload handle: {id}. Open Uploads to inspect or resume prepared content.",
-                error.message
-            );
+            if let Some(hint) = upload_handle_hint(&error, &id) {
+                error.message = format!("{} {hint}", error.message);
+            }
         }
         error
+    })
+}
+
+/// What a failed upload's message says about its handle. The desktop issues
+/// the handle before the stream starts, and the agent records it only once
+/// it has admitted the upload, so the agent's refusals before admission
+/// (missing KV capability, an invalid request, a busy worker pool or
+/// profile) leave nothing for the Uploads list to show. A lost agent
+/// connection does not say whether the agent recorded the handle.
+pub(super) fn upload_handle_hint(error: &AgentError, id: &str) -> Option<String> {
+    if !error.ambiguous
+        && matches!(
+            error.code.as_str(),
+            "capability-denied" | "invalid-request" | "busy" | "profile-busy"
+        )
+    {
+        return None;
+    }
+    Some(if error.code == "agent-lost" {
+        format!(
+            "If the agent recorded upload handle {id} before the connection was lost, open Uploads to inspect or resume prepared content."
+        )
+    } else {
+        format!("Upload handle: {id}. Open Uploads to inspect or resume prepared content.")
     })
 }
 

@@ -1178,6 +1178,125 @@ fn early_transport_loss_with_an_unchanged_source_stays_agent_lost() {
 
     assert_eq!(error.code, "agent-lost");
     assert!(error.fatal);
+    assert!(
+        error
+            .message
+            .contains("If the agent recorded upload handle "),
+        "{}",
+        error.message
+    );
+}
+
+/// Answers every upload stream with one agent error, before reading it.
+struct RefusedUpload(fn() -> foks_desktop::AgentError);
+
+impl foks_desktop::AgentTransport for RefusedUpload {
+    fn call_with_deadline(
+        &self,
+        operation: foks_agent_proto::Operation,
+        _deadline: &foks_local_deadline::Deadline,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        self.call_cancellable(operation, cancelled)
+    }
+    fn put_kv_stream_with_deadline(
+        &self,
+        header: foks_agent_proto::KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+        _deadline: &foks_local_deadline::Deadline,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        self.put_kv_stream(header, reader)
+    }
+    fn call(&self, _operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        Ok(serde_json::json!({"database_id":vec![1;16],"issued_at":1}))
+    }
+    fn put_kv_stream(
+        &self,
+        _header: KvUploadHeader,
+        _reader: &mut dyn std::io::Read,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        Err((self.0)())
+    }
+}
+
+fn protocol_error(code: foks_agent_proto::ErrorCode) -> foks_desktop::AgentError {
+    foks_desktop::AgentError::Protocol {
+        code,
+        message: "refused.".to_owned(),
+        fields: foks_agent_proto::ErrorFields {
+            capability: Some("kv".to_owned()),
+            ..Default::default()
+        }
+        .into(),
+    }
+}
+
+#[test]
+fn only_failures_after_upload_admission_point_to_the_uploads_list() {
+    use foks_agent_proto::ErrorCode;
+    let source = tempfile::NamedTempFile::new().unwrap();
+    source.as_file().set_len(1024).unwrap();
+    let store = CatalogStoreRef::Account(foks_agent_proto::AccountStoreRef {
+        profile: "foks.example".to_owned(),
+        account_alias: "personal".to_owned(),
+    });
+    let upload = |refusal: fn() -> foks_desktop::AgentError| {
+        let header = file_create_header(&store, "/bundle.tar", 0, None, None).unwrap();
+        upload_file(
+            &RefusedUpload(refusal),
+            header,
+            source.path(),
+            MutationKind::Create,
+        )
+        .unwrap_err()
+    };
+    // The agent refuses these before it records the handle.
+    for (refusal, code) in [
+        (
+            (|| protocol_error(ErrorCode::CapabilityDenied)) as fn() -> _,
+            "capability-denied",
+        ),
+        (
+            || protocol_error(ErrorCode::InvalidRequest),
+            "invalid-request",
+        ),
+        (|| protocol_error(ErrorCode::Busy), "busy"),
+        (|| protocol_error(ErrorCode::ProfileBusy), "profile-busy"),
+    ] {
+        let error = upload(refusal);
+        assert_eq!(error.code, code);
+        assert!(!error.message.contains("Upload"), "{}", error.message);
+    }
+    // After admission the agent keeps the prepared content under the handle.
+    for (refusal, code) in [
+        (
+            (|| protocol_error(ErrorCode::ServerUnavailable)) as fn() -> _,
+            "server-unavailable",
+        ),
+        (
+            || protocol_error(ErrorCode::UploadSpoolFull),
+            "upload-spool-full",
+        ),
+        (
+            || foks_desktop::AgentError::DeadlineExceeded,
+            "deadline-exceeded",
+        ),
+        (
+            || foks_desktop::AgentError::Ambiguous("lost reply".to_owned()),
+            "ambiguous",
+        ),
+    ] {
+        let error = upload(refusal);
+        assert_eq!(error.code, code);
+        assert!(
+            error.message.contains("Upload handle: ")
+                && error
+                    .message
+                    .ends_with("Open Uploads to inspect or resume prepared content."),
+            "{}",
+            error.message
+        );
+    }
 }
 
 pub(super) struct ResizeDuringUpload {
