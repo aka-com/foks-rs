@@ -350,7 +350,7 @@ pub struct KexCleartext {
 
 impl KexCleartext {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        let value = decode(bytes)?;
+        let value = foks_snowpack::decode_sensitive(bytes)?;
         let fields = array(&value, 4)?;
         Ok(Self {
             session_id: fixed_blob(&fields[0], "KEX cleartext session ID")?,
@@ -360,19 +360,37 @@ impl KexCleartext {
         })
     }
 
+    /// The message tree holds copies of `KexPpe::skmwk` and
+    /// `KexPleaseSign::self_token`; it is erased when encoding finishes.
     pub fn encoded(&self) -> Result<Vec<u8>> {
-        Ok(encode(&Value::Array(vec![
+        Ok(encode(&zeroize::Zeroizing::new(Value::Array(vec![
             Value::Binary(self.session_id.to_vec()),
             Value::Binary(self.sender.as_bytes().to_vec()),
             Value::Unsigned(self.sequence),
             self.message.to_value()?,
-        ]))?)
+        ])))?)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cleartext_round_trips_through_the_sensitive_decoder() {
+        let cleartext = KexCleartext {
+            session_id: [4; KEX_SESSION_ID_BYTES],
+            sender: EntityId::from_bytes([vec![crate::ENTITY_DEVICE], vec![5; 32]].concat())
+                .unwrap(),
+            sequence: 6,
+            message: KexMessage::Start,
+        };
+        let encoded = cleartext.encoded().unwrap();
+        assert_eq!(KexCleartext::decode(&encoded).unwrap(), cleartext);
+        let mut trailing = encoded;
+        trailing.push(0);
+        assert!(KexCleartext::decode(&trailing).is_err());
+    }
 
     #[test]
     fn receive_argument_round_trips() {

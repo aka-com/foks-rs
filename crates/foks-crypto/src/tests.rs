@@ -1943,6 +1943,23 @@ fn seed_chain_plaintexts_bypass_the_non_zeroizing_prefix_decoder() {
 }
 
 #[test]
+fn secret_plaintext_sites_avoid_the_general_decoder_and_unerased_encodings() {
+    // Opened PPE, SKMWK and KEX plaintexts are decoded by the foks-proto
+    // payload types, which use the sensitive decoder; these modules must not
+    // decode them with the general decoder themselves. The KEX cleartext
+    // encoding holds the SKMWK and the self token and is erased after sealing.
+    let general_decoder = ["foks_snowpack::", "decode("].concat();
+    let general_prefix_decoder = ["decode_prefix", "("].concat();
+    for source in [include_str!("passphrase.rs"), include_str!("kex.rs")] {
+        assert!(!source.contains(&general_decoder));
+        assert!(!source.contains(&general_prefix_decoder));
+    }
+    let kex = include_str!("kex.rs");
+    assert!(kex.contains("let plaintext = Zeroizing::new(cleartext.encoded()?);"));
+    assert!(!kex.contains(&["cleartext.encoded()?", ".as_slice()"].concat()));
+}
+
+#[test]
 fn official_initial_signup_puk_box_opens() {
     let expected = UserLink::decode(&signup_fixture("eldest-link.snowp")).unwrap();
     let opened = expected.decode_eldest().unwrap();
