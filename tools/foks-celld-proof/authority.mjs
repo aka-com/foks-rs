@@ -12,7 +12,10 @@ const BASE = ["kv_nodes", "kv_dirents", "kv_dirent_heads", "kv_locks"];
 // resulting rows. A replay that writes a row in two statements (kv_nodes
 // below) fires more triggers than the native write did, so these values are
 // left out of the state hash; apply checks that the revision advanced.
-// Must match UNHASHED_COUNTERS in foks-server-testkit's celld_proof.rs.
+// No proof covers their values, so an output routed through the proof must
+// not include them (the read-dependency revision is a read token's read
+// coordinate). Must match UNHASHED_COUNTERS in foks-server-testkit's
+// celld_proof.rs, which a Rust test compares with this line.
 const UNHASHED_COUNTERS = [["metadata_read_dependency","revision"]];
 const fail = () => { throw new Error("proof request rejected"); };
 const canonical = value => {
@@ -130,9 +133,14 @@ export class Authority {
     }
     this.schema = schema;
     this.schemaHash = hash(schema);
+    // A listed table without its counter column is refused, as the native
+    // side refuses it; a schema without the table has nothing to leave out.
     this.unhashed = new Map(UNHASHED_COUNTERS.flatMap(([table,column]) => {
-      const index = schema.tables.find(t=>t.name===table)?.columns.findIndex(c=>c.name===column) ?? -1;
-      return index < 0 ? [] : [[table,index]];
+      const found = schema.tables.find(t=>t.name===table);
+      if (!found) return [];
+      const index = found.columns.findIndex(c=>c.name===column);
+      if (index < 0) fail();
+      return [[table,index]];
     }));
     this.tables = new Map(schema.tables.map(t => [t.name,t]));
     // This must happen outside transactionSync: SQLite ignores a foreign_keys

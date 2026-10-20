@@ -45,8 +45,11 @@ const READ_DEPENDENCY_COUNTERS: &[&str] = &["revision"];
 /// resulting rows: the authority's replay writes a kv_nodes row in two
 /// statements, so it advances them a different number of times than the
 /// native write. They are left out of the state hash ([`Schema::state_digest`]);
-/// the authority checks that they advanced. Must match UNHASHED_COUNTERS in
-/// tools/foks-celld-proof/authority.mjs.
+/// the authority checks that they advanced. Because no proof covers their
+/// values, an output routed through the proof must not include them (the
+/// read-dependency revision is the read coordinate of a read token). Must
+/// match UNHASHED_COUNTERS in tools/foks-celld-proof/authority.mjs, which a
+/// test compares.
 const UNHASHED_COUNTERS: &[(&str, &str)] = &[("metadata_read_dependency", "revision")];
 
 fn invalid(message: &'static str) -> Box<dyn std::error::Error + Send + Sync> {
@@ -913,6 +916,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_authority_leaves_out_the_same_counters() {
+        let authority = include_str!("../../../tools/foks-celld-proof/authority.mjs");
+        let line = authority
+            .lines()
+            .find(|line| line.starts_with("const UNHASHED_COUNTERS"))
+            .expect("authority.mjs declares UNHASHED_COUNTERS");
+        let declared: String = line
+            .split_once('=')
+            .unwrap()
+            .1
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        let expected = format!(
+            "[{}];",
+            UNHASHED_COUNTERS
+                .iter()
+                .map(|(table, column)| format!("[\"{table}\",\"{column}\"]"))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        assert_eq!(declared, expected);
+    }
+
     /// The authority accepts a delta when its replay reaches `after_hash`.
     /// The replay fires the read-dependency triggers a different number of
     /// times than the native write, which the state hash must not see.
@@ -986,8 +1014,9 @@ mod tests {
             .parse()
             .unwrap();
         assert!(native > start && replay > start);
-        // The two counts differ, which is why the revision is not hashed.
-        assert_ne!(digest(&replayed).unwrap(), digest(&after).unwrap());
+        // The two revisions need not be equal (the replay fires more
+        // triggers), which is why the revision is not hashed; the state
+        // hash above matches either way.
     }
 
     #[test]
