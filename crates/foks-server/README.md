@@ -793,7 +793,8 @@ database with the compiled limits unless `--config
 flags.
 
 Restore and retention validation also accept the same prior schemas as server
-startup (43 through 59, upgraded to 60). They copy the database and any WAL into
+startup (43 through 59, upgraded to 60; a pre-port version-49 store is refused,
+see the foks-server-db README). They copy the database and any WAL into
 a private temporary directory, apply the normal transactional migrations,
 checkpoint, and validate that copy. Restore installs the migrated database;
 validation never opens or changes the original snapshot in SQLite. Retention

@@ -296,8 +296,10 @@ incarnation rebuild, chunk authority and publication provenance, the current
 KV entry and historical name indexes, the public usage counters, the unique
 waitlist address index with its entry count, and the read-dependency
 coordinate), with the version stamped last. An upgrade runs the same steps. A
-file at version 43 through 59 is upgraded in one transaction as well, and every
-connection then compares the complete `sqlite_schema` with the contract
+file at version 43 through 59 is upgraded in one transaction as well (except a
+version-49 file written before the celld port, which lacks the KV accounting
+columns and is refused with a schema-version error; see the foks-server-db
+README), and every connection then compares the complete `sqlite_schema` with the contract
 compiled from a fresh reference schema. Two properties make
 that upgrade safe:
 
