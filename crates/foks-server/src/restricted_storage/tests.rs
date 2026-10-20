@@ -590,3 +590,80 @@ fn capture_change_and_cancellation_between_hash_and_copy_fail_closed() {
     )
     .is_err());
 }
+
+/// Runs an unbounded statement under `job` with `budget` until the progress
+/// hook stops it, and returns the classified error.
+fn interrupted(
+    job: &Arc<Control>,
+    budget: usize,
+    during: impl FnOnce() + Send + 'static,
+) -> ScanError {
+    let db =
+        scan::Database::private_target(Connection::open_in_memory().unwrap(), job.clone()).unwrap();
+    job.statement_with_budget(budget).unwrap();
+    let side = std::thread::spawn(during);
+    let error = db
+        .connection()
+        .query_row(
+            "WITH RECURSIVE c(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM c) SELECT count(*) FROM c",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_err();
+    side.join().unwrap();
+    let error = ScanError::from(error);
+    assert!(
+        matches!(
+            error,
+            ScanError::Sql {
+                extended_code: Some(9)
+            }
+        ),
+        "{error:?}"
+    );
+    job.classify(error)
+}
+
+#[test]
+fn stop_inside_a_statement_keeps_cancellation_deadline_and_budget_classes() {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let ctl = ScanControl::new(
+        Deadline::capture(Instant::now() + Duration::from_secs(300)).unwrap(),
+        cancelled.clone(),
+    );
+    let job = Control::new(&ctl).unwrap();
+    let error = interrupted(&job, usize::MAX, move || {
+        std::thread::sleep(Duration::from_millis(100));
+        cancelled.store(true, Ordering::Release);
+    });
+    assert!(matches!(error, ScanError::Cancelled), "{error:?}");
+    assert!(matches!(job.check(), Err(ScanError::Cancelled)));
+
+    let ctl = ScanControl::new(
+        Deadline::capture(Instant::now() + Duration::from_millis(200)).unwrap(),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let job = Control::new(&ctl).unwrap();
+    let error = interrupted(&job, usize::MAX, || {});
+    assert!(matches!(error, ScanError::Deadline(_)), "{error:?}");
+    assert!(matches!(job.check(), Err(ScanError::Deadline(_))));
+
+    let job = Control::new(&control()).unwrap();
+    let error = interrupted(&job, 10_000, || {});
+    assert!(
+        matches!(
+            error,
+            ScanError::Unsupported("SQLite operation/deadline limit")
+        ),
+        "{error:?}"
+    );
+    // An error the hook did not cause is left as it is.
+    assert!(matches!(
+        job.classify(ScanError::Sql {
+            extended_code: Some(1)
+        }),
+        ScanError::Sql {
+            extended_code: Some(1)
+        }
+    ));
+}

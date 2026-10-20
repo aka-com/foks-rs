@@ -152,12 +152,29 @@ impl Control {
     }
     fn check(&self) -> Result<()> {
         if self.interrupted.load(Ordering::Acquire) {
+            // A cancellation or deadline that stopped a statement keeps its own
+            // class; only an opcode-budget stop is the operation limit.
+            self.job_check()?;
             return Err(ScanError::Unsupported("SQLite operation/deadline limit"));
         }
+        self.job_check()
+    }
+    fn job_check(&self) -> Result<()> {
         self.control
             .lock()
             .map_err(|_| ScanError::Incomplete)?
             .check()
+    }
+    /// SQLite reports a statement stopped by the progress hook as
+    /// SQLITE_INTERRUPT. Replace that with the reason the hook stopped it:
+    /// Cancelled, Deadline, or the operation limit.
+    fn classify(&self, error: ScanError) -> ScanError {
+        match error {
+            ScanError::Sql {
+                extended_code: Some(rusqlite::ffi::SQLITE_INTERRUPT),
+            } if self.interrupted.load(Ordering::Acquire) => self.check().err().unwrap_or(error),
+            error => error,
+        }
     }
     fn intersect(&self, value: &ScanControl) -> Result<()> {
         value.check()?;
@@ -212,9 +229,13 @@ impl RestrictedScanner {
             return Err(ScanError::Unsupported("database capture ceiling"));
         }
         let control = Control::new(control)?;
-        let package = capture::Package::capture(artifacts, limits, &control)?;
-        let database = scan::Database::open(package.database(), control.clone())?;
-        database.verify_schema()?;
+        let package = capture::Package::capture(artifacts, limits, &control)
+            .map_err(|error| control.classify(error))?;
+        let database = scan::Database::open(package.database(), control.clone())
+            .map_err(|error| control.classify(error))?;
+        database
+            .verify_schema()
+            .map_err(|error| control.classify(error))?;
         Ok(Self {
             database,
             package,
@@ -258,14 +279,16 @@ impl RestrictedScanner {
         if result.is_err() {
             self.failed = true;
         }
-        result
+        result.map_err(|error| self.control.classify(error))
     }
     pub fn finish(mut self, control: &ScanControl) -> Result<StorageScanComplete> {
         if self.failed || !self.complete {
             return Err(ScanError::Incomplete);
         }
         self.control.intersect(control)?;
-        self.package.verify(&self.control)?;
+        self.package
+            .verify(&self.control)
+            .map_err(|error| self.control.classify(error))?;
         self.control.check()?;
         let digest = self.package.digest();
         Ok(StorageScanComplete {

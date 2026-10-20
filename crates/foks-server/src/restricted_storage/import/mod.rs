@@ -238,6 +238,16 @@ fn rescan(db: &scan::Database, package: &capture::Package) -> Result<StorageSumm
 }
 
 pub(crate) fn import_personal_list(
+    source: StorageScanComplete,
+    root_key: Zeroizing<[u8; 32]>,
+    config: foks_server_db::Config,
+    control: &ScanControl,
+) -> Result<NativePersonalListImport> {
+    let job = source._database.control();
+    import_source(source, root_key, config, control).map_err(|error| job.classify(error))
+}
+
+fn import_source(
     mut source: StorageScanComplete,
     root_key: Zeroizing<[u8; 32]>,
     config: foks_server_db::Config,
