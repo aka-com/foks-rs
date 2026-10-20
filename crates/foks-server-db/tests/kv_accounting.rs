@@ -10,6 +10,10 @@ const UID: [u8; 33] = [1; 33];
 // Intentionally independent of the counter implementation: enumerate the rows
 // that the previous quota query charged, including all historical versions.
 fn assert_accounting(connection: &Connection) {
+    assert!(accounting_matches(connection));
+}
+
+fn accounting_matches(connection: &Connection) -> bool {
     let namespaces: Vec<Vec<u8>> = connection
         .prepare("SELECT namespace_id FROM kv_namespaces")
         .unwrap()
@@ -59,17 +63,19 @@ fn assert_accounting(connection: &Connection) {
             )
             .unwrap();
         let stored: (i64,i64,i64,i64) = connection.query_row("SELECT accounted_bytes,accounted_objects,directory_count,dirent_count FROM kv_namespaces WHERE namespace_id=?1", [&uid], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
-        assert_eq!(stored, (bytes, objects, directories, dirents));
+        if stored != (bytes, objects, directories, dirents) {
+            eprintln!(
+                "stored {stored:?} != counted {:?}",
+                (bytes, objects, directories, dirents)
+            );
+            return false;
+        }
     }
     let mismatches: i64 = connection.query_row("SELECT count(*) FROM kv_file_uploads u WHERE chunk_count != (SELECT count(*) FROM kv_file_chunks c WHERE c.uid=u.uid AND c.file_id=u.file_id) OR chunk_bytes != (SELECT coalesce(sum(coalesce(external_ciphertext_bytes,length(ciphertext))),0) FROM kv_file_chunks c WHERE c.uid=u.uid AND c.file_id=u.file_id)", [], |r| r.get(0)).unwrap();
-    assert_eq!(mismatches, 0);
+    mismatches == 0
 }
 
-#[test]
-fn accounting_tracks_history_updates_rollback_and_cascades() {
-    let test = common::TestDatabase::new();
-    let mut c = Connection::open(&test.path).unwrap();
-    c.execute_batch("PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF;
+const ACCOUNTING_FIXTURE: &str = "PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF;
         INSERT INTO kv_namespaces(namespace_id,party_kind,host_id) VALUES(zeroblob(33),1,zeroblob(33));
         INSERT INTO kv_directories VALUES(zeroblob(33),zeroblob(16),1,3,0,1,0,X'0102');
         INSERT INTO kv_directories VALUES(zeroblob(33),zeroblob(16),2,3,0,1,0,X'010203');
@@ -80,7 +86,13 @@ fn accounting_tracks_history_updates_rollback_and_cascades() {
         INSERT INTO kv_dirent_heads VALUES(zeroblob(33),zeroblob(16),zeroblob(16),2);
         INSERT INTO kv_file_uploads(uid,file_id,exact_metadata,created_at,updated_at) VALUES(zeroblob(33),zeroblob(16),X'0102',0,0);
         INSERT INTO kv_file_chunks(uid,file_id,clear_offset,ciphertext,final_chunk,exact_upload_chunk) VALUES(zeroblob(33),zeroblob(16),0,X'010203',0,X'01020304');
-        INSERT INTO kv_locks VALUES(zeroblob(33),zeroblob(16),zeroblob(16),zeroblob(16),0);").unwrap();
+        INSERT INTO kv_locks VALUES(zeroblob(33),zeroblob(16),zeroblob(16),zeroblob(16),0);";
+
+#[test]
+fn accounting_tracks_history_updates_rollback_and_cascades() {
+    let test = common::TestDatabase::new();
+    let mut c = Connection::open(&test.path).unwrap();
+    c.execute_batch(ACCOUNTING_FIXTURE).unwrap();
     assert_accounting(&c);
     c.execute_batch("UPDATE kv_roots SET exact_root=X'01020304'; UPDATE kv_directory_heads SET version=1; UPDATE kv_dirent_heads SET version=1; UPDATE kv_file_chunks SET ciphertext=X'0102',exact_upload_chunk=X'01'; UPDATE kv_file_uploads SET exact_metadata=X'01020304';").unwrap();
     assert_accounting(&c);
@@ -131,6 +143,55 @@ fn accounting_tracks_history_updates_rollback_and_cascades() {
             .unwrap(),
         0
     );
+}
+
+/// The accounting triggers are AFTER INSERT/AFTER DELETE pairs. REPLACE
+/// deletes the conflicting row without its DELETE trigger unless
+/// recursive_triggers is on, which the writer connection does not set, so
+/// production writes use plain INSERT or ON CONFLICT DO UPDATE. kv_nodes and
+/// kv_file_uploads refuse a colliding INSERT outright.
+#[test]
+fn replace_keeps_accounting_only_with_recursive_triggers() {
+    for (table, guarded) in [
+        ("kv_directories", false),
+        ("kv_directory_heads", false),
+        ("kv_roots", false),
+        ("kv_dirents", false),
+        ("kv_dirent_heads", false),
+        ("kv_file_chunks", false),
+        ("kv_locks", false),
+        ("kv_nodes", true),
+        ("kv_file_uploads", true),
+    ] {
+        for recursive in [false, true] {
+            let test = common::TestDatabase::new();
+            let c = Connection::open(&test.path).unwrap();
+            c.execute_batch(ACCOUNTING_FIXTURE).unwrap();
+            c.execute(
+                "INSERT INTO kv_nodes(uid,node_id,node_type,exact_node) VALUES(zeroblob(33),?1,3,X'0102')",
+                [[3_u8; 17]],
+            )
+            .unwrap();
+            c.pragma_update(None, "recursive_triggers", recursive)
+                .unwrap();
+            assert_accounting(&c);
+            let replaced = c.execute(
+                &format!("INSERT OR REPLACE INTO {table} SELECT * FROM {table} LIMIT 1"),
+                [],
+            );
+            if guarded {
+                assert!(replaced.is_err(), "{table}");
+                assert_accounting(&c);
+            } else {
+                assert_eq!(replaced.unwrap(), 1, "{table}");
+                assert_eq!(
+                    accounting_matches(&c),
+                    recursive,
+                    "{table} recursive_triggers={recursive}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
