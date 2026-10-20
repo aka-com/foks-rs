@@ -121,6 +121,14 @@ function checkReport(report,host){
   const bounds=host.chargeLayout.bounds;
   const bound=key=>{assert.ok(Number.isSafeInteger(bounds[key])&&bounds[key]>=0);return BigInt(bounds[key]);};
   const admitted=phase=>number(report.phases.find(p=>p.name===phase).admitted_bytes),pages=number(report.page_scopes);
+  const allowance=host.chargeLayout.page_allowance;
+  for(const v of Object.values(allowance))assert.ok(Number.isSafeInteger(v)&&v>=0);
+  assert.equal(BigInt(allowance.dynamic_credits),bound('full_page_scratch'));
+  assert.equal(allowance.workspace_bytes,allowance.dynamic_credits+allowance.auxiliary_live);
+  assert.ok(number(report.workspace_reservations)<=1n);
+  assert.equal(number(report.workspace_bytes),number(report.workspace_reservations)*BigInt(allowance.workspace_bytes+allowance.control_bytes));
+  if(pages>0n||report.outcome==='ok')assert.equal(number(report.workspace_reservations),1n);
+
   assert.ok(number(report.maximum_page_scratch)<=number(report.maximum_page_charge));
   assert.ok(number(report.maximum_page_scratch)<=bound('full_page_scratch'));
   assert.ok(admitted('page')<=pages*bound('page_transport'));
@@ -151,7 +159,7 @@ test('immutable feature/default artifacts expose exactly the reviewed functions 
 for(const fixture of manifest.fixtures)test(`same-instance native/Wasm trace parity: ${fixture.name}`,()=>{
   const db=seed(fixture),host=new ListChargeHost(module,scalar,storage(db),page);
   try{
-    const layout=host.layout();assert.equal(layout.version,1);assert.equal(layout.target.pointer_bits,32);assert.equal(layout.bounds.complete,false);
+    const layout=host.layout();assert.equal(layout.version,1);assert.equal(layout.target.pointer_bits,32);assert.equal(layout.bounds.complete,false);assert.equal(layout.bounds.selected_auth_caller,82296);
     const changes=db.prepare('SELECT total_changes() AS n').get().n;
     for(const vector of fixture.cases){
       const before=host.instance.exports.memory.buffer.byteLength,start=performance.now();let report,error;
@@ -197,8 +205,17 @@ test('maximum-page transport, retained growth and final-output refusal preserve 
     const refuse=site=>{
       const report=call(db,host,{...input,fail_at:String(site)});checkReport(report,host);
       assert.equal(report.outcome,'trace_refused');assert.equal(report.first_refusal,String(site));
-      const refused=report.phases.filter(p=>number(p.refused_calls)>0n);assert.equal(refused.length,1);
-      assert.equal(refused[0].first_refusal,String(site));seen.add(refused[0].name);
+      const refused=report.phases.filter(p=>number(p.refused_calls)>0n);
+      const primary=refused.filter(p=>p.first_refusal===String(site));assert.equal(primary.length,1);
+      // A late Decode refusal retains the existing prior-prefix role ordering.
+      // The sticky page owner denies its first parameter allocation before SQL.
+      if(refused.length!==1){
+        assert.equal(refused.length,2);assert.equal(primary[0].name,'decode');
+        const secondary=refused.find(p=>p!==primary[0]);assert.equal(secondary.name,'roles');
+        assert.equal(secondary.first_refusal,String(site+1n));
+        assert.equal(secondary.attempts,'1');assert.equal(secondary.refused_calls,'1');assert.equal(secondary.admitted_bytes,'0');
+      }
+      seen.add(primary[0].name);
     };
     // Discover actual sites rather than freezing target/layout-dependent indices.
     // Stop once both page allocation and retained encoder growth were refused.

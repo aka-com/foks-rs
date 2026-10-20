@@ -1,11 +1,12 @@
 //! Real current-certificate resolver for the private A1 qualification surface.
 //! No endpoint selects this versus the synthetic fixture resolver. TLS possession
 //! and the owner capability remain responsibilities of the trusted frontend/host.
+mod admission;
+
 use super::{Caller, Number, Principal, Reply, Request, Resolver};
 use crate::personal::{self, CurrentCredential, PeerCertificate, PersonalError};
 use crate::{wire, Sql};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,7 +25,7 @@ struct PersonalResolver<'a> {
 }
 impl<'a> PersonalResolver<'a> {
     fn new(peer: &'a PeerCertificate, now: Number) -> personal::Result<Self> {
-        let context = Sha256::digest(super::encoded(&("foks-personal-peer-v1", peer))?).into();
+        let context = admission::peer_context_digest(peer)?;
         Ok(Self {
             peer,
             now,
@@ -51,20 +52,11 @@ impl Resolver for PersonalResolver<'_> {
         personal::require_personal_profile(sql, &current)?;
         // Principal identity survives certificate renewal, while the separate
         // context digest fixes the exact original certificate at Register/Execute.
-        let id = Sha256::digest(super::encoded(&(
-            "foks-personal-principal-v1",
-            current.uid().as_slice(),
-            current.credential_id(),
-            current.owner_id(),
-        ))?)
-        .into();
+        let id = admission::principal_digest(&current)?;
         let principal = Principal {
             id,
-            namespace: current.uid().to_vec(),
-            role: current
-                .role()
-                .encoded()
-                .map_err(|_| PersonalError::Corrupt)?,
+            namespace: crate::personal::admission::copy(current.uid())?,
+            role: admission::role(current.role())?,
             enabled: true,
         };
         self.current = Some(current);

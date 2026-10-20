@@ -2,14 +2,19 @@
 //!
 //! The frontend, not this module, proves TLS possession and parses the exact
 //! certificate. No result here commits, publishes, or establishes a tenant fence.
+pub(crate) mod admission;
 pub(crate) mod catalog;
 mod generations;
 mod list;
+#[cfg(feature = "list-allocation-qualification")]
+pub(crate) use list::allowance::{target_terms as page_allowance_terms, PageAllowanceTerms};
 #[cfg(feature = "list-allocation-qualification")]
 pub(crate) fn list_decoded_size() -> usize {
     std::mem::size_of::<list::Decoded>()
 }
 pub use generations::current_key_generations;
+#[cfg(any(test, feature = "list-allocation-qualification"))]
+pub(crate) use list::read_personal_list_owned;
 pub use list::{read_personal_list, ListCursor, ListRequest};
 
 use crate::{Sql, Statement as S, Value as V};
@@ -94,7 +99,19 @@ mod micros {
         value: &u64,
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error> {
-        serializer.serialize_str(&value.to_string())
+        let mut digits = [0u8; 20];
+        let mut at = digits.len();
+        let mut remaining = *value;
+        loop {
+            at -= 1;
+            digits[at] = b'0' + (remaining % 10) as u8;
+            remaining /= 10;
+            if remaining == 0 {
+                break;
+            }
+        }
+        // Every written byte is an ASCII digit; no owned formatting temporary.
+        serializer.serialize_str(std::str::from_utf8(&digits[at..]).expect("decimal digits"))
     }
     pub fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
@@ -105,6 +122,30 @@ mod micros {
             return Err(serde::de::Error::custom("noncanonical certificate time"));
         }
         Ok(value)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[derive(serde::Serialize)]
+        struct Decimal(#[serde(serialize_with = "super::serialize")] u64);
+
+        #[test]
+        fn stack_decimal_matches_legacy_full_u64_range_boundaries() {
+            let check = |value| {
+                assert_eq!(
+                    serde_json::to_vec(&Decimal(value)).unwrap(),
+                    serde_json::to_vec(&value.to_string()).unwrap()
+                );
+            };
+            check(0);
+            check(u64::MAX);
+            for exponent in 0..=19 {
+                let power = 10u64.pow(exponent);
+                check(power - 1);
+                check(power);
+                check(power + 1);
+            }
+        }
     }
 }
 
@@ -219,27 +260,34 @@ pub fn authenticate_peer(
     }
     let mut found = None;
     for width in peer.serial_magnitude.len()..=20 {
-        let mut serial = vec![0; width];
+        let mut serial = admission::zeroed(width)?;
         serial[width - peer.serial_magnitude.len()..].copy_from_slice(&peer.serial_magnitude);
         let row = sql.query(
             S::PersonalIssuedCredential,
-            &[V::Blob(serial), blob(peer.exact_der()), now.clone()],
+            &[
+                V::Blob(serial),
+                V::Blob(admission::copy(peer.exact_der())?),
+                now.clone(),
+            ],
         )?;
         let Some(row) = row else { continue };
         if found.is_some() {
             return Err(PersonalError::Corrupt);
         }
-        let [uid, credential, owner, kind, visibility] = row.as_slice() else {
-            return Err(PersonalError::Corrupt);
-        };
-        let uid: [u8; 33] = bytes(uid)?.try_into().map_err(|_| PersonalError::Corrupt)?;
+        let [uid, credential, owner, kind, visibility]: [V; 5] =
+            row.try_into().map_err(|_| PersonalError::Corrupt)?;
+        let uid: [u8; 33] = bytes(&uid)?
+            .try_into()
+            .map_err(|_| PersonalError::Corrupt)?;
         if uid[0] != foks_proto::ENTITY_USER {
             return Err(PersonalError::Corrupt);
         }
-        let credential = EntityId::from_bytes(bytes(credential)?.to_vec())
+        // Move the already admitted scalar-row buffers into the retained IDs.
+        // Taking ownership does not refund the row's invocation allowance.
+        let credential = EntityId::from_bytes(admission::into_blob(credential)?)
             .map_err(|_| PersonalError::Corrupt)?;
-        let owner =
-            EntityId::from_bytes(bytes(owner)?.to_vec()).map_err(|_| PersonalError::Corrupt)?;
+        let owner = EntityId::from_bytes(admission::into_blob(owner)?)
+            .map_err(|_| PersonalError::Corrupt)?;
         if credential
             .ed25519_key()
             .map_err(|_| PersonalError::Corrupt)?
@@ -247,7 +295,7 @@ pub fn authenticate_peer(
         {
             return Err(PersonalError::Unauthenticated);
         }
-        let role = stored_role(kind, visibility)?;
+        let role = stored_role(&kind, &visibility)?;
         let kind = match credential.entity_type() {
             foks_proto::ENTITY_DEVICE => CredentialKind::SoftwareDevice,
             foks_proto::ENTITY_SUBKEY => CredentialKind::DelegatedSubkey,
@@ -287,9 +335,9 @@ pub fn recheck_current_credential(
         .query(
             S::PersonalCurrentCredential,
             &[
-                blob(credential.owner_id()),
-                blob(credential.uid()),
-                blob(credential.credential_id()),
+                V::Blob(admission::copy(credential.owner_id())?),
+                V::Blob(admission::copy(credential.uid())?),
+                V::Blob(admission::copy(credential.credential_id())?),
             ],
         )?
         .ok_or(PersonalError::Permission)?;
@@ -310,7 +358,10 @@ pub fn require_personal_profile(sql: &mut impl Sql, credential: &CurrentCredenti
         return Err(PersonalError::UnsupportedProfile);
     }
     if sql
-        .query(S::PersonalAnchor, &[blob(credential.uid())])?
+        .query(
+            S::PersonalAnchor,
+            &[V::Blob(admission::copy(credential.uid())?)],
+        )?
         .is_none()
     {
         return Err(PersonalError::Permission);
@@ -327,7 +378,7 @@ pub fn current_key_generation(sql: &mut impl Sql, uid: &[u8], role: Role) -> Res
     sql.query(
         S::PersonalRoleGeneration,
         &[
-            blob(uid),
+            V::Blob(admission::copy(uid)?),
             crate::integer(role.protocol_value())?,
             V::Integer(i64::from(role.visibility().unwrap_or(0))),
         ],

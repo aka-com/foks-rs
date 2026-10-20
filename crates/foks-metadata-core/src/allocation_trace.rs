@@ -154,7 +154,10 @@ struct State {
     maximum_page_scratch: u64,
     first_refusal: u64,
     allocator_failed: bool,
+    owner_failed: bool,
     overflow: bool,
+    workspace_reservations: u64,
+    workspace_bytes: u64,
 }
 impl Default for State {
     fn default() -> Self {
@@ -168,13 +171,42 @@ impl Default for State {
             maximum_page_scratch: 0,
             first_refusal: 0,
             allocator_failed: false,
+            owner_failed: false,
             overflow: false,
+            workspace_reservations: 0,
+            workspace_bytes: 0,
         }
     }
 }
 struct Recorder {
     state: Mutex<State>,
     fail_at: u64,
+}
+impl crate::list_encoder::owned::ListRetainedOwner for Recorder {
+    fn reserve_page_workspace(&self, bytes: usize) -> bool {
+        let mut s = self.state.lock().unwrap();
+        let Some(count) = s.workspace_reservations.checked_add(1) else {
+            s.overflow = true;
+            return false;
+        };
+        let Some(total) = s.workspace_bytes.checked_add(bytes as u64) else {
+            s.overflow = true;
+            return false;
+        };
+        s.workspace_reservations = count;
+        s.workspace_bytes = total;
+        true
+    }
+    fn reserve_retained(&self, bytes: usize) -> bool {
+        self.record(bytes, Origin::Snowpack, false)
+    }
+    fn failed(&self) -> bool {
+        let state = self.state.lock().unwrap();
+        state.owner_failed || state.first_refusal != 0 || state.overflow || state.allocator_failed
+    }
+    fn fail(&self) {
+        self.state.lock().unwrap().owner_failed = true;
+    }
 }
 impl Recorder {
     fn new(fail_at: u64) -> Self {
@@ -184,6 +216,15 @@ impl Recorder {
         }
     }
     fn record(&self, bytes: usize, origin: Origin, control: bool) -> bool {
+        self.record_admissible(bytes, origin, control, true)
+    }
+    fn record_admissible(
+        &self,
+        bytes: usize,
+        origin: Origin,
+        control: bool,
+        locally_admissible: bool,
+    ) -> bool {
         let index = PHASE.with(|p| p.get() as usize);
         let mut s = self.state.lock().unwrap();
         let Some(next) = s.total.attempts.checked_add(1) else {
@@ -191,7 +232,8 @@ impl Recorder {
             return false;
         };
         let bytes = bytes as u64;
-        let accepted = !s.overflow
+        let accepted = locally_admissible
+            && !s.overflow
             && next != self.fail_at
             && s.total.admitted_bytes.checked_add(bytes).is_some();
         s.total.attempts = next;
@@ -239,6 +281,14 @@ impl foks_rpc::ResponseAllocationBudget for Recorder {
         self.record(bytes, Origin::RpcResponse, control)
     }
 }
+/// Preserve logical traffic without acquiring another parent workspace permit.
+pub(crate) fn observe_page_attempt(bytes: usize, admissible: bool) -> bool {
+    ACTIVE.with(|active| {
+        active.borrow().as_ref().map_or(admissible, |r| {
+            r.record_admissible(bytes, Origin::Snowpack, false, admissible)
+        })
+    })
+}
 struct ActiveGuard(Option<Arc<Recorder>>);
 impl Drop for ActiveGuard {
     fn drop(&mut self) {
@@ -279,12 +329,14 @@ pub struct LayoutReport {
     pub version: u8,
     pub target: Layout,
     pub bounds: formula::Bounds,
+    pub(crate) page_allowance: personal::PageAllowanceTerms,
 }
 pub fn layout_report() -> crate::Result<LayoutReport> {
     Ok(LayoutReport {
         version: 1,
         target: layout(),
         bounds: formula::bounds()?,
+        page_allowance: personal::page_allowance_terms()?,
     })
 }
 #[derive(Serialize)]
@@ -314,6 +366,10 @@ pub struct Report {
     pub maximum_page_charge: u64,
     #[serde(serialize_with = "decimal")]
     pub maximum_page_scratch: u64,
+    #[serde(serialize_with = "decimal")]
+    pub workspace_reservations: u64,
+    #[serde(serialize_with = "decimal")]
+    pub workspace_bytes: u64,
     #[serde(serialize_with = "decimal")]
     pub response_bytes: u64,
     pub list_sha256: Option<String>,
@@ -407,22 +463,23 @@ pub fn run_parsed(sql: &mut impl Sql, i: Invocation) -> crate::Result<Report> {
                 personal::authenticate_peer(&mut sql, &i.peer, i.now_micros)
                     .map_err(|e| outcome(&e))?
             };
-            let response = personal::read_personal_list(
+            let response = personal::read_personal_list_owned(
                 &mut sql,
                 &credential,
                 &i.request,
                 i.now_micros,
                 crate::directory::MAXIMUM_DIRECTORY_BYTES,
+                recorder.clone(),
             )
             .map_err(|e| outcome(&e))?;
             // Keep only fixed-size diagnostics before consuming the raw bytes.
             // They are published only after the entire framing operation succeeds.
             let response_length = response.len();
-            let response_digest: [u8; 32] = Sha256::digest(&response).into();
+            let response_digest: [u8; 32] = Sha256::digest(response.as_bytes()).into();
             let frame = if i.frame {
                 let _phase = phase(Phase::Frame);
                 Some(
-                    foks_rpc::encode_success_response_owned_at(response, i.rpc_sequence)
+                    crate::list_encoder::owned::frame_owned_list(response, i.rpc_sequence)
                         .map_err(frame_error)?,
                 )
             } else {
@@ -459,6 +516,8 @@ pub fn run_parsed(sql: &mut impl Sql, i: Invocation) -> crate::Result<Report> {
         page_scopes: s.page_scopes,
         maximum_page_charge: s.maximum_page_charge,
         maximum_page_scratch: s.maximum_page_scratch,
+        workspace_reservations: s.workspace_reservations,
+        workspace_bytes: s.workspace_bytes,
         response_bytes: 0,
         list_sha256: None,
         frame_bytes: 0,
@@ -479,7 +538,7 @@ pub fn run_parsed(sql: &mut impl Sql, i: Invocation) -> crate::Result<Report> {
             report.list_sha256 = Some(digest_hex(response_digest));
             if let Some(frame) = frame {
                 report.frame_bytes = frame.len() as u64;
-                report.frame_sha256 = Some(hash(&frame));
+                report.frame_sha256 = Some(hash(frame.as_bytes()));
             }
         }
     }

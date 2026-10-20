@@ -15,6 +15,7 @@ pub struct Term {
 #[derive(Serialize)]
 pub struct Bounds {
     pub complete: bool,
+    pub selected_auth_caller: u64,
     pub page_transport: u64,
     pub row_decode: u64,
     pub row_append: u64,
@@ -24,7 +25,7 @@ pub struct Bounds {
     pub finish: u64,
     pub parent: u64,
     pub frame: u64,
-    pub terms: [Term; 12],
+    pub terms: [Term; 13],
     pub uncovered: [&'static str; 6],
 }
 fn add(values: &[usize]) -> Result<usize> {
@@ -161,6 +162,17 @@ pub fn frame(length: usize, entries: usize, bodies: usize) -> Result<usize> {
 }
 pub fn bounds() -> Result<Bounds> {
     let l = layout();
+    // One authenticate + List-entry recheck/profile + parent-key lookup only.
+    // This is cumulative caller payload, additional to scalar transport charges.
+    let selected_auth_caller = add(&[
+        mul(20, 4096)?,
+        mul(add(&[20, 1])?, 20)? / 2,
+        34,
+        33,
+        33,
+        33,
+        33,
+    ])?;
     let v = l.snowpack_value_bytes;
     let d = 4096;
     let n = 65536;
@@ -206,6 +218,7 @@ pub fn bounds() -> Result<Bounds> {
     };
     Ok(Bounds {
         complete: false,
+        selected_auth_caller: selected_auth_caller as u64,
         page_transport: page_transport as u64,
         row_decode: row_decode as u64,
         row_append: row_append as u64,
@@ -216,6 +229,11 @@ pub fn bounds() -> Result<Bounds> {
         parent: parent(crate::directory::MAXIMUM_DIRECTORY_BYTES)? as u64,
         frame: frame(crate::list_encoder::MAX_LIST_BYTES, 4096, 4096)? as u64,
         terms: [
+            term(
+                "one authenticate/recheck/profile/parent-key caller payload",
+                "selected-callgraph cumulative",
+                selected_auth_caller,
+            ),
             term(
                 "parent valid-schema cumulative",
                 "parent",
@@ -262,7 +280,7 @@ pub fn bounds() -> Result<Bounds> {
             "actual parent/frame live capacity and fragmentation, separate from charges",
             "scalar aggregate formula pending; S1 requested native copies are admitted",
             "S2 Wasm scalar JSON and TLS buffer lifetime",
-            "S3 domain credential/DER/authority copies",
+            "remaining S3 resolver/authority/domain copies beyond selected auth caller",
             "SQLite/JS host internals, allocator fragmentation and physical peak",
         ],
     })
