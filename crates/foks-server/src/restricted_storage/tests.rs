@@ -648,7 +648,12 @@ fn stop_inside_a_statement_keeps_cancellation_deadline_and_budget_classes() {
     assert!(matches!(error, ScanError::Deadline(_)), "{error:?}");
     assert!(matches!(job.check(), Err(ScanError::Deadline(_))));
 
-    let job = Control::new(&control()).unwrap();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let ctl = ScanControl::new(
+        Deadline::capture(Instant::now() + Duration::from_secs(300)).unwrap(),
+        cancelled.clone(),
+    );
+    let job = Control::new(&ctl).unwrap();
     let error = interrupted(&job, 10_000, || {});
     assert!(
         matches!(
@@ -657,6 +662,19 @@ fn stop_inside_a_statement_keeps_cancellation_deadline_and_budget_classes() {
         ),
         "{error:?}"
     );
+    // The recorded cause stands: a cancellation after a budget stop does not
+    // relabel it.
+    cancelled.store(true, Ordering::Release);
+    assert!(matches!(
+        job.check(),
+        Err(ScanError::Unsupported("SQLite operation/deadline limit"))
+    ));
+    assert!(matches!(
+        job.classify(ScanError::Sql {
+            extended_code: Some(9)
+        }),
+        ScanError::Unsupported("SQLite operation/deadline limit")
+    ));
     // An error the hook did not cause is left as it is.
     assert!(matches!(
         job.classify(ScanError::Sql {

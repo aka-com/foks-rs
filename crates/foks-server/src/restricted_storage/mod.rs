@@ -134,11 +134,22 @@ impl StorageScanComplete {
     }
 }
 
+/// Why the progress hook stopped a statement. The first cause is kept, so a
+/// later cancellation or deadline does not relabel a budget stop.
+#[derive(Clone)]
+enum Stop {
+    Budget,
+    Cancelled,
+    Deadline(foks_local_deadline::Error),
+    Failed,
+}
+
 struct Control {
     control: Mutex<ScanControl>,
     operations: AtomicUsize,
     budget: AtomicUsize,
     interrupted: AtomicBool,
+    stop: Mutex<Option<Stop>>,
 }
 impl Control {
     fn new(value: &ScanControl) -> Result<Arc<Self>> {
@@ -148,14 +159,12 @@ impl Control {
             operations: AtomicUsize::new(0),
             budget: AtomicUsize::new(STATEMENT_OPERATIONS),
             interrupted: AtomicBool::new(false),
+            stop: Mutex::new(None),
         }))
     }
     fn check(&self) -> Result<()> {
         if self.interrupted.load(Ordering::Acquire) {
-            // A cancellation or deadline that stopped a statement keeps its own
-            // class; only an opcode-budget stop is the operation limit.
-            self.job_check()?;
-            return Err(ScanError::Unsupported("SQLite operation/deadline limit"));
+            return Err(self.stopped());
         }
         self.job_check()
     }
@@ -165,14 +174,23 @@ impl Control {
             .map_err(|_| ScanError::Incomplete)?
             .check()
     }
+    /// The error for the cause recorded when the hook stopped a statement.
+    fn stopped(&self) -> ScanError {
+        match self.stop.lock().ok().and_then(|stop| stop.clone()) {
+            Some(Stop::Cancelled) => ScanError::Cancelled,
+            Some(Stop::Deadline(error)) => ScanError::Deadline(error),
+            Some(Stop::Failed) => ScanError::Incomplete,
+            Some(Stop::Budget) | None => ScanError::Unsupported("SQLite operation/deadline limit"),
+        }
+    }
     /// SQLite reports a statement stopped by the progress hook as
-    /// SQLITE_INTERRUPT. Replace that with the reason the hook stopped it:
+    /// SQLITE_INTERRUPT. Replace that with the cause the hook recorded:
     /// Cancelled, Deadline, or the operation limit.
     fn classify(&self, error: ScanError) -> ScanError {
         match error {
             ScanError::Sql {
                 extended_code: Some(rusqlite::ffi::SQLITE_INTERRUPT),
-            } if self.interrupted.load(Ordering::Acquire) => self.check().err().unwrap_or(error),
+            } if self.interrupted.load(Ordering::Acquire) => self.stopped(),
             error => error,
         }
     }
@@ -197,15 +215,31 @@ impl Control {
         Ok(())
     }
     fn progress(&self) -> bool {
+        if self.interrupted.load(Ordering::Acquire) {
+            return true;
+        }
         let used = self
             .operations
             .fetch_add(1000, Ordering::AcqRel)
             .saturating_add(1000);
-        let stop = used >= self.budget.load(Ordering::Acquire) || self.check().is_err();
-        if stop {
-            self.interrupted.store(true, Ordering::Release);
+        let cause = if used >= self.budget.load(Ordering::Acquire) {
+            Some(Stop::Budget)
+        } else {
+            match self.job_check() {
+                Ok(()) => None,
+                Err(ScanError::Cancelled) => Some(Stop::Cancelled),
+                Err(ScanError::Deadline(error)) => Some(Stop::Deadline(error)),
+                Err(_) => Some(Stop::Failed),
+            }
+        };
+        let Some(cause) = cause else {
+            return false;
+        };
+        if let Ok(mut stop) = self.stop.lock() {
+            stop.get_or_insert(cause);
         }
-        stop
+        self.interrupted.store(true, Ordering::Release);
+        true
     }
 }
 

@@ -455,6 +455,17 @@ pub(super) fn consume(
     control: &ScanControl,
     pools: &Arc<Pools>,
 ) -> Result<(NativeOwner, crate::pki::HostTls)> {
+    // Statements below run under the import's job; an SQLITE_INTERRUPT from
+    // its progress hook is reported as the cause the hook recorded.
+    let job = import.database.control();
+    consume_import(import, control, pools).map_err(|error| job.classify(error))
+}
+
+fn consume_import(
+    import: NativePersonalListImport,
+    control: &ScanControl,
+    pools: &Arc<Pools>,
+) -> Result<(NativeOwner, crate::pki::HostTls)> {
     import.verify_owned()?;
     let job = import.database.control();
     job.check()?;
@@ -793,6 +804,35 @@ mod tests {
             consume(import, &control, &pools())
         }))
         .is_err());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn cancellation_inside_a_bootstrap_statement_is_reported_as_cancelled() {
+        let (import, control) = imported();
+        let path = failed_path(&import);
+        let cancelled = Arc::clone(&control.cancelled);
+        hook(Stage::Initialized, move |db, job| {
+            // Cancel from another thread while an unbounded statement runs
+            // under the job's progress hook.
+            let setter = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(100));
+                cancelled.store(true, Ordering::Release);
+            });
+            job.statement_with_budget(usize::MAX)?;
+            let result = db.query_row(
+                "WITH RECURSIVE c(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM c) SELECT count(*) FROM c",
+                [],
+                |row| row.get::<_, i64>(0),
+            );
+            setter.join().unwrap();
+            result?;
+            Ok(())
+        });
+        assert!(matches!(
+            consume(import, &control, &pools()),
+            Err(ScanError::Cancelled)
+        ));
         assert!(!path.exists());
     }
 
