@@ -654,15 +654,51 @@ The filesystem implementation fsyncs objects and directories, rejects symlink
 leaves, and verifies existing objects. It cannot bound a hung filesystem call.
 S3 uses one deadline across each operation, retries and verification reads. That
 deadline alone does not bound the complete RPC: queuing, SQLite and client
-retries also count toward the 15-second hosted target.
+retries also count toward the request deadline (`request_timeout_seconds`,
+30 seconds by default).
 
 Object publication precedes the SQLite commit; authorization, ordering and quota
 are checked again before commit. An interrupted or rejected commit can leave an
-unreferenced object. **There is no object garbage collector in this release.**
-Objects remain after upload cleanup or removal of their SQLite references. Do
-not configure bucket lifecycle deletion. Monitor physical object growth; current
-quota charging does not include orphan objects. History pruning and deletion
-need coordinated writers, reads and backups before they are safe to enable.
+unreferenced object. Such objects, and objects whose SQLite references upload
+cleanup or namespace removal deletes, stay in the store until an offline
+collection removes them; for S3 nothing removes them. Do not configure bucket
+lifecycle deletion. Monitor physical object growth: physical capacity
+accounting charges orphan objects, per-user quota charging does not. History
+pruning and deletion need coordinated writers, reads and backups before they
+are safe to enable.
+
+Two offline commands maintain the physical object ledger. Stop the server
+first: both take the installation writer lock and the storage lease
+(collection takes the lease exclusively, so no backup can run at the same
+time) and use the store configured in the installation TOML.
+
+```sh
+foks-server inventory-chunk-store --config /srv/foks/server.toml [--restart]
+foks-server collect-chunk-store --config /srv/foks/server.toml \
+  [--maximum-objects 128] [--maximum-bytes 1073741824] [--dry-run]
+```
+
+`inventory-chunk-store` lists the namespace and records every object in the
+ledger. An object the database does not know is recorded as unknown and stays
+charged against physical capacity; the command never deletes objects.
+`--restart` starts the listing again after missing objects or a stale cursor
+have been corrected. It prints the physical usage totals.
+
+`collect-chunk-store` deletes one batch (at most `--maximum-objects`, 1 to
+128, and `--maximum-bytes`) of objects that no SQLite row references, after a
+complete inventory; repeat it to drain further batches, or pass `--dry-run`
+to report only. It deletes only from a filesystem store, and only when the
+database's binding carries the authority identity of this database path;
+an installation bound before authority identities were recorded, and every S3
+store, is report-only, because the termination of late S3 PUT retries is not
+qualified. It never deletes unknown objects (those it did not publish and
+record with a digest), objects with an unresolved or retrying publication
+attempt, or objects of another namespace.
+
+Once collection has run, a copy of the SQLite database whose external
+chunks were not hydrated is not a backup: its references can name objects
+that collection has deleted. Use the `backup` command or scheduled backups,
+which hydrate external chunks into the snapshot.
 
 To convert existing inline chunks, stop the server and run:
 
@@ -681,7 +717,7 @@ snapshot before publishing its completeness manifest. Completed backups remain
 self-contained and restore without the original store. Missing/corrupt objects
 fail backup creation. Hydration requires temporary disk and database capacity
 for the original duplicated inline representation and can be slow; it is not a
-15-second failover path. Scheduled shutdown checks cancellation between chunks.
+failover path that completes within a request deadline. Scheduled shutdown checks cancellation between chunks.
 
 A restored database has no chunk store binding and no object ledger. If the
 restored installation is configured with a chunk store, that store must be a

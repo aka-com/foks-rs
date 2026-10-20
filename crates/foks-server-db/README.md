@@ -97,5 +97,9 @@ freelist pages automatically.
 External references require their configured object store after restart. Namespace
 and abandoned-upload cleanup delete metadata references only; they do not delete
 external objects. Orphans and removed objects therefore keep consuming physical
-bucket space. Do not apply bucket lifecycle deletion: a referenced object or an
-in-progress backup could still require it. A coordinated collector is future work.
+space until the server's offline `collect-chunk-store` command deletes them,
+which it does only for a filesystem store whose binding carries an authority
+identity, and only for objects the ledger records with a digest, no references
+and no unresolved publication attempt. S3 objects are never deleted. Do not apply
+bucket lifecycle deletion: a referenced object or an in-progress backup could
+still require it.
