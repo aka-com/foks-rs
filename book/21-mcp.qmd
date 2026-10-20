@@ -113,7 +113,11 @@ usable by the agent (initialized, provisioned, and unlocked through the
 ordinary client); MCP never asks for the credentials that would make it
 so. If the agent is not running, the CLI starts the packaged sibling
 executable found next to itself, never a shell command or an executable
-named by a tool call.
+named by a tool call. Startup (probing a running agent, then launching
+one) may take 5 seconds, and binding the account then has 5 seconds of
+its own, both within the command's 15-second budget, so a slow start
+does not leave binding too little time to wait out another front end's
+work on the profile.
 
 ## Idempotency keys
 
