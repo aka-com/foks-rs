@@ -29,24 +29,20 @@ const resumable = [
   'blocked',
 ];
 /**
- * Refusals the host answers before it discards the store's listed items and
- * asks the agent: another change's reservation, a malformed handle, the
- * application lock and a command without a deadline policy.
+ * The one refusal that comes before the host discards the store's listed
+ * items: another change holds the reservation. Every later failure, the
+ * agent's included, leaves the items to be read again.
  */
-const refusedBeforeDispatch = [
-  'mutation-in-flight',
-  'invalid-request',
-  'app-locked',
-  'missing-deadline-policy',
-];
+const refusedBeforeDispatch = ['mutation-in-flight'];
 /** States with nothing left to upload, whose cancel only frees the spool. */
 const settled = ['completed', 'cancelled', 'inline-untracked'];
 
 /**
  * On-demand local inventory: opening the Files view does not fan out to
  * servers. A resume or cancel can publish or remove the store's file, so
- * `onChanged` refreshes the store's server afterwards; the list stays on the
- * page it showed.
+ * `onChanged` refreshes the store's server afterwards, with the notice to
+ * show, or with `null` after a failed attempt, whose error the panel shows
+ * itself; the list stays on the page it showed.
  */
 export function FileUploadsPanel({
   bridge,
@@ -55,7 +51,7 @@ export function FileUploadsPanel({
 }: {
   bridge: Bridge;
   storeId: string;
-  onChanged?: (message: string) => Promise<void>;
+  onChanged?: (message: string | null) => Promise<void>;
 }): ReactNode {
   const [open, setOpen] = useState(false);
   const [inventory, setInventory] = useState<FileUploads | null>(null);
@@ -81,9 +77,7 @@ export function FileUploadsPanel({
           if (
             !refusedBeforeDispatch.includes(normalizeCommandError(cause).code)
           )
-            await onChanged?.(
-              'The upload change failed; the vault was refreshed.',
-            );
+            await onChanged?.(null);
           throw cause;
         }
         await onChanged?.(change.done);

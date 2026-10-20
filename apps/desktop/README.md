@@ -538,8 +538,10 @@ list (`src/features/files/file-uploads.tsx`) reads them only when opened.
 It offers Resume only for states with work left, shows the node and version
 a verified or completed upload was saved as, and keeps the page it showed.
 After a resume or cancel it refreshes the store's server, also after a
-failed one unless the host refused it before asking the agent, since the
-host discards the store's listed items before that call.
+failed one unless another change held the reservation (`mutation-in-flight`),
+since the host discards the store's listed items before it asks the agent
+and the agent's own failures include `invalid-request`; after a failed one
+the reload shows no notice of its own.
 
 A failed `import_dropped_file` or `replace_dropped_file` names the upload
 handle the host issued and points to Uploads only after failures that can

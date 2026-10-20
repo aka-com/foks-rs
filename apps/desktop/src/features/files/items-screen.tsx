@@ -178,9 +178,10 @@ export interface ItemsScreenProps {
   onUploadDroppedFile?: (upload: DropUpload) => Promise<void>;
   /**
    * Refreshes a store's server after the Uploads panel resumed or cancelled
-   * one of its uploads, with `message` for the notice.
+   * one of its uploads, with `message` for the notice, or `null` after a
+   * failed attempt, which shows no notice of its own.
    */
-  onUploadsChanged?: (storeId: string, message: string) => Promise<void>;
+  onUploadsChanged?: (storeId: string, message: string | null) => Promise<void>;
   /** Cleared while a modal workflow owns the drop, such as the new-item sheet. */
   dropEnabled?: boolean;
 }

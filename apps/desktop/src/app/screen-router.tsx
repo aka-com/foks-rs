@@ -61,7 +61,8 @@ export function ScreenRouter({
 }): ReactNode {
   const shown = useShellSnapshot();
   usePreloadVaultScreens();
-  const { bridge, accessNow, mutationError, refresh } = useShellServices();
+  const { bridge, accessNow, mutationError, refresh, reloadCatalog } =
+    useShellServices();
   const here = state.location;
   // An exposure review's Open: the item's store, with the item selected so
   // the details panel shows it and its Edit.
@@ -123,9 +124,17 @@ export function ScreenRouter({
         })
       }
       onUploadDroppedFile={uploadDroppedFile}
-      onUploadsChanged={(storeId, message) =>
-        refresh(message, storeOf(shown, storeId)?.server)
-      }
+      onUploadsChanged={(storeId, message) => {
+        const profile = storeOf(shown, storeId)?.server;
+        // After a failed change the panel shows its error; a reload that
+        // fails as well must not report the change as completed.
+        return message === null
+          ? reloadCatalog(profile).then(
+              () => undefined,
+              () => undefined,
+            )
+          : refresh(message, profile);
+      }}
       // A modal workflow owns the drop while it is open; the new-item sheet
       // takes dropped files itself.
       dropEnabled={workflow === null}
