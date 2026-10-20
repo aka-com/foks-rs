@@ -11,6 +11,7 @@ mod servers;
 mod store_key;
 mod support;
 mod trash;
+mod uploads;
 mod validation;
 mod vault;
 mod vault_copy;

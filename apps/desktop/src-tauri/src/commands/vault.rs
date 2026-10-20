@@ -1982,8 +1982,28 @@ pub async fn list_file_uploads(
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
     let state = state.for_store(&store_id)?;
-    let (store, _) = state.selected_store(&store_id)?;
-    let transport = state.transport()?;
+    list_file_uploads_in(
+        &state,
+        |state| state.transport(),
+        &store_id,
+        after,
+        || check_mutation_access(unlocked, crate::applock::unlocked_generation(&app)),
+    )
+    .await
+}
+
+/// [`list_file_uploads`] once the command is admitted: `transport` binds the
+/// agent transport and `access` checks that the application is still
+/// unlocked, which the listing must be when it answers.
+pub(super) async fn list_file_uploads_in(
+    state: &AppState,
+    transport: impl FnOnce(&AppState) -> Result<Arc<dyn foks_desktop::AgentTransport>, AgentError>,
+    store_id: &str,
+    after: Option<[u8; 32]>,
+    access: impl Fn() -> Result<(), AgentError>,
+) -> Result<serde_json::Value, AgentError> {
+    let (store, _) = state.selected_store(store_id)?;
+    let transport = transport(state)?;
     let result = {
         let deadline = state.deadline()?.clone();
         super::deadline::run(
@@ -2001,9 +2021,10 @@ pub async fn list_file_uploads(
         )
         .await
     }?;
-    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
+    access()?;
     Ok(result)
 }
+
 async fn change_file_upload(
     app: tauri::AppHandle,
     webview: tauri::Webview,
@@ -2015,12 +2036,39 @@ async fn change_file_upload(
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
     let state = state.for_store(&store_id)?;
+    change_file_upload_in(
+        &state,
+        |state| state.transport(),
+        &store_id,
+        &upload_id,
+        resume,
+        || check_mutation_access(unlocked, crate::applock::unlocked_generation(&app)),
+    )
+    .await
+}
+
+/// Resumes or cancels a recorded upload once the command is admitted. The
+/// upload reconciliation reservation is taken before anything else, and the
+/// store's catalog items are discarded before the agent is asked, since a
+/// resume can publish the file. `access` is checked before the agent call
+/// only: a lock taken while the agent resumed or cancelled the upload does
+/// not undo the change, and the report holds no plaintext, so answering
+/// `app-locked` afterwards would report an applied change as never
+/// submitted.
+pub(super) async fn change_file_upload_in(
+    state: &AppState,
+    transport: impl FnOnce(&AppState) -> Result<Arc<dyn foks_desktop::AgentTransport>, AgentError>,
+    store_id: &str,
+    upload_id: &str,
+    resume: bool,
+    access: impl Fn() -> Result<(), AgentError>,
+) -> Result<serde_json::Value, AgentError> {
     let _permit = state.begin_upload_reconciliation()?;
-    let (store, _) = state.selected_store(&store_id)?;
-    let upload_id = parse_upload_identity(&upload_id)?;
-    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
+    let (store, _) = state.selected_store(store_id)?;
+    let upload_id = parse_upload_identity(upload_id)?;
+    access()?;
     state.invalidate_catalog_items(&store);
-    let transport = state.transport()?;
+    let transport = transport(state)?;
     let operation = if resume {
         Operation::ResumeKvUpload {
             store: protocol_store(&store),
@@ -2047,7 +2095,6 @@ async fn change_file_upload(
             .mutation_requires_refresh()
             .store(true, Ordering::Release);
     }
-    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     result
 }
 #[tauri::command]

@@ -254,6 +254,9 @@ upload handle. They take a reservation through `begin_upload_reconciliation`,
 which, unlike other mutations, may proceed while an earlier change still
 needs a refresh, since it acts only on an existing handle; it still
 excludes concurrent mutations and does not clear the refresh requirement.
+Both check the application lock before the agent call but not after it: a
+lock taken while the agent resumes or cancels does not undo the change, and
+the answer holds no plaintext.
 
 ## Clipboard hygiene
 
