@@ -47,12 +47,11 @@ pub fn boot_id() -> Result<[u8; 16]> {
 #[cfg(target_os = "linux")]
 fn platform_boot() -> Result<crate::BootId> {
     use std::io::Read;
-    let f = std::fs::File::open("/proc/sys/kernel/random/boot_id")
-        .map_err(|e| Error::Unavailable(e.to_string()))?;
+    const BOOT_ID: &str = "/proc/sys/kernel/random/boot_id";
+    let unavailable = |e: std::io::Error| Error::Unavailable(format!("cannot read {BOOT_ID}: {e}"));
+    let f = std::fs::File::open(BOOT_ID).map_err(unavailable)?;
     let mut bytes = Vec::with_capacity(38);
-    f.take(38)
-        .read_to_end(&mut bytes)
-        .map_err(|e| Error::Unavailable(e.to_string()))?;
+    f.take(38).read_to_end(&mut bytes).map_err(unavailable)?;
     if bytes.len() != 37 || bytes[36] != b'\n' {
         return Err(Error::Range);
     }
@@ -76,15 +75,48 @@ fn platform_boot() -> Result<crate::BootId> {
 }
 
 #[cfg(target_os = "linux")]
+const TIME_NAMESPACE: &str = "/proc/thread-self/ns/time";
+#[cfg(target_os = "linux")]
+const NAMESPACES: &str = "/proc/thread-self/ns";
+
+#[cfg(target_os = "linux")]
 fn linux_domain() -> Result<Domain> {
     use std::os::unix::fs::MetadataExt;
-    let boot = platform_boot()?;
-    let metadata = std::fs::metadata("/proc/thread-self/ns/time")
-        .map_err(|e| Error::Unavailable(e.to_string()))?;
+    linux_domain_with(platform_boot()?, |path| {
+        std::fs::metadata(path).map(|metadata| (metadata.dev(), metadata.ino()))
+    })
+}
+
+/// The time namespace identifies which `CLOCK_MONOTONIC` offset a process
+/// reads. A kernel without time namespaces (before Linux 5.6, or built
+/// without `CONFIG_TIME_NS`) lists the other namespaces of a thread but no
+/// `time` entry, and has exactly one monotonic clock per boot; that clock
+/// is encoded as device and inode 0, which no namespace file has. When the
+/// namespace directory itself cannot be read, nothing tells a missing time
+/// namespace from a hidden one, so the clock stays unavailable.
+#[cfg(target_os = "linux")]
+fn linux_domain_with(
+    boot: crate::BootId,
+    metadata: impl Fn(&str) -> std::io::Result<(u64, u64)>,
+) -> Result<Domain> {
+    let (device, inode) = match metadata(TIME_NAMESPACE) {
+        Ok(identity) => identity,
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound && metadata(NAMESPACES).is_ok() =>
+        {
+            (0, 0)
+        }
+        Err(error) => {
+            return Err(Error::Unavailable(format!(
+                "cannot read {TIME_NAMESPACE}: {error}; the local deadline clock needs \
+                 /proc/thread-self/ns, with a time entry on kernels that have time namespaces"
+            )))
+        }
+    };
     Ok(Domain(crate::DomainValue::Linux {
         boot,
-        device: Decimal(metadata.dev()),
-        inode: Decimal(metadata.ino()),
+        device: Decimal(device),
+        inode: Decimal(inode),
     }))
 }
 #[cfg(target_os = "linux")]
@@ -256,6 +288,37 @@ fn remaining(deadline: Instant, now: Instant) -> Result<u64> {
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn missing_time_namespace_is_one_clock_only_when_namespaces_are_listed() {
+        use std::io::{Error as Io, ErrorKind};
+        let boot = || crate::BootId::parse("00000000-0000-4000-8000-000000000001").unwrap();
+        let found = linux_domain_with(boot(), |_| Ok((4, 4026531834))).unwrap();
+        let no_time_namespaces = linux_domain_with(boot(), |path| match path {
+            TIME_NAMESPACE => Err(Io::from(ErrorKind::NotFound)),
+            _ => Ok((4, 4026531835)),
+        })
+        .unwrap();
+        assert_ne!(found, no_time_namespaces);
+        assert_eq!(
+            no_time_namespaces,
+            Domain(crate::DomainValue::Linux {
+                boot: boot(),
+                device: Decimal(0),
+                inode: Decimal(0),
+            })
+        );
+        for hidden in [
+            linux_domain_with(boot(), |_| Err(Io::from(ErrorKind::NotFound))),
+            linux_domain_with(boot(), |_| Err(Io::from(ErrorKind::PermissionDenied))),
+        ] {
+            let Err(Error::Unavailable(message)) = hidden else {
+                panic!("an unreadable namespace directory must not pick a clock");
+            };
+            assert!(message.contains(TIME_NAMESPACE), "{message}");
+        }
+    }
     struct Fake {
         base: Instant,
         elapsed: Cell<u64>,

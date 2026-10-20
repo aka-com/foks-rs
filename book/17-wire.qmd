@@ -400,6 +400,18 @@ match the agent's, is refused before it runs. The Hello carries no deadline:
 the agent recognizes it after the request decode fails, so a version mismatch
 is still reported as one.
 
+On Linux the clock is `CLOCK_MONOTONIC`, and its domain is the boot
+identifier together with the device and inode of
+`/proc/thread-self/ns/time`, because processes in different time
+namespaces read the clock with different offsets. A kernel without time
+namespaces (before 5.6, or built without `CONFIG_TIME_NS`, such as the
+RHEL 8 family) has no `time` entry and a single monotonic clock per boot;
+its domain records device and inode 0. Where `/proc/thread-self/ns` cannot
+be read at all, as in some sandboxes, the clock is reported unavailable
+and every CLI command and agent request is refused, since a hidden time
+namespace cannot be told from a missing one. On macOS the clock is
+`CLOCK_UPTIME_RAW` and the domain is the boot session.
+
 Frames are held in zeroizing buffers. Chapter 19 covers the security checks
 on the socket itself: ownership, permissions, and peer credentials.
 
