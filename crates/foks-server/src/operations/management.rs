@@ -559,6 +559,7 @@ fn kex_prometheus(output: &mut String, kex: &crate::KexMetricsSnapshot) {
         ("delivered", kex.delivered),
         ("timeout", kex.timed_out),
         ("disconnected", kex.disconnected),
+        ("cancelled", kex.cancelled),
         ("shutdown", kex.shutdown),
         ("failed", kex.failed),
     ] {

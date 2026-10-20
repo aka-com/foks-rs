@@ -271,9 +271,14 @@ their calls. A CANCEL control message for a pending poll's sequence number
 ends that poll without a response and releases its permits; end of stream or
 a read error closes the connection and drops its pending polls. One
 connection holds at most four pending long polls; a fifth is answered with
-status 1012 and the connection closes, counted as
-`foks_admission_rejected_total{reason="connection_long_polls"}`. A connection
-with a pending long poll is not idle, so `io_timeout` does not close it.
+status 1012 at its sequence number, counted as
+`foks_admission_rejected_total{reason="connection_long_polls"}`, and the
+connection goes on serving the peer's other calls. A long poll refused by the
+KEX receive budget is answered the same way. A connection with a pending long
+poll is not idle. When a connection reaches its frame budget
+(`maximum_requests`, 4,096 frames), it answers further calls with status 1012
+but keeps reading cancels and end of stream until its pending long polls have
+been answered, and closes after the last one.
 
 `foks_requests_total{family,status}` counts written responses by route family
 (the protocol name, such as `KvStore` or `Reg`) and wire status code (`0` for
@@ -299,7 +304,8 @@ with status 1012 because every pooled read connection was in use. The
 `foks_reader_pool_open` gauge is the number of connections that pool holds
 open; it never decreases, because the pool keeps every connection it opens.
 `foks_rate_limited_requests_total` counts per-source token-bucket,
-handler-permit, request-memory and KEX receive refusals.
+handler-permit, request-memory, KEX receive and per-connection long-poll
+refusals.
 `foks_admission_rejected_total{reason}` counts every admission refusal by its
 cause: `connection_rate` and `request_rate` (the per-source token buckets),
 `source_connections` (the per-source connection limit), `admission_queue` (a
@@ -316,7 +322,8 @@ handler may already have committed a write, so the connection closes without
 a response and the client keeps the outcome as unknown. `foks_kex_active_polls`,
 `foks_kex_admitted_total`, `foks_kex_rejected_total` and
 `foks_kex_completed_total{reason}` (`delivered`, `timeout`, `disconnected`,
-`shutdown`, `failed`) describe KEX receives.
+`cancelled` by the client's CANCEL message, `shutdown`, `failed`) describe
+KEX receives.
 
 When OIDC is configured and the host has a rollout policy, `/metrics` also
 reports the `foks_oidc_*` rollout gauges: mode, provider block, authorization
@@ -379,11 +386,11 @@ clients and the server that rewrites the client's source address: a load
 balancer or TCP proxy on another host that uses source NAT (for example a
 Kubernetes Service with `externalTrafficPolicy: Cluster`, or Docker's
 userland proxy), an office NAT, carrier-grade NAT, or an IPv6 site whose
-clients share one /64. Every client behind it is one source. A Go or Rust
-client holds a connection open for each realtime inbox poll, KEX receive or
-OIDC completion poll, so a small number of devices behind one such address can
-reach the default limit of 32, and a refused client sees only a reset
-connection. Go v0.1.9 hosts have no such limit. For a forwarder the operator
+clients share one /64. Every client behind it is one source. The Rust client
+holds a connection open for each realtime inbox poll, KEX receive or OIDC
+completion poll (a Go client multiplexes its polls on one connection per
+host), so a small number of Rust devices behind one such address can reach
+the default limit of 32, and a refused client sees only a reset connection. Go v0.1.9 hosts have no such limit. For a forwarder the operator
 controls, list its address or prefix in `trusted_sources`: those peers are
 exempt from the per-source connection limit and the KEX relay's per-source
 share, as loopback peers are. For clients behind NAT that the operator does
@@ -411,7 +418,7 @@ A KEX receive can stay open for up to an hour. At most
 `maximum_active_connections`, are outstanding at once across all
 connections; a receive over that limit is refused at once with status 1012
 and is not queued, so receives cannot hold every connection of the public
-listener. One source can hold at most an eighth of that budget (4 of the
+listener. The refusal leaves its connection open. One source can hold at most an eighth of that budget (4 of the
 default 32, and at least one), so that a single address cannot take every
 pairing slot for an hour; a receive over its source's share is refused the
 same way. Both refusals are counted in `foks_kex_rejected_total` and

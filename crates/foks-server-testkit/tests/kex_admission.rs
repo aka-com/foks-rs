@@ -110,7 +110,12 @@ fn assert_closed(tls: &mut Tls) {
 }
 
 fn completed(value: foks_server::KexMetricsSnapshot) -> u64 {
-    value.delivered + value.timed_out + value.disconnected + value.shutdown + value.failed
+    value.delivered
+        + value.timed_out
+        + value.disconnected
+        + value.cancelled
+        + value.shutdown
+        + value.failed
 }
 
 #[test]
@@ -141,13 +146,18 @@ fn saturated_anonymous_polls_preserve_public_requests_and_signed_pairing_progres
             foks_rpc::read_bare_response(&mut excess, DEFAULT_MAX_FRAME_LENGTH, 73),
             Err(Error::RemoteStatus { code: 1012, .. })
         ));
-        assert_closed(&mut excess);
         assert!(started.elapsed() < Duration::from_secs(1));
+        // The refusal leaves the connection serving the peer's other calls.
+        let probe = foks_proto::ProbeResponse::decode(&server.probe_response()).unwrap();
+        let host = probe.hostchain[0].decode_change().unwrap().host;
+        send(
+            &mut excess,
+            &foks_rpc::encode_get_current_merkle_root_request(&host, 74).unwrap(),
+        );
+        foks_rpc::read_response(&mut excess, DEFAULT_MAX_FRAME_LENGTH, 74).unwrap();
         drop(excess);
         // This is the same public listener, not the separate probe listener.
         let mut ordinary = connect(&server);
-        let probe = foks_proto::ProbeResponse::decode(&server.probe_response()).unwrap();
-        let host = probe.hostchain[0].decode_change().unwrap().host;
         send(
             &mut ordinary,
             &foks_rpc::encode_get_current_merkle_root_request(&host, 0).unwrap(),
@@ -388,7 +398,7 @@ fn calls_pipelined_behind_a_kex_receive_are_served_in_completion_order() {
         )
         .unwrap(),
     );
-    let settled = wait_metrics(&server, |m| m.active == 0 && m.disconnected == 1);
+    let settled = wait_metrics(&server, |m| m.active == 0 && m.cancelled == 1);
     assert_eq!(settled.delivered, 2);
     send(
         &mut tls,
@@ -398,7 +408,7 @@ fn calls_pipelined_behind_a_kex_receive_are_served_in_completion_order() {
     foks_proto::MerkleRoot::decode(&root).unwrap();
 
     // A connection holds at most four pending long polls; the fifth is
-    // refused and the connection closes.
+    // refused at its sequence and the connection goes on serving.
     for (sequence, tag) in (5..9).zip(0x60..) {
         let (_, receive) = packet(tag);
         send(&mut tls, &receive_call(&receive, sequence));
@@ -410,14 +420,67 @@ fn calls_pipelined_behind_a_kex_receive_are_served_in_completion_order() {
         foks_rpc::read_bare_response(&mut tls, DEFAULT_MAX_FRAME_LENGTH, 9),
         Err(Error::RemoteStatus { code: 1012, .. })
     ));
-    assert_closed(&mut tls);
+    send(
+        &mut tls,
+        &foks_rpc::encode_get_current_merkle_root_request(&host, 10).unwrap(),
+    );
+    foks_rpc::read_response(&mut tls, DEFAULT_MAX_FRAME_LENGTH, 10).unwrap();
+    assert_eq!(server.metrics().kex.active, 4);
+    // End of stream drops the pending receives as disconnected.
+    tls.sock.shutdown(Shutdown::Both).unwrap();
+    drop(tls);
     let settled = wait_metrics(&server, |m| m.active == 0);
-    assert_eq!(settled.disconnected, 5);
+    assert_eq!((settled.disconnected, settled.cancelled), (4, 1));
     assert_eq!(settled.admitted, completed(settled));
     assert_eq!(
         server.metrics().admission_rejections
             [foks_server::AdmissionRejection::ConnectionLongPolls as usize],
         1
     );
+    server.shutdown().unwrap();
+}
+
+/// A connection that has spent its frame budget still answers the long polls
+/// it admitted, refuses further calls at their sequence, and closes once no
+/// poll is pending.
+#[test]
+fn pending_polls_are_answered_after_the_frame_budget_is_spent() {
+    let environment = TestEnvironment::with_profile(TestProfile::FewRequests).unwrap();
+    let server = environment.start_server().unwrap();
+    let probe = foks_proto::ProbeResponse::decode(&server.probe_response()).unwrap();
+    let host = probe.hostchain[0].decode_change().unwrap().host;
+    let (offer, waiting) = packet(0x80);
+    let mut tls = connect(&server);
+    // The budget is three frames: a receive, then two ordinary calls.
+    send(&mut tls, &receive_call(&waiting, 0));
+    wait_metrics(&server, |m| m.active == 1);
+    for sequence in 1..3 {
+        send(
+            &mut tls,
+            &foks_rpc::encode_get_current_merkle_root_request(&host, sequence).unwrap(),
+        );
+        foks_rpc::read_response(&mut tls, DEFAULT_MAX_FRAME_LENGTH, sequence).unwrap();
+    }
+    // A call beyond the budget is refused at its sequence while the receive
+    // is still pending.
+    send(
+        &mut tls,
+        &foks_rpc::encode_get_current_merkle_root_request(&host, 3).unwrap(),
+    );
+    assert!(matches!(
+        foks_rpc::read_response(&mut tls, DEFAULT_MAX_FRAME_LENGTH, 3),
+        Err(Error::RemoteStatus { code: 1012, .. })
+    ));
+    let mut sender = connect(&server);
+    send(
+        &mut sender,
+        &foks_rpc::encode_kex_send_request(&offer).unwrap(),
+    );
+    foks_rpc::read_bare_void_response(&mut sender, DEFAULT_MAX_FRAME_LENGTH, 0).unwrap();
+    let response = foks_rpc::read_bare_response(&mut tls, DEFAULT_MAX_FRAME_LENGTH, 0).unwrap();
+    assert_eq!(KexWrapperMessage::decode(&response).unwrap(), offer.message);
+    assert_closed(&mut tls);
+    let settled = wait_metrics(&server, |m| m.active == 0);
+    assert_eq!((settled.delivered, settled.disconnected), (1, 0));
     server.shutdown().unwrap();
 }

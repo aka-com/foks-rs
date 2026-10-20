@@ -281,8 +281,9 @@ until the session ends, and closes a new connection beyond 32 (0 removes
 the limit). Loopback peers are exempt, since behind a local TCP proxy every
 client would appear as one loopback source. A forwarder on another host that
 rewrites client addresses, or a NAT, has the same effect: every client
-behind it is one source, and since each realtime inbox poll or KEX receive
-holds a connection, a small number of devices can reach the limit. The operator
+behind it is one source, and since the Rust client holds a connection for
+each realtime inbox poll or KEX receive (a Go client multiplexes them on one
+connection), a small number of devices can reach the limit. The operator
 lists such a forwarder's address or prefix in `trusted_sources`, which
 exempts it as loopback is exempt, or raises or removes the limit for NAT
 that it does not control. A Go v0.1.9 host has no per-source connection

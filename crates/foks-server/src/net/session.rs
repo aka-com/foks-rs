@@ -318,7 +318,15 @@ pub(crate) async fn serve(
         limits,
     };
 
-    for _ in 0..limits.maximum_requests {
+    let mut frames = 0_usize;
+    loop {
+        // Once the connection's frame budget is spent, the session reads only
+        // to see cancels and end of stream while it answers the long polls
+        // still pending, and ends when none is left.
+        let budget_spent = frames >= limits.maximum_requests;
+        if budget_spent && responder.polls.is_empty() {
+            break;
+        }
         // The request deadline starts at the first byte of the frame. Body
         // reading, handler execution and queued writes all consume it; idle
         // time between requests does not, and the response write gets its
@@ -331,13 +339,15 @@ pub(crate) async fn serve(
                     limits.request_timeout,
                 ),
                 Some(limits.io_timeout),
+                budget_spent,
                 &mut stop,
             )
             .await?
         {
             Waited::Done(read) => read,
-            Waited::Idle | Waited::Ended => break,
+            Waited::Idle | Waited::Drained | Waited::Ended => break,
         };
+        frames = frames.saturating_add(1);
         let (length, deadline) = match read {
             Ok(length) => length,
             Err(foks_rpc::Error::Io(error))
@@ -379,12 +389,13 @@ pub(crate) async fn serve(
                     ),
                 ),
                 None,
+                false,
                 &mut stop,
             )
             .await?
         {
             Waited::Done(read) => read,
-            Waited::Idle | Waited::Ended => break,
+            Waited::Idle | Waited::Drained | Waited::Ended => break,
         };
         let call = match read {
             Err(_) => break,
@@ -464,6 +475,23 @@ pub(crate) async fn serve(
                 .await?;
             return Ok(());
         }
+        if budget_spent {
+            // The frame budget is spent; only the pending polls are served.
+            service_data.metrics.request_started();
+            let _request_timer =
+                crate::ServerMetrics::request_timer(Arc::clone(&service_data.metrics));
+            let sequence = call.sequence();
+            drop(call);
+            responder
+                .refuse(
+                    &request_memory,
+                    sequence,
+                    crate::metrics::UNROUTED,
+                    deadline,
+                )
+                .await?;
+            continue;
+        }
         service_data.metrics.request_started();
         let request_timer = crate::ServerMetrics::request_timer(Arc::clone(&service_data.metrics));
         let sequence = call.sequence();
@@ -511,6 +539,9 @@ pub(crate) async fn serve(
                 // request deadline, while the session reads and serves the
                 // peer's next frames. Its response is written when it
                 // completes, in completion order.
+                // A refused poll is answered at its sequence and the session
+                // goes on: the frame was read in full, and the peer's other
+                // calls on this connection stay pending.
                 if responder.polls.len() >= MAXIMUM_PENDING_POLLS {
                     service_data
                         .metrics
@@ -518,7 +549,7 @@ pub(crate) async fn serve(
                     responder
                         .refuse(&request_memory, sequence, family, deadline)
                         .await?;
-                    return Ok(());
+                    continue;
                 }
                 let pending = match call.route.id {
                     RouteId::KexReceive => {
@@ -533,7 +564,7 @@ pub(crate) async fn serve(
                                 responder
                                     .refuse(&request_memory, sequence, family, deadline)
                                     .await?;
-                                return Ok(());
+                                continue;
                             }
                         };
                         let handler = handlers::kex_receive_response(service_data.as_ref(), call);
@@ -705,9 +736,9 @@ pub(crate) async fn serve(
                 })
             },
         );
-        let execution = match responder.wait(execution, None, &mut stop).await? {
+        let execution = match responder.wait(execution, None, false, &mut stop).await? {
             Waited::Done(execution) => execution?,
-            Waited::Idle | Waited::Ended => break,
+            Waited::Idle | Waited::Drained | Waited::Ended => break,
         };
         let outcome = match execution {
             BoundedExecution::Completed(outcome) => outcome?,
@@ -759,6 +790,8 @@ enum Waited<T> {
     Done(T),
     /// No frame arrived within the idle allowance and no poll was pending.
     Idle,
+    /// The last pending poll was answered while waiting `until_drained`.
+    Drained,
     /// The server is stopping, or a poll's response could not be written.
     Ended,
 }
@@ -772,11 +805,13 @@ enum Flow {
 impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
     /// Awaits `operation` while writing the response of each long poll that
     /// completes meanwhile. With `idle`, gives up once no poll has been
-    /// pending for that long.
+    /// pending for that long; with `until_drained`, gives up as soon as the
+    /// last pending poll has been answered.
     async fn wait<F: std::future::Future>(
         &mut self,
         operation: F,
         idle: Option<std::time::Duration>,
+        until_drained: bool,
         stop: &mut watch::Receiver<bool>,
     ) -> Result<Waited<F::Output>> {
         tokio::pin!(operation);
@@ -792,10 +827,19 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
                     return Ok(Waited::Ended);
                 }
                 completed = self.polls.next_completed(), if polls_pending => {
-                    let (outcome, family, sequence) = completed?;
-                    match self.write_outcome(outcome, family, sequence, stop).await? {
+                    let completed = completed?;
+                    // The request timer observes the duration through the
+                    // response write.
+                    let _request_timer = completed.request_timer;
+                    match self
+                        .write_outcome(completed.outcome, completed.family, completed.sequence, stop)
+                        .await?
+                    {
                         Flow::Continue => {}
                         Flow::End => return Ok(Waited::Ended),
+                    }
+                    if until_drained && self.polls.is_empty() {
+                        return Ok(Waited::Drained);
                     }
                     if self.polls.is_empty() {
                         idle_deadline = idle.map(idle_after);
@@ -1038,8 +1082,8 @@ where
 /// Most long polls one connection can hold pending at once. Go clients
 /// multiplex calls on one connection: while provisioning a device, go-foks
 /// holds up to three KEX receives at once (client/libclient/kex.go). A long
-/// poll over this limit is refused with `RateLimited` and the connection
-/// closes.
+/// poll over this limit is refused with `RateLimited` at its sequence, and
+/// the connection goes on serving.
 const MAXIMUM_PENDING_POLLS: usize = 4;
 
 /// One long-poll request: the SSO completion poll, a KEX receive or a
@@ -1198,14 +1242,14 @@ impl<'a> PendingPolls<'a> {
         };
         self.polls
             .swap_remove(index)
-            .abandon(crate::metrics::kex::Completion::Disconnected);
+            .abandon(crate::metrics::kex::Completion::Cancelled);
         true
     }
 
     /// Waits for any pending poll to complete and returns its outcome and
     /// route family. Cancellation safe: the polls stay pending when the
     /// returned future is dropped.
-    async fn next_completed(&mut self) -> Result<(RequestOutcome, &'static str, u64)> {
+    async fn next_completed(&mut self) -> Result<CompletedPoll> {
         let (index, result) = std::future::poll_fn(|context| {
             for (index, poll) in self.polls.iter_mut().enumerate() {
                 if let std::task::Poll::Ready(result) = poll.future.as_mut().poll(context) {
@@ -1225,8 +1269,21 @@ impl<'a> PendingPolls<'a> {
                 completion: polled.kex_completion,
             });
         }
-        Ok((outcome, poll.family, poll.sequence))
+        Ok(CompletedPoll {
+            outcome,
+            family: poll.family,
+            sequence: poll.sequence,
+            request_timer: poll._request_timer,
+        })
     }
+}
+
+/// A long poll whose handler has completed, ready for its response write.
+struct CompletedPoll {
+    outcome: RequestOutcome,
+    family: &'static str,
+    sequence: u64,
+    request_timer: crate::metrics::RequestTimer,
 }
 
 impl Drop for PendingPolls<'_> {
@@ -1860,12 +1917,17 @@ mod tests {
         // The later call completes first and is answered first, at its own
         // sequence.
         second_release.send(Ok(b"second".to_vec())).unwrap();
-        let (mut outcome, family, sequence) = polls.next_completed().await.unwrap();
-        assert_eq!(sequence, 1);
+        let completed = polls.next_completed().await.unwrap();
+        let mut outcome = completed.outcome;
+        assert_eq!(completed.sequence, 1);
         assert_eq!(
-            (outcome.response.as_slice(), family),
+            (outcome.response.as_slice(), completed.family),
             (&b"second"[..], "Kex")
         );
+        // The request is still being timed until its response is written.
+        assert_eq!(metrics.snapshot().request_duration_observations, 0);
+        drop(completed.request_timer);
+        assert_eq!(metrics.snapshot().request_duration_observations, 1);
         assert_eq!(polls.len(), 2);
         // A KEX receive keeps its budget permit until its response is written.
         assert_eq!(budget.available_permits(), 1);
@@ -1881,7 +1943,7 @@ mod tests {
                 completion: Completion::TimedOut,
             }))
             .unwrap();
-        let (mut outcome, _, _) = polls.next_completed().await.unwrap();
+        let mut outcome = polls.next_completed().await.unwrap().outcome;
         assert_eq!(
             outcome.response,
             encode_status_response_at(&RpcStatus::RateLimited, 0).unwrap()
@@ -1890,13 +1952,13 @@ mod tests {
         drop(outcome);
         assert_eq!(metrics.snapshot().kex.failed, 1);
 
-        // A cancelled receive is dropped unanswered as disconnected; a
-        // cancel for an unknown sequence changes nothing.
+        // A cancelled receive is dropped unanswered and recorded as
+        // cancelled; a cancel for an unknown sequence changes nothing.
         assert!(!polls.cancel(7));
         assert!(polls.cancel(2));
         assert!(polls.is_empty());
         let snapshot = metrics.snapshot();
-        assert_eq!((snapshot.kex.disconnected, snapshot.kex.active), (1, 0));
+        assert_eq!((snapshot.kex.cancelled, snapshot.kex.active), (1, 0));
         assert_eq!(budget.available_permits(), 4);
 
         // Receives still pending when the connection ends are disconnected,
@@ -1914,7 +1976,7 @@ mod tests {
         polls.closing = Completion::Shutdown;
         drop(polls);
         let snapshot = metrics.snapshot();
-        assert_eq!((snapshot.kex.disconnected, snapshot.kex.shutdown), (2, 1));
+        assert_eq!((snapshot.kex.disconnected, snapshot.kex.shutdown), (1, 1));
         assert_eq!((snapshot.kex.active, snapshot.kex.admitted), (0, 5));
         assert_eq!(budget.available_permits(), 4);
         assert_eq!(memory.available_permits(), 8);
