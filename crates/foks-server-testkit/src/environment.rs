@@ -641,7 +641,13 @@ pub enum TestProfile {
     Waitlist,
     /// Ends each connection after `FEW_REQUESTS_PER_CONNECTION` frames.
     FewRequests,
+    /// Closes connections idle for `SHORT_IDLE_TIMEOUT` between requests;
+    /// other limits are the defaults.
+    ShortIdle,
 }
+
+/// Idle allowance between requests under `TestProfile::ShortIdle`.
+pub const SHORT_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Idle allowance between requests under `TestProfile::TightIo`, whose
 /// `io_timeout` is 500 ms.
@@ -710,7 +716,8 @@ impl TestProfile {
             | Self::StorageShutdown
             | Self::RateLimited
             | Self::BackupAutomation
-            | Self::FewRequests => foks_server_db::Config::default(),
+            | Self::FewRequests
+            | Self::ShortIdle => foks_server_db::Config::default(),
         };
         let limits = foks_server::SessionLimits {
             maximum_read_connections: if matches!(self, Self::RealtimeSingleReader) {
@@ -766,6 +773,8 @@ impl TestProfile {
             },
             idle_timeout: if matches!(self, Self::TightIo) {
                 TIGHT_IO_IDLE_TIMEOUT
+            } else if matches!(self, Self::ShortIdle) {
+                SHORT_IDLE_TIMEOUT
             } else {
                 foks_server::SessionLimits::default().idle_timeout
             },

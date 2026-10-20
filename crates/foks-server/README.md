@@ -250,9 +250,20 @@ frame are bounded separately by the 15 s I/O timeout (`io_timeout`). A Go
 v0.1.9 server never closes an idle connection and a Go client closes its own
 after five minutes idle, so the default lets the client's close come first; a
 call that raced a server-side close would otherwise fail with an RPC EOF that
-the Go client does not retry. Idle connections count against
-`maximum_active_connections` and `maximum_connections_per_source` while they
-stay open.
+the Go client does not retry.
+
+Idle connections count against `maximum_active_connections` and
+`maximum_connections_per_source` for as long as they stay open, so both
+limits must cover every client that was active within the last
+`idle_timeout_seconds`, not only the ones with a request in progress. go-foks
+keeps one connection per server type (probe, registration, user, KV,
+realtime) open for about five minutes after its last call, and the Rust client
+pools up to two idle connections per endpoint besides the connections its
+long polls hold. A connection that finds every active slot taken waits in the
+listener's queue of `maximum_pending_connections` and is dropped when that
+queue is full. Size the limits for the number of devices active in any 5.5
+minute window, or lower `idle_timeout_seconds` (at the cost of Go calls that
+race a server-side close).
 
 Each request has one deadline, `request_timeout_seconds` after the first byte
 of its frame arrives. Reading the rest of the frame, waiting for a handler
@@ -406,8 +417,10 @@ userland proxy), an office NAT, carrier-grade NAT, or an IPv6 site whose
 clients share one /64. Every client behind it is one source. The Rust client
 holds a connection open for each realtime inbox poll, KEX receive or OIDC
 completion poll (a Go client multiplexes its polls on one connection per
-host), so a small number of Rust devices behind one such address can reach
-the default limit of 32, and a refused client sees only a reset connection. Go v0.1.9 hosts have no such limit. For a forwarder the operator
+host), and every client keeps its connections open while idle for up to
+`idle_timeout_seconds` (330 s), so a small number of devices behind one
+such address can reach the default limit of 32, and a refused client sees
+only a reset connection. Go v0.1.9 hosts have no such limit. For a forwarder the operator
 controls, list its address or prefix in `trusted_sources`: those peers are
 exempt from the per-source connection limit, the KEX relay's per-source
 share and the per-source share of KEX receives (8 by default; see below), as
@@ -531,7 +544,8 @@ reads use read-only connections from bounded asynchronous sessions; the default
 limits are four async runtime workers, 256 active and 32 pending connections per
 listener, 64 request handlers shared across listeners, 4,096 requests per
 connection, 64 pending writes in the executable, a 15-second I/O timeout, a
-30-second request-execution timeout, and a 16 MiB frame ceiling. A timed-out
+330-second idle timeout between requests, a 30-second request-execution
+timeout, and a 16 MiB frame ceiling. A timed-out
 handler closes its connection without claiming that a durable mutation was
 cancelled; any surviving synchronous work retains its execution permit until
 it exits, keeping resource use bounded.

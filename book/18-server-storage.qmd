@@ -214,7 +214,7 @@ mechanism differs by resource.
 | Writer queue | 64 pending jobs | `try_send` fails; status 1012 |
 | Reader pool | 32 connections | `Error::ReaderPool`; status 1012 |
 | Listener admission queue | 32 pending connections | `try_send` fails; connection dropped |
-| Active sessions per listener | 256 | accept loop waits for a permit |
+| Active sessions per listener | 256, including idle sessions for up to 330 s | accepted connections wait in the 32-entry queue; dropped when it is full |
 | Connections per source per listener | 32 (0 = unlimited); loopback and `trusted_sources` exempt | connection dropped |
 | Request handlers (shared) | 64 blocking permits | `try_acquire_owned` fails; status 1012 |
 | Pending long polls per connection | 4 | status 1012 at the call's sequence; the connection stays open |
@@ -285,7 +285,12 @@ client would appear as one loopback source. A forwarder on another host that
 rewrites client addresses, or a NAT, has the same effect: every client
 behind it is one source, and since the Rust client holds a connection for
 each realtime inbox poll or KEX receive (a Go client multiplexes them on one
-connection), a small number of devices can reach the limit. The operator
+connection), and every client's idle connections stay open for up to the
+330 s idle timeout, a small number of devices can reach the limit. The same
+holds for the 256 active sessions per listener: both limits must cover the
+devices active within one idle timeout, counting a go-foks client's one
+connection per server type and the Rust client's pool of up to two idle
+connections per endpoint. The operator
 lists such a forwarder's address or prefix in `trusted_sources`, which
 exempts it as loopback is exempt, or raises or removes the limit for NAT
 that it does not control. A Go v0.1.9 host has no per-source connection

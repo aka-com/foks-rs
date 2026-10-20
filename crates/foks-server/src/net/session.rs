@@ -798,8 +798,9 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
         stop: &mut watch::Receiver<bool>,
     ) -> Result<Waited<F::Output>> {
         tokio::pin!(operation);
-        let idle_after = |idle: std::time::Duration| tokio::time::Instant::now() + idle;
-        let mut idle_deadline = idle.map(idle_after);
+        // A configured idle timeout too large to represent is no limit.
+        let idle_after = |idle: std::time::Duration| tokio::time::Instant::now().checked_add(idle);
+        let mut idle_deadline = idle.and_then(idle_after);
         loop {
             let polls_pending = !self.polls.is_empty();
             tokio::select! {
@@ -825,7 +826,7 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
                         return Ok(Waited::Drained);
                     }
                     if self.polls.is_empty() {
-                        idle_deadline = idle.map(idle_after);
+                        idle_deadline = idle.and_then(idle_after);
                     }
                 }
                 output = &mut operation => return Ok(Waited::Done(output)),
