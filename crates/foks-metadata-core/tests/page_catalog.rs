@@ -781,6 +781,29 @@ fn export_real_schema_binary_pages_for_native_wasm_and_celld_qualification() {
         PageStatement::RoleGenerations,
         &p,
     ));
+    // Node type is validated by native kv_node before optional payload decode.
+    c.pragma_update(None, "ignore_check_constraints", true)
+        .unwrap();
+    for (kind, name) in [
+        (-1, "list_negative_node_type"),
+        (0, "list_zero_node_type"),
+        (4, "list_mismatched_positive_node_type"),
+    ] {
+        c.execute(
+            "UPDATE kv_nodes SET node_type=?1 WHERE uid=?2 AND node_id=?3",
+            params![kind, UID, [3u8; 17]],
+        )
+        .unwrap();
+        let (statement, parameters) = start(None, true, 15);
+        vectors.push(vector(&c, name, statement, &parameters));
+    }
+    c.execute(
+        "UPDATE kv_nodes SET node_type=3 WHERE uid=?1 AND node_id=?2",
+        params![UID, [3u8; 17]],
+    )
+    .unwrap();
+    c.pragma_update(None, "ignore_check_constraints", false)
+        .unwrap();
     // Preserve the probe distinction on oversized legacy data; these vectors
     // qualify SQL transport, not admission or public List decoding.
     c.execute(

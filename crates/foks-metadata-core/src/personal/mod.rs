@@ -4,7 +4,9 @@
 //! certificate. No result here commits, publishes, or establishes a tenant fence.
 pub(crate) mod catalog;
 mod generations;
+mod list;
 pub use generations::current_key_generations;
+pub use list::{read_personal_list, ListCursor, ListRequest};
 
 use crate::{Sql, Statement as S, Value as V};
 use foks_proto::{EntityId, Role, RoleAndGeneration};

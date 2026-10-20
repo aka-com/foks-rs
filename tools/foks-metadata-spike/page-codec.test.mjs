@@ -9,15 +9,20 @@ const paths={wasm:process.env.FOKS_PAGE_WASM,vectors:process.env.FOKS_PAGE_VECTO
 for(const [kind,path] of Object.entries(paths))if(!path||statSync(path).size>(kind==='catalog'?65536:64*1024*1024))throw new Error(`reviewed FOKS_PAGE_${kind.toUpperCase()} artifact required`);
 const module=new WebAssembly.Module(readFileSync(paths.wasm));
 const fixture=JSON.parse(readFileSync(paths.vectors,'utf8')),artifact=JSON.parse(readFileSync(paths.catalog,'utf8'));
-assert.equal(fixture.vectors.length,34);
+assert.equal(fixture.vectors.length,37);
 const quote=s=>'"'+s.replaceAll('"','""')+'"';
 function seeded(vector){
   const db=new DatabaseSync(':memory:');db.exec('PRAGMA foreign_keys=ON;BEGIN;PRAGMA defer_foreign_keys=ON');
   for(const o of fixture.objects.filter(o=>o.kind==='table'))db.exec(o.sql);
+  const malformedNode=vector.page===true&&['list_negative_node_type','list_zero_node_type','list_mismatched_positive_node_type'].includes(vector.name);
+  if(malformedNode)db.exec('PRAGMA ignore_check_constraints=ON');
+  try {
   for(const t of vector.before)for(const row of t.rows){
     const sql=`INSERT INTO ${quote(t.name)} VALUES(${row.map(v=>v!=='null'&&'integer' in v?'CAST(? AS INTEGER)':'?').join(',')})`;
     db.prepare(sql).run(...row.map(v=>v==='null'?null:'integer' in v?v.integer:'blob' in v?Uint8Array.from(v.blob):v.text));
   }
+  } finally {if(malformedNode)db.exec('PRAGMA ignore_check_constraints=OFF');}
+  assert.equal(db.prepare('PRAGMA ignore_check_constraints').get().ignore_check_constraints,0);
   for(const o of fixture.objects.filter(o=>o.kind!=='table'))db.exec(o.sql);
   db.exec('COMMIT');
   return db;
