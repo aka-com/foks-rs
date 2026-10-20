@@ -2,7 +2,7 @@ use std::io::{Cursor, Write as _};
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::{mpsc, Condvar, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use foks_client::{CreatedSoftwareAccount, KvWriteOptions, PinnedHost};
 use foks_client_db::SoftStateStore;
@@ -218,11 +218,22 @@ fn revocation_during_external_put_prevents_publication_without_blocking_writer()
         .unwrap();
     assert_eq!(usage.large.base.number, 0);
     assert_eq!(usage.large.chunks, 0);
-    let physical = environment
-        .read_database()
-        .unwrap()
-        .chunk_physical_usage()
-        .unwrap();
+    // The client can see its upload fail before the server's handler, which
+    // was blocked in put_object until the gate opened, settles the
+    // publication attempt: a client or server timeout under load ends the
+    // request first. Wait for the settlement rather than racing it.
+    let settled = Instant::now() + Duration::from_secs(30);
+    let physical = loop {
+        let physical = environment
+            .read_database()
+            .unwrap()
+            .chunk_physical_usage()
+            .unwrap();
+        if physical.unresolved_attempts == 0 || Instant::now() >= settled {
+            break physical;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
     assert_eq!(
         (
             physical.objects,
