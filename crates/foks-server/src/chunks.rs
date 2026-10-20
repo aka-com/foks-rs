@@ -412,6 +412,7 @@ impl ChunkStore for FilesystemChunks {
     }
 
     fn put_object(&self, object: &ChunkObject, bytes: &[u8]) -> Result<()> {
+        crate::deadline::check()?;
         object.validate_key()?;
         let digest = &object.digest;
         if object.encoded_bytes != bytes.len() as u64 {
@@ -443,6 +444,7 @@ impl ChunkStore for FilesystemChunks {
     }
 
     fn get_object(&self, object: &ChunkObject) -> Result<Vec<u8>> {
+        crate::deadline::check()?;
         object.validate_key()?;
         let digest = &object.digest;
         let encoded_length = object.encoded_bytes;
@@ -597,11 +599,21 @@ impl S3Chunks {
         future: impl Future<Output = Result<T>> + Send + 'static,
     ) -> Result<T> {
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-        let timeout = self.timeout;
+        crate::deadline::check()?;
+        let configured_until = std::time::Instant::now()
+            .checked_add(self.timeout)
+            .ok_or(Error::Config("object deadline overflow"))?;
+        let until = crate::deadline::current().map_or(configured_until, |deadline| {
+            deadline.instant().min(configured_until)
+        });
         // The caller can time out before a spawned transfer is dropped. Keep
         // its allocation reservation with the future that owns payload buffers.
         let task = remote_runtime()?.spawn(crate::net::memory::retain_future(async move {
-            let result = tokio::time::timeout(timeout, future)
+            if std::time::Instant::now() >= until {
+                let _ = sender.send(Err(crate::deadline::expired()));
+                return;
+            }
+            let result = tokio::time::timeout_at(until.into(), future)
                 .await
                 .unwrap_or(Err(Error::Chunk("object operation timed out")));
             let _ = sender.send(result);
@@ -609,7 +621,7 @@ impl S3Chunks {
         // This also bounds waiting if runtime workers are overloaded. Abort is
         // cancellation, not a claim that an in-flight PUT could not complete.
         let result = receiver
-            .recv_timeout(timeout)
+            .recv_timeout(until.saturating_duration_since(std::time::Instant::now()))
             .unwrap_or(Err(Error::Chunk("object operation timed out")));
         task.abort();
         result
@@ -745,6 +757,7 @@ impl ChunkStore for S3Chunks {
     }
 
     fn put_object(&self, object: &ChunkObject, bytes: &[u8]) -> Result<()> {
+        crate::deadline::check()?;
         object.validate_key()?;
         let digest = &object.digest;
         if object.encoded_bytes != bytes.len() as u64 {
@@ -778,6 +791,7 @@ impl ChunkStore for S3Chunks {
     }
 
     fn get_object(&self, object: &ChunkObject) -> Result<Vec<u8>> {
+        crate::deadline::check()?;
         object.validate_key()?;
         let digest = &object.digest;
         let encoded_length = object.encoded_bytes;

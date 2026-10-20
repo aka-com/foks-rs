@@ -46,6 +46,7 @@ impl ReadPool {
     }
 
     pub(crate) fn checkout(&self) -> Result<ReadLease> {
+        crate::deadline::check()?;
         let mut state = self.inner.state.lock().map_err(|_| Error::Thread)?;
         if let Some(database) = state.idle.pop() {
             return Ok(ReadLease {

@@ -1390,10 +1390,10 @@ pub(crate) async fn serve(
             }
             result = tokio::time::timeout(
                 limits.io_timeout,
-                read_frame_length_async(&mut stream, limits.maximum_frame_bytes),
+                read_frame_ingress(&mut stream, limits.maximum_frame_bytes, limits.request_timeout),
             ) => result,
         };
-        let length = match read {
+        let (length, deadline) = match read {
             Err(_) => break,
             Ok(Ok(length)) => length,
             Ok(Err(foks_rpc::Error::Io(error)))
@@ -1419,7 +1419,7 @@ pub(crate) async fn serve(
             service_data.metrics.request_rate_limited();
             let memory = service_data.memory.request(None);
             let response = memory.sync(|| encode_status_response_at(&RpcStatus::RateLimited, 0))?;
-            write_response(&mut stream, &response, limits.io_timeout).await?;
+            write_response_until(&mut stream, &response, deadline, limits.io_timeout).await?;
             service_data.metrics.response_completed();
             return Ok(());
         }
@@ -1428,8 +1428,8 @@ pub(crate) async fn serve(
                 let _ = result;
                 break;
             }
-            result = tokio::time::timeout(
-                limits.io_timeout,
+            result = tokio::time::timeout_at(
+                phase_deadline(deadline, limits.io_timeout)?,
                 read_call_body_async(
                     &mut stream,
                     length,
@@ -1497,10 +1497,11 @@ pub(crate) async fn serve(
             }
             let response = request_memory
                 .sync(|| encode_status_response_at(&RpcStatus::RateLimited, sequence))?;
-            write_response(&mut stream, &response, limits.io_timeout).await?;
+            write_response_until(&mut stream, &response, deadline, limits.io_timeout).await?;
             service_data.metrics.request_rate_limited();
             return Ok(());
         }
+        deadline.remaining()?;
         // Keep admitted KEX capacity through response transmission and all early exits.
         let mut kex_poll = None;
         let mut kex_completion = None;
@@ -1540,7 +1541,8 @@ pub(crate) async fn serve(
                     service_data.metrics.request_rate_limited();
                     let response = request_memory
                         .sync(|| encode_status_response_at(&RpcStatus::RateLimited, sequence))?;
-                    write_response(&mut stream, &response, limits.io_timeout).await?;
+                    write_response_until(&mut stream, &response, deadline, limits.io_timeout)
+                        .await?;
                     service_data.metrics.response_completed();
                     return Ok(());
                 }
@@ -1667,9 +1669,10 @@ pub(crate) async fn serve(
         } else {
             match execute_bounded(
                 Arc::clone(&service_data.execution),
-                limits.request_timeout,
+                deadline,
                 &mut stop,
                 move || -> Result<RequestOutcome> {
+                    crate::deadline::check()?;
                     let scope = Arc::clone(&request_memory);
                     scope.sync(|| {
                         // A timed-out blocking handler can still own decoded request
@@ -1789,7 +1792,8 @@ pub(crate) async fn serve(
                     let memory = service_data.memory.request(None);
                     let response = memory
                         .sync(|| encode_status_response_at(&RpcStatus::RateLimited, sequence))?;
-                    write_response(&mut stream, &response, limits.io_timeout).await?;
+                    write_response_until(&mut stream, &response, deadline, limits.io_timeout)
+                        .await?;
                     service_data.metrics.response_completed();
                     return Ok(());
                 }
@@ -1810,6 +1814,11 @@ pub(crate) async fn serve(
         if outcome.disconnect_before_response || outcome._memory.failed() {
             return Ok(());
         }
+        let response_deadline = if kex_receive || realtime_poll || sso_poll {
+            crate::deadline::Deadline::after(limits.io_timeout)?
+        } else {
+            deadline
+        };
         let _memory = outcome._memory;
         let response = outcome.response;
         let route = outcome.route;
@@ -1830,7 +1839,13 @@ pub(crate) async fn serve(
                 method,
             ) {
                 let split = response.len().div_ceil(2);
-                write_response(&mut stream, &response[..split], limits.io_timeout).await?;
+                write_response_until(
+                    &mut stream,
+                    &response[..split],
+                    response_deadline,
+                    limits.io_timeout,
+                )
+                .await?;
                 return Ok(());
             }
         }
@@ -1842,7 +1857,7 @@ pub(crate) async fn serve(
                 }
                 break;
             }
-            result = write_response(&mut stream, &response, limits.io_timeout) => result,
+            result = write_response_until(&mut stream, &response, response_deadline, limits.io_timeout) => result,
         };
         write?;
         if let (Some(poll), Some(completion)) = (kex_poll.as_mut(), kex_completion) {
@@ -1870,26 +1885,29 @@ enum BoundedExecution<T> {
 
 async fn execute_bounded<T>(
     execution: Arc<Semaphore>,
-    timeout: std::time::Duration,
+    deadline: crate::deadline::Deadline,
     stop: &mut watch::Receiver<bool>,
     operation: impl FnOnce() -> T + Send + 'static,
 ) -> Result<BoundedExecution<T>>
 where
     T: Send + 'static,
 {
+    if deadline.remaining().is_err() {
+        return Ok(BoundedExecution::TimedOut);
+    }
     let Ok(permit) = execution.try_acquire_owned() else {
         return Ok(BoundedExecution::Saturated);
     };
     let mut task = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        operation()
+        crate::deadline::scope(Some(deadline), operation)
     });
     tokio::select! {
         result = stop.changed() => {
             let _ = result;
             Ok(BoundedExecution::Stopped)
         }
-        result = tokio::time::timeout(timeout, &mut task) => {
+        result = tokio::time::timeout_at(deadline.instant().into(), &mut task) => {
             match result {
                 Ok(Ok(value)) => Ok(BoundedExecution::Completed(value)),
                 Ok(Err(_)) => Err(crate::Error::Thread),
@@ -1899,11 +1917,39 @@ where
     }
 }
 
+#[cfg(test)]
 async fn read_frame_length_async<R: AsyncRead + Unpin>(
     reader: &mut R,
     maximum: usize,
 ) -> foks_rpc::Result<usize> {
     let marker = read_byte_async(reader).await?;
+    read_frame_length_after_marker(reader, maximum, marker).await
+}
+
+async fn read_frame_ingress<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    maximum: usize,
+    budget: std::time::Duration,
+) -> foks_rpc::Result<(usize, crate::deadline::Deadline)> {
+    // Idle time is not request work. Once the first byte arrives, all remaining
+    // framing, dispatch and ordinary response work consume this same deadline.
+    let marker = read_byte_async(reader).await?;
+    let deadline = crate::deadline::Deadline::after(budget)
+        .map_err(|error| foks_rpc::Error::Io(std::io::Error::other(error)))?;
+    let length = tokio::time::timeout_at(
+        deadline.instant().into(),
+        read_frame_length_after_marker(reader, maximum, marker),
+    )
+    .await
+    .map_err(|_| foks_rpc::Error::Io(timeout_error("frame deadline expired")))??;
+    Ok((length, deadline))
+}
+
+async fn read_frame_length_after_marker<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    maximum: usize,
+    marker: u8,
+) -> foks_rpc::Result<usize> {
     let length = match marker {
         0x00..=0x7f => usize::from(marker),
         0xcc => {
@@ -1995,18 +2041,43 @@ async fn read_u32_async<R: AsyncRead + Unpin>(reader: &mut R) -> std::io::Result
     Ok(u32::from_be_bytes(bytes))
 }
 
+fn phase_deadline(
+    deadline: crate::deadline::Deadline,
+    maximum: std::time::Duration,
+) -> Result<tokio::time::Instant> {
+    deadline.remaining()?;
+    let phase = crate::deadline::Deadline::after(maximum)?;
+    Ok(deadline.instant().min(phase.instant()).into())
+}
+
+async fn write_response_until<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
+    response: &[u8],
+    deadline: crate::deadline::Deadline,
+    maximum: std::time::Duration,
+) -> Result<()> {
+    tokio::time::timeout_at(phase_deadline(deadline, maximum)?, async {
+        writer.write_all(response).await?;
+        writer.flush().await
+    })
+    .await
+    .map_err(|_| crate::Error::Io(timeout_error("response deadline expired")))??;
+    Ok(())
+}
+
+#[cfg(test)]
 pub(super) async fn write_response<W: tokio::io::AsyncWrite + Unpin>(
     writer: &mut W,
     response: &[u8],
     timeout: std::time::Duration,
 ) -> Result<()> {
-    tokio::time::timeout(timeout, async {
-        writer.write_all(response).await?;
-        writer.flush().await
-    })
+    write_response_until(
+        writer,
+        response,
+        crate::deadline::Deadline::after(timeout)?,
+        timeout,
+    )
     .await
-    .map_err(|_| crate::Error::Io(timeout_error("response write timed out")))??;
-    Ok(())
 }
 
 fn timeout_error(message: &'static str) -> std::io::Error {
@@ -2219,6 +2290,50 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn frame_budget_is_not_renewed_for_body_execution_or_transmission() {
+        let (mut peer, mut input) = tokio::io::duplex(16);
+        peer.write_all(&[0xcd, 0x01, 0x00]).await.unwrap();
+        let (length, deadline) =
+            read_frame_ingress(&mut input, 1024, std::time::Duration::from_millis(20))
+                .await
+                .unwrap();
+        assert_eq!(length, 256);
+        // Keep the peer alive but withhold the body. Body time consumes the
+        // original frame budget, leaving no fresh allowance for dispatch/output.
+        let body = tokio::time::timeout_at(
+            phase_deadline(deadline, std::time::Duration::from_secs(15)).unwrap(),
+            read_call_body_async(
+                &mut input,
+                length,
+                1024,
+                Arc::new(Semaphore::new(4096)),
+                super::super::memory::Pools::new(crate::SessionLimits::default()),
+            ),
+        )
+        .await;
+        assert!(body.is_err());
+        let (_stop, mut stop) = watch::channel(false);
+        assert!(matches!(
+            execute_bounded(Arc::new(Semaphore::new(1)), deadline, &mut stop, || panic!(
+                "expired work started"
+            ))
+            .await
+            .unwrap(),
+            BoundedExecution::TimedOut
+        ));
+        let mut output = Vec::new();
+        assert!(write_response_until(
+            &mut output,
+            b"late",
+            deadline,
+            std::time::Duration::from_secs(15)
+        )
+        .await
+        .is_err());
+        assert!(output.is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn timed_out_execution_remains_bounded_until_work_finishes() {
         let execution = Arc::new(Semaphore::new(1));
         let (_stop, mut receiver) = watch::channel(false);
@@ -2227,7 +2342,7 @@ mod tests {
 
         let first = execute_bounded(
             Arc::clone(&execution),
-            std::time::Duration::from_millis(20),
+            crate::deadline::Deadline::after(std::time::Duration::from_millis(20)).unwrap(),
             &mut receiver,
             move || {
                 entered_sender.send(()).unwrap();
@@ -2243,7 +2358,7 @@ mod tests {
         assert!(matches!(
             execute_bounded(
                 Arc::clone(&execution),
-                std::time::Duration::from_secs(1),
+                crate::deadline::Deadline::after(std::time::Duration::from_secs(1)).unwrap(),
                 &mut receiver,
                 || 2_u8,
             )

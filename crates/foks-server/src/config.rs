@@ -80,7 +80,7 @@ impl Default for SessionLimits {
             maximum_pending_connections: 32,
             maximum_in_flight_requests: 64,
             io_timeout: Duration::from_secs(15),
-            request_timeout: Duration::from_secs(30),
+            request_timeout: Duration::from_secs(15),
         }
     }
 }
