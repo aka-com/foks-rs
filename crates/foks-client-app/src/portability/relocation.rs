@@ -864,13 +864,11 @@ mod tests {
         remove_native(&id);
     }
 
+    // The case needs a second file system: /dev/shm, a tmpfs on Linux.
+    #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
     fn cross_filesystem_move_fails_before_publishing_intent() {
-        // The case needs a second file system; /dev/shm is a tmpfs on Linux.
-        if !Path::new("/dev/shm").is_dir() {
-            return;
-        }
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("source");
         let id = initialize(&source);

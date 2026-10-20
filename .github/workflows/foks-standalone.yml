@@ -74,7 +74,12 @@ jobs:
         run: tools/foks-client/check.sh
       - name: Test macOS Keychain integration
         if: runner.os == 'macOS'
-        run: cargo test --locked -p foks-keystore --test native_credential_store -- --ignored
+        run: |
+          cargo test --locked -p foks-keystore --test native_credential_store -- --ignored
+          # The application tests that need the native credential backend,
+          # as in the Linux Secret Service step below.
+          cargo test --locked -p foks-client-app -- --ignored --test-threads=1 \
+            --skip default_refresh_registration_benchmark
       - name: Test the Linux client graph and Secret Service integration
         if: runner.os == 'Linux'
         shell: bash
