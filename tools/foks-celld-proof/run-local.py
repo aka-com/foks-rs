@@ -7,16 +7,19 @@ celld processes and an in-memory S3 emulator on one physical host. A pass does
 not qualify physical-host/AZ loss, production S3, platform security or capacity.
 """
 import argparse, concurrent.futures, hashlib, http.server, json, os, pathlib
-import secrets, shutil, signal, socket, subprocess, threading, time, urllib.request, urllib.error, urllib.parse
+import secrets, shutil, signal, socket, subprocess, sys, threading, time, urllib.request, urllib.error, urllib.parse
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from clock_guard import ClockGuard
+sys.path.insert(0,str(pathlib.Path(__file__).resolve().parent.parent/'foks-metadata-spike'))
+from wasm_limits import memory_limits
 
 parser=argparse.ArgumentParser()
 parser.add_argument('--celld',required=True,type=pathlib.Path)
 parser.add_argument('--moto',required=True,type=pathlib.Path)
 parser.add_argument('--schema',required=True,type=pathlib.Path)
+parser.add_argument('--node-decoder-wasm',required=True,type=pathlib.Path)
 parser.add_argument('--test-binary',required=True,type=pathlib.Path)
 parser.add_argument('--esbuild',required=True,type=pathlib.Path)
 parser.add_argument('--output',required=True,type=pathlib.Path)
@@ -27,8 +30,12 @@ parser.add_argument('--test-name',default='real_foks_projection_recovers_keys_an
 args=parser.parse_args()
 if args.fault_mode=='pause-return' and args.test_name!='real_foks_cell_owner_process_loss_preserves_acknowledged_sql_writes':parser.error('pause-return requires the single-owner loss test')
 if not 1000<=args.lease_ttl_ms<=60000:parser.error('--lease-ttl-ms must be 1000..60000')
-for path in [args.celld,args.moto,args.schema,args.test_binary,args.esbuild]:
+for path in [args.celld,args.moto,args.schema,args.node_decoder_wasm,args.test_binary,args.esbuild]:
     if not path.is_file(): parser.error(f'missing input file: {path}')
+if args.node_decoder_wasm.stat().st_size>32*1024*1024:parser.error('decoder artifact exceeds32MiB')
+decoder_bytes=args.node_decoder_wasm.read_bytes()
+decoder_limits=memory_limits(decoder_bytes)
+decoder_sha256=hashlib.sha256(decoder_bytes).hexdigest()
 args.output.mkdir(mode=0o700,parents=False,exist_ok=False)
 root=args.output.resolve(); source=pathlib.Path(__file__).resolve().parent
 shutil.copyfile(__file__,root/"controller-script.py")
@@ -126,7 +133,8 @@ try:
     with concurrent.futures.ThreadPoolExecutor(2) as executor:assert sorted(executor.map(race,range(2)))==[200,412]
     token=secrets.token_urlsafe(32);control=secrets.token_urlsafe(32)
     project=root/'worker';project.mkdir(mode=0o700)
-    for name in ['worker.mjs','authority.mjs']:shutil.copyfile(source/name,project/name)
+    for name in ['worker.mjs','authority.mjs','node-decoder.mjs']:shutil.copyfile(source/name,project/name)
+    (project/'node-decoder.wasm').write_bytes(decoder_bytes)
     shutil.copyfile(args.schema,project/'generated-schema.json')
     config={'name':'foks-local-proof','main':'worker.mjs','compatibility_date':'2026-01-01','compatibility_flags':['nodejs_compat'],'vars':{'PROOF_TOKEN':token,'PROOF_CONTROL_TOKEN':control},'durable_objects':{'bindings':[{'name':'FOKS_PROOF','class_name':'FoksProof'}]},'migrations':[{'tag':'v1','new_sqlite_classes':['FoksProof']}]}
     config_path=project/'wrangler.jsonc';config_path.write_text(json.dumps(config));config_path.chmod(0o600)
@@ -157,7 +165,8 @@ try:
                     output=subprocess.run(['/bin/ps','-o','rss=','-p',str(process.pid)],capture_output=True,text=True,timeout=2)
                     if output.stdout.strip().isdigit():record('rss',process=name,kib=int(output.stdout.strip()))
     sampler=threading.Thread(target=sample,daemon=True);sampler.start()
-    record('configuration',celld_sha256=hashlib.sha256(args.celld.read_bytes()).hexdigest(),test_sha256=hashlib.sha256(args.test_binary.read_bytes()).hexdigest(),test=args.test_name,fault_mode=args.fault_mode,tuning=tuning,host_load_average=os.getloadavg(),idle_sleep_inhibitor=os.environ.get('FOKS_PROOF_IDLE_SLEEP_INHIBITOR','none'),test_client_timeout_seconds=5,bridge_http_timeout_seconds=4,native_default_request_timeout_seconds=30,native_default_io_timeout_seconds=15,scope='same-host actual FOKS SQL authority experiment; unqualified in-memory S3 emulator')
+    replay_inputs=[source/'worker.mjs',source/'authority.mjs',source/'node-decoder.mjs',pathlib.Path(__file__),source.parent/'foks-metadata-spike/wasm_limits.py',args.schema]
+    record('configuration',celld_sha256=hashlib.sha256(args.celld.read_bytes()).hexdigest(),test_sha256=hashlib.sha256(args.test_binary.read_bytes()).hexdigest(),node_decoder_sha256=decoder_sha256,node_decoder_memory_pages=decoder_limits,replay_source_sha256={str(p.resolve()):hashlib.sha256(p.read_bytes()).hexdigest() for p in replay_inputs},test=args.test_name,fault_mode=args.fault_mode,tuning=tuning,host_load_average=os.getloadavg(),idle_sleep_inhibitor=os.environ.get('FOKS_PROOF_IDLE_SLEEP_INHIBITOR','none'),test_client_timeout_seconds=5,bridge_http_timeout_seconds=4,native_default_request_timeout_seconds=30,native_default_io_timeout_seconds=15,scope='same-host actual FOKS SQL authority experiment; unqualified in-memory S3 emulator')
     if args.test_name in ['real_foks_cell_owner_process_loss_preserves_acknowledged_sql_writes','real_foks_multiple_cells_capacity_baseline']:
         tenants=int(os.environ.get('FOKS_CELLD_TENANTS','4')) if args.test_name=='real_foks_multiple_cells_capacity_baseline' else 1
         assert 1<=tenants<=16

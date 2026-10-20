@@ -16,6 +16,7 @@ pub(crate) fn spec(statement: S) -> Spec {
         S::PersonalRoot => ("SELECT CAST(root_version AS TEXT),CAST(length(exact_root) AS TEXT),CASE WHEN length(exact_root)<=4096 THEN exact_root ELSE NULL END FROM kv_roots WHERE uid=?1",&[B],&[I,I,N]),
         S::PersonalDirectory => ("SELECT CAST(d.version AS TEXT),CAST(length(d.exact_directory) AS TEXT),CASE WHEN length(d.exact_directory)<=4096 THEN d.exact_directory ELSE NULL END FROM kv_directory_heads h JOIN kv_directories d ON d.uid=h.uid AND d.directory_id=h.directory_id AND d.version=h.version WHERE h.uid=?1 AND h.directory_id=?2",&[B,B],&[I,I,N]),
         S::PersonalSmallNode => ("SELECT CAST(node_type AS TEXT),CAST(length(exact_node) AS TEXT),CASE WHEN length(exact_node)<=4096 THEN exact_node ELSE NULL END FROM kv_nodes WHERE uid=?1 AND node_id=?2",&[B,B],&[I,I,N]),
+        S::PublicUsage => ("SELECT CAST(usage_small_count AS TEXT),CAST(usage_small_bytes AS TEXT),CAST(usage_large_count AS TEXT),CAST(usage_large_bytes AS TEXT),CAST(usage_large_chunks AS TEXT),CAST(usage_unvalidated_small_count AS TEXT) FROM kv_namespaces WHERE namespace_id=?1",&[B],&[I,I,I,I,I,I]),
         _=>unreachable!("personal statements explicitly delegated"),
     };
     Spec {

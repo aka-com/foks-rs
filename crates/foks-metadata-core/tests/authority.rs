@@ -85,7 +85,15 @@ fn fixture() -> common::TestDatabase {
             uid: &UID,
             id: &[3; 17],
             node_type: 3,
-            exact: b"small file",
+            exact: &foks_proto::KvSmallFileBox {
+                key: foks_proto::RoleAndGeneration {
+                    role: foks_proto::Role::OWNER,
+                    generation: 1,
+                },
+                ciphertext: b"small file".to_vec(),
+            }
+            .encode()
+            .unwrap(),
         })
         .unwrap();
     test

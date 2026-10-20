@@ -559,6 +559,13 @@ pub struct KvSmallFileBox {
 }
 
 impl KvSmallFileBox {
+    /// Derive semantic ciphertext usage from the exact canonical box. This does
+    /// not impose RPC new-write policy or accept a caller-supplied byte count.
+    pub fn ciphertext_length(exact: &[u8]) -> Result<u64> {
+        u64::try_from(Self::decode(exact)?.ciphertext.len())
+            .map_err(|_| Error::IntegerRange("KV ciphertext length"))
+    }
+
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         kv_small_file_box(&decode(bytes)?)
     }
@@ -1044,4 +1051,36 @@ fn kv_large_file_metadata(value: &Value) -> Result<KvLargeFileMetadata> {
         version: unsigned(&fields[2])?,
         custom_metadata: option(&fields[3], secret_box)?,
     })
+}
+
+#[cfg(test)]
+mod usage_derivation_tests {
+    use super::*;
+    #[test]
+    fn exact_box_usage_matches_payload_not_encoded_metadata_and_retains_decode_errors() {
+        for size in [0, 16, 2064, 2065, 60_000] {
+            let boxed = KvSmallFileBox {
+                key: RoleAndGeneration {
+                    role: Role::OWNER,
+                    generation: 1,
+                },
+                ciphertext: vec![0x83; size],
+            };
+            let exact = boxed.encode().unwrap();
+            assert_eq!(
+                KvSmallFileBox::ciphertext_length(&exact).unwrap(),
+                u64::try_from(size).unwrap()
+            );
+            assert!(exact.len() > size);
+            let mut trailing = exact;
+            trailing.push(0);
+            assert!(matches!(
+                KvSmallFileBox::ciphertext_length(&trailing),
+                Err(Error::Snowpack(_))
+            ));
+        }
+        for malformed in [vec![], vec![0xc0], vec![0x91, 0]] {
+            assert!(KvSmallFileBox::ciphertext_length(&malformed).is_err());
+        }
+    }
 }

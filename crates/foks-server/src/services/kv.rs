@@ -1444,3 +1444,23 @@ fn bad_arguments(error: impl std::fmt::Display) -> RpcStatus {
 fn permission_denied() -> RpcStatus {
     RpcStatus::PermissionDenied("active device does not authorize this KV namespace".to_owned())
 }
+
+#[cfg(feature = "celld-proof")]
+pub(crate) fn qualify_personal_usage(
+    principal: &Principal,
+    reader: &foks_server_db::ReadDatabase,
+    clock: &Arc<dyn foks_server_db::Clock>,
+) -> Result<Vec<u8>, RpcStatus> {
+    principal.require_ordinary_device()?;
+    let argument = encode(&Value::Array(vec![Value::Array(vec![
+        Value::Unsigned(0),
+        Value::Variant(None),
+    ])]))
+    .map_err(|_| RpcStatus::TransactionRetry)?;
+    let snapshot = reader.snapshot().map_err(|_| RpcStatus::TransactionRetry)?;
+    let authority = resolve_authority(&argument, principal, &snapshot, clock)?;
+    match usage(&argument, &snapshot, &authority)? {
+        Response::Data(bytes) => Ok(bytes),
+        Response::Void => Err(RpcStatus::TransactionRetry),
+    }
+}

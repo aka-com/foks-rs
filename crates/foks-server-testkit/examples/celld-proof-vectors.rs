@@ -25,9 +25,33 @@ fn main() -> foks_server_testkit::celld_proof::Result<()> {
       INSERT INTO kv_roots VALUES(zeroblob(33),1,zeroblob(16),1,X'0405');")?;
     let schema = Schema::export(&connection)?;
     let before = schema.snapshot(&connection)?;
-    connection.execute_batch("INSERT INTO kv_nodes VALUES(zeroblob(33),X'0300000000000000000000000000000000',3,X'000102ff');")?;
     let mut node = [0_u8; 17];
     node[0] = 3;
+    let small_box = |length| {
+        foks_proto::KvSmallFileBox {
+            key: foks_proto::RoleAndGeneration {
+                role: foks_proto::Role::OWNER,
+                generation: 1,
+            },
+            ciphertext: vec![0xa5; length],
+        }
+        .encode()
+    };
+    let exact_node = small_box(4)?;
+    database.put_kv_node(&foks_server_db::KvNodeMutation {
+        uid: &[0; 33],
+        id: &node,
+        node_type: 3,
+        exact: &exact_node,
+    })?;
+    let mut symlink = node;
+    symlink[0] = 4;
+    database.put_kv_node(&foks_server_db::KvNodeMutation {
+        uid: &[0; 33],
+        id: &symlink,
+        node_type: 4,
+        exact: &exact_node,
+    })?;
     database.put_kv_dirents(
         &[0; 33],
         None,
@@ -45,7 +69,16 @@ fn main() -> foks_server_testkit::celld_proof::Result<()> {
     )?;
     let after = schema.snapshot(&connection)?;
     let delta = schema.delta(&before, &after)?;
-    let vectors = serde_json::json!({"schema":schema,"before":before,"after":after,"delta":delta,"host_id":base64::engine::general_purpose::STANDARD.encode([0;33])});
+    let node_decoder_cases = [0, 1, 2065, 64_000]
+        .into_iter()
+        .map(|length| {
+            Ok(serde_json::json!({
+                "exact":base64::engine::general_purpose::STANDARD.encode(small_box(length)?),
+                "length":length.to_string(),
+            }))
+        })
+        .collect::<foks_proto::Result<Vec<_>>>()?;
+    let vectors = serde_json::json!({"schema":schema,"before":before,"after":after,"delta":delta,"host_id":base64::engine::general_purpose::STANDARD.encode([0;33]),"node_decoder_cases":node_decoder_cases});
     let file = std::fs::OpenOptions::new()
         .create_new(true)
         .write(true)

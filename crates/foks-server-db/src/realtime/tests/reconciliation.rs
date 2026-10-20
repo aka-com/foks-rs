@@ -244,8 +244,9 @@ fn membership_rollback_and_foreign_parties_do_not_invalidate_or_create_inboxes()
 // Turn a test-only fresh database into the exact previous table layout.
 fn legacy(f: &mut Fixture) {
     f.db.connection
-        .execute_batch(include_str!(
-            "../../../tests/fixtures/remove_kv_current.sql"
+        .execute_batch(concat!(
+            include_str!("../../../tests/fixtures/remove_kv_usage.sql"),
+            include_str!("../../../tests/fixtures/remove_kv_current.sql")
         ))
         .unwrap();
     f.db.connection

@@ -442,6 +442,91 @@ pub fn qualify(
         p::PersonalPoint::QuotaCounters {},
     )
     .unwrap();
+    let native_usage = || {
+        let clock: Arc<dyn Clock> = Arc::new(FixedClock(now));
+        hosted_personal::native_usage(
+            &CertificateDer::from(der),
+            &environment.read_database().unwrap(),
+            &clock,
+        )
+        .unwrap()
+    };
+    let exact_usage = native_usage().unwrap();
+    assert_eq!(
+        h.point("public_usage_exact", p::PersonalPoint::PublicUsage {})
+            .unwrap()
+            .values,
+        vec![Value::Blob(exact_usage)]
+    );
+    // ABI precision fixture, not a supported production counter mutation.
+    let original_bytes: i64 =
+        h.c.query_row(
+            "SELECT usage_small_bytes FROM kv_namespaces WHERE namespace_id=?1",
+            [uid],
+            |r| r.get(0),
+        )
+        .unwrap();
+    h.c.execute(
+        "UPDATE kv_namespaces SET usage_small_bytes=9007199254740993 WHERE namespace_id=?1",
+        [uid],
+    )
+    .unwrap();
+    let exact_usage = native_usage().unwrap();
+    assert_eq!(
+        foks_proto::KvUsage::decode(&exact_usage)
+            .unwrap()
+            .small
+            .bytes,
+        9_007_199_254_740_993
+    );
+    assert_eq!(
+        h.point(
+            "public_usage_exact_integer_above_js_safe_range",
+            p::PersonalPoint::PublicUsage {}
+        )
+        .unwrap()
+        .values,
+        vec![Value::Blob(exact_usage)]
+    );
+    h.c.execute(
+        "UPDATE kv_namespaces SET usage_small_bytes=?1 WHERE namespace_id=?2",
+        params![original_bytes, uid],
+    )
+    .unwrap();
+    h.c.execute(
+        "UPDATE kv_nodes SET exact_node=X'00',ciphertext_bytes=NULL WHERE uid=?1 AND node_id=?2",
+        params![uid, d.value.0],
+    )
+    .unwrap();
+    assert_eq!(native_usage(), Err(foks_rpc::RpcStatus::TransactionRetry));
+    assert_eq!(
+        h.point(
+            "public_usage_corrupt_node_never_partial_success",
+            p::PersonalPoint::PublicUsage {}
+        ),
+        Err(p::PersonalError::Corrupt)
+    );
+    let length =
+        i64::try_from(foks_proto::KvSmallFileBox::ciphertext_length(&node_exact).unwrap()).unwrap();
+    h.c.execute(
+        "UPDATE kv_nodes SET exact_node=?1,ciphertext_bytes=NULL WHERE uid=?2 AND node_id=?3",
+        params![node_exact, uid, d.value.0],
+    )
+    .unwrap();
+    h.c.execute(
+        "UPDATE kv_nodes SET ciphertext_bytes=?1 WHERE uid=?2 AND node_id=?3 AND exact_node=?4",
+        params![length, uid, d.value.0, node_exact],
+    )
+    .unwrap();
+    assert_eq!(
+        h.point(
+            "public_usage_revalidated_exact_node",
+            p::PersonalPoint::PublicUsage {}
+        )
+        .unwrap()
+        .values,
+        vec![Value::Blob(native_usage().unwrap())]
+    );
     assert_eq!(
         h.point("missing_node", p::PersonalPoint::Node { id: [3; 17] }),
         Err(p::PersonalError::Missing)

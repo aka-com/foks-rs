@@ -363,6 +363,7 @@ fn scalar_reads_preserve_exact_nodes_and_fail_closed_on_unsupported_or_corrupt_s
         PersonalPoint::Directory { id: ROOT },
         PersonalPoint::Node { id: [3; 17] },
         PersonalPoint::QuotaCounters {},
+        PersonalPoint::PublicUsage {},
     ] {
         assert!(read_personal_point(&mut sql, &credential, &point, NOW).is_ok());
     }
@@ -416,6 +417,78 @@ fn scalar_reads_preserve_exact_nodes_and_fail_closed_on_unsupported_or_corrupt_s
     assert_eq!(
         require_personal_profile(&mut NativeSql::new(&tx).unwrap(), &credential),
         Err(PersonalError::Permission)
+    );
+}
+
+#[test]
+fn public_usage_matches_native_exact_bytes_and_preserves_corruption_failure() {
+    assert_eq!(
+        Statement::PublicUsage.spec().sql,
+        foks_server_db::KV_PUBLIC_USAGE_SQL
+    );
+    let test = fixture();
+    let reader =
+        foks_server_db::ReadDatabase::open(&test.path, foks_server_db::Config::default()).unwrap();
+    let c = Connection::open(&test.path).unwrap();
+    c.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+    let credential = auth(&c, &peer(vec![7])).unwrap();
+    let read = || {
+        let tx = c.unchecked_transaction().unwrap();
+        read_personal_point(
+            &mut NativeSql::new(&tx).unwrap(),
+            &credential,
+            &PersonalPoint::PublicUsage {},
+            NOW,
+        )
+    };
+    let expected = reader.kv_usage(&UID).unwrap();
+    assert_eq!(expected.small.number, 2);
+    assert_eq!(expected.small.bytes, 96);
+    assert_eq!(
+        read().unwrap().values,
+        vec![Value::Blob(
+            foks_snowpack::encode(&expected.to_value()).unwrap()
+        )]
+    );
+    // Exact integer ABI fixture only: this is not a claim that direct aggregate
+    // edits are a supported production mutation path.
+    c.execute(
+        "UPDATE kv_namespaces SET usage_small_bytes=9007199254740993 WHERE namespace_id=?1",
+        [UID],
+    )
+    .unwrap();
+    let expected = reader.kv_usage(&UID).unwrap();
+    assert_eq!(expected.small.bytes, 9_007_199_254_740_993);
+    assert_eq!(
+        read().unwrap().values,
+        vec![Value::Blob(
+            foks_snowpack::encode(&expected.to_value()).unwrap()
+        )]
+    );
+    c.execute(
+        "UPDATE kv_namespaces SET usage_small_bytes=96 WHERE namespace_id=?1",
+        [UID],
+    )
+    .unwrap();
+    c.execute(
+        "UPDATE kv_nodes SET exact_node=X'00',ciphertext_bytes=NULL WHERE node_id=?1",
+        [[3u8; 17]],
+    )
+    .unwrap();
+    assert_eq!(read(), Err(PersonalError::Corrupt));
+    assert!(matches!(
+        reader.kv_usage(&UID),
+        Err(foks_server_db::Error::Invalid("stored KV small node"))
+    ));
+    c.execute("DELETE FROM kv_namespaces WHERE namespace_id=?1", [UID])
+        .unwrap();
+    let expected = foks_proto::KvUsage::default();
+    assert_eq!(reader.kv_usage(&UID).unwrap(), expected);
+    assert_eq!(
+        read().unwrap().values,
+        vec![Value::Blob(
+            foks_snowpack::encode(&expected.to_value()).unwrap()
+        )]
     );
 }
 

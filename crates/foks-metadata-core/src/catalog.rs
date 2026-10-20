@@ -79,6 +79,8 @@ pub enum Statement {
     PersonalRoot,
     PersonalDirectory,
     PersonalSmallNode,
+    HistoricalName,
+    PublicUsage,
 }
 
 #[derive(Serialize)]
@@ -92,7 +94,7 @@ pub struct Spec {
 }
 
 impl Statement {
-    pub const ALL: [Self; 40] = [
+    pub const ALL: [Self; 42] = [
         Self::NamespaceParty,
         Self::NamespaceEnsure,
         Self::Head,
@@ -133,6 +135,8 @@ impl Statement {
         Self::PersonalRoot,
         Self::PersonalDirectory,
         Self::PersonalSmallNode,
+        Self::HistoricalName,
+        Self::PublicUsage,
     ];
 
     pub fn from_id(id: u32) -> Result<Self> {
@@ -175,8 +179,25 @@ impl Statement {
                 | Self::PersonalRoot
                 | Self::PersonalDirectory
                 | Self::PersonalSmallNode
+                | Self::PublicUsage
         ) {
             return crate::personal::catalog::spec(self);
+        }
+        if self == Self::HistoricalName {
+            return Spec {
+                id: self as u32,
+                sql: HISTORICAL_NAME_SQL.as_str(),
+                parameters: &[Kind::Blob, Kind::Blob, Kind::Blob, Kind::Integer],
+                columns: &[
+                    Kind::Integer,
+                    Kind::NullableBlob,
+                    Kind::Blob,
+                    Kind::Integer,
+                    Kind::NullableBlob,
+                ],
+                write: false,
+                maximum_blob_bytes: MAX_BLOB_BYTES,
+            };
         }
         use Kind::{Blob as B, Integer as I, NullableBlob as N, Text as T};
         let (sql, parameters, columns, write): (_, &'static [_], &'static [_], _) = match self {
@@ -229,3 +250,9 @@ impl Statement {
         Ok(())
     }
 }
+
+/// Kept byte-identical to server-db's selection until the shared query layer lands.
+pub const HISTORICAL_NAME_SELECTION_SQL: &str = "SELECT e.dirent_id,e.version FROM kv_dirents e INDEXED BY kv_dirent_historical_name JOIN kv_directories d ON d.uid=e.uid AND d.directory_id=e.parent_id AND d.version=e.directory_version WHERE e.uid=?1 AND e.parent_id=?2 AND e.name_mac=?3 AND e.directory_version=CAST(?4 AS INTEGER) ORDER BY e.version DESC,e.dirent_id ASC LIMIT 1";
+static HISTORICAL_NAME_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!("WITH selected AS ({}) SELECT CAST(length(e.exact_dirent) AS TEXT),CASE WHEN length(e.exact_dirent)<=4096 THEN e.exact_dirent ELSE NULL END,e.node_id,CAST(length(d.exact_directory) AS TEXT),CASE WHEN length(d.exact_directory)<=4096 THEN d.exact_directory ELSE NULL END FROM selected s JOIN kv_dirents e ON e.uid=?1 AND e.parent_id=?2 AND e.dirent_id=s.dirent_id AND e.version=s.version JOIN kv_directories d ON d.uid=e.uid AND d.directory_id=e.parent_id AND d.version=e.directory_version",HISTORICAL_NAME_SELECTION_SQL)
+});

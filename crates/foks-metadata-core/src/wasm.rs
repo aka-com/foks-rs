@@ -47,6 +47,38 @@ pub extern "C" fn output_pointer() -> u32 {
 pub extern "C" fn output_length() -> u32 {
     OUTPUT.with(|b| b.borrow().len() as u32)
 }
+
+/// Pure exact-box decoder ABI for the private native-backed replay proof.
+/// Rejected allocation invalidates the preceding request and result.
+#[no_mangle]
+pub extern "C" fn small_box_input_alloc(length: u32) -> u32 {
+    INPUT.with(|b| b.borrow_mut().clear());
+    OUTPUT.with(|b| b.borrow_mut().clear());
+    if length == 0 || length > 65_536 {
+        return 0;
+    }
+    input_alloc(length)
+}
+
+/// Does not call a SQL/domain import. Successful output is exact ASCII decimal,
+/// never a JS Number; failures cannot become durable domain rejections.
+#[no_mangle]
+pub extern "C" fn small_box_ciphertext_length() -> u32 {
+    let bytes = INPUT.with(|b| std::mem::take(&mut *b.borrow_mut()));
+    let result = if bytes.is_empty() || bytes.len() > 65_536 {
+        Err("input_bound")
+    } else {
+        foks_proto::KvSmallFileBox::ciphertext_length(&bytes)
+            .map_err(|_| "invalid_box")
+            .and_then(|length| i64::try_from(length).map_err(|_| "integer_range"))
+    };
+    let (status, output) = match result {
+        Ok(length) => (0, length.to_string().into_bytes()),
+        Err(code) => (1, code.as_bytes().to_vec()),
+    };
+    OUTPUT.with(|b| *b.borrow_mut() = output);
+    status
+}
 #[no_mangle]
 pub extern "C" fn trap() {
     core::arch::wasm32::unreachable()

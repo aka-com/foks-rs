@@ -575,8 +575,9 @@ mod tests {
                 .unwrap();
         }
         connection
-            .execute_batch(include_str!(
-                "../../foks-server-db/tests/fixtures/remove_kv_current.sql"
+            .execute_batch(concat!(
+                include_str!("../../foks-server-db/tests/fixtures/remove_kv_usage.sql"),
+                include_str!("../../foks-server-db/tests/fixtures/remove_kv_current.sql")
             ))
             .unwrap();
         connection

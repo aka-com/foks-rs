@@ -141,7 +141,10 @@ fn remove_accounting(connection: &Connection) {
 fn predecessor(connection: &Connection, version: i64) {
     assert!(matches!(version, 43..=49));
     connection
-        .execute_batch(include_str!("fixtures/remove_kv_current.sql"))
+        .execute_batch(concat!(
+            include_str!("fixtures/remove_kv_usage.sql"),
+            include_str!("fixtures/remove_kv_current.sql")
+        ))
         .unwrap();
     if version <= 48 {
         remove_accounting(connection);
@@ -464,7 +467,7 @@ fn accounting_upgrade_backfills_history_and_preserves_version_48_sso() {
     let c = Connection::open(&test.path).unwrap();
     predecessor(&c, 48);
     c.execute_batch("INSERT INTO kv_namespaces VALUES(zeroblob(33),1,zeroblob(33));
-        INSERT INTO kv_nodes VALUES(zeroblob(33),X'0300000000000000000000000000000000',3,X'010203');
+        INSERT INTO kv_nodes(uid,node_id,node_type,exact_node) VALUES(zeroblob(33),X'0300000000000000000000000000000000',3,X'010203');
         INSERT INTO kv_directories VALUES(zeroblob(33),zeroblob(16),1,3,0,1,0,X'0102');
         INSERT INTO kv_directories VALUES(zeroblob(33),zeroblob(16),2,3,0,1,0,X'010203');
         INSERT INTO kv_directory_heads VALUES(zeroblob(33),zeroblob(16),2);
