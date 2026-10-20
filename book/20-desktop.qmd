@@ -247,8 +247,9 @@ a chunked read checks the deadline and the interval again between chunks.
 Reads name the catalog entry by dirent id as well as path and version, and
 a result for another dirent is a `response-binding` error. The renderer's
 request carries the dirent id it listed as well, and the host refuses it
-with `conflict` when its catalog holds another dirent at that path and
-version.
+with `item-replaced` when its catalog holds another dirent at that path and
+version. A read never answers `conflict`, which the shell reserves for the
+edit-conflict sheet.
 
 The Uploads button above the Files list calls `list_file_uploads`, which
 returns the durable uploads the agent holds for the selected store and its

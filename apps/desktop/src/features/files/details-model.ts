@@ -49,6 +49,7 @@ export function readOnce(
     request.storeId,
     request.path,
     request.version,
+    request.direntId,
   ]);
   const sessions =
     readFlights.get(bridge) ??

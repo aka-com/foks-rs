@@ -1997,16 +1997,27 @@ fn a_read_refuses_another_dirent_at_the_listed_path_and_version() {
     let listed = "09".repeat(16);
     assert_eq!(
         state
-            .selected_bound_item(&id, "/notes/plan", 4, &listed, "reading")
+            .selected_read_item(&id, "/notes/plan", 4, &listed)
             .unwrap(),
         item
     );
     let replaced = state
-        .selected_bound_item(&id, "/notes/plan", 4, &"0a".repeat(16), "reading")
+        .selected_read_item(&id, "/notes/plan", 4, &"0a".repeat(16))
         .unwrap_err();
-    assert_eq!(replaced.code, "conflict");
+    // Not `conflict`: the renderer answers that with the edit-conflict sheet.
+    assert_eq!(replaced.code, "item-replaced");
+    assert!(replaced.retryable);
     assert_eq!(
         replaced.message,
         "This item was replaced. Refresh the vault before reading it."
     );
+    // A changed or removed item keeps the lookup's own codes.
+    let changed = state
+        .selected_read_item(&id, "/notes/plan", 5, &listed)
+        .unwrap_err();
+    assert_eq!(changed.code, "item-version-mismatch");
+    let missing = state
+        .selected_read_item(&id, "/notes/gone", 4, &listed)
+        .unwrap_err();
+    assert_eq!(missing.code, "item-not-found");
 }

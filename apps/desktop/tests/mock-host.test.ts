@@ -182,11 +182,9 @@ test('mock vault failures carry the host codes and the transport normalization',
       direntId: item.direntId,
     }),
     {
-      code: 'conflict',
-      message:
-        'This item changed or was removed. Refresh the vault before reading it.',
+      code: 'item-version-mismatch',
       origin: 'invoke',
-      retryable: false,
+      retryable: true,
       ambiguous: false,
     },
   );
@@ -197,7 +195,7 @@ test('mock vault failures carry the host codes and the transport normalization',
       version: 1,
       direntId: item.direntId,
     }),
-    { code: 'conflict', origin: 'invoke', ambiguous: false },
+    { code: 'item-not-found', origin: 'invoke', ambiguous: false },
   );
   // Another dirent at the same path and version: the listed entry was
   // replaced, and the read refuses it.
@@ -209,9 +207,10 @@ test('mock vault failures carry the host codes and the transport normalization',
       direntId: 'ff'.repeat(16),
     }),
     {
-      code: 'conflict',
+      code: 'item-replaced',
       message: 'This item was replaced. Refresh the vault before reading it.',
       origin: 'invoke',
+      retryable: true,
       ambiguous: false,
     },
   );

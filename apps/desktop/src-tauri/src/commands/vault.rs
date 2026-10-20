@@ -1423,7 +1423,7 @@ pub async fn read_item(
 ) -> Result<ReadItemDto, AgentError> {
     let interval = crate::applock::unlocked_interval(&app)?;
     require_main_window(&webview)?;
-    let item = state.selected_bound_item(&store_id, &path, version, &dirent_id, "reading")?;
+    let item = state.selected_read_item(&store_id, &path, version, &dirent_id)?;
     let transport = state.transport()?;
     let worker_interval = interval.clone();
     let result = super::deadline::run(
@@ -1560,7 +1560,7 @@ pub async fn copy_item_field(
 ) -> Result<ClipboardAck, AgentError> {
     let interval = crate::applock::unlocked_interval(&app)?;
     require_main_window(&webview)?;
-    let item = state.selected_bound_item(&store_id, &path, version, &dirent_id, "reading")?;
+    let item = state.selected_read_item(&store_id, &path, version, &dirent_id)?;
     let transport = state.transport()?;
     let worker_interval = interval.clone();
     let value = super::deadline::run(
@@ -1622,7 +1622,7 @@ pub async fn open_item_url(
 ) -> Result<CommandAck, AgentError> {
     let interval = crate::applock::unlocked_interval(&app)?;
     require_main_window(&webview)?;
-    let item = state.selected_bound_item(&store_id, &path, version, &dirent_id, "reading")?;
+    let item = state.selected_read_item(&store_id, &path, version, &dirent_id)?;
     let transport = state.transport()?;
     let worker_interval = interval.clone();
     let field = super::deadline::run(
@@ -1678,7 +1678,7 @@ pub async fn download_file(
 ) -> Result<DownloadResult, AgentError> {
     let interval = crate::applock::unlocked_interval(&app)?;
     require_main_window(&webview)?;
-    let item = state.selected_bound_item(&store_id, &path, version, &dirent_id, "reading")?;
+    let item = state.selected_read_item(&store_id, &path, version, &dirent_id)?;
     let suggested = item
         .metadata
         .path

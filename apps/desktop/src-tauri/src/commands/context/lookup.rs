@@ -19,8 +19,7 @@ use foks_desktop::{CatalogItem, CatalogSnapshot, CatalogStoreRef, CatalogStoreSu
 
 impl AppState {
     /// The listed version of the item at `path`. Commands resolve through
-    /// the dirent-bound selections below; tests use this one directly.
-    #[cfg(test)]
+    /// the dirent-bound selections below.
     pub(in crate::commands) fn selected_item(
         &self,
         store: &str,
@@ -28,6 +27,29 @@ impl AppState {
         version: u64,
     ) -> Result<CatalogItem, AgentError> {
         self.item_for_key(StoreKey::parse(store).as_ref(), path, version)
+    }
+
+    /// The listed version of the listed dirent at `path`, for the read
+    /// commands. A changed or missing item keeps the lookup's
+    /// `item-version-mismatch` or `item-not-found`, and another dirent at
+    /// that path and version is `item-replaced`; none of them is `conflict`,
+    /// which the renderer answers with the edit-conflict sheet.
+    pub(in crate::commands) fn selected_read_item(
+        &self,
+        store: &str,
+        path: &str,
+        version: u64,
+        dirent_id: &str,
+    ) -> Result<CatalogItem, AgentError> {
+        let item = self.selected_item(store, path, version)?;
+        if listed_dirent(&item) != dirent_id {
+            return Err(AgentError::new(
+                "item-replaced",
+                "This item was replaced. Refresh the vault before reading it.",
+                true,
+            ));
+        }
+        Ok(item)
     }
 
     /// [`Self::selected_item`] for an identity the caller has already
@@ -633,18 +655,21 @@ impl AppState {
 /// Refuses `item` with a `conflict` unless its dirent is `dirent_id`, the one
 /// the renderer selected, so that an item recreated at the same path and
 /// version is not used in its place.
+/// The dirent id of `item` as the renderer sends it: lowercase hex.
+fn listed_dirent(item: &CatalogItem) -> String {
+    item.metadata
+        .dirent_id
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 fn require_listed_dirent(
     item: &CatalogItem,
     dirent_id: &str,
     action: &str,
 ) -> Result<(), AgentError> {
-    let listed: String = item
-        .metadata
-        .dirent_id
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    if dirent_id == listed {
+    if dirent_id == listed_dirent(item) {
         return Ok(());
     }
     Err(AgentError::new(

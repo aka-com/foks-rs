@@ -402,8 +402,10 @@ the other facts needed by the Phase 2 shell; `read_item`,
 `{storeId, path, version, direntId}`, and `copy_item_field` takes the same
 plus `field` (`password`, `username`, `url` or `value`). The host resolves
 the selection against its catalog by all three: an item that changed or was
-removed, or another dirent at the same path and version, is refused with
-`conflict`. Both item copies answer
+removed is refused with `item-version-mismatch` or `item-not-found`, and
+another dirent at the same path and version with `item-replaced`
+(retryable). None of these is `conflict`, which the shell answers with the
+edit-conflict sheet; a read refusal is shown as a notice. Both item copies answer
 `{ok, clearAfterSeconds}`: the seconds after which the host clears the
 clipboard if it still holds the copied value (`AUTO_CLEAR_SECONDS` in
 `src-tauri/src/clipboard.rs`: 15 on Linux, 30 elsewhere), which the copy toast
