@@ -1827,7 +1827,13 @@ async fn handle_streaming_upload(
             return answer_ambiguous_upload(stream, request_id, &cancellation, &control).await;
         }
         let mut frame = foks_agent_proto::decode_upload_frame(&bytes)?;
-        validate_upload_frame_binding(&mut frame, request_id, &control)?;
+        // Validation erases the decoded plaintext when it refuses the frame.
+        if let Err(error) = validate_upload_frame_binding(&mut frame, request_id, &control) {
+            if control.check().is_err() {
+                return answer_ambiguous_upload(stream, request_id, &cancellation, &control).await;
+            }
+            return Err(error);
+        }
         match frame.payload {
             foks_agent_proto::KvUploadPayload::Chunk {
                 offset: frame_offset,

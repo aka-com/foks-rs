@@ -12,8 +12,8 @@ reconciliation or a lease refresh) is answered `DeadlineExceeded`, written
 under a 2-second grace because the request's own deadline has passed, and
 then its connection is closed, because its durable outcome can be ambiguous.
 A result whose deadline has passed when its write starts is replaced by the
-same answer, and its plaintext is erased. Any surviving blocking work retains its worker
-permit until it exits.
+same answer, and its plaintext is erased. Any surviving blocking work retains
+its worker permit until it exits.
 
 KV reads require the catalog version and large-file chunks echo the store,
 path, version, and offset they answer. Creating or updating account-store entries
