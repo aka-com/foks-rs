@@ -564,10 +564,10 @@ impl BackendCall {
 }
 
 /// The budget and process deadline of one backend command, both counted
-/// from `started`. `--request-timeout-seconds` is the ceiling of an
-/// ordinary request, as the agent's flag of the same name is; a pairing,
-/// bulk or chat-poll request keeps the cap of its class, which the flag can
-/// only raise. The Tauri desktop derives its deadlines the same way.
+/// from `started`. `--request-timeout-seconds` can only lower the 15 s cap
+/// of an ordinary request; a pairing, bulk or chat-poll request has the cap
+/// of its class, as the Tauri desktop derives it. The agent client caps
+/// every call at its class cap in any case.
 fn call_deadline(
     started: std::time::Instant,
     request_timeout: std::time::Duration,
@@ -575,10 +575,8 @@ fn call_deadline(
 ) -> Result<(std::time::Duration, foks_local_deadline::Deadline), Box<dyn std::error::Error>> {
     let class = call.deadline_class();
     let budget = match class {
-        DeadlineClass::Ordinary => request_timeout,
-        DeadlineClass::Pairing | DeadlineClass::Bulk | DeadlineClass::ChatPoll => {
-            request_timeout.max(class.cap())
-        }
+        DeadlineClass::Ordinary => request_timeout.min(class.cap()),
+        DeadlineClass::Pairing | DeadlineClass::Bulk | DeadlineClass::ChatPoll => class.cap(),
     };
     let original = started
         .checked_add(budget)
@@ -1557,6 +1555,18 @@ mod tests {
         let (budget, deadline) = call_deadline(started, timeout, &status).unwrap();
         assert_eq!(budget, timeout);
         assert!(deadline.instant() <= started + timeout);
+        // The flag only lowers the ordinary cap and leaves class caps alone.
+        let short = std::time::Duration::from_secs(5);
+        assert_eq!(call_deadline(started, short, &status).unwrap().0, short);
+        let long = std::time::Duration::from_secs(60);
+        assert_eq!(
+            call_deadline(started, long, &status).unwrap().0,
+            DeadlineClass::Ordinary.cap()
+        );
+        assert_eq!(
+            call_deadline(started, long, &accept).unwrap().0,
+            DeadlineClass::Pairing.cap()
+        );
     }
 
     #[test]

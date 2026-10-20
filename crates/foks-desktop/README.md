@@ -26,11 +26,11 @@ profile, passphrase, security key and device pairing operations have not been
 moved yet and are still built separately by each caller; `ISSUES.md` tracks
 the remainder.
 
-`--request-timeout-seconds` (default 15) bounds an ordinary command only, as
-the agent's flag of the same name does. Device pairing commands, uploads and
-chat polls keep the cap of their deadline class (5 minutes for pairing and
-uploads, 60 seconds for a chat poll), which the flag can raise but not lower,
-so `device-pair-accept` waits for the other device as long as the desktop app does.
+`--request-timeout-seconds` (default 15) can only lower the 15-second cap of an
+ordinary command. Device pairing commands, uploads and chat polls have the cap of
+their deadline class (5 minutes for pairing and uploads, 60 seconds for a chat
+poll), whatever the flag says, so `device-pair-accept` waits for the other device
+as long as the desktop app does.
 
 For the first-run onboarding transcript, invoke the backend sequentially per line;
 the process may exit between lines. `pending` provides the authenticated checkpoint
