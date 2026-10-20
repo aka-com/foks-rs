@@ -21,7 +21,26 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + S
 pub const MAX_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_ROWS: usize = 10_000;
 const BASE_TABLES: &[&str] = &["kv_nodes", "kv_dirents", "kv_dirent_heads", "kv_locks"];
-const DERIVED_TABLES: &[&str] = &["kv_namespaces", "kv_dirent_current"];
+const DERIVED_TABLES: &[&str] = &[
+    "kv_namespaces",
+    "kv_dirent_current",
+    "metadata_read_dependency",
+];
+/// The trigger-owned columns of each derived table whose other columns are
+/// frozen in a proof.
+const NAMESPACE_COUNTERS: &[&str] = &[
+    "accounted_bytes",
+    "accounted_objects",
+    "directory_count",
+    "dirent_count",
+    "usage_small_count",
+    "usage_small_bytes",
+    "usage_large_count",
+    "usage_large_bytes",
+    "usage_large_chunks",
+    "usage_unvalidated_small_count",
+];
+const READ_DEPENDENCY_COUNTERS: &[&str] = &["revision"];
 
 fn invalid(message: &'static str) -> Box<dyn std::error::Error + Send + Sync> {
     std::io::Error::other(message).into()
@@ -531,8 +550,17 @@ impl Schema {
                     // accepting it as a direct write would bypass that check.
                     continue;
                 }
-                // Only trigger-owned counters may change. Namespace ownership
-                // and party/host bindings are frozen in this proof.
+                // Only trigger-owned counters may change: the namespace usage
+                // counters, and the read-dependency revision that every base
+                // write advances. Namespace ownership, party/host bindings and
+                // the read-dependency incarnation are frozen in this proof; the
+                // authority recomputes the counters by replaying the base rows
+                // and compares the full after hash.
+                let counters = if table.name == "metadata_read_dependency" {
+                    READ_DEPENDENCY_COUNTERS
+                } else {
+                    NAMESPACE_COUNTERS
+                };
                 let identity = |data: &TableRows| -> Result<BTreeSet<String>> {
                     data.rows
                         .iter()
@@ -541,21 +569,7 @@ impl Schema {
                                 .columns
                                 .iter()
                                 .zip(&row.0)
-                                .filter(|(c, _)| {
-                                    ![
-                                        "accounted_bytes",
-                                        "accounted_objects",
-                                        "directory_count",
-                                        "dirent_count",
-                                        "usage_small_count",
-                                        "usage_small_bytes",
-                                        "usage_large_count",
-                                        "usage_large_bytes",
-                                        "usage_large_chunks",
-                                        "usage_unvalidated_small_count",
-                                    ]
-                                    .contains(&c.name.as_str())
-                                })
+                                .filter(|(c, _)| !counters.contains(&c.name.as_str()))
                                 .map(|(_, v)| v)
                                 .collect::<Vec<_>>();
                             Ok(serde_json::to_string(&values)?)
@@ -563,7 +577,11 @@ impl Schema {
                         .collect()
                 };
                 if identity(old)? != identity(new)? {
-                    return Err(invalid("proof namespace identity changed"));
+                    return Err(invalid(if table.name == "metadata_read_dependency" {
+                        "proof read dependency identity changed"
+                    } else {
+                        "proof namespace identity changed"
+                    }));
                 }
                 continue;
             }
@@ -709,6 +727,31 @@ mod tests {
             .execute_batch("CREATE VIEW unsupported_view AS SELECT 1;")
             .unwrap();
         assert!(Schema::export(&connection).is_err());
+    }
+
+    #[test]
+    fn read_dependency_revision_is_derived_and_its_incarnation_is_frozen() {
+        let (_directory, connection, schema) = fixture();
+        let before = schema.snapshot(&connection).unwrap();
+        connection
+            .execute(
+                "UPDATE metadata_read_dependency SET revision=revision+1",
+                [],
+            )
+            .unwrap();
+        let after = schema.snapshot(&connection).unwrap();
+        let delta = schema.delta(&before, &after).unwrap();
+        assert!(delta.changes.is_empty());
+        assert_ne!(delta.before_hash, delta.after_hash);
+        connection
+            .execute(
+                "UPDATE metadata_read_dependency SET incarnation=?",
+                [[9u8; 32].as_slice()],
+            )
+            .unwrap();
+        assert!(schema
+            .delta(&after, &schema.snapshot(&connection).unwrap())
+            .is_err());
     }
 
     #[test]
