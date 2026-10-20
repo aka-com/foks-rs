@@ -96,7 +96,9 @@ delegated Ed25519 mTLS subkey, burns one-time hardware recovery challenges, and
 stores PUK-encrypted PIV management-key envelopes with monotonic generations.
 The server never talks to PC/SC and never receives a PIN, PUK, management key,
 or private hardware key. Client-side hardware support is macOS/Linux only.
-Interactive software-device KEX is supported. Rotation to another
+Interactive software-device KEX is supported, for Rust clients and for Go
+v0.1.9 clients, which multiplex KEX calls on one connection (see the session
+limits below). Rotation to another
 already-enrolled Yubi recipient remains outside this slice.
 
 Protocol IDs, method positions, status codes, and service numbers are extracted
@@ -256,6 +258,20 @@ including their wait in the writer queue, take longer than the request timeout
 before their writes start. Long polls (OIDC completion, KEX receive and
 realtime inbox) wait on their own timeouts instead, and their response write
 gets a fresh `io_timeout` allowance.
+
+A long poll does not block its connection. Go clients multiplex calls on one
+connection by sequence number, and go-foks device pairing issues further KEX
+calls while an hour-long KEX receive is pending. While long polls are
+pending, the session keeps reading frames: a call is served (ordinary
+requests one at a time, as on an idle connection), and each response is
+written when it is ready, so responses can arrive in a different order than
+their calls. A CANCEL control message for a pending poll's sequence number
+ends that poll without a response and releases its permits; end of stream or
+a read error closes the connection and drops its pending polls. One
+connection holds at most four pending long polls; a fifth is answered with
+status 1012 and the connection closes, counted as
+`foks_admission_rejected_total{reason="connection_long_polls"}`. A connection
+with a pending long poll is not idle, so `io_timeout` does not close it.
 
 `foks_requests_total{family,status}` counts written responses by route family
 (the protocol name, such as `KvStore` or `Reg`) and wire status code (`0` for

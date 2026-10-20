@@ -60,15 +60,25 @@ The first element is a *message type*. The go-snowpack-rpc protocol defines
 eight: CALL (0), RESPONSE (1), NOTIFY (2), CANCEL (3), CALL_COMPRESSED (4),
 CALL_V2 (5), NOTIFY_V2 (6), and CANCEL_V2 (7). The Rust client emits only
 CALL_V2 and the Rust server answers only CALL_V2. NOTIFY and CANCEL messages,
-in both versions, are parsed for well-formedness and then discarded, because a
+in both versions, are parsed for well-formedness and never answered, because a
 peer never expects a reply to them and closing the connection over a harmless
-control message would drop otherwise healthy sessions. CALL_COMPRESSED, on the
+control message would drop otherwise healthy sessions. A CANCEL whose
+sequence number names a pending long poll ends that poll without a response;
+any other control message is discarded. CALL_COMPRESSED, on the
 other hand, does expect a reply, so receiving one is treated as a fatal
 protocol error rather than silently ignored. Nothing in the Rust wire path
 compresses.
 
 The second element is the *sequence number*, which pairs a response with its
-call. The third and fourth elements of a call identify the function: a 32-bit
+call. Each connection numbers its calls from 0. go-snowpack-rpc multiplexes
+calls on one connection by this number and lets several be outstanding at
+once; the Rust client sends one call at a time. The Rust server reads the
+next frame while long polls (OIDC completion, KEX receive, realtime inbox)
+are pending, serves the calls it finds, and writes each response when it is
+ready, so a long poll's response can follow the responses of calls sent after
+it. go-foks needs this for device pairing: it keeps an hour-long KEX receive
+open while it issues a fail-fast receive, a send and a second receive on the
+same connection. The third and fourth elements of a call identify the function: a 32-bit
 *protocol ID* naming a group of related methods (registration, user chains,
 Merkle queries, key-value storage, and so on) and a small integer *method
 position* within that group. Positions need not be contiguous; the key-value

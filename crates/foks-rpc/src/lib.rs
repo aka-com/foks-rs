@@ -34,7 +34,8 @@ mod server;
 pub use generated::*;
 pub use response::{encode_status_response_at, encode_void_success_response_at, RpcStatus};
 pub use server::{
-    decode_call, decode_message, read_call, read_message, DecodedCall, InboundMessage,
+    cancelled_sequence, decode_call, decode_message, encode_cancel_v2, read_call, read_message,
+    DecodedCall, InboundMessage,
 };
 
 pub const CURRENT_COMPATIBILITY_VERSION: u64 = 1;
