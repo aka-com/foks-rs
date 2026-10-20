@@ -109,6 +109,12 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
         let version =
             transaction.pragma_query_value(None, "user_version", |r| r.budgeted_get(0))?;
         if application_id == APPLICATION_ID && matches!(version, 43..=59) {
+            if version == 49 && !has_kv_accounting(&transaction)? {
+                // Before the celld port this branch numbered its waitlist step
+                // 49. Such a store has no accounting columns and cannot take
+                // the version-49 upgrade path; it must be recreated.
+                return Err(Error::SchemaVersion { found: version });
+            }
             if version <= 47 {
                 if version == 43 {
                     transaction.execute_batch(
@@ -212,6 +218,16 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
         return Ok(());
     }
     validate(application_id, version)
+}
+
+fn has_kv_accounting(connection: &Connection) -> Result<bool> {
+    Ok(connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM pragma_table_info('kv_namespaces') WHERE name='accounted_bytes'
+        )",
+        [],
+        |row| row.budgeted_get(0),
+    )?)
 }
 
 pub(crate) fn validate_connection(connection: &Connection) -> Result<()> {

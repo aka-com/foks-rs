@@ -48,7 +48,11 @@ index, adds a `created_at` index for retention, and creates the one-row
 `waitlist_count` table. The upgrade initialises that row from the deduplicated
 entries, insert and delete triggers keep it current, and the join cap check
 reads it instead of counting the table. These changes and the version stamp
-commit together; any error leaves the previous schema and data intact. Index
+commit together; any error leaves the previous schema and data intact.
+A version-49 store written before the celld port (where 49 was the waitlist
+step: `waitlist_count` and the unique email index, without the KV accounting
+columns) is refused with a schema-version error and must be recreated; the
+upgrade recognises it by the missing `kv_namespaces.accounted_bytes` column. Index
 creation can take time and disk/WAL space proportional to the existing tables,
 so allow for that work during a controlled writer restart and retain a backup.
 No upgrade runs inside recurring maintenance.

@@ -109,6 +109,38 @@ fn older_than_supported_predecessor_is_refused_without_upgrading() {
     );
 }
 
+#[test]
+fn pre_port_schema_49_is_refused_without_upgrading() {
+    // Before the celld port this branch's schema 49 was the waitlist step:
+    // waitlist_count and the unique email index, no KV accounting columns.
+    let test = common::TestDatabase::new();
+    let path = test.path.clone();
+    drop(test.database);
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(concat!(
+            include_str!("fixtures/remove_read_dependency.sql"),
+            include_str!("fixtures/remove_kv_usage.sql"),
+            include_str!("fixtures/remove_kv_current.sql")
+        ))
+        .unwrap();
+    remove_accounting(&connection);
+    connection.pragma_update(None, "user_version", 49).unwrap();
+    let before = schema_objects(&connection);
+    assert!(before.iter().any(|(_, name, _)| name == "waitlist_count"));
+    assert!(matches!(
+        Database::open(&path, Config::default()),
+        Err(Error::SchemaVersion { found: 49 })
+    ));
+    assert_eq!(schema_objects(&connection), before);
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+            .unwrap(),
+        49
+    );
+}
+
 const EXPIRY_INDEXES: [&str; 7] = [
     "names_reservation_expiry",
     "team_names_reservation_expiry",
