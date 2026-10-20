@@ -1,5 +1,7 @@
 # Review of the ported celld code
 
+> **Status, 20 October 2026:** the 34 medium- and low-priority findings rated effort S are fixed; each finding below carries a status line naming the merge and any remaining part. The 12 other findings (the 7 high-priority ones, including the effort-S bulk pool, and the medium findings rated effort M) remain open.
+
 A review of the celld code as it exists on branch `claude/focused-mccarthy-3amy72` at `bca9eee`, after the frozen `origin/celld` branch (78 commits from `d3ee213`) was squash-ported in `6581535` and `bca9eee` on top of `224a6c4`. Twelve reviewers covered nine areas (backup, chunks, deadlines, desktop, kernel, kv-accounting, session, storage-contract, uploads) and three cross-cutting concerns (security, Go FOKS v0.1.9 compatibility, test quality), skipping problems already recorded in [second-review.md](second-review.md), [STATUS.md](STATUS.md) and `findings/*.md`. They produced 51 candidates. Two independent verifiers (a skeptic and a reproducer) checked each candidate against HEAD and, where it settled a question, by experiment; a third verifier decided three split votes. Four candidates were refuted. The remaining 47 merge into 46 findings: 7 high, 10 medium and 29 low priority (35 S, 11 M, 0 L); by origin, 40 introduced by celld, 4 pre-existing and unrecorded, 2 introduced by the port's resolution.
 
 ## Summary
@@ -199,6 +201,8 @@ Verifier note: Both verifiers confirmed and agreed on M; one rated medium becaus
 
 Priority: medium · Type: bug · Origin: celld · Effort: S · Area: deadlines · Merged: `c-deadlines-expired-response-never-written`
 
+Status: fixed on 20 October 2026 (merge `dbf5e4b`).
+
 Every terminal deadline response in the agent is built only after tokio::time::timeout_at(control.deadline.instant()) or sleep_until(deadline) fired, and is then handed to write_controlled_response(&control), which calls control.check() before encoding and again before write_all. Deadline::check returns Expired when Instant::now() >= the same instant the timer fired on, so the first check fails deterministically, nothing is written, the Err propagates out of handle_connection and the socket is dropped. Affected: the supervise_blocking_with_control timeout arm ('connection closed because completion is ambiguous', written at main.rs:1463), the post-completion worker_control.check() that replaces a definite result with DeadlineExceeded (main.rs:1995-1998), the chat poll ('chat poll operation deadline exceeded'), and the streaming upload ('streaming upload outcome is ambiguous; refresh the store before another mutation'); ReconcileProfile and RefreshLease do not even build a response and return Err from handle_connection on timeout_at. Pre-port the agent wrote these responses with write_response(timeout) under the agent-wide write budget. The client's deadline is strictly later than the agent's (Deadline::receive caps at min(rest, cap) after transit), and read_frame_cancellable maps Ok(0) to Io(UnexpectedEof) 'agent disconnected' before any deadline check, so the client sees EOF first: a reproducer with the HEAD binary (--request-timeout-seconds 2, a never-answering server, a CheckAndAddProfile) printed 'local agent mutation outcome is ambiguous: local agent I/O failed: agent disconnected' after 2.01 s while the agent log recorded 'connection failed: FOKS operation deadline exceeded'. The desktop maps UnexpectedEof to connection_lost ('agent-lost', fatal) and fires its connection-loss notifier although the agent is healthy; a slow PutKv ends as Ambiguous(Io) rather than a typed DeadlineExceeded with the refresh advice. The existing test expired_rejection_does_not_start_a_fresh_response_write_budget pins the refusal for an admission-not-started rejection, where it is correct; no test covers a dispatched operation.
 
 Evidence:
@@ -223,6 +227,8 @@ Verifier note: Both verifiers confirmed medium, S; one reproduced it end to end 
 **Every KV file put claims a resumable upload identity before the size is known, so each small inline write holds one of 8192 receipt rows for 30 days and every save depends on the receipt clock trusting the system clock**
 
 Priority: medium · Type: bug · Origin: celld · Effort: S · Area: uploads · Merged: `c-uploads-implicit-identity-receipt-budget`, `c-uploads-clock-gates-all-puts`
+
+Status: fixed on 20 October 2026 (merge `dbf5e4b`). Remaining: large writes still fail while the upload clock is untrusted, the clock is not re-anchored in-process, and the desktop cannot repair the upload clock (ISSUES.md).
 
 put_file_with_size_bound calls ensure_file_upload_claim before the first source read, regardless of size; for every session without an explicit identity it issues a fresh UploadHandle, samples the receipt clock, calls upload_issuance_context, and registers the intent, which runs receipt_admit and inserts a kv_upload_handles row with receipt_bytes=1024 whose AFTER INSERT trigger increments reserved_rows. Two consequences follow. (1) Receipt budget: a small file finishes as InlineUntracked (state 11) but keeps the handle row; terminal_at/expires_at = floor + 30 days are stamped later and PRUNE_CANDIDATES deletes only rows past expires_at (128 per maintenance turn), so each inline write holds one of max_rows = 8192 for 30 days. The budget is a per-profile singleton shared by every account and team, set_upload_retention_limits has no caller outside tests, and every desktop PutKv (item saves, imports), adapter write and MCP data write reaches this path. A bulk import of 9,000 items or an agent writing about 300 small files a day hits UploadRetentionFull on the 8,193rd write within 30 days, after which every file write in that profile, large or small, fails (desktop code 'upload-retention-full', not retryable) until the oldest receipts age out. (2) Clock dependency: upload_issuance_context fails with UploadClockUntrusted when the receipt clock's validation rejects the sample. Within one process the anchor is never re-taken, so a wall-clock step of more than 300 s in either direction while the agent runs (a user correcting a fast clock, a VM step) makes every file put fail for the rest of the process lifetime; after a restart a forward step under 24 h reanchors immediately, a backward step of S seconds is refused for about S - 300 s of real time, and larger steps need the manual `foks retention reanchor --domain upload` flow, for which the desktop has no action (the agent's error text names the CLI command). Reads, mkdir, symlink and remove are not gated, so the failure looks like a save-specific bug. Pre-port puts had neither an upload claim nor a clock dependency. Each inline write also leaves a four-phase cleanup ledger row that maintenance must walk, including a temporary-directory sweep.
 
@@ -292,6 +298,8 @@ Verifier note: Both verifiers confirmed medium, M, by tracing the open path and 
 
 Priority: medium · Type: bug · Origin: celld · Effort: S · Area: backup · Merged: `c-backup-restore-into-bound-store-dead-end`
 
+Status: fixed on 20 October 2026 (merge `7aaae66`).
+
 The hosted recovery case celld targets is 'SQLite volume lost, object store survived'. restore_backup deliberately produces an inline-only database with no binding and no ledger. When the operator restarts with the unchanged server.toml (same bucket/prefix or directory), initialize_online sees a non-empty namespace, commits a PendingNew binding pinned to that locator with a fresh random namespace and authority None inside writer.call before any marker I/O, and then create_namespace_marker_if_absent finds the old installation's marker and fails with 'storage namespace marker conflict'. Because the row is committed first and prepare_chunk_storage_binding_with_authority refuses a different locator for any non-Legacy binding, the restored database is now pinned. A reproducer ran the sequence: start 1 against the old store fails with the marker conflict and leaves PendingNew (locator = old store, authority None); start 2 with a fresh empty directory fails Invalid('chunk storage binding mismatch'); start 3 back on the old store fails on the marker again; start 4 with no [chunk_store] at all fails 'bound external storage requires its configured backend' because a binding row exists. After one wrong first start the restored database cannot start under any configuration and must be deleted and restored again, and the operator has to guess that a new empty prefix or directory is required. The surviving objects are useless (the backup is self-contained) and become permanent orphans with no collector for S3. The testkit restore tests remove the chunk directory first or restore into a fresh environment, so the sequence is untested, and the README says only that backups 'restore without the original store'.
 
 Evidence:
@@ -315,6 +323,8 @@ Verifier note: Both verifiers confirmed medium, S; one reproduced all four start
 
 Priority: medium · Type: bug · Origin: pre-existing · Effort: S · Area: backup · Merged: `c-backup-restore-stale-sidecars`
 
+Status: fixed on 20 October 2026 (merge `7aaae66`).
+
 SQLite validates a -wal file's header checksum, page size and salts against the WAL itself, not against the main database it was written for, so a WAL with a valid header is replayed into whatever main file sits next to it. restore_backup refuses an existing foks-server.sqlite and a non-empty key directory but not an existing -wal, -shm, -journal, .storage-lock or writer lock at the destination; copy_new_file writes only the main file, whose header still declares WAL mode, so the first Database::open replays the stale frames. Both verifiers reproduced it: a -wal copied from database A placed next to an unrelated WAL-mode main file B was replayed on B's first open, B's own table disappeared, A's tables appeared, and PRAGMA integrity_check returned ok, so the corruption is silent. The scenario is the natural response to 'restore destination is not empty' after a failed integrity check: the operator stops the server, deletes only foks-server.sqlite and restores into the same path; the stale WAL is present precisely because the stop was unclean. The documented procedure (new explicit paths) and the recovery harness (remove_dir_all of the database directory) avoid it only if followed. The check is unchanged from 224a6c4, so this is pre-existing; it is reported because celld made restore the documented lost-volume recovery route and it is not recorded in docs/review.
 
 Evidence:
@@ -333,6 +343,8 @@ Verifier note: Both verifiers confirmed and reproduced the WAL replay; one kept 
 **A single 15 s Ordinary budget now covers the whole serial catalog walk (list_catalog, list_catalog_progressive, list_profile_catalog) and the catalog repair inside Ordinary mutations, so a vault with many stores on a slow server never finishes loading**
 
 Priority: medium · Type: perf · Origin: celld · Effort: S · Area: desktop · Merged: `c-desktop-ordinary-cap-whole-catalog-walk`
+
+Status: fixed on 20 October 2026 (merge `efe4cd2`). Remaining: the catalog repair inside a mutation still runs on the mutation's 15 s budget.
 
 CommandState::admitted calls begin_operation, which captures Instant::now() + class.cap() once, and every transport the command uses is bound to it; list_catalog, list_catalog_progressive and list_profile_catalog are Ordinary (15 s). load_catalog runs ListProfiles, then per profile ListKnownStores/ListProfileOverview, then load_store_pages for each store in a plain for loop, each store issuing one or more ListKv pages; a fresh ListKv is not a cache read (the agent runs list_kv_metadata, which authenticates and syncs the namespace over the network), and the agent's retained first pages serve a non-fresh read only when the cache holds them, so the first boot after an agent start pays the full cost. Before the port the only bound was the agent's 60 s per request and the command had no total. Three profiles with 40 team stores at about 300 ms per round trip is 47 serial requests, about 14 s before any second page; list_catalog(fresh=true) then expires with deadline-exceeded (retryable, not ambiguous), note_fresh_catalog_read runs only on success so every later listing is fresh too, and the stores late in label order never load. A boot read that fails is not fatal: the shell mounts on an empty snapshot and the reconciliation scheduler runs a per-profile catalog job every 30 s under its own 15 s budget, so the real risk is a profile whose own stores cannot be walked in 15 s, which stays unloaded indefinitely, plus the user's Refresh and the boot walk. ensure_catalog_for_mutation spends an Ordinary mutation command's budget on the same per-profile walk when the profile's catalog is missing or retired. The agent's own cap for ListKv is per request, so widening the desktop command class does not lengthen any single agent request. No real latency was measured; the finding is a sizing defect.
 
@@ -357,6 +369,8 @@ Verifier note: Both verifiers confirmed medium; one rated M for a per-store budg
 
 Priority: medium · Type: security · Origin: celld · Effort: S · Area: session · Merged: `c-session-kex-budget-per-source`, `c-security-kex-receive-budget-single-source`
 
+Status: fixed on 20 October 2026 (merge `79f7830`).
+
 celld (9c19e75) added a non-queuing global budget for anonymous KEX receive long polls so that receives cannot occupy every public connection. kex_receive_capacity() = min(maximum_kex_receive_polls, maximum_active_connections / 2) = 32 by default; admit_kex_receive is a keyless try_acquire on one semaphore; the permit is held until the response is written; and kex::receive sleeps in 5 s slices until min(requested wait, MAX_BLOCKING_WAIT = 1 h). maximum_connections_per_source is also 32 per listener. One IPv4 address or IPv6 /64 can therefore open 32 public connections, send KexReceive for a random session id with poll_wait_milliseconds = 3_600_000 on each, and take the whole budget for an hour, renewing as the polls expire; every other device-pairing receive on the host is answered RateLimited (1012) at admission. Before the port the same 32 connections took 32 of 256 public slots and pairing for other sources continued, so celld changed the exposure from eight sources (all public connections) to one. The relay already has a per-source share (MAX_SOURCE_MESSAGES, kex.rs:16); the receive budget is the only KEX resource without one. The refusal is counted under its own reason (KexReceivePolls) and the README documents the global cap, but not that one source can take all of it.
 
 Evidence:
@@ -379,6 +393,8 @@ Verifier note: Both verifiers confirmed medium, effort S, and agreed this is not
 
 Priority: medium · Type: bug · Origin: celld · Effort: S · Area: storage-contract · Merged: `c-storage-contract-import-statement-op-budget`
 
+Status: fixed on 20 October 2026 (merge `7aaae66`).
+
 scan::Database::private_target installs the same Control progress hook (every 1000 opcodes, latch after 1000 callbacks) on the import target as on the scanner, and import::integrity and policy::verify only call statement() (which resets the counter) before each whole-database statement: PRAGMA main.foreign_key_check, PRAGMA main.integrity_check(1) (the argument bounds reported errors, not work) and policy::none's full-table EXISTS scans. The cap is sized for the scanner's keyset LIMIT 1 probes. Measured on the bundled SQLite 3.53.2 against the real schema-60 database (101 tables, 185 indexes): integrity_check costs about 24 opcodes per row for a two-btree table and 33 for a three-btree table, so the cap is crossed at roughly 25-40k rows in ordinary indexed tables (60k merkle rows: 1.4M opcodes, interrupted); foreign_key_check and the EXISTS scans bind at about 150-200k rows. Capture, scan, copy_all and COMMIT succeed; then the hook returns true, SQLite aborts the step with SQLITE_INTERRUPT, and the import returns ScanError::Sql { extended_code: Some(9) } (not the Unsupported('SQLite operation/deadline limit') the reviewer named, which appears only on later Control::check calls because the latch is permanent). The qualification harness therefore cannot run on any realistic dataset; only the tiny bootstrapped fixtures in import/tests.rs pass. The path is reachable only through the celld-proof feature and tests, so there is no production impact.
 
 Evidence:
@@ -397,6 +413,8 @@ Verifier note: Both verifiers confirmed medium, S, and both measured opcode coun
 **Everything behind the celld-proof and list-allocation-qualification features (hosted_personal, proof, the oracle and qualification integration tests) is never compiled, clippy-checked or run by any check script or workflow, and the features are undocumented**
 
 Priority: medium · Type: test · Origin: celld · Effort: S · Area: tests · Merged: `c-tests-celld-proof-gated-tests-never-run`
+
+Status: fixed on 20 October 2026 (merge `efe4cd2`). Remaining: the proof authority (tools/foks-celld-proof/authority.mjs) changed, so earlier lab qualification evidence must be re-run.
 
 No script, workflow or document passes --features celld-proof or list-allocation-qualification (grep over tools/, scripts/, .github/, *.md, *.qmd and AGENTS.md returns nothing outside tools/foks-celld-*); tools/foks-server/check.sh and scripts/test-rust-full.sh run default features only. The feature-only public surface (foks-server hosted_personal.rs, net/session/proof.rs, qualify_personal_list_import, start_native_personal_list_qualification, the celld-proof arms of services/kv.rs, listener.rs and session.rs, the testkit celld_proof module) and the five #![cfg(feature)] integration test files (native_list_oracle, the only test comparing hosted_personal::native_list output byte-for-byte with the authenticated List RPC; personal_authority; personal_list_domain; list_allocation; restricted_list_allocation) compile to empty binaries without the feature and so are outside every CI job. The restricted_storage import unit tests do run because that module is cfg(any(test, feature)). A regression in these modules, or a change that stops them compiling (for example to encode_kv_list_request_at or KvListResponse encoding), is noticed only when somebody runs the feature by hand on the lab machine. hosted_personal.rs describes itself as feature-only qualification helpers that install no listener route, so the exposure is silent bit-rot of the qualification evidence, not a runtime defect. A local run with the feature passed native_list_oracle, personal_authority (Go test ignored), personal_list_domain and the 102 restricted/hosted/owned_list unit tests.
 
@@ -421,6 +439,8 @@ Verifier note: Both verifiers confirmed medium, S. Correction applied: 'producti
 **The scheduled backup's storage-lease acquisition runs outside the phase wrapper, so its failures count as backup failures with no phase/reason record**
 
 Priority: low · Type: maintainability · Origin: celld · Effort: S · Area: backup · Merged: `c-backup-lease-failure-unreported`
+
+Status: fixed on 20 October 2026 (merge `7aaae66`).
 
 celld added StorageLease::with_store(...)? as the first statement of run_backup, outside the checked(Phase, ...) wrapper that BackupRead, BackupCreate, BackupPublish and BackupRetention use; report() is called only from checked() and the request-failure path, so a lease failure increments metrics.backup_failed and writes nothing to stderr, while README:828-836 tells operators to diagnose backups from the 'FOKS operation failed: phase=..., reason=...' record. The lease can fail on DatabasePathIdentity::existing (database path changed), the storage lock not being a regular file or unopenable (EACCES on the database directory), try_lock_shared ('storage is in use' while an offline command holds the exclusive lease), identity rechecks, and namespace_lease I/O on the chunk directory. Wrapping alone would report Error::Chunk variants as reason=internal because reason() has no arm for Error::Chunk. The CLI backup command is unaffected because it reports errors directly. Pre-port run_backup began with checked(Phase::BackupRead, ...) and had no lease.
 
@@ -461,6 +481,8 @@ Verifier note: Both verifiers confirmed low, M, and both measured: the reviewer'
 
 Priority: low · Type: docs · Origin: celld · Effort: S · Area: chunks · Merged: `c-chunks-readme-stale-collector-and-timeout`
 
+Status: fixed on 20 October 2026 (merge `7aaae66`).
+
 README.md:661 says 'There is no object garbage collector in this release' and that objects remain after upload cleanup or removal of their SQLite references, while the same port added collect_chunk_store (filesystem only, offline, exclusive lease, authority-verified) and the collect-chunk-store and inventory-chunk-store commands, which no README, ADMINISTRATION.md, foks-server-db README or book chapter mentions; the foks-server-db README:101 still says 'A coordinated collector is future work'. README.md:657 ('the 15-second hosted target') and 684 ('not a 15-second failover path') matched celld's 15 s request_timeout default; bca9eee restored 30 s and updated line 161 and the book but not these two lines, so the README contradicts itself. An operator relying on 'objects remain after removal of their SQLite references' who keeps an un-hydrated SQLite copy as a cold backup and runs collect-chunk-store on the live installation later finds the copy's external references pointing at deleted objects. The separate '15-second I/O timeout' at README:436 and book/18:225 is a different, still-correct limit.
 
 Evidence:
@@ -478,6 +500,8 @@ Verifier note: Both verifiers confirmed low, S. Provenance correction: neither l
 **Temporary files left by a hard stop during a filesystem put are inventoried as unknown objects, charged to physical capacity permanently, never collectable, and block the empty-namespace fast path**
 
 Priority: low · Type: bug · Origin: celld · Effort: S · Area: chunks · Merged: `c-chunks-temp-files-charged-forever`, `c-security-filesystem-chunk-temporaries-leak`
+
+Status: fixed on 20 October 2026 (merge `7aaae66`). Remaining: temporaries left by earlier releases (`.tmp??????`) stay charged (ISSUES.md).
 
 FilesystemChunks::put_object and create_namespace_marker_if_absent create NamedTempFile::new_in(directory) (tempfile 3.27.0 default prefix '.tmp' plus six random characters) in the object directory and persist_noclobber it. NamedTempFile removes its file on Drop, so every error path (deadline check, write, sync, recheck, persist failure, a dying client) cleans up; a leftover needs the process to die (SIGKILL, OOM kill, power loss, or the binary's process::exit(1) fatal path) while a blocking put is between create and persist. Once left, the inventory treats any regular file other than the marker and lock as an object, record_chunk_inventory_page inserts it as state 3 with digest NULL, the insert trigger adds its bytes to present_bytes and one to objects, admission compares those totals against maximum_chunk_physical_bytes and maximum_chunk_objects, and collection candidates require digest IS NOT NULL, so the file (up to 9 MiB) is charged for the life of the installation and never deletable; delete_object requires a ledger key that validate_key accepts, which a '.tmp' name is not. empty() also counts it, so a stale temporary in the window of a first start (a hard stop during the marker's own temporary write, or after clear_private_chunk_ledger or an inventory restart) means every external upload is refused with 'chunk inventory is incomplete' until an offline inventory runs. The current test fixture treats 'old-temp' as an ordinary unknown key, so the behaviour is intended, but nothing distinguishes the server's own residue from foreign objects.
 
@@ -501,6 +525,8 @@ Verifier note: Both verifiers confirmed low, S. Corrections applied: only a hard
 
 Priority: low · Type: compat · Origin: celld · Effort: S · Area: compat · Merged: `c-compat-memory-budget-failure-closes-read-routes-unanswered`, `c-session-decode-allocation-closes-connection`
 
+Status: fixed on 20 October 2026 (merge `79f7830`).
+
 serve() returns Ok(()) (close, no response) whenever outcome._memory.failed(), for every route, so that a possibly committed write stays ambiguous; AllocationBudget::reserve and ResponseAllocationBudget::reserve set failed on any shortfall, including budgeted_get during a read query. Read-only routes (KvStoreList, GetDir, GetEncryptedChunk) have nothing to keep ambiguous, yet under working-pool pressure a client listing a large directory gets EOF rather than the documented 1012: the handler maps the FromSqlConversionFailure to TransactionRetry (1014), that status is encoded, and then discarded because failed() is set. A second path has the same outcome: decode_message runs under memory.sync before admit_working, and an allocation shortfall during decoding becomes foks_snowpack ErrorKind::AllocationLimit wrapped as foks_rpc::Error::Snowpack, which serve() returns as Err, closing the connection and classifying it as a protocol (Rpc) error in diagnostics. The Go client surfaces a closed connection as io.EOF for the pending call and the Rust agent's RateLimited mapping is bypassed. book/18-server-storage.qmd:222 says the close happens 'once a handler may have written', which the code does not distinguish. Pre-port decode had no allocation charges and session.rs had no failed() check. Reachability is limited: with default limits the bulk cap bounds the heavy chargers and validate() refuses a working pool under 512 MiB, so exhaustion needs many concurrent small requests with large SQL results; raising the bulk cap (c3-session-bulk-pool-four-permits) makes this path more reachable.
 
 Evidence:
@@ -523,6 +549,8 @@ Verifier note: Both verifiers confirmed low, S. Correction applied: even if the 
 
 Priority: low · Type: bug · Origin: celld · Effort: S · Area: deadlines · Merged: `c-deadlines-backend-pairing-cap-shrunk`
 
+Status: fixed on 20 October 2026 (merge `dbf5e4b`).
+
 Pre-port, call_cancellable applied self.timeout.max(DEVICE_PAIRING_TIMEOUT) and .max(CHAT_POLL_TIMEOUT), so a general-purpose client timeout never cut a pairing wait. deadline_for now uses self.timeout.unwrap_or(class.cap()).min(class.cap()), inverting that. foks-desktop-backend sets set_timeout(request_timeout_seconds) (default 15) and additionally binds a process-wide Deadline::capture(started + request_timeout_seconds) through with_local_deadline, which deadline_for's existing.shorten keeps, so fixing set_timeout alone would not restore the budget. FinishDevicePairing, AcceptDevicePairing and ResumeDevicePairingAcceptance are Pairing class (300 s cap) and are built by the backend; with a 15 s envelope the agent's pairing_relay_budget is 7.5 s because the cap is below PAIRING_COMPLETION_MARGIN (45 s). A `pair-accept` through the backend while the other device takes 30 s to respond now fails with a deadline error where it waited up to five minutes before. Impact is limited to the scripted transcript shell: the Tauri desktop derives its deadline from operation.deadline_class().cap() and the CLI budgets pairing commands at 300 s. Any other embedder that calls set_timeout as an Ordinary ceiling and then issues Pairing or ChatPoll requests inherits the same inversion.
 
 Evidence:
@@ -542,6 +570,8 @@ Verifier note: Both verifiers confirmed low, S. Both added that the process-wide
 **MCP startup shares one 5 s deadline across the running-agent probe, agent launch, readiness and account binding; pre-port each phase had its own wait**
 
 Priority: low · Type: bug · Origin: celld · Effort: S · Area: deadlines · Merged: `c-deadlines-mcp-startup-window`
+
+Status: fixed on 20 October 2026 (merge `dbf5e4b`). Remaining: no test with a fake agent answering ProfileBusy.
 
 mcp::run shortens the 15 s Mcp command budget to now + 5 s and passes that one deadline to ensure_agent_with_deadline, whose running-agent wait (2 s) and launch wait (5 s) are each min'd with it, and to connect_with_deadline -> bind_account, which shortens the same deadline by another 5 s (no effect) and retries ProfileBusy only until it expires. Pre-port the phases were sequential and independent (2 s probe, 5 s launch wait, 5 s bind, up to 12 s). The probe for an absent agent fails fast, so the material loss is that bind_account now gets only what agent startup left of the 5 s; the agent waits in admission up to admission_budget(remaining) before answering ProfileBusy, so a bind issued with 4 s left spends it waiting and retrying while another front end runs a 10 s profile sync, and startup fails with 'authenticated agent startup timed out' or 'selected profile remains busy' although nothing is wrong. startup_context treats Expired as Ok, so the loops end through their Instant checks rather than an error.
 
@@ -563,6 +593,8 @@ Verifier note: Both verifiers confirmed low, S; cold-start timing was not measur
 
 Priority: low · Type: bug · Origin: pre-existing · Effort: S · Area: deadlines · Merged: `c-deadlines-mcp-upload-ordinary-cap`
 
+Status: fixed on 20 October 2026 (merge `dbf5e4b`). Remaining: tested through the deadline derivation, not a full call_tool round trip.
+
 call_tool captures Deadline::capture(now + DeadlineClass::Ordinary.cap()) for every tool before parsing and before waiting on the server's active permit; the worker receives that deadline, AgentBackend::invoke intersects it into the client via with_local_deadline, and deadline_for(Bulk) then shortens its 300 s original to the existing 15 s, so a Put write of up to MAX_FILE_BYTES (4 MiB) is bounded by 15 s minus queueing, parsing and binding. On a slow upstream link (about 17 s for 4 MiB at 2 Mbit/s) or a busy agent the upload is cancelled mid-stream and reported as 'upload interrupted; inspect submission_id', an ambiguity the caller must resolve with foks_status although a Bulk-class request would have completed. This is not a port regression: pre-port the MCP used AgentClient's default 15 s timeout for put_kv_stream and the agent bounded streaming uploads by its agent-wide timeout; the port introduced a Bulk class that the MCP server does not use, and the 15 s now also covers the permit wait, which was unbounded before.
 
 Evidence:
@@ -582,6 +614,8 @@ Verifier note: Both verifiers confirmed low, S, and corrected the origin to pre-
 **Retention maintenance runs admission, registry, credential and profile-session opens under the same 50 ms budget as the maintenance slice, and a pass that fails there is counted but never logged**
 
 Priority: low · Type: bug · Origin: celld · Effort: S · Area: deadlines · Merged: `c-deadlines-retention-50ms-session-open`
+
+Status: fixed on 20 October 2026 (merge `dbf5e4b`). Remaining: a retention admission miss still defers the profile for 60 s.
 
 main.rs enters RequestControl::background(50 ms) around retention::run_one_profile and run_profile computes a second 50 ms Instant deadline; both start before profile_work admission. acquire_blocking checks request_control::current(), so the admission wait shrank from the pre-port 1 s to the remainder of the 50 ms, and ProfileSession::open binds to runtime::current_operation() and calls check_operation at entry, after building the client and inside the checked-session entry (checkpoint verification), so registry open, credential open, client construction and the checked session all consume and can be failed by the budget. An Err (deadline inside the opens) or an admission miss (Ok(None)) is counted as FAILURES with no log and Schedule::finish defers the profile 60 s; a pass whose opens merely use up the slice returns more_work=true and is rescheduled at 250 ms, so it does not back off. Measured on this 4-CPU host under load, the opens cost about 10-25 ms (about 2x headroom), so the budget is not exceeded here; a slow disk, a Native credential backend whose master_key() reaches the Keychain or Secret Service when no session key is cached, or any foreground request holding the profile for more than 50 ms (admission miss, then a 60 s back-off where pre-port waited 1 s) are the realistic triggers. An agent with a profile whose checked session fails showed attempts 2 / failures 2 / successes 0 with no retention line in the log. Pre-port cadence was one profile per 60 s, so the 60 s back-off is not itself a regression; the reduced admission and open budget and the silent failure are.
 
@@ -604,6 +638,8 @@ Verifier note: Both verifiers confirmed and lowered the reviewer's medium to low
 
 Priority: low · Type: compat · Origin: celld · Effort: S · Area: deadlines · Merged: `c-deadlines-time-namespace-hard-requirement`
 
+Status: fixed on 20 October 2026 (merge `dbf5e4b`). Remaining: sandboxes that hide /proc/thread-self/ns, and kernels before 3.17, are still refused.
+
 linux_domain() maps any metadata error on /proc/thread-self/ns/time, including ENOENT, to Error::Unavailable with no fallback; platform_sample calls it twice per sample and every Deadline::capture, receive and check samples. Time-namespace proc entries exist only on kernels built with CONFIG_TIME_NS (Linux 5.6+, a build option), so on RHEL/Alma/Rocky 8 (4.18), older Android and WSL1 kernels, and sandboxes that hide /proc/thread-self/ns, the CLI fails in CommandScope::enter before any command runs ('local deadline clock is unavailable: No such file or directory (os error 2)', which names neither the file nor the requirement), the agent starts but rejects every request with DeadlineClockUnavailable, and the desktop and MCP server fail the same way. No document states a minimum kernel. The refusal is a defensible safety choice because the namespace inode is what detects a different CLOCK_MONOTONIC offset, but without CONFIG_TIME_NS there is exactly one monotonic clock per boot, so ENOENT is a safe case to encode rather than refuse.
 
 Evidence:
@@ -622,6 +658,8 @@ Verifier note: Both verifiers confirmed low, S, by reading; this host (6.18) has
 **Read commands resolve the renderer's selection by path and version only, unlike mutations and copy_item_to_store, so an entry replaced under the same path and version by another dirent would be read in place of the listed one**
 
 Priority: low · Type: bug · Origin: pre-existing · Effort: S · Area: desktop · Merged: `c-desktop-read-selection-not-dirent-bound`
+
+Status: fixed on 20 October 2026 (merge `efe4cd2`).
 
 celld's 4ed9899 bound the agent hop of a read to the catalog entry's dirent_id. The renderer hop is unchanged: read_item, copy_item_field, open_item_url and download_file resolve the selection through selected_item(store, path, version), the bridge sends only {storeId, path, version} although ItemDto.direntId exists, and selected_bound_item (written for reads) is used only by copy_item_to_store, while mutations use selected_bound_mutation_item and refuse a mismatch with 'conflict'. The reviewer's scenario cannot happen as written: a file removed and recreated at the same path is not version 1 again in either client (the Rust client's prepare_dirent reuses the existing dirent id, including a tombstone's, at version+1; Go v0.1.9's Dirent.edit does ret.Version++ keeping the id), so the existing version check already refuses it. A same-path, same-version, different-dirent entry requires the parent directory node to be replaced (a folder removed or moved and recreated with a same-named child), and the host's native snapshot is replaced only by renderer-invoked listings whose result the renderer receives at once and by the mutation repair in ensure_catalog_for_mutation; there is no background host loop, so the divergence window is a render tick or the interval between a repair and the renderer's own profile refresh, and what is then read is the current content at the path the user clicked. The gap is a consistency defect against the documented 'bound to entry identity' model with a trivial fix; it predates the port.
 
@@ -643,6 +681,8 @@ Verifier note: Both verifiers confirmed the code gap and refuted the failure sce
 
 Priority: low · Type: bug · Origin: celld · Effort: S · Area: desktop · Merged: `c-desktop-upload-change-postwrite-app-locked`
 
+Status: fixed on 20 October 2026 (merge `efe4cd2`).
+
 change_file_upload is the only mutation whose check_mutation_access runs after the agent call (list_file_uploads does the same after its read). A lock taken during ResumeKvUpload or CancelKvUpload (a resume has a 300 s budget) discards a completed report and returns 'app-locked: The application locked before the change was submitted.', and failureOutcome maps app-locked to 'rejected' (never started) although the file was published or the spool cancelled. The user impact claimed by the reviewer does not reproduce: both lock paths tear the vault shell down before the reply can be shown (lockNow calls lockApp then setLoaded(null); the macOS menu path runs lock_now on the host and the renderer unmounts on the lock event), FileUploadsPanel keeps its error in component state that is lost with the shell and remounts closed, there is no idle auto-lock, and lock_now invalidates the whole catalog so every listing after unlock is a full reload; the panel prints only the normalized message and does not consult failureOutcome. What remains is a factually wrong message and code on a command that did apply its change, a redundant check (the report carries upload_id, state, counts, node_id and version, no plaintext), and a wrong classification for any future caller that classifies the error.
 
 Evidence:
@@ -663,6 +703,8 @@ Verifier note: Both verifiers confirmed and lowered the reviewer's medium to low
 
 Priority: low · Type: test · Origin: celld · Effort: S · Area: desktop · Merged: `c-desktop-upload-commands-untested`
 
+Status: fixed on 20 October 2026 (merge `efe4cd2`).
+
 The three new commands have distinct lock, deadline and reservation ordering (reservation before upload_id parse, invalidate before dispatch, lock check after dispatch) and the panel has a hand-written state-to-action table, but nothing under apps/desktop/src-tauri/src/commands/tests or apps/desktop/tests references list_file_uploads, resume_file_upload, cancel_file_upload, ListKvUploads, ResumeKvUpload, CancelKvUpload, FileUploadsPanel or the bridge methods. The only related native test, durable_upload_reconciliation_keeps_inflight_exclusion_and_does_not_clear_ambiguity, exercises begin_upload_reconciliation on AppState alone; tests/file-uploads.test.ts tests only the decoders, wire-contract-domains.test.ts records the FileUploads shape as covered by that decoder test, the deadline-table signature test checks only that the commands have a class, and the existing upload tests in tests/vault.rs cover upload_file for drop and replace. A change that moves the upload_id parse before the reservation, or renames an agent state string, passes the suite.
 
 Evidence:
@@ -681,6 +723,8 @@ Verifier note: Both verifiers confirmed low; one rated S, the other M because th
 **Every failed drop or replace upload tells the user to open Uploads to inspect or resume, including failures the agent never recorded**
 
 Priority: low · Type: bug · Origin: celld · Effort: S · Area: desktop · Merged: `c-desktop-upload-handle-hint-without-record`
+
+Status: fixed on 20 October 2026 (merge `efe4cd2`). Remaining: an exact answer needs the transport to report the agent's upload_ready signal; the hint is chosen by error code.
 
 upload_file issues the handle locally via ensure_upload_identity (KvUploadIssuance returns only database_id and issued_at; the id is random and nothing is recorded) before PutKvStream is sent, and appends 'Upload handle: {id}. Open Uploads to inspect or resume prepared content.' to every error from map_mutation_error once upload_id is Some. The agent records the handle in claim_upload -> prepare_kv_upload -> register_upload_intent, and several refusals precede that point: prepare_kv_upload's first statement is self.profile.require(Capability::Kv) (the capability-denied branch map_mutation_error rewrites), the agent's header size refusal, profile_work admission and worker-pool saturation in handle_streaming_upload, path validation inside put_kv_file_upload_with_size, and any transport loss before the header frame is consumed (the upload_ready handshake marks registration, and the desktop's error path does not record whether it completed). In each case ListKvUploads has no entry for the handle, the Uploads panel shows 'No recorded uploads', and the message promises a recovery that does not exist. The existing EarlyUploadLoss test asserts the code but not the message.
 
@@ -703,6 +747,8 @@ Verifier note: Both verifiers confirmed low, S, and settled the reviewer's unver
 
 Priority: low · Type: bug · Origin: celld · Effort: S · Area: desktop · Merged: `c-desktop-uploads-panel-receipt-discarded`
 
+Status: fixed on 20 October 2026 (merge `efe4cd2`).
+
 act() awaits resumeFileUpload or cancelFileUpload, discards the returned report, and renders listFileUploads(storeId, after); the per-row buttons call act(upload.uploadId) with no cursor, so the list returns to page one. For a completed upload the button label is 'Show saved receipt', but the row renders uploadId, label, chunk counts and reserved bytes and never nodeId or version, although the listing already carries them for verified and completed entries. Host side, change_file_upload takes the exclusive upload reconciliation reservation and calls invalidate_catalog_items before dispatch unconditionally, which drops the store's items from the host catalog, retires the in-flight load and raises the mutation epoch; nothing in the panel or checkedMutation refreshes the catalog afterwards, so until the next 30 s reconciliation job host-side resolution of the store's listed items fails with item-not-found. Agent side, a resume of a finalized upload with a verified receipt skips the network and returns the report, so there is no server write; the cost is a local catalog invalidation and a fresh reload for a button that displays nothing.
 
 Evidence:
@@ -722,6 +768,8 @@ Verifier note: Both verifiers confirmed low, S. The reviewer's line numbers (450
 **The native scalar, native page and Wasm scalar decoders map the same non-canonical INTEGER text to three different kernel error codes (integer_range, bounds, storage)**
 
 Priority: low · Type: maintainability · Origin: celld · Effort: S · Area: kernel · Merged: `c-kernel-scalar-vs-page-integer-error-code`
+
+Status: fixed on 20 October 2026 (merge `7aaae66`).
 
 Three decoders of the kernel's CAST(x AS TEXT) integer convention classify one storage condition (an INTEGER column that is not canonical decimal text) differently: native/scalar.rs returns Storage for bad UTF-8, IntegerRange for a parse failure and Storage for non-canonical text; native.rs returns Bounds for all three (and for every unexpected cell shape); the Wasm scalar codec's invalid() maps through parse() to Storage. The reviewer's operator-impact argument does not hold: the condition is unreachable without file-level corruption (kv_dirent_current.creation_time is INTEGER NOT NULL in a STRICT table and the page SQL emits CAST(... AS TEXT), which always yields canonical decimal for an i64; other integer columns use typeof() guards), the Bounds -> ScanError::Allocation mapping in restricted_list/bootstrap.rs applies only to pool admission and workspace construction in the bootstrap scan, which never calls query_page, and the List operation treats every kernel error uniformly (stats.rejected/failed, no code), so native and Wasm reports do not disagree in anything an operator sees. What remains is error-code hygiene between decoders; the Bounds and IntegerRange choices are celld's original code.
 
@@ -743,6 +791,8 @@ Verifier note: Both verifiers confirmed low, S, as a maintainability item, and r
 
 Priority: low · Type: bug · Origin: celld · Effort: S · Area: kernel · Merged: `c-kernel-wasm-input-alloc-infallible`
 
+Status: fixed on 20 October 2026 (merge `7aaae66`).
+
 input_alloc uses `*b = vec![0; length as usize]` for up to MAX_INPUT_BYTES (2 MiB) and page_input_alloc and small_box_input_alloc delegate to it, while the page, response and scalar buffers go through try_reserve_exact and the list_charge fixture entry shows the intended fallible pattern (return 0 on failure). No custom allocator or max-memory link flag exists, so an allocation failure goes through handle_alloc_error to abort and an `unreachable` trap; an exception out of an export poisons the instance in the spike host (poisonAndDiscard), whereas a 0 return raises a non-poisoning 'input allocation' error. The doc on small_box_input_alloc promises that a rejected allocation invalidates the request and returns 0, which the delegated path does not honour. Impact is narrow: the module declares no maximum, so growth fails only at the engine or host limit (wasm_limits.py requires at most 64 MiB); the hosts cap input at MAX_INPUT before calling; in a near-limit regime the same request also allocates infallibly in wire::run (serde_json::from_slice) and the output Vec, so making input_alloc fallible alone does not make such a request fail soft; the Wasm module is loaded only by the qualification tools under tools/, not by any server crate. The reviewer's 'charge the input length' suggestion would be a no-op: page::charge is reserve_allocation, which accepts whenever no thread-local budget is installed, and none is installed at the idle phase in which input_alloc runs (page_input_alloc's charge is equally inert in the shipped module).
 
 Evidence:
@@ -763,6 +813,8 @@ Verifier note: Both verifiers confirmed low, S, and narrowed it to a consistency
 
 Priority: low · Type: maintainability · Origin: port · Effort: S · Area: kv-accounting · Merged: `c-kv-accounting-preport-49-collision`
 
+Status: fixed on 20 October 2026 (merge `7aaae66`).
+
 Before the port this branch's SCHEMA_VERSION was 49 (454cc8b) and step 49 was the waitlist dedupe/unique/count step; after the port 49 means celld's kv_accounting step and the waitlist step moved to 60. initialize() accepts 43..=59 as upgradeable and cannot tell the two shapes apart: a pre-port file carries user_version 49, waitlist_count and the unique email index, and no accounting columns or triggers. It skips kv_accounting.sql (version <= 48 is false), applies kv_external.sql (version <= 49), whose ALTER TABLE and CREATE INDEX statements succeed and whose `DROP TRIGGER kv_file_chunks_account_insert` has no IF EXISTS and fails with 'no such trigger'. Reproduced with SQLite 3.45.1 from the 224a6c4 schema files. The IMMEDIATE transaction rolls back, so the file is intact, but Database::open returns Error::Sql rather than Error::SchemaVersion and nothing names the cause; even with IF EXISTS the chain would fail later because the recreated triggers reference missing accounted_* columns and migrate_waitlist would drop an index the pre-port step already dropped. tests/schema.rs predecessor() models only celld's 49, and the foks-server-db README documents 43..59 as upgradeable without the caveat. Only developer and CI data directories created between 454cc8b and 224a6c4 are affected (the port commit says no deployed databases exist).
 
 Evidence:
@@ -781,6 +833,8 @@ Verifier note: Both verifiers confirmed low, S, and both reproduced the failure 
 **Accounting triggers are not REPLACE-safe except on kv_nodes and kv_file_uploads, and the current-projection test performs the exact drifting statement without asserting the counters**
 
 Priority: low · Type: test · Origin: celld · Effort: S · Area: kv-accounting · Merged: `c-kv-accounting-replace-unsafe-counters`
+
+Status: fixed on 20 October 2026 (merge `7aaae66`). Remaining: the writer leaves recursive_triggers off, so seven accounted tables are not REPLACE-safe (recorded in crates/foks-server-db/README.md).
 
 With recursive_triggers off (the writer connection never sets it; only the restricted-list read connection turns it on), INSERT OR REPLACE deletes the conflicting row without firing DELETE triggers but fires the INSERT trigger, so the AFTER INSERT/AFTER DELETE accounting triggers on kv_dirent_heads, kv_directory_heads, kv_dirents, kv_directories, kv_roots, kv_locks and kv_file_chunks inflate their counters by one object and the old row's bytes per REPLACE; reproduced on HEAD's schema with SQLite 3.45.1 (dirent_count 2 against 1 head row; accounted_objects 4 against 3 dirent rows), exact with recursive_triggers on. BEFORE INSERT collision guards exist only for kv_nodes and kv_file_uploads. No production statement drifts today: the typed writers and the hosted catalog use plain INSERT or ON CONFLICT DO UPDATE. The gap is in the tests: kv_current_tests.rs:146-158 executes INSERT OR REPLACE INTO kv_dirent_heads onto an existing head and its invariant() checks only the projection and foreign keys, so dirent_count is left one too high unnoticed, and tests/kv_accounting.rs, whose assert_accounting would catch it, never uses REPLACE. The suite therefore neither proves REPLACE-safety nor documents its absence. A BEFORE INSERT guard on kv_dirent_heads is not an option because it would abort the production upserts (BEFORE INSERT runs before ON CONFLICT resolution, as the kv_usage_triggers.sql comment says for kv_nodes).
 
@@ -802,6 +856,8 @@ Verifier note: Both verifiers confirmed low, S, and both reproduced the drift. C
 **Ordinary response writes are bounded by the remaining request deadline, so a completed chunk download whose store fetch consumed most of the deadline cannot be delivered to a slow client and is repeated from scratch**
 
 Priority: low · Type: perf · Origin: celld · Effort: S · Area: session · Merged: `c-session-response-write-remaining-deadline`
+
+Status: fixed on 20 October 2026 (merge `79f7830`).
 
 Before the port write_response always had the full io_timeout (15 s) for the response. celld's single request deadline charges the write against whatever remains after body read, handler and store transfer: ordinary routes write under phase_deadline(deadline, io_timeout) = min(remaining, 15 s) and only long polls get a fresh io_timeout. When the write times out the connection is closed after the expensive work completed, the output buffer already charged to the output pool is discarded, and a client retry repeats the fetch. With default configuration the scenario is narrower than the reviewer stated: a remote object read is bounded by min(request deadline, configured chunk-store timeout), the store timeout defaults to 10 s (range 1-60 s), so a GetEncryptedChunk fetch leaves at least about 20 s of the 30 s deadline and the write still gets its full 15 s. The regression appears when timeout_seconds is configured above 15 s, or when execution queueing plus handler time plus store time exceed 15 s. It also lengthens the bulk-permit hold (c3-session-bulk-pool-four-permits) up to the same 15 s bound.
 
@@ -841,6 +897,8 @@ Verifier note: Both verifiers confirmed low, M. Corrections applied: the read co
 
 Priority: low · Type: bug · Origin: celld · Effort: S · Area: storage-contract · Merged: `c-storage-contract-interrupt-masks-cancellation-class`
 
+Status: fixed on 20 October 2026 (merge `7aaae66`).
+
 Control::progress latches `interrupted` whenever check() fails, which includes cancellation and deadline expiry as well as the opcode budget, and returns true; SQLite then aborts the running step with SQLITE_INTERRUPT, which From<rusqlite::Error> turns into ScanError::Sql { extended_code: Some(9) }, the error advance() and import_personal_list return (advance() then latches `failed`, so later calls return Incomplete). Every later Control::check() or statement() returns Unsupported('SQLite operation/deadline limit') because check() tests `interrupted` before re-evaluating the inner ScanControl. So a cancellation inside a statement surfaces as Sql{9} or Unsupported, never Cancelled or Deadline, and a pure opcode-budget stop is indistinguishable from a cancelled job. The existing tests set the flag between statements, where intersect()/check() run first, so they see Cancelled and do not cover the in-hook path. For the scanner the window is one LIMIT 1 probe; for import it is the whole integrity_check or foreign_key_check. No caller in restricted_list branches on the Cancelled or Deadline variants, so the impact today is on diagnostics and reports.
 
 Evidence:
@@ -877,6 +935,8 @@ Verifier note: Both verifiers confirmed low (the merged tests candidate had medi
 
 Priority: low · Type: maintainability · Origin: celld · Effort: S · Area: tests · Merged: `c-tests-celld-guarded-lab-machine-paths`
 
+Status: fixed on 20 October 2026 (merge `efe4cd2`). Remaining: the guarded tests' digests are part of the recorded qualification source identity; lab qualification must be re-run.
+
 The guarded runtime tooling (five patch files of about 38,000 lines, prepare-runtime.py at 5,000 lines, run-node.py at 1,600, 6,500 lines of tests) can be exercised only on the lab host: node.lock.json pins /private/tmp/foks-celld-lab/venv/bin/python and /opt/homebrew dylib paths as the reviewed roster, prepare-runtime.py refuses unless /dev/null is the Darwin character device 3:2, run-node.py requires darwin and arm64, and the Cargo graph needs gitignored source. On Linux `python3 -m unittest test_run_node test_prepare_runtime test_check_graph` gives 239 tests, 13 failures, 21 errors, 6 skipped in 183 s (FileNotFoundError on the venv path, the Darwin device check, cascading ActualBoundedFixtures cleanup assertions); only six tests carry a platform skip. The lockfile carve-out in scripts/test_dependency_audit.py is deliberate and documented. Nothing portable detects bit-rot: a Homebrew Python patch upgrade on the lab machine changes every roster path and is discovered only by a failed qualification attempt, and toolchain or patch drift is invisible to every reviewer not on that machine.
 
 Evidence:
@@ -896,6 +956,8 @@ Verifier note: Both verifiers reproduced the Linux failures and confirmed low, S
 **The recovery harness that proves acknowledged writes survive crashes and that stale backups are rejected is #[ignore]d everywhere, including the nightly server-full job that already builds the server binary**
 
 Priority: low · Type: test · Origin: celld · Effort: S · Area: tests · Merged: `c-tests-recovery-harness-never-scheduled`
+
+Status: fixed on 20 October 2026 (merge `efe4cd2`).
 
 The four recovery_harness tests (acknowledged_writes_survive_process_crashes_with_bounded_authenticated_recovery, restoring_stale_kv_backup_is_rejected_by_existing_client_anchors, restoring_stale_identity_backup_is_rejected_by_existing_merkle_pin and one more) and the four volume-loss experiments are ignored with 'requires a freshly built FOKS_SERVER_BIN; run per RECOVERY.md', and no workflow or script sets FOKS_SERVER_BIN for them (only test-client-server.sh and test-small-team.sh use that variable, for binary_release). These are the behaviours celld's external chunk store, chunk ledger and backup finalization most directly affect, and none of the port's CI changes schedule them. Backup and restart behaviour is not wholly unverified: the nightly server-full job runs test-small-team.sh, which executes team_restart_recovery and backup_restore; what is missing is the stale-backup rejection and crash-recovery-budget experiments against the built binary. RECOVERY.md frames the harness as a local timing experiment with a 15 s budget to run serially, so it was ignored by design. All eight ignored tests run serially against target/debug/foks-server on this 4-CPU container in 71 s and pass, including the two 'expected counterexample' volume tests, which assert the counterexample and so pass as written.
 
@@ -917,6 +979,8 @@ Verifier note: Both verifiers confirmed low, S; one ran all eight tests (71 s, a
 
 Priority: low · Type: test · Origin: celld · Effort: S · Area: tests · Merged: `c-tests-tool-suites-not-in-ci`
 
+Status: fixed on 20 October 2026 (merge `efe4cd2`).
+
 celld added roughly 2,000 lines of Node tests and 7,000 lines of Python tests under tools/, but no workflow or npm script executes them: foks-standalone.yml's path filter lists only tools/foks-client, foks-protocol-sync, foks-server and foks-v019-oracle, foks-dependencies.yml touches only the foks-hosted-transport-check lockfile, and there is no package.json under tools/. Run from a clean checkout (node 22, python 3.11, no lab artifacts, no boto3): foks-sqlite-policy (10 node, 13 python with 4 skipped), foks-schema-cookie-probe node (25), foks-celld-proof python (5) and foks-hosted-transport-check python (11) pass; foks-metadata-spike fails 7 of 9 node files at import ('reviewed directory artifacts required') and one python class (KeyError on FOKS_SCHEMA_ENUMERATION_VECTORS in setUpClass); foks-celld-proof fails 2 of its 3 node files (FOKS_PROOF_VECTORS throw); foks-schema-cookie-probe's test_controller errors because exec_module(run-local.py) imports boto3 at module level. The failures are unconditional throws or os.environ[] at module scope, so a plain run is red regardless of code health, and the pure tests that do pass (host.mjs, durability.mjs, deadline-worker, worker.mjs, probe/configuration/connection-state, check_graph) guard code the qualification pipeline uses and would be cheap to run.
 
 Evidence:
@@ -937,6 +1001,8 @@ Verifier note: Both verifiers reproduced the per-file results; one kept medium, 
 
 Priority: low · Type: test · Origin: celld · Effort: S · Area: tests · Merged: `c-tests-wasm-kernel-never-built`
 
+Status: fixed on 20 October 2026 (merge `efe4cd2`).
+
 The native tests exercise the kernel through rusqlite, but the wasm32-unknown-unknown cdylib that tools/foks-metadata-spike, foks-celld-proof and the celld runtime load is built only on the lab machine: rust-toolchain.toml lists no wasm32 target and no script or workflow invokes cargo build --target wasm32-unknown-unknown (the only occurrences of the target string are string comparisons in tools/foks-hosted-transport-check/check_graph.py and its tests). .cargo/config.toml does anticipate the target (it sets the getrandom wasm_js cfg). Code under cfg(target_arch = "wasm32") (wasm.rs, list_charge.rs, read_token_wasm.rs, the wasm arm of allocation_trace.rs) can stop compiling, or acquire a dependency that does not build for wasm, without any CI signal. The build does succeed at HEAD: after rustup target add, `cargo build --locked --target wasm32-unknown-unknown -p foks-metadata-core --no-default-features` and the same with --features read-token-qualification,list-allocation-qualification both finish (about 45 s cold).
 
 Evidence:
@@ -955,6 +1021,8 @@ Verifier note: Both verifiers confirmed low, S; one installed the target and sho
 **An upload-cleanup owner whose 50 ms turn expired before its first erasure is treated as blocked and backed off for 60 s; under load the cleanup of a cancelled spool stalls while its reserved bytes refuse new uploads**
 
 Priority: low · Type: bug · Origin: celld · Effort: S · Area: uploads · Merged: `c-uploads-deadline-miss-backoff`
+
+Status: fixed on 20 October 2026 (merge `dbf5e4b`).
 
 In maintain_upload_state_until the only deadline check that exits without back-off is right after the receipt-time step (line 68). After that the turn opens the protected store, probes up to 131 candidates, reads the owner and loops over children, and cleanup_file_upload_records opens another HardStateStore before its first deadline check; if the deadline has passed there it returns Ok(()) with no write, so before == after, the metadata revision is unchanged and scanned is false, owner_progress is false, and line 269 inserts the owner into cursor.blocked for 60 s and clears cursor.active. For a single owner more_work is then false and the agent's schedule moves the profile to a 60 s cadence after two idle turns; `retention maintain` shares the cursor and the 50 ms turn, its early exit requires debt.actionable == 0, which a cancelled owner does not satisfy, so it spins with 10 ms sleeps until max turns and exits with 'Local cleanup is incomplete' although nothing is blocked. The agent takes its 50 ms deadline before profile_work admission, registry open, credentials open and the checked-session open, so the window is real; the repository's own test_support comment gives tests a 10 s turn because 50 ms can be missed under load. Magnitude is bounded: max_reserved_bytes defaults to 256 MiB, so the largest default spool is about 64 chunks (about 8 passes), not the 256-chunk spool of the reviewer's scenario; an hour-scale stall needs the deadline to land in the window on most turns, which was not measured.
 
@@ -976,6 +1044,8 @@ Verifier note: Both verifiers confirmed the misclassification by trace and agree
 **A publication rejected during crash recovery is never retried: the upload stays reported as 'publishing' and Resume refuses forever, leaving Cancel and a full re-upload as the only exit**
 
 Priority: low · Type: bug · Origin: celld · Effort: S · Area: uploads · Merged: `c-uploads-rejected-child-after-crash-dead-publishing`
+
+Status: fixed on 20 October 2026 (merge `dbf5e4b`).
 
 In-process, mutate_namespace retries a stale precondition up to MAX_NAMESPACE_ATTEMPTS with a refreshed tree after calling retry_upload_namespace. The recovery path does not: resume_namespace_mutation on a Prepared child sends the stored Put once, and on KvStaleCache calls rejected() and returns the error without retry_upload_namespace or a refreshed attempt. On the next Resume, resume_file_upload sees the Rejected child and returns 'upload publication was rejected; original intent retained' before reaching the content-complete path, although the intent (a Create, or an overwrite whose selected entry and version are unchanged) is still satisfiable from the manifest and the content is already on the server. retry_upload_namespace (state 4 to 3, child cleared, requires child state 5) exists but nothing calls it outside mutate_namespace. The same terminal state follows a non-stale RemoteStatus rejection inside mutate_namespace. KvUploadReport maps state 4 to 'publishing' without looking at the child, so List shows 'publishing' indefinitely and Resume returns an opaque OperationBinding error; Cancel is permitted and costs a full re-upload.
 

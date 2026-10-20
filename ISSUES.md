@@ -203,6 +203,36 @@ Required resolution:
 - Offer the upload-clock status and the preview-then-confirm repair in the
   desktop app, as for the adapter clock.
 
+## Held client connections are not re-checked after an idle close
+
+**Priority: medium.** The Rust client checks that a pooled connection is
+still open only when it takes it from the pool. A KV write session keeps one
+connection for its whole life, and a large `put_file` encrypts and stores
+every chunk locally before it sends the upload on that held connection. When
+the local work takes longer than the server's idle timeout between requests,
+the server has closed the connection and the upload fails with
+`Rpc(Io(BrokenPipe))`. Realtime connections are held the same way. The server
+now waits 330 s between requests (`idle_timeout_seconds`), which makes this
+rare, but a slow enough client still hits it.
+
+Required resolution:
+
+- Re-check a held connection that has been idle before reusing it, and
+  reconnect (including the vhost selection) or retry the call when it was
+  closed.
+
+## Flaky desktop chat render test
+
+**Priority: low.** In `apps/desktop/tests/chat.render.test.tsx`, "an unread
+channel opens at its first unread message and marks only what was on screen"
+fails intermittently under CPU load, also on commits that do not touch chat
+code (3 of 6 isolated runs failed on 7aaae66).
+
+Required resolution:
+
+- Find the timing assumption in the test or the scroll observer and make the
+  test wait for the state it asserts.
+
 ## Existing disclosed limitations
 
 These are real product or verification limits, but the reviewed plans already
