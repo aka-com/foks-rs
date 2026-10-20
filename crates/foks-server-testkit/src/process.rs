@@ -61,7 +61,7 @@ impl InProcessServer {
             probe_tls: Arc::clone(&environment.inner.tls.public),
             database: environment.inner.database_config.clone(),
             limits: environment.inner.session_limits,
-            rate_limits: environment.inner.rate_limits,
+            rate_limits: environment.inner.rate_limits.clone(),
             backup: environment.inner.backup.clone(),
             chunk_store: environment
                 .inner

@@ -787,6 +787,7 @@ mod tests {
             maximum_tracked_ips = 41\n\
             ipv6_source_prefix = 56\n\
             maximum_connections_per_source = 5\n\
+            trusted_sources = [\"192.0.2.10\", \"10.0.0.0/8\", \"2001:db8::/48\"]\n\
             [storage]\n\
             maximum_database_bytes = 43\n\
             maximum_teams = 47\n\
@@ -819,6 +820,9 @@ mod tests {
                 maximum_tracked_ips: 41,
                 ipv6_source_prefix: 56,
                 maximum_connections_per_source: 5,
+                trusted_sources: ["192.0.2.10", "10.0.0.0/8", "2001:db8::/48"]
+                    .map(|prefix| prefix.parse().unwrap())
+                    .to_vec(),
             }
         );
         assert_eq!(
@@ -929,9 +933,12 @@ mod tests {
         );
         assert_eq!(
             message(&|c| c.rate_limits.request_burst = 0),
-            "rate limit parameters, tracked IP capacity and connections per source \
-             must be non-zero"
+            "rate limit parameters and tracked IP capacity must be non-zero"
         );
+        // A per-source connection limit of 0 means no limit.
+        let mut unlimited = config.clone();
+        unlimited.rate_limits.maximum_connections_per_source = 0;
+        unlimited.validate().unwrap();
         assert_eq!(
             message(&|c| c.rate_limits.ipv6_source_prefix = 0),
             "ipv6_source_prefix must be between 1 and 128"

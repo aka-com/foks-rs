@@ -163,11 +163,13 @@ the same default.
 - `[rate_limits]` sets the per-source admission limits: the token buckets
   `connection_burst` (512), `connections_per_second` (256), `request_burst`
   (2,000) and `requests_per_second` (1,000), `maximum_tracked_ips` (4,096),
-  `ipv6_source_prefix` (64, 1 to 128) and
-  `maximum_connections_per_source` (32). The `serve` flags set the same
-  values; the token bucket and tracking flags are named
+  `ipv6_source_prefix` (64, 1 to 128), `maximum_connections_per_source`
+  (32; 0 removes the limit) and `trusted_sources` (empty; a list of
+  addresses or prefixes such as `"10.0.0.0/8"`, at most 256). The `serve`
+  flags set the same values; the token bucket and tracking flags are named
   `--connection-rate-burst`, `--request-rate-burst` and
-  `--maximum-rate-limit-ips`.
+  `--maximum-rate-limit-ips`, and `--trusted-source` is repeated once per
+  entry.
 - `[storage]` sets database capacity: `maximum_database_bytes` (64 GiB),
   `maximum_teams` (4,096), `maximum_team_members` (64),
   `maximum_kv_namespace_bytes` (16 GiB) and `maximum_kv_namespace_objects`
@@ -340,9 +342,32 @@ the bucket has no sequence number and closes the connection unanswered.
 Each listener also limits the connections one source holds at once, queued
 or active, to `maximum_connections_per_source`, so that one source cannot
 occupy all `maximum_active_connections` slots with long polls or slow
-requests. A connection over the limit is closed without a response. Loopback
-peers are exempt: they are local processes or a local TCP proxy, and behind
-such a proxy every client would share one source.
+requests. A connection over the limit is closed without a response and
+counted in `foks_admission_rejected_total{reason="source_connections"}`; at
+most once a minute per listener, stderr gets a line `FOKS connection refused:
+reason=source_connections, source=...` with the number of refusals since the
+previous line. Loopback peers are exempt: they are local processes or a local
+TCP proxy, and behind such a proxy every client would share one source.
+
+The same holds for any forwarder or network address translation between the
+clients and the server that rewrites the client's source address: a load
+balancer or TCP proxy on another host that uses source NAT (for example a
+Kubernetes Service with `externalTrafficPolicy: Cluster`, or Docker's
+userland proxy), an office NAT, carrier-grade NAT, or an IPv6 site whose
+clients share one /64. Every client behind it is one source. A Go or Rust
+client holds a connection open for each realtime inbox poll, KEX receive or
+OIDC completion poll, so a small number of devices behind one such address can
+reach the default limit of 32, and a refused client sees only a reset
+connection. Go v0.1.9 hosts have no such limit. For a forwarder the operator
+controls, list its address or prefix in `trusted_sources`: those peers are
+exempt from the per-source connection limit and the KEX relay's per-source
+share, as loopback peers are. For clients behind NAT that the operator does
+not control, raise `maximum_connections_per_source` or set it to 0 to remove
+the limit. The token buckets still count a trusted source or a NAT address
+as one source, so `connection_burst`, `request_burst` and their rates must
+cover the aggregate of the clients behind it. Passthrough load balancers that
+preserve the client address need neither setting. The server does not read
+the PROXY protocol.
 
 A realtime inbox poll (`RtPollInbox`) holds its connection for up to 55
 seconds. One account, across all of its devices, can hold at most
@@ -367,7 +392,8 @@ The public KEX relay holds at most 4,096 pairing packets or 32 MiB of them,
 each for up to two hours, and refuses a send at either bound with status 1012.
 One source can hold at most a sixteenth of each (256 packets or 2 MiB), so
 that it cannot fill the relay and block device pairing for other users.
-Loopback peers are exempt, as from the per-source connection limit.
+Loopback peers and `trusted_sources` are exempt, as from the per-source
+connection limit.
 
 Automatic backups are opt-in:
 
