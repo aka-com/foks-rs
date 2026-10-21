@@ -492,3 +492,171 @@ pub(crate) fn public_client_creates_and_loads_named_and_adhoc_teams() {
         )
         .is_err());
 }
+
+/// go-foks `df2acf1`: an edit that takes the roster from at least one owner to
+/// none is refused locally by the client and, independently, by the server.
+#[test]
+fn an_edit_leaving_a_team_without_an_owner_is_refused() {
+    use foks_client::{ChangeTeamMemberRequest, TeamMemberSelector, VerifiedMemberParty};
+
+    let fixture = Fixture::start("team-ownerless-edit");
+    let account = fixture
+        .client
+        .create_account(fixture.host(), &TestAccountSpec::new("soleowner", 0x35))
+        .unwrap();
+    let named = NamedTeamSecrets {
+        member_min: SecretSeed::new([0x81; 32]),
+        member: SecretSeed::new([0x82; 32]),
+        admin: SecretSeed::new([0x83; 32]),
+        owner: SecretSeed::new([0x84; 32]),
+        removal_key: SecretSeed::new([0x85; 32]),
+        team_name_commitment_key: [0x86; 16],
+    };
+    let created = fixture
+        .client
+        .foks()
+        .create_single_owner_named_team(fixture.host(), &account.credential, "ownerless", &named)
+        .unwrap();
+    // A second, non-owner member gives the edit a recipient for its rotated
+    // member key; the actor remains the team's only owner.
+    let member_client = TestClient::new(&fixture.environment, "ownerless-member").unwrap();
+    let member_host = member_client.probe_and_pin().unwrap();
+    let member = member_client
+        .create_account(
+            &member_host.pinned,
+            &TestAccountSpec::new("onlymember", 0x36),
+        )
+        .unwrap();
+    let member_removal_key = SecretSeed::new([0x88; 32]);
+    let added = fixture
+        .client
+        .foks()
+        .add_local_user_to_named_team(
+            fixture.host(),
+            &account.credential,
+            &created.team,
+            &AddLocalTeamMemberRequest {
+                target_user: &member.authenticated.verified,
+                destination_role: Role::member(0),
+                removal_key: &member_removal_key,
+            },
+        )
+        .unwrap();
+    assert_eq!(added.authenticated.verified.chain_seqno(), 2);
+    let user = fixture
+        .client
+        .foks()
+        .authenticate_and_pin(fixture.host(), &account.credential)
+        .unwrap();
+    // Both parties are authenticated after the last posted link, so they sit
+    // at the Merkle root the edit cites.
+    let member_user = member_client
+        .foks()
+        .authenticate_and_pin(&member_host.pinned, &member.credential)
+        .unwrap();
+    let remaining = [VerifiedMemberParty::User(&member_user.verified)];
+    let selector = TeamMemberSelector {
+        party: &account.credential.uid,
+        host: None,
+        source_role: Role::OWNER,
+    };
+    let replacement = Some(VerifiedMemberParty::User(&user.verified));
+
+    // The client refuses before computing any rotation.
+    let refused = fixture.client.foks().team_member_rotation_roles(
+        &added.authenticated,
+        selector,
+        Role::member(-0x4000),
+        replacement,
+    );
+    assert!(
+        matches!(
+            refused,
+            Err(foks_client::Error::TeamRequest(message))
+                if message == "change would leave team without an owner"
+        ),
+        "unexpected local result: {refused:?}"
+    );
+
+    // Demoting the only owner to the lowest member role rotates every key
+    // above that role.
+    let rotated = [
+        SecretSeed::new([0x87; 32]),
+        SecretSeed::new([0x89; 32]),
+        SecretSeed::new([0x8a; 32]),
+    ];
+    let rotations = [
+        TeamPtkRotationSeed {
+            role: Role::member(0),
+            seed: &rotated[0],
+        },
+        TeamPtkRotationSeed {
+            role: Role::ADMIN,
+            seed: &rotated[1],
+        },
+        TeamPtkRotationSeed {
+            role: Role::OWNER,
+            seed: &rotated[2],
+        },
+    ];
+    let request = ChangeTeamMemberRequest {
+        target: selector,
+        destination_role: Role::member(-0x4000),
+        replacement,
+        rotations: &rotations,
+        remaining_parties: &remaining,
+    };
+    let mut protected = fixture.client.open_protected_store().unwrap();
+    let local = fixture.client.foks().change_team_member_and_rotate_ptks(
+        fixture.host(),
+        &account.credential,
+        &created.team,
+        &request,
+        &mut protected,
+    );
+    assert!(
+        matches!(local, Err(foks_client::Error::TeamRequest(_))),
+        "unexpected local edit result: {:?}",
+        local.err()
+    );
+
+    // A client without the local check reaches the server, which refuses the
+    // sole owner's self-demotion with go-foks' roster status and message.
+    let posted = fixture
+        .client
+        .foks()
+        .change_team_member_without_owner_check_for_test(
+            fixture.host(),
+            &account.credential,
+            &created.team,
+            &request,
+            &mut protected,
+        );
+    match posted {
+        Err(foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code, detail })) => {
+            assert_eq!(code, foks_rpc::STATUS_TEAM_ROSTER_ERROR, "{detail:?}");
+            assert!(
+                format!("{detail:?}").contains("edit would leave team without an owner"),
+                "unexpected detail {detail:?}"
+            );
+        }
+        other => panic!("unexpected server result: {:?}", other.err()),
+    }
+    let reloaded = fixture
+        .client
+        .foks()
+        .load_and_pin_team(
+            fixture.host(),
+            &account.credential,
+            &user.verified,
+            &user.puks,
+            &created.team,
+        )
+        .unwrap();
+    assert_eq!(reloaded.verified.chain_seqno(), 2);
+    assert!(reloaded
+        .verified
+        .members()
+        .iter()
+        .any(|member| member.party == account.credential.uid && member.role == Role::OWNER));
+}

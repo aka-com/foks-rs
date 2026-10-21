@@ -308,6 +308,11 @@ impl FoksClient {
         replacement: Option<VerifiedMemberParty<'_>>,
     ) -> Result<Vec<Role>> {
         let target = unique_target(&authenticated_team.verified, selector)?;
+        require_owner_retained(
+            authenticated_team.verified.members(),
+            target,
+            destination_role,
+        )?;
         let replacement_generation = validate_replacement(target, destination_role, replacement)?
             .map(|(_, key)| key.generation);
         Ok(required_rotation_roles(
@@ -2569,6 +2574,88 @@ impl FoksClient {
         remaining_parties: &[VerifiedMemberParty<'_>],
         protected_store: &mut dyn ProtectedMutationStore,
     ) -> Result<RotatedTeamPtks> {
+        self.change_with_material_inner(
+            host,
+            uid,
+            device_id,
+            auth_seed,
+            certificate_chain,
+            actor_user,
+            actor_puk,
+            team,
+            selector,
+            destination_role,
+            replacement,
+            retained_removal_key,
+            supplied_rotations,
+            remaining_parties,
+            protected_store,
+            true,
+        )
+    }
+
+    /// Test-only compatibility seam for modeling a client without the
+    /// owner-retention check (go-foks before `df2acf1`, or a modified client),
+    /// so tests can show that the server refuses the resulting edit itself.
+    #[cfg(feature = "test-support")]
+    pub fn change_team_member_without_owner_check_for_test(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        team: &EntityId,
+        request: &ChangeTeamMemberRequest<'_>,
+        protected_store: &mut dyn ProtectedMutationStore,
+    ) -> Result<RotatedTeamPtks> {
+        let authenticated_user = self.authenticate_and_pin(host, credential)?;
+        let authenticated_team = self.load_and_pin_team(
+            host,
+            credential,
+            &authenticated_user.verified,
+            &authenticated_user.puks,
+            team,
+        )?;
+        let owner = team_actor_puk(&authenticated_user, &authenticated_team)?;
+        let device_id = credential.public_material()?.id;
+        self.change_with_material_inner(
+            host,
+            &credential.uid,
+            &device_id,
+            &credential.seed,
+            &credential.certificate_chain,
+            &authenticated_user,
+            owner,
+            team,
+            request.target,
+            request.destination_role,
+            request.replacement,
+            None,
+            request.rotations,
+            request.remaining_parties,
+            protected_store,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn change_with_material_inner(
+        &self,
+        host: &PinnedHost,
+        uid: &EntityId,
+        device_id: &EntityId,
+        auth_seed: &SecretSeed,
+        certificate_chain: &[Vec<u8>],
+        actor_user: &AuthenticatedUserOutcome,
+        actor_puk: &UserPrivateKey,
+        team: &EntityId,
+        selector: TeamMemberSelector<'_>,
+        destination_role: Role,
+        replacement: Option<VerifiedMemberParty<'_>>,
+        retained_removal_key: Option<&SecretSeed>,
+        supplied_rotations: &[TeamPtkRotationSeed<'_>],
+        remaining_parties: &[VerifiedMemberParty<'_>],
+        protected_store: &mut dyn ProtectedMutationStore,
+        require_owner: bool,
+    ) -> Result<RotatedTeamPtks> {
         team.clone().require_type(ENTITY_NAMED_TEAM)?;
         let authenticated_team = self.load_and_pin_team_with_material(
             host,
@@ -2591,6 +2678,13 @@ impl FoksClient {
             return Err(Error::TeamRequest(
                 "team editor is not authorized for this member transition",
             ));
+        }
+        if require_owner {
+            require_owner_retained(
+                authenticated_team.verified.members(),
+                target,
+                destination_role,
+            )?;
         }
         let replacement_key = validate_replacement(target, destination_role, replacement)?;
         let observer_puk = if self_target {
