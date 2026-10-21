@@ -2,13 +2,19 @@ import { TeamInfoPanel } from '../screens/team-info';
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
 } from 'react';
-import { anyDialogOpen, OverlayProvider } from '/kit/overlay-primitives';
+import {
+  anyDialogOpen,
+  anyPopupOpen,
+  OverlayProvider,
+} from '/kit/overlay-primitives';
+import { mountFocusKeeper, setFocusContext } from '/kit/focus-keeper';
 import { ToastController, ToastProvider } from '/kit/toasts';
 import type { AgentLifecycleController } from '../agent-lifecycle';
 import type { Bridge } from '../bridge';
@@ -352,6 +358,12 @@ export function VaultShell({
     ).blocked,
   });
   const here = state.location;
+  // The focus never rests on <body>: a control that goes away hands it to
+  // its replacement or to the place's list (`kit/focus-keeper.ts`). Each
+  // place is a focus context, so Back returns to the control left there.
+  useEffect(() => mountFocusKeeper(), []);
+  const focusContext = JSON.stringify([here, state.folder, state.kind]);
+  useLayoutEffect(() => setFocusContext(focusContext), [focusContext]);
   const [teamInfo, setTeamInfo] = useState<{
     storeId: string;
     trigger?: HTMLElement;
@@ -509,7 +521,7 @@ export function VaultShell({
         !(event.metaKey || event.ctrlKey) ||
         event.altKey ||
         event.key.toLowerCase() !== 'n' ||
-        document.querySelector('[role="menu"], [role="listbox"]')
+        anyPopupOpen()
       )
         return;
       if (openNewItem(event.shiftKey ? 'Document' : 'Password'))
@@ -540,7 +552,7 @@ export function VaultShell({
         target.closest('input, textarea, select, [contenteditable="true"]')
       )
         return;
-      if (anyDialogOpen() || document.querySelector('[role="menu"]')) return;
+      if (anyDialogOpen() || anyPopupOpen()) return;
       event.preventDefault();
       setWorkflow({ kind: 'delete', item: selectedItem });
     };
@@ -553,8 +565,7 @@ export function VaultShell({
     let stop: (() => void) | undefined;
     void bridge
       .onNewItem((kind) => {
-        if (!document.querySelector('[role="menu"], [role="listbox"]'))
-          openNewItem(kind);
+        if (!anyPopupOpen()) openNewItem(kind);
       })
       .then((unlisten) => {
         if (disposed) unlisten();
@@ -825,7 +836,7 @@ export function VaultShell({
                 nativeChrome={bridge.native}
                 blocked={chrome.blocked}
               />
-              <main className="main">
+              <main className="main" tabIndex={-1}>
                 {here.kind === 'chat' ? null : renderTopbar()}
                 {chatMigration.notice}
                 {/* Reset screen failures when the location changes while keeping
