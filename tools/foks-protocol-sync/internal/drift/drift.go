@@ -43,6 +43,10 @@ type Policy struct {
 	Statuses  map[string]bool
 	Services  map[string]bool
 	Coverage  map[string][]string
+	// Accepted lists, per supported route, result types from a newer
+	// upstream release that the Rust client and server already handle
+	// (`accepted_upstream_results` in the policy).
+	Accepted map[string][]string
 }
 
 func ReadPolicy(path string) (Policy, error) {
@@ -57,12 +61,14 @@ func ReadPolicy(path string) (Policy, error) {
 		Statuses:  make(map[string]bool),
 		Services:  make(map[string]bool),
 		Coverage:  make(map[string][]string),
+		Accepted:  make(map[string][]string),
 	}
 	type block struct {
 		kind, name, upstream, protocol, method string
 		supported                              bool
 		hasSupported                           bool
 		coverage                               []string
+		accepted                               []string
 	}
 	var current block
 	flush := func() {
@@ -80,6 +86,9 @@ func ReadPolicy(path string) (Policy, error) {
 				key := protocol + "." + current.method
 				policy.Supported[key] = true
 				policy.Coverage[key] = current.coverage
+				if len(current.accepted) != 0 {
+					policy.Accepted[key] = current.accepted
+				}
 			}
 		case "service":
 			if current.upstream != "" {
@@ -123,6 +132,8 @@ func ReadPolicy(path string) (Policy, error) {
 			current.hasSupported = true
 		case "coverage":
 			current.coverage = stringArray(value)
+		case "accepted_upstream_results":
+			current.accepted = stringArray(value)
 		}
 	}
 	flush()
@@ -252,7 +263,11 @@ func compareMethods(old, candidate model.Protocol, policy Policy, protocolSuppor
 				add(class, "method_position_changed", subject, withCoverage(fmt.Sprintf("%d -> %d", method.Position, newMethod.Position), subject, policy))
 			}
 			if method.ResultType != newMethod.ResultType {
-				add(class, "method_result_changed", subject, withCoverage(fmt.Sprintf("%s -> %s", method.ResultType, newMethod.ResultType), subject, policy))
+				if class == WireBreaking && accepted(policy.Accepted[subject], newMethod.ResultType) {
+					add(Additive, "method_result_accepted", subject, withCoverage(fmt.Sprintf("%s -> %s; accepted by policy", method.ResultType, newMethod.ResultType), subject, policy))
+				} else {
+					add(class, "method_result_changed", subject, withCoverage(fmt.Sprintf("%s -> %s", method.ResultType, newMethod.ResultType), subject, policy))
+				}
 			}
 		}
 	}
@@ -270,6 +285,15 @@ func compareMethods(old, candidate model.Protocol, policy Policy, protocolSuppor
 			add(class, "method_position_reused", candidate.Name, fmt.Sprintf("position %d changed from %s to %s", position, oldName, newName))
 		}
 	}
+}
+
+func accepted(results []string, result string) bool {
+	for _, candidate := range results {
+		if candidate == result {
+			return true
+		}
+	}
+	return false
 }
 
 func compareNamed(kind string, old, candidate []model.NamedValue, relevant map[string]bool, add func(Class, string, string, string)) {

@@ -396,3 +396,50 @@ pub fn encode_kv_usage_request_at(auth: KvAuth<'_>, sequence: u64) -> Result<Vec
 pub(super) fn encode_kv_call_at(method: u64, argument: Value, sequence: u64) -> Result<Vec<u8>> {
     encode_call(KV_STORE_PROTOCOL_ID, method, &encode(&argument)?, sequence)
 }
+
+/// Result of `kvMkdir` and `kvPutSmallFileOrSymlink`.
+///
+/// go-foks v0.1.9 declares both methods void. Later upstream servers return a
+/// one-field positional struct, `KVMkdirRes` or `KVPutSmallFileOrSymlinkRes`,
+/// whose `wasReplay` field reports that an object with the same ID and exactly
+/// the same persisted contents already existed, so nothing was written or
+/// charged against usage. An omitted result decodes as `was_replay = false`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct KvWriteReceipt {
+    pub was_replay: bool,
+}
+
+impl KvWriteReceipt {
+    /// Decodes the `Data` bytes returned by [`crate::decode_optional_response`],
+    /// with an empty slice standing for an omitted result.
+    ///
+    /// The struct is an unsigned RPC result, so fields appended by a later
+    /// upstream release are accepted and ignored.
+    pub fn decode(data: &[u8]) -> Result<Self> {
+        if data.is_empty() {
+            return Ok(Self::default());
+        }
+        match foks_snowpack::decode(data)? {
+            Value::Null => Ok(Self::default()),
+            Value::Array(fields) => match fields.first() {
+                None => Ok(Self::default()),
+                Some(Value::Bool(was_replay)) => Ok(Self {
+                    was_replay: *was_replay,
+                }),
+                Some(_) => Err(crate::Error::Envelope {
+                    expected: "boolean KV wasReplay field",
+                    found: "another MessagePack value",
+                }),
+            },
+            _ => Err(crate::Error::Envelope {
+                expected: "KV write result struct",
+                found: "another MessagePack value",
+            }),
+        }
+    }
+
+    /// Encodes the result as the one-field struct upstream servers return.
+    pub fn encode(self) -> Result<Vec<u8>> {
+        Ok(encode(&Value::Array(vec![Value::Bool(self.was_replay)]))?)
+    }
+}

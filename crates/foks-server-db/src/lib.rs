@@ -95,9 +95,9 @@ pub use invites::{
     InviteConsumption, InviteKind, InvitePolicy, InviteRegime, InviteSnapshot, IssuedInvite,
 };
 pub use kv::{
-    KvDirectoryMutation, KvDirentMutation, KvFileChunkMutation, KvListCursor, KvNodeMutation,
-    KvRootMutation, KvVersionCheck, StoredKvDirectory, StoredKvDirent, StoredKvFile,
-    StoredKvFileChunk, StoredKvNode, StoredKvRoot,
+    KvCreation, KvDirectoryMutation, KvDirentMutation, KvFileChunkMutation, KvListCursor,
+    KvNodeMutation, KvRootMutation, KvVersionCheck, StoredKvDirectory, StoredKvDirent,
+    StoredKvFile, StoredKvFileChunk, StoredKvNode, StoredKvRoot,
 };
 pub use log_upload::{
     LogSendBlockMutation, LogSendFileMutation, MAXIMUM_LOG_SEND_BLOCKS,

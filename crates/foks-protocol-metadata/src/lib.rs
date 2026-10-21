@@ -127,6 +127,13 @@ pub struct RoutePolicy {
     pub max_request_bytes: usize,
     pub supported: bool,
     pub coverage: Vec<String>,
+    /// Result types that an upstream release newer than the pinned artifact
+    /// returns for this method and that the Rust client and server already
+    /// handle. They never change the pinned `upstream_result`; the drift
+    /// report classifies a change to one of them as additive instead of
+    /// wire-breaking.
+    #[serde(default)]
+    pub accepted_upstream_results: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -512,6 +519,18 @@ pub fn merge<'a>(artifact: &'a Artifact, policy: &'a Policy) -> Result<Merged<'a
             ));
         }
         validate_route_result(&route.result)?;
+        for accepted in &route.accepted_upstream_results {
+            if !route.supported
+                || route.local_position.is_some()
+                || accepted.is_empty()
+                || accepted == upstream_result
+            {
+                return invalid(format!(
+                    "route {}.{} has an invalid accepted upstream result {accepted}",
+                    route.protocol, route.method
+                ));
+            }
+        }
         for status in &route.statuses {
             if !status_codes.contains_key(status.as_str()) {
                 return invalid(format!(
@@ -612,6 +631,7 @@ fn validate_route_result(value: &str) -> Result<(), MetadataError> {
             | "KvPathVersionVector"
             | "KvRoot"
             | "KvUsage"
+            | "KvWriteReceipt"
             | "LocalTeamList"
             | "LogSendID"
             | "LookupUserResult"

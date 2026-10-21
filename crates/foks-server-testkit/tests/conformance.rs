@@ -20,6 +20,8 @@ mod kv_large;
 mod kv_locks;
 #[path = "conformance/kv_small.rs"]
 mod kv_small;
+#[path = "conformance/kv_tombstones.rs"]
+mod kv_tombstones;
 #[path = "conformance/log_upload.rs"]
 mod log_upload;
 #[path = "conformance/membership_increment.rs"]

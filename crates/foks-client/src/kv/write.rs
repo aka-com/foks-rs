@@ -12,6 +12,7 @@ use foks_proto::{
     KvDirectory, KvDirectoryPair, KvDirectoryStatus, KvDirent, KvNodeId, KvNodeType, KvRoot,
     KvSmallFilePlaintext, Role, RoleAndGeneration, SecretSeed,
 };
+use foks_rpc::KvWriteReceipt;
 use foks_snowpack::{decode, encode, Value};
 use zeroize::Zeroizing;
 
@@ -214,7 +215,7 @@ impl KvWriteSession<'_> {
             status: KvDirectoryStatus::Active,
         };
         let binding_mac = derive_kv_keys(seed)?.bind_root(&self.party, id, 1, key)?;
-        self.call(KvRequest::Mkdir {
+        self.call_content_write(KvRequest::Mkdir {
             precondition: None,
             directory,
         })?;
@@ -338,15 +339,17 @@ impl KvWriteSession<'_> {
             key,
             KvSmallFilePlaintext::File(first),
         )?;
-        self.call(KvRequest::PutSmall { id: node_id, boxed })?;
-        self.link_uploaded_node_bound(
+        let receipt = self.call_content_write(KvRequest::PutSmall { id: node_id, boxed })?;
+        let mut result = self.link_uploaded_node_bound(
             tree,
             parent,
             name.as_bytes(),
             node_id,
             options,
             expected_dirent_id,
-        )
+        )?;
+        result.content_was_replay = receipt.was_replay;
+        Ok(result)
     }
 
     pub fn put_symlink(
@@ -374,8 +377,10 @@ impl KvWriteSession<'_> {
             key,
             KvSmallFilePlaintext::Symlink(target.as_bytes().to_vec()),
         )?;
-        self.call(KvRequest::PutSmall { id, boxed })?;
-        self.link_uploaded_node(tree, parent, name.as_bytes(), id, options)
+        let receipt = self.call_content_write(KvRequest::PutSmall { id, boxed })?;
+        let mut result = self.link_uploaded_node(tree, parent, name.as_bytes(), id, options)?;
+        result.content_was_replay = receipt.was_replay;
+        Ok(result)
     }
 
     pub fn mkdir(
@@ -406,12 +411,18 @@ impl KvWriteSession<'_> {
             status: KvDirectoryStatus::Active,
         };
         let mut current_tree = tree;
+        let mut receipt = KvWriteReceipt::default();
         for attempt in 0..Self::MAX_NAMESPACE_ATTEMPTS {
-            match self.call(KvRequest::Mkdir {
+            // Every attempt resends the same directory ID and sealed seed, so
+            // a server that already holds it reports a replay, not a race.
+            match self.call_content_write(KvRequest::Mkdir {
                 precondition: Some(kv_version_vector_from_tree(&current_tree)),
                 directory: directory.clone(),
             }) {
-                Ok(_) => break,
+                Ok(accepted) => {
+                    receipt = accepted;
+                    break;
+                }
                 Err(error)
                     if is_kv_stale_cache(&error) && attempt + 1 < Self::MAX_NAMESPACE_ATTEMPTS =>
                 {
@@ -423,13 +434,15 @@ impl KvWriteSession<'_> {
         let mut node = [0; 17];
         node[0] = KvNodeType::Directory as u8;
         node[1..].copy_from_slice(&id);
-        self.link_uploaded_node(
+        let mut result = self.link_uploaded_node(
             current_tree,
             parent,
             name.as_bytes(),
             KvNodeId(node),
             options,
-        )
+        )?;
+        result.content_was_replay = receipt.was_replay;
+        Ok(result)
     }
 
     pub fn unlink(
@@ -656,6 +669,7 @@ impl KvWriteSession<'_> {
             node_id: destination.value,
             dirent_version: destination.version,
             path: tree,
+            content_was_replay: false,
         })
     }
 
@@ -726,6 +740,7 @@ impl KvWriteSession<'_> {
             node_id,
             dirent_version: dirents[0].version,
             path: tree,
+            content_was_replay: false,
         })
     }
 
@@ -1098,6 +1113,18 @@ impl KvWriteSession<'_> {
 
     pub(super) fn call(&mut self, request: KvRequest) -> Result<Vec<u8>> {
         self.connection.call(self.auth.borrowed(), &request)
+    }
+
+    /// Sends `kvMkdir` or `kvPutSmallFileOrSymlink`. The object ID and sealed
+    /// contents are fixed before the call, so a resend is byte-identical and a
+    /// server that already applied it acknowledges it with `was_replay`.
+    fn call_content_write(&mut self, request: KvRequest) -> Result<KvWriteReceipt> {
+        debug_assert!(matches!(
+            request,
+            KvRequest::Mkdir { .. } | KvRequest::PutSmall { .. }
+        ));
+        let data = self.call(request)?;
+        Ok(KvWriteReceipt::decode(&data)?)
     }
 
     pub(super) fn current_content_key(

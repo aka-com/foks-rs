@@ -154,6 +154,45 @@ func TestCompareClassifiesHeaderAndResultDriftAsWireBreaking(t *testing.T) {
 	}
 }
 
+func TestCompareClassifiesPolicyAcceptedResultGrowthAsAdditive(t *testing.T) {
+	baseline := fixtureArtifact()
+	baseline.Protocols[0].Methods[0].ResultType = "void"
+	accepted := fixtureArtifact()
+	accepted.Protocols[0].Methods[0].ResultType = "ProbeRes"
+	policy := Policy{
+		Protocols: map[string]string{"Probe": "Probe"},
+		Supported: map[string]bool{"Probe.probe": true},
+		Accepted:  map[string][]string{"Probe.probe": {"ProbeRes"}},
+	}
+	report := Compare(baseline, accepted, policy)
+	if report.Counts[WireBreaking] != 0 || report.Counts[Additive] != 1 ||
+		report.Changes[0].Kind != "method_result_accepted" {
+		t.Fatalf("changes = %#v", report.Changes)
+	}
+	// A result the policy does not name stays wire-breaking.
+	other := fixtureArtifact()
+	other.Protocols[0].Methods[0].ResultType = "OtherRes"
+	report = Compare(baseline, other, policy)
+	if report.Counts[WireBreaking] != 1 || report.Changes[0].Kind != "method_result_changed" {
+		t.Fatalf("changes = %#v", report.Changes)
+	}
+}
+
+func TestReadPolicyRecordsAcceptedUpstreamResults(t *testing.T) {
+	policy, err := ReadPolicy("../../../../crates/foks-server/protocol/policy-v1.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for route, result := range map[string]string{
+		"KVStore.kvMkdir":                 "KVMkdirRes",
+		"KVStore.kvPutSmallFileOrSymlink": "KVPutSmallFileOrSymlinkRes",
+	} {
+		if got := policy.Accepted[route]; len(got) != 1 || got[0] != result {
+			t.Fatalf("%s accepted results = %v", route, got)
+		}
+	}
+}
+
 func fixtureArtifact() model.Artifact {
 	return model.Artifact{
 		SchemaVersion: model.SchemaVersion,

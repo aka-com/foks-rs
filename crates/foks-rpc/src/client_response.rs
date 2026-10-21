@@ -166,6 +166,81 @@ pub fn decode_void_response(content: &[u8], expected_sequence: u64) -> Result<()
     Ok(())
 }
 
+/// Reads a successful RPC response whose result an older server may omit.
+pub fn read_optional_response<R: Read>(
+    reader: &mut R,
+    maximum: usize,
+    expected_sequence: u64,
+) -> Result<Option<Vec<u8>>> {
+    let content = read_frame(reader, maximum)?;
+    decode_optional_response(&content, expected_sequence)
+}
+
+/// Decodes a response for a method whose result changed from void to a struct
+/// in a later upstream release. A void response (the DataWrap omits `Data`, or
+/// carries nil) returns `None`; any other `Data` value is returned exactly.
+pub fn decode_optional_response(content: &[u8], expected_sequence: u64) -> Result<Option<Vec<u8>>> {
+    let mut cursor = Cursor::new(content);
+    if cursor.byte()? != 0x94 {
+        return Err(Error::Envelope {
+            expected: "four-element RPC response array",
+            found: "another MessagePack value",
+        });
+    }
+    if unsigned(cursor.value()?)? != METHOD_RESPONSE {
+        return Err(Error::Envelope {
+            expected: "RPC response method",
+            found: "another RPC method",
+        });
+    }
+    let sequence = unsigned(cursor.value()?)?;
+    if sequence != expected_sequence {
+        return Err(Error::Sequence {
+            expected: expected_sequence,
+            received: sequence,
+        });
+    }
+    check_status(cursor.value()?)?;
+    let wrapped = cursor.value()?;
+    if !cursor.done() {
+        return Err(Error::Envelope {
+            expected: "end of RPC response",
+            found: "trailing data",
+        });
+    }
+    let mut wrapped = Cursor::new(wrapped);
+    let data = match wrapped.byte()? {
+        0x81 => None,
+        0x82 => {
+            if text(wrapped.value()?)? != b"Data" {
+                return Err(Error::Envelope {
+                    expected: "canonical Data field",
+                    found: "another field",
+                });
+            }
+            let data = wrapped.value()?;
+            (data != [0xc0]).then(|| data.to_vec())
+        }
+        _ => {
+            return Err(Error::Envelope {
+                expected: "RPC data wrapper",
+                found: "another MessagePack value",
+            });
+        }
+    };
+    if text(wrapped.value()?)? != b"Header" {
+        return Err(Error::Compatibility);
+    }
+    check_compatibility_header(wrapped.value()?)?;
+    if !wrapped.done() {
+        return Err(Error::Envelope {
+            expected: "end of RPC data wrapper",
+            found: "trailing data",
+        });
+    }
+    Ok(data)
+}
+
 /// Decodes a response from a headerless (team or Kex) protocol and returns its
 /// exact result bytes. Unlike [`decode_response`], the result slot is the bare
 /// protocol struct rather than a `{Data, Header}` DataWrap.

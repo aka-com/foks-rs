@@ -676,6 +676,7 @@ impl KvWriteSession<'_> {
             node_id: result.receipt.node_id,
             dirent_version: result.receipt.version,
             path: result.path,
+            content_was_replay: false,
         })
     }
     pub fn resume_file_upload(&mut self, id: [u8; 16]) -> Result<KvUploadResult> {

@@ -520,3 +520,105 @@ fn colliding_node_key_updates_fail_closed_without_replacement_delete_drift() {
         .is_err());
     same(&c);
 }
+
+#[test]
+fn client_chosen_object_replays_are_reported_and_not_recharged() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("db");
+    let mut db = crate::Database::open(&path, crate::Config::default()).unwrap();
+    db.connection
+        .execute(
+            "INSERT INTO names(normalized_name,reservation_sequence,uid) VALUES(?1,1,?2)",
+            params![b"replay-owner".as_slice(), UID.as_slice()],
+        )
+        .unwrap();
+    db.connection
+        .execute(
+            "INSERT INTO users(uid,normalized_name,username_utf8,username_sequence,username_commitment_key,created_at) VALUES(?1,?2,?2,1,zeroblob(16),0)",
+            params![UID.as_slice(), b"replay-owner".as_slice()],
+        )
+        .unwrap();
+    let accounted = |db: &crate::Database| -> (i64, i64, i64) {
+        db.connection
+            .query_row(
+                "SELECT accounted_bytes, accounted_objects, directory_count
+                 FROM kv_namespaces WHERE namespace_id = ?1",
+                [UID.as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap()
+    };
+
+    let exact = boxed(40);
+    let node = id(7);
+    let small = KvNodeMutation {
+        uid: &UID,
+        id: &node,
+        node_type: 3,
+        exact: &exact,
+    };
+    assert_eq!(db.create_kv_node(&small).unwrap(), KvCreation::Created);
+    let charged = accounted(&db);
+    let usage = kv_usage(&db.connection, &UID).unwrap();
+    assert_eq!(db.create_kv_node(&small).unwrap(), KvCreation::Replayed);
+    assert_eq!(accounted(&db), charged);
+    assert_eq!(kv_usage(&db.connection, &UID).unwrap(), usage);
+    let other = boxed(41);
+    let reused = KvNodeMutation {
+        exact: &other,
+        ..small
+    };
+    assert!(matches!(
+        db.create_kv_node(&reused),
+        Err(Error::KvObjectReused)
+    ));
+    // The void-returning wrapper keeps its existing error.
+    assert!(matches!(db.put_kv_node(&reused), Err(Error::KvConflict)));
+    assert_eq!(accounted(&db), charged);
+
+    let directory_id = [0x5d; 16];
+    let directory = KvDirectoryMutation {
+        uid: &UID,
+        id: &directory_id,
+        version: 1,
+        key_role: 3,
+        key_visibility: 0,
+        key_generation: 1,
+        status: KV_DIRECTORY_STATUS_ACTIVE,
+        exact: b"directory-v1",
+    };
+    assert_eq!(
+        db.create_kv_directory(&directory, None).unwrap(),
+        KvCreation::Created
+    );
+    let charged = accounted(&db);
+    assert_eq!(
+        db.create_kv_directory(&directory, None).unwrap(),
+        KvCreation::Replayed
+    );
+    assert_eq!(accounted(&db), charged);
+    let reused = KvDirectoryMutation {
+        exact: b"directory-v1-other-seed",
+        ..directory
+    };
+    assert!(matches!(
+        db.create_kv_directory(&reused, None),
+        Err(Error::KvObjectReused)
+    ));
+    assert!(matches!(
+        db.put_kv_directory_with_precondition(&reused, None),
+        Err(Error::KvConflict)
+    ));
+    // Identical bytes match only an active stored directory.
+    db.connection
+        .execute(
+            "UPDATE kv_directories SET status = 2 WHERE uid = ?1 AND directory_id = ?2",
+            params![UID.as_slice(), directory_id.as_slice()],
+        )
+        .unwrap();
+    assert!(matches!(
+        db.create_kv_directory(&directory, None),
+        Err(Error::KvObjectReused)
+    ));
+    assert_eq!(accounted(&db), charged);
+}

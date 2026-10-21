@@ -115,6 +115,12 @@ pub struct KvWriteResult {
     /// projected after the mutation. A path-scoped write never traverses the
     /// directories outside its path, so this is not the whole namespace.
     pub path: Vec<KvDirectoryProjection>,
+    /// The server reported that the directory, small file or symlink this
+    /// write created already existed with exactly the same contents, so the
+    /// creation step was acknowledged as a replay of an earlier attempt rather
+    /// than written again. Servers that predate replay reporting, and writes
+    /// that create no such object, report `false`.
+    pub content_was_replay: bool,
 }
 
 /// Plaintext returned by an authenticated read of exactly one KV node.

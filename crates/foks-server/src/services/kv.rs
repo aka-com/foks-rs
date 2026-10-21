@@ -335,12 +335,12 @@ fn mkdir(
     let write_authority = authority.clone();
     drop(snapshot);
     drop(reader);
-    writer
+    let creation = writer
         .call_with_current_time(Arc::clone(&write_authority.clock), move |database, now| {
             if !kv_write_is_current(database, &write_authority, &device, now)? {
                 return Err(crate::Error::AuthorizationChanged);
             }
-            database.put_kv_directory_with_precondition(
+            Ok(database.create_kv_directory(
                 &foks_server_db::KvDirectoryMutation {
                     uid: &uid,
                     id: &directory.id,
@@ -352,11 +352,10 @@ fn mkdir(
                     exact: &exact,
                 },
                 precondition.as_ref(),
-            )?;
-            Ok(())
+            )?)
         })
-        .map_err(map_write_error)?;
-    Ok(Response::Void)
+        .map_err(|error| map_creation_error(error, "dir id reused with different contents"))?;
+    kv_write_receipt(creation)
 }
 
 fn put_root(
@@ -629,21 +628,45 @@ fn put_small_file_or_symlink(
     let device = principal.device_id().to_vec();
     let write_authority = authority.clone();
     drop(reader);
-    writer
+    let creation = writer
         .call_with_current_time(Arc::clone(&write_authority.clock), move |database, now| {
             if !kv_write_is_current(database, &write_authority, &device, now)? {
                 return Err(crate::Error::AuthorizationChanged);
             }
-            database.put_kv_node(&foks_server_db::KvNodeMutation {
+            Ok(database.create_kv_node(&foks_server_db::KvNodeMutation {
                 uid: &uid,
                 id: &id,
                 node_type: u64::from(id[0]),
                 exact: &exact,
-            })?;
-            Ok(())
+            })?)
         })
-        .map_err(map_write_error)?;
-    Ok(Response::Void)
+        .map_err(|error| {
+            map_creation_error(error, "small-file node id reused with different contents")
+        })?;
+    kv_write_receipt(creation)
+}
+
+/// Encodes the `KVMkdirRes` / `KVPutSmallFileOrSymlinkRes` result of later
+/// go-foks releases. go-foks v0.1.9 clients treat these methods as void and
+/// discard the result, so the struct is emitted unconditionally.
+fn kv_write_receipt(creation: foks_server_db::KvCreation) -> Result<Response, RpcStatus> {
+    let receipt = foks_rpc::KvWriteReceipt {
+        was_replay: creation.was_replay(),
+    };
+    Ok(Response::Data(
+        receipt.encode().map_err(|_| RpcStatus::TransactionRetry)?,
+    ))
+}
+
+/// A client-chosen object ID that is already stored with other contents is
+/// reported as `KV_RACE_ERROR` with go-foks's message for that object type.
+fn map_creation_error(error: crate::Error, reused: &str) -> RpcStatus {
+    match error {
+        crate::Error::Database(foks_server_db::Error::KvObjectReused) => {
+            RpcStatus::KvRace(reused.to_owned())
+        }
+        error => map_write_error(error),
+    }
 }
 
 fn put(

@@ -1288,11 +1288,14 @@ position_constant = "KV_MKDIR_METHOD_POSITION"
 listeners = ["authenticated"]
 authentication = "active_device_mtls"
 request = "KvMkdirArgument"
-result = "KvDirectory"
+result = "KvWriteReceipt"
 statuses = ["oauth2_auth", "ok", "bad_args", "stale_cache", "kv_race", "quota_exceeded", "tx_retry"]
 max_request_bytes = 1048576
 supported = true
 coverage = ["kv_small"]
+# go-foks main (fd03098) returns KVMkdirRes{wasReplay}; the client decodes
+# both the void and struct results and the server emits the struct.
+accepted_upstream_results = ["KVMkdirRes"]
 
 
 [[route]]
@@ -1363,11 +1366,15 @@ position_constant = "KV_PUT_SMALL_FILE_OR_SYMLINK_METHOD_POSITION"
 listeners = ["authenticated"]
 authentication = "active_device_mtls"
 request = "KvPutSmallArgument"
-result = "Void"
+result = "KvWriteReceipt"
 statuses = ["oauth2_auth", "ok", "bad_args", "stale_cache", "kv_race", "quota_exceeded", "tx_retry"]
 max_request_bytes = 4194304
 supported = true
 coverage = ["kv_small"]
+# go-foks main (b3c9177) returns KVPutSmallFileOrSymlinkRes{wasReplay}; the
+# client decodes both the void and struct results and the server emits the
+# struct.
+accepted_upstream_results = ["KVPutSmallFileOrSymlinkRes"]
 
 
 [[route]]

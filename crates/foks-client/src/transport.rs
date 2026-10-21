@@ -13,8 +13,8 @@ use foks_local_deadline::Deadline;
 use foks_proto::SecretSeed;
 use foks_rpc::{
     call_protocol_id, is_headerless_result_protocol, read_bare_response, read_bare_void_response,
-    read_probe_response, read_response, read_void_response, resequence_call, write_probe_request,
-    DEFAULT_MAX_FRAME_LENGTH,
+    read_optional_response, read_probe_response, read_response, read_void_response,
+    resequence_call, write_probe_request, DEFAULT_MAX_FRAME_LENGTH,
 };
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
 use zeroize::{Zeroize as _, Zeroizing};
@@ -249,6 +249,28 @@ impl Default for ConnectionPool {
     }
 }
 
+/// Which response decoder a pooled call reads its reply with.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResponseShape {
+    /// The method returns a value.
+    Value,
+    /// The method returns nothing.
+    Void,
+    /// The method was void in the pinned upstream release and returns a
+    /// struct in a later one; both reply forms are accepted.
+    OptionalValue,
+}
+
+impl ResponseShape {
+    pub(crate) fn void_if(is_void: bool) -> Self {
+        if is_void {
+            Self::Void
+        } else {
+            Self::Value
+        }
+    }
+}
+
 pub(crate) struct PooledConnection {
     connection: Option<RpcConnection>,
     key: PoolKey,
@@ -269,6 +291,13 @@ impl PooledConnection {
     }
 
     pub(crate) fn call(&mut self, request: &[u8], is_void: bool) -> Result<Vec<u8>> {
+        self.call_shaped(request, ResponseShape::void_if(is_void))
+    }
+
+    /// Like [`Self::call`], with the response decoder named explicitly. An
+    /// omitted [`ResponseShape::OptionalValue`] result is returned as an empty
+    /// vector.
+    pub(crate) fn call_shaped(&mut self, request: &[u8], shape: ResponseShape) -> Result<Vec<u8>> {
         let control = OperationControl {
             deadline: bounded_deadline(self.timeout, self.operation_deadline)?,
             local_deadline: self.local_deadline.clone(),
@@ -282,7 +311,7 @@ impl PooledConnection {
             .stream
             .sock
             .set_control(control);
-        let result = self.call_current(request, is_void);
+        let result = self.call_current(request, shape);
         if result.is_err()
             && !matches!(
                 &result,
@@ -304,7 +333,7 @@ impl PooledConnection {
         self.connection.take();
     }
 
-    fn call_current(&mut self, request: &[u8], is_void: bool) -> Result<Vec<u8>> {
+    fn call_current(&mut self, request: &[u8], shape: ResponseShape) -> Result<Vec<u8>> {
         self.reusable = false;
         let connection = self
             .connection
@@ -323,21 +352,29 @@ impl PooledConnection {
             .write_all(&request)
             .map_err(map_io_error)?;
         connection.stream.flush().map_err(map_io_error)?;
-        let mut response = match (is_void, headerless) {
-            (true, false) => {
+        let mut response = match (shape, headerless) {
+            (ResponseShape::Void, false) => {
                 read_void_response(&mut connection.stream, self.maximum_frame_length, sequence)
                     .map(|()| Vec::new())
             }
-            (true, true) => {
+            (ResponseShape::Void, true) => {
                 read_bare_void_response(&mut connection.stream, self.maximum_frame_length, sequence)
                     .map(|()| Vec::new())
             }
-            (false, false) => {
+            (ResponseShape::Value, false) => {
                 read_response(&mut connection.stream, self.maximum_frame_length, sequence)
             }
-            (false, true) => {
+            (ResponseShape::Value, true) => {
                 read_bare_response(&mut connection.stream, self.maximum_frame_length, sequence)
             }
+            (ResponseShape::OptionalValue, false) => {
+                read_optional_response(&mut connection.stream, self.maximum_frame_length, sequence)
+                    .map(Option::unwrap_or_default)
+            }
+            (ResponseShape::OptionalValue, true) => Err(foks_rpc::Error::Envelope {
+                expected: "DataWrap protocol for an optional result",
+                found: "headerless protocol",
+            }),
         }
         .map_err(map_rpc_error);
         // rustls can satisfy a complete frame from its plaintext buffer without
@@ -962,7 +999,7 @@ impl FoksClient {
         is_void: bool,
     ) -> Result<Vec<u8>> {
         let mut connection = self.checkout_connection(host, target, credential, select_request)?;
-        connection.call_current(request, is_void)
+        connection.call_current(request, ResponseShape::void_if(is_void))
     }
 
     fn checkout_connection(
@@ -1045,7 +1082,7 @@ impl FoksClient {
                 .as_ref()
                 .is_some_and(|connection| connection.next_sequence == 0)
             {
-                pooled.call_current(select_request, true)?;
+                pooled.call_current(select_request, ResponseShape::Void)?;
             }
         }
         Ok(pooled)

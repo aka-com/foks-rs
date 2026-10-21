@@ -54,6 +54,8 @@ pub enum Error {
     RtUnsupportedFormat,
     #[error("KV object conflicts with authoritative state")]
     KvConflict,
+    #[error("KV object ID is already stored with different contents")]
+    KvObjectReused,
     #[error("KV mutation is not permitted by the stored object role")]
     KvPermission,
     #[error("KV lock is held by another token")]
