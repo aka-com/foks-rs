@@ -6,8 +6,8 @@
  */
 
 import { useId } from 'react';
-import type { ReactNode } from 'react';
-import { Dialog, DismissibleDialog } from '/kit/overlay-primitives';
+import type { KeyboardEvent, ReactNode } from 'react';
+import { Dialog, DismissibleDialog, inPopup } from '/kit/overlay-primitives';
 
 /** `.sheet`, `.sheet.mid`, `.sheet.wide` — the three the stylesheet draws. */
 export type SheetWidth = 'base' | 'mid' | 'wide';
@@ -52,7 +52,7 @@ export function Sheet({
 }: SheetProps): ReactNode {
   const classes = ['sheet', WIDTH_CLASS[width]].filter(Boolean).join(' ');
   return (
-    <div className={classes}>
+    <div className={classes} onKeyDown={pressDefaultButton}>
       <div className="hd">
         {glyph}
         <span className="t">
@@ -67,6 +67,50 @@ export function Sheet({
       {footer === undefined ? null : <div className="ft">{footer}</div>}
     </div>
   );
+}
+
+/**
+ * Return activates the sheet's default button, as on macOS: the last primary
+ * button in the footer, when it is enabled. A control that uses Return itself
+ * keeps it — a text area, a select, an open combobox, a button or link (Return
+ * presses the focused one), a picker's popup — and so does a key already
+ * handled below, such as an alert over the sheet.
+ */
+function pressDefaultButton(event: KeyboardEvent<HTMLDivElement>): void {
+  if (
+    event.key !== 'Enter' ||
+    event.defaultPrevented ||
+    event.nativeEvent.isComposing ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.altKey ||
+    event.shiftKey
+  )
+    return;
+  const target = event.target instanceof Element ? event.target : null;
+  if (
+    !target ||
+    inPopup(target) ||
+    target.closest(
+      'textarea, select, button, a[href], [contenteditable="true"], ' +
+        '[role="combobox"][aria-expanded="true"], [role="option"], ' +
+        '[role="menuitem"], [role="button"], input[type="checkbox"], ' +
+        'input[type="radio"], input[type="file"]',
+    )
+  )
+    return;
+  // The sheet this key belongs to, not one further out in the React tree.
+  const sheet = target.closest('.sheet');
+  if (sheet !== event.currentTarget) return;
+  const primaries = sheet.querySelectorAll<HTMLButtonElement>(
+    ':scope > .ft .btn.primary',
+  );
+  const button = primaries[primaries.length - 1];
+  if (!button) return;
+  event.preventDefault();
+  if (button.disabled || button.getAttribute('aria-disabled') === 'true')
+    return;
+  button.click();
 }
 
 export interface SheetDialogProps extends Omit<SheetProps, 'titleId'> {
