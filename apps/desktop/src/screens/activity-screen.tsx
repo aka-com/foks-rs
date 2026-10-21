@@ -21,8 +21,8 @@
  * owns it.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import type { KeyboardEvent, ReactNode } from 'react';
+import { useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
 import {
   Band,
@@ -33,6 +33,7 @@ import {
   PropertyGroup,
   PropertyRow,
   StoreMark,
+  useListbox,
 } from '../components';
 import { useMembershipInbox } from '../components/membership-inbox';
 import type { MembershipInbox } from '../components/membership-inbox';
@@ -576,39 +577,24 @@ export function ActivityScreen({
   // left rather than pointing at nothing.
   const selected =
     visible.find((entry) => entry.id === chosen) ?? visible[0] ?? null;
-  const listRef = useRef<HTMLDivElement>(null);
-  const focusRow = useRef(false);
-  useEffect(() => {
-    if (!focusRow.current) return;
-    focusRow.current = false;
-    listRef.current
-      ?.querySelector<HTMLElement>('[role="option"][aria-selected="true"]')
-      ?.focus();
+  const requests = visible.filter((entry) => entry.kind === 'request');
+  const notices = visible.filter((entry) => entry.kind === 'notice');
+  // The list's keyboard model is the Files and Devices one: one Tab stop,
+  // Up/Down/Home/End and type-select, selection following the focus.
+  const ordered = [...requests, ...notices];
+  const list = useListbox<HTMLDivElement>({
+    keys: ordered.map((entry) => entry.id),
+    selectedKey: selected?.id ?? null,
+    onMove: (key) => setChosen(key),
+    labelOf: (key) => ordered.find((entry) => entry.id === key)?.title ?? '',
   });
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-    const index = visible.findIndex((entry) => entry.id === selected?.id);
-    const next =
-      visible[
-        Math.min(
-          visible.length - 1,
-          Math.max(0, index + (event.key === 'ArrowDown' ? 1 : -1)),
-        )
-      ];
-    if (!next) return;
-    event.preventDefault();
-    focusRow.current = true;
-    setChosen(next.id);
-  };
   const row = (entry: Entry): ReactNode => {
     const on = entry.id === selected?.id;
     return (
       <button
         key={entry.id}
         type="button"
-        role="option"
-        aria-selected={on}
-        tabIndex={on ? 0 : -1}
+        {...list.optionProps(entry.id)}
         className={on ? 'row act sel' : 'row act'}
         onClick={() => setChosen(entry.id)}
       >
@@ -629,19 +615,11 @@ export function ActivityScreen({
       </button>
     );
   };
-  const requests = visible.filter((entry) => entry.kind === 'request');
-  const notices = visible.filter((entry) => entry.kind === 'notice');
   return (
     <>
       <div className="activity-list">
         {visible.length || loadingRequests ? (
-          <div
-            ref={listRef}
-            className="rows"
-            role="listbox"
-            aria-label="Activity"
-            onKeyDown={onKeyDown}
-          >
+          <div {...list.listProps} className="rows" aria-label="Activity">
             {requests.length || loadingRequests ? (
               <>
                 <div className="gsec" role="presentation">
