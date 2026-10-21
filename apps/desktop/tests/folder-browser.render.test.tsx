@@ -260,13 +260,16 @@ test('a store with nothing in it is still reachable from the tree', async () => 
 
 test('an empty team displays shared-item details and its Manage command', async () => {
   const { store } = await mount({ kind: 'all' });
-  // "Homelab" is a team with nothing in it.
+  // "Homelab" is a team with nothing in it whose setup did not finish: the
+  // list says so, as its store page does, instead of an empty list.
   ui.fireEvent.click(treeRow('Homelab'));
   await ui.waitFor(() => assert.equal(currentTitle(), 'Homelab'));
+  assert.equal(document.querySelector('.lpane .empty'), null);
   assert.equal(
-    document.querySelector('.lpane .empty p')?.textContent,
-    'Items stored in this team vault are accessible to team members according to their assigned roles.',
+    document.querySelector('.lpane .access-notice h2')?.textContent,
+    'Setup incomplete',
   );
+  assert.ok(ui.screen.getByRole('button', { name: 'Finish setup' }));
   // A team's head offers its page.
   ui.fireEvent.click(treeRow('Household'));
   await ui.waitFor(() => assert.equal(currentTitle(), 'Household'));
@@ -382,7 +385,7 @@ test('cards preserve browsing state, sorting, and selected details and persist a
   assert.equal(await checked('As Cards'), true);
   assert.equal(document.querySelectorAll('.files-grid .row').length, 1);
   assert.equal(
-    document.querySelector('.files-grid .row')?.getAttribute('aria-pressed'),
+    document.querySelector('.files-grid .row')?.getAttribute('aria-selected'),
     'true',
   );
   assert.equal(await checked('Descending'), true);
@@ -412,7 +415,9 @@ test('folder cards navigate with the keyboard and retain the cards and kind filt
     '.files-grid [data-folder-path="/logins"]',
   );
   assert.ok(folder);
-  assert.equal(folder.querySelector('.name small')?.textContent, 'Folder');
+  // At a store's root a first-level folder is the label of its section.
+  assert.equal(folder.getAttribute('role'), 'option');
+  assert.match(folder.getAttribute('aria-label') ?? '', /^logins, folder/);
   ui.fireEvent.keyDown(folder, { key: 'Enter' });
   assert.equal(store.getSnapshot().folder, '/logins');
   assert.equal(store.getSnapshot().kind, 'Password');

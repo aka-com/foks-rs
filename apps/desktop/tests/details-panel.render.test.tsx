@@ -977,7 +977,7 @@ test('a file replacement conflict closes Replace and reports replacement-specifi
   assert.equal(conflict?.operation, 'replace');
 });
 
-test('outside clicks close details while clicks inside and dialog interactions do not', async () => {
+test('clicks outside the panel leave it open; Escape in it closes it', async () => {
   const { props, draw } = await setup();
   let closed = 0;
   props.onClose = () => {
@@ -985,20 +985,18 @@ test('outside clicks close details while clicks inside and dialog interactions d
   };
   ui.render(draw());
   const panel = document.querySelector('.details')!;
-  const pointer = (target: Element) =>
+  const click = (target: Element) => {
     ui.fireEvent(
       target,
       new window.MouseEvent('pointerdown', { bubbles: true, button: 0 }),
     );
-  pointer(panel);
+    ui.fireEvent.click(target);
+  };
+  // The panel is a column of the window: the bars, the sidebar and the
+  // list's controls are used beside it without closing it.
+  click(panel);
+  click(document.body);
   assert.equal(closed, 0);
-  const dialog = document.createElement('div');
-  dialog.setAttribute('role', 'dialog');
-  document.body.append(dialog);
-  pointer(dialog);
-  pointer(document.body);
-  assert.equal(closed, 0);
-  dialog.remove();
-  pointer(document.body);
+  ui.fireEvent.keyDown(panel, { key: 'Escape' });
   assert.equal(closed, 1);
 });

@@ -272,22 +272,10 @@ export function DetailsPanel({
   accessTicket,
   resumeDraft = null,
 }: DetailsPanelProps): ReactNode {
+  // The panel is a column of the window, not a popover: a click elsewhere
+  // does not close it. Escape here, or a click on the list's empty space,
+  // clears the selection through the guarded `onClose`.
   const panelRef = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const dismiss = (event: PointerEvent): void => {
-      const target = event.target;
-      if (!(target instanceof Element) || event.button !== 0) return;
-      if (
-        panelRef.current?.contains(target) ||
-        document.querySelector('[role="dialog"], [role="alertdialog"]') ||
-        target.closest('[role="menu"], [role="listbox"]')
-      )
-        return;
-      onClose();
-    };
-    document.addEventListener('pointerdown', dismiss);
-    return () => document.removeEventListener('pointerdown', dismiss);
-  }, [onClose]);
   const item: Item | undefined = selection
     ? snapshot.items.find(
         (candidate) =>
@@ -1163,6 +1151,7 @@ export function DetailsPanel({
                     </>
                   )}
                   <MenuItem
+                    icon="folder"
                     reason={readProblem}
                     onClick={() => void copyPath()}
                   >
@@ -1171,6 +1160,7 @@ export function DetailsPanel({
                   <div className="menu-separator" role="separator" />
                   {onMove ? (
                     <MenuItem
+                      icon="pencil"
                       reason={writeProblem}
                       onClick={() => {
                         if (requireAccess(true)) onMove(item);
@@ -1271,8 +1261,8 @@ export function DetailsPanel({
             <div className="notice info">
               <Icon name="info" />
               <span className="t">
-                Saves a new version if no one else has changed this item since
-                version {item.version}.
+                Saves version {item.version + 1} if no one else has changed this
+                item since version {item.version}.
               </span>
             </div>
           ) : null}

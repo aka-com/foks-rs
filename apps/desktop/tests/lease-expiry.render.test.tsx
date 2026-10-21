@@ -113,7 +113,10 @@ test('an expiring open vault conceals details while a healthy neighbor stays usa
 
   await ui.act(async () => clock.advance(expiresAt - start));
   await ui.waitFor(() => {
-    assert.equal(document.querySelector('.details'), null);
+    // The item's details are gone; the store page keeps its list layout,
+    // so the details column is the empty No Selection column.
+    assert.equal(document.querySelector('.details:not(.details-empty)'), null);
+    assert.ok(document.querySelector('.details.details-empty'));
     assert.equal(rendered.queryByText('foks_team_token_7f31ac09'), null);
     assert.ok(rendered.getAllByText('Check-in expired').length > 0);
   });

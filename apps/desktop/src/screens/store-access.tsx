@@ -1,7 +1,7 @@
 /** Full-page error and recovery view displayed when a store cannot be accessed. */
 
 import type { ReactNode } from 'react';
-import { Band, Button, Notice } from '../components';
+import { Button, Notice } from '../components';
 import {
   serverDisplayLabelForStore as displayServerName,
   canChangeItem,
@@ -196,31 +196,41 @@ export function accessCopy(
   }
 }
 
-export interface StoreAccessTakeoverProps {
+export interface StoreAccessNoticeProps {
   operation?: StoreOperation;
   snapshot: AgentSnapshot;
   store: Store;
+  /**
+   * The condition to state, when the caller knows one the snapshot does not
+   * yet carry (a check-in that lapsed by the clock). Defaults to the store's
+   * description state.
+   */
+  state?: AccessProblem;
   onOpenServer: (profile: string) => void;
   onFinishSetup: () => void;
+  /** Further controls after the notice's own action. */
   headerAction?: ReactNode;
-  /**
-   * `band` draws the message as a full-width alert with its one action at the
-   * right end, on the alert's center line — the group page's treatment.
-   */
-  variant?: 'notice' | 'band';
 }
 
-export function StoreAccessTakeover({
+/**
+ * The notice for a store that cannot be opened: a lock (for a lapsed
+ * check-in) or alert glyph, the condition as a bold title, the sentence from
+ * `accessCopy` in ink, and the one recovery action. The store page, a folder
+ * of it, All Items and the team page all draw this same block, which matches
+ * the locked notice in the item details.
+ */
+export function StoreAccessNotice({
   operation = 'vault',
   snapshot,
   store,
+  state: given,
   onOpenServer,
   onFinishSetup,
   headerAction,
-  variant = 'notice',
-}: StoreAccessTakeoverProps): ReactNode {
-  const state = storeDescriptionState(snapshot, store, { operation });
-  if (state === 'normal') return null;
+}: StoreAccessNoticeProps): ReactNode {
+  const described = storeDescriptionState(snapshot, store, { operation });
+  const state = given ?? (described === 'normal' ? null : described);
+  if (!state) return null;
   const server = serverOf(snapshot, store.id);
   const copy = accessCopy(
     state,
@@ -239,69 +249,72 @@ export function StoreAccessTakeover({
       </Button>
     ) : (
       <Button onClick={() => onOpenServer(server?.profileName ?? store.server)}>
-        {copy.action === 'open-server' ? 'View server' : 'Server settings'}
+        {copy.action === 'open-server' ? 'Check Status' : 'Server Settings'}
       </Button>
     );
-
   return (
-    <>
-      <div className="body">
-        {variant === 'band' ? (
-          // The takeover replaces the page's content, so what it says is a
-          // heading of that page; the band draws the same words as its lead-in,
-          // which is a phrase in a sentence rather than a heading.
-          <>
-            <h2 className="offscreen">{copy.title}</h2>
-            <Band
-              severity={
-                state === 'loading'
-                  ? 'info'
-                  : state === 'setup-incomplete'
-                    ? 'warn'
-                    : 'crit'
-              }
-              label={copy.title}
-              action={
-                <>
-                  {action}
-                  {headerAction}
-                </>
-              }
-            >
-              {copy.detail}
-            </Band>
-          </>
-        ) : (
-          // The window header's crumb names the store; the notice says what
-          // stands between the reader and its items, with every action at its
-          // right.
-          <Notice
-            severity={
-              state === 'loading'
-                ? 'info'
-                : state === 'setup-incomplete'
-                  ? 'warn'
-                  : 'crit'
-            }
-            title={copy.title}
-            actions={
-              <>
-                {action}
-                {headerAction}
-              </>
-            }
-          >
-            <p>{copy.detail}</p>
-          </Notice>
-        )}
-      </div>
-    </>
+    <Notice
+      severity={
+        state === 'loading'
+          ? 'info'
+          : state === 'setup-incomplete'
+            ? 'warn'
+            : 'crit'
+      }
+      icon={
+        state === 'check-in-expired' || state === 'check-in-unavailable'
+          ? 'lock'
+          : undefined
+      }
+      title={copy.title}
+      actions={
+        <>
+          {action}
+          {headerAction}
+        </>
+      }
+    >
+      <p>{copy.detail}</p>
+    </Notice>
+  );
+}
+
+export interface StoreAccessTakeoverProps extends Omit<
+  StoreAccessNoticeProps,
+  'state'
+> {
+  /**
+   * Accepted for the team page's call sites; both variants now draw the same
+   * notice (title line, body, action), so the condition reads the same on
+   * every surface.
+   */
+  variant?: 'notice' | 'band';
+}
+
+/** A page body that holds only the access notice. */
+export function StoreAccessTakeover(
+  props: StoreAccessTakeoverProps,
+): ReactNode {
+  const operation = props.operation ?? 'vault';
+  if (
+    storeDescriptionState(props.snapshot, props.store, { operation }) ===
+    'normal'
+  )
+    return null;
+  return (
+    <div className="body">
+      <StoreAccessNotice {...props} />
+    </div>
   );
 }
 
 export interface StoreAccessBand {
   key: string;
   text: string;
+  /** The condition, as `accessCopy` titles it. */
+  title: string;
+  /** The server profile whose status explains it. */
+  server: string;
 }
 
 function joinNames(stores: readonly Store[]): string {
@@ -353,6 +366,11 @@ export function storeAccessBands(snapshot: AgentSnapshot): StoreAccessBand[] {
                         : state === 'agent-unavailable'
                           ? `${names} ${verb} unavailable while the local service is stopped.`
                           : `${names} ${verb} unavailable because ${serverName} has not been checked.`;
-    return { key, text };
+    return {
+      key,
+      text,
+      title: accessCopy(state, stores[0], serverName).title,
+      server: stores[0].server,
+    };
   });
 }

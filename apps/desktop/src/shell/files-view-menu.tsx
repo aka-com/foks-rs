@@ -1,6 +1,6 @@
 /**
- * The Files list bar's view menu: List or Cards, the sort key and the
- * direction. Choices are radio items with a check in the leading column, as a
+ * The Files list bar's view menu: List or Cards, which kinds to show in the
+ * current store or folder, the sort key and the direction. Choices are radio items with a check in the leading column, as a
  * macOS View menu draws them; choosing one keeps the menu's opener focused.
  */
 
@@ -8,7 +8,7 @@ import type { ReactNode } from 'react';
 import { Icon, MenuButton } from '../components';
 import { setFilesView, useFilesView } from '../files-view-pref';
 import type { FilesView } from '../files-view-pref';
-import type { SortDirection, SortKey } from '../location';
+import type { KindFilter, SortDirection, SortKey } from '../location';
 
 function Choice({
   checked,
@@ -40,8 +40,13 @@ export function FilesViewMenu({
   direction,
   onSort,
   locationSort,
+  kind,
+  onKind,
   disabled = false,
 }: {
+  /** The kind filter, which narrows whatever store or folder is open. */
+  kind: KindFilter;
+  onKind: (kind: KindFilter) => void;
   sort: SortKey;
   direction: SortDirection;
   onSort: (sort: SortKey, direction: SortDirection) => void;
@@ -55,6 +60,11 @@ export function FilesViewMenu({
   const views: readonly [FilesView, string][] = [
     ['list', 'As List'],
     ['grid', 'As Cards'],
+  ];
+  const kinds: readonly [KindFilter, string][] = [
+    ['All', 'All Items'],
+    ['Password', 'Passwords'],
+    ['Document', 'Documents'],
   ];
   const keys: [SortKey, string][] = [
     ['name', 'Name'],
@@ -82,6 +92,15 @@ export function FilesViewMenu({
               checked={view === id}
               onSelect={() => setFilesView(id)}
             >
+              {label}
+            </Choice>
+          ))}
+          <div className="menu-separator" role="separator" />
+          <div className="mh" aria-hidden="true">
+            Show
+          </div>
+          {kinds.map(([id, label]) => (
+            <Choice key={id} checked={kind === id} onSelect={() => onKind(id)}>
               {label}
             </Choice>
           ))}
