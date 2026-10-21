@@ -4,7 +4,9 @@
   overflow: clip;
   display: grid;
   --chat-inbox-w: 300px;
-  grid-template-columns: var(--chat-inbox-w) minmax(0, 1fr);
+  /* With the sidebar hidden the column widens by the traffic lights' room. */
+  --chat-col-w: calc(var(--chat-inbox-w) + var(--chat-col-extra, 0px));
+  grid-template-columns: var(--chat-col-w) minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   height: 100%;
@@ -480,7 +482,7 @@
   position: absolute;
   inset: 0 0 0 auto;
   width: var(--chat-info-w);
-  max-width: calc(100% - var(--chat-inbox-w));
+  max-width: calc(100% - var(--chat-col-w));
   z-index: 2;
   box-shadow: var(--shadow-menu);
   animation: chat-info-in 180ms ease-out;
@@ -495,7 +497,7 @@
    than a sheet over it. */
 @media (min-width: 1100px) {
   .chat-screen.with-info {
-    grid-template-columns: var(--chat-inbox-w) minmax(0, 1fr) var(--chat-info-w);
+    grid-template-columns: var(--chat-col-w) minmax(0, 1fr) var(--chat-info-w);
   }
   .chat-screen.with-info > .chat-info {
     position: static;
@@ -516,6 +518,7 @@
 }
 .app.no-side .chat-info-head {
   height: 52px;
+  padding-top: 8px;
 }
 .chat-info-head b {
   flex: 1;
@@ -818,8 +821,12 @@
   padding: 0 10px 0 14px;
   border-bottom: 1px solid var(--bar-rule);
 }
+.app.no-side .chat-screen {
+  --chat-col-extra: 72px;
+}
 .app.no-side .chat-thread-header {
   height: 52px;
+  padding-top: 8px;
 }
 /* Single-line header displaying channel name, team, and member count. */
 .chat-thread-header h2 {
@@ -1327,7 +1334,7 @@
   position: absolute;
   z-index: 3;
   inset-block: 0;
-  left: calc(var(--chat-inbox-w) - 3px);
+  left: calc(var(--chat-col-w) - 3px);
   width: 6px;
   cursor: col-resize;
   touch-action: none;
