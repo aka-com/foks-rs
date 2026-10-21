@@ -612,6 +612,33 @@ test('Preferences holds desktop alert preferences and the accent color', async (
   assert.equal(rendered.queryByText('Sidebar color'), null);
 });
 
+test('an accent stored by an earlier build reads as its current swatch', async () => {
+  // Iris, Sky and Slate were the choices before the five distinct hues.
+  for (const [stored, label] of [
+    ['iris', 'Purple'],
+    ['sky', 'Blue'],
+    ['slate', 'Graphite'],
+  ] as const) {
+    window.localStorage.setItem('railColor', stored);
+    try {
+      const rendered = await renderSettings(await fixture(), {
+        where: { section: 'preferences' },
+      });
+      const accent = rendered.getByRole('radiogroup', { name: 'Accent color' });
+      assert.deepEqual(
+        [...accent.querySelectorAll('[aria-checked="true"]')].map((swatch) =>
+          swatch.getAttribute('aria-label'),
+        ),
+        [label],
+        stored,
+      );
+      rendered.unmount();
+    } finally {
+      window.localStorage.removeItem('railColor');
+    }
+  }
+});
+
 test('Preferences remains available without an account', async () => {
   const snapshot = await fixture();
   const rendered = await renderSettings(

@@ -69,3 +69,30 @@ test('accent colors are distinct hues and retired choices map to their nearest o
   assert.equal(resolveRailColor('nonsense'), 'default');
   assert.equal(resolveRailColor(null), 'default');
 });
+
+test('a retired accent stored by an earlier build is drawn as its current choice', async () => {
+  const { applyRailColor, storedRailColor } = await import('../src/rail-theme');
+  const root = document.documentElement;
+  try {
+    for (const [stored, drawn] of [
+      ['iris', 'purple'],
+      ['lavender', 'purple'],
+      ['slate', 'graphite'],
+    ] as const) {
+      window.localStorage.setItem('railColor', stored);
+      assert.equal(storedRailColor(), drawn);
+      applyRailColor(storedRailColor());
+      assert.equal(root.dataset.rail, drawn, stored);
+    }
+    // Sky maps to the default, which tokens.css draws with no attribute.
+    window.localStorage.setItem('railColor', 'sky');
+    applyRailColor(storedRailColor());
+    assert.equal(root.dataset.rail, undefined);
+    // A retired id passed straight in is resolved too.
+    applyRailColor('iris');
+    assert.equal(root.dataset.rail, 'purple');
+  } finally {
+    window.localStorage.removeItem('railColor');
+    delete root.dataset.rail;
+  }
+});
