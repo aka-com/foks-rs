@@ -221,7 +221,11 @@ impl Database {
     /// active version: the exact directory encodes the seed box, key role and
     /// generation, write role and status, and every one of them must match.
     /// Any other directory under this ID fails with
-    /// [`Error::KvObjectReused`].
+    /// [`Error::KvObjectReused`]. go-foks main (`server/kv-store/dir.go`)
+    /// instead compares the row for the replayed (ID, version) pair, so a
+    /// mkdir retry after the directory was re-versioned is a replay there and
+    /// a race here; a client cannot re-version a directory whose creation it
+    /// has not seen acknowledged, so the difference is not reachable.
     pub fn create_kv_directory(
         &mut self,
         mutation: &KvDirectoryMutation<'_>,

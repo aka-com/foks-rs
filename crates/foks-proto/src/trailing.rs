@@ -32,6 +32,9 @@
 //! Encoders are unaffected: a value constructed by this implementation
 //! encodes exactly the fields the pinned release defines, so bytes sent to a
 //! v0.1.9 peer do not change.
+//!
+//! The hand-written server argument decoders in `foks-rpc` are still exact;
+//! each is to be converted with the same stored-or-compared analysis.
 
 use crate::{array_at_least, Result, Value};
 
@@ -39,6 +42,8 @@ use crate::{array_at_least, Result, Value};
 ///
 /// Equality compares only the unknown fields: whether a known optional field
 /// was written explicitly at its default changes the encoding, not the value.
+/// Two equal values may therefore encode to different bytes; code that
+/// decides whether to store or re-serve a value must compare encodings.
 #[derive(Clone, Debug, Default)]
 pub struct TrailingFields {
     optional_on_wire: usize,

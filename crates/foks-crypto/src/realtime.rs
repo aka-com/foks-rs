@@ -105,16 +105,10 @@ impl RealtimeKeys {
         noncer: &RtMessageNoncer,
         body: &[u8],
     ) -> Result<RtCiphertext> {
-        self.check_basic(noncer)?;
-        if body.len() > RT_MAX_BODY_BYTES {
+        if noncer.metadata.kind != RtMessageType::Basic || body.len() > RT_MAX_BODY_BYTES {
             return Err(Error::Realtime);
         }
-        let nonce = realtime_message_nonce(noncer)?;
-        let plaintext = Zeroizing::new(RtMessageBody::Basic(body.to_vec()).encoded()?);
-        let ciphertext = XSalsa20Poly1305::new((&*self.data).into())
-            .encrypt((&nonce).into(), plaintext.as_ref())
-            .map_err(|_| Error::Realtime)?;
-        Ok(RtCiphertext(ciphertext))
+        self.seal_message(noncer, &RtMessageBody::Basic(body.to_vec()))
     }
 
     /// Seal a Basic message or a pegged Reply, Reaction or Edit as go-foks
@@ -192,13 +186,6 @@ impl RealtimeKeys {
             return Err(Error::Realtime);
         }
         Ok(body)
-    }
-
-    fn check_basic(&self, noncer: &RtMessageNoncer) -> Result<()> {
-        if noncer.metadata.kind != RtMessageType::Basic {
-            return Err(Error::Realtime);
-        }
-        self.check_sender(noncer)
     }
 
     fn check_sender(&self, noncer: &RtMessageNoncer) -> Result<()> {
