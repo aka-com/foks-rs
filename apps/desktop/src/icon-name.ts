@@ -47,4 +47,6 @@ export type FoksIconName =
   | 'chevronsUpDown'
   | 'fileText'
   | 'lock'
-  | 'panelLeft';
+  | 'panelLeft'
+  | 'userPlus'
+  | 'warning';

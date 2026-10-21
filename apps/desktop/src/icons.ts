@@ -50,8 +50,10 @@ import Settings from 'lucide/dist/esm/icons/settings.mjs';
 import ShieldCheck from 'lucide/dist/esm/icons/shield-check.mjs';
 import Terminal from 'lucide/dist/esm/icons/terminal.mjs';
 import Trash from 'lucide/dist/esm/icons/trash.mjs';
+import TriangleAlert from 'lucide/dist/esm/icons/triangle-alert.mjs';
 import Upload from 'lucide/dist/esm/icons/upload.mjs';
 import User from 'lucide/dist/esm/icons/user.mjs';
+import UserPlus from 'lucide/dist/esm/icons/user-plus.mjs';
 import Users from 'lucide/dist/esm/icons/users.mjs';
 import Vault from 'lucide/dist/esm/icons/vault.mjs';
 import X from 'lucide/dist/esm/icons/x.mjs';
@@ -106,6 +108,8 @@ export const FOKS_ICONS = {
   fileText: FileText,
   lock: Lock,
   panelLeft: PanelLeft,
+  userPlus: UserPlus,
+  warning: TriangleAlert,
 } as const satisfies Record<FoksIconName, IconNode>;
 
 export type { FoksIconName } from './icon-name';

@@ -8,6 +8,7 @@
 import type { ReactNode } from 'react';
 import { Icon } from './icon';
 import type { Severity } from '../model';
+import type { FoksIconName } from '../icon-name';
 
 export interface NoticeProps {
   severity?: Severity;
@@ -69,11 +70,14 @@ export interface BandProps {
   live?: boolean;
   /** Optional control associated with the band's message, displayed at the right edge. */
   action?: ReactNode;
+  /** The leading glyph, where the severity's own does not say what the band is about. */
+  icon?: FoksIconName;
   children: ReactNode;
 }
 
 export function Band({
   label,
+  icon,
   title,
   severity = 'warn',
   live = false,
@@ -105,7 +109,7 @@ export function Band({
       aria-label={role === 'group' ? label : undefined}
       title={title}
     >
-      <Icon name={severity === 'info' ? 'info' : 'alert'} />
+      <Icon name={icon ?? (severity === 'info' ? 'info' : 'alert')} />
       <span className="t">
         {/* A heading cannot nest in this line; the label is the bold lead-in
             it has always been drawn as. */}
