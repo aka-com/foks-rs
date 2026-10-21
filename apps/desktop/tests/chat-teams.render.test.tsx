@@ -847,11 +847,14 @@ test('the rail returns to the chat the tab last had open', async () => {
   // team that still has chat is not collateral damage.
   ui.cleanup();
   rememberChatLocation({ kind: 'chat', ref: 'team:household', channel });
-  await mount(await snapshotWithChat(['personal']), {
+  const journal = await mount(await snapshotWithChat(['personal']), {
     kind: 'chat',
     ref: 'team:eng',
   });
   await ui.screen.findByRole('heading', { name: 'Engineering has no chat' });
+  // The team itself is still there to open.
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Open Team' }));
+  assert.deepEqual(journal.at(-1), { kind: 'group-settings', ref: 'team:eng' });
   assert.deepEqual(railChat(), {
     kind: 'chat',
     ref: 'team:household',

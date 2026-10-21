@@ -340,7 +340,7 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .toolbar-rest>.search{margin-left:auto}
 .toolbar .spacer{flex:1 1 8px}
 .toolbar .btn,.toolbar .seg{height:32px}.toolbar .btn,.toolbar .seg.txt button{font-size:13px}
-.toolbar .btn.primary,.empty .btn.primary{height:30px}
+.toolbar .btn.primary,.empty .btn.primary,.empty .empty-acts .btn{height:30px}
 .scope{font-size:13px;color:var(--muted)}.toolbar .scope{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}.path .loc>.scope{flex:1;min-width:0;margin-left:auto;overflow:hidden;text-align:right;text-overflow:ellipsis;white-space:nowrap}
 /* Buttons: flat, 26px, a hairline and a 1px shadow, 6px radius, title-case
    labels at 500. The primary fill is --accent-fill (4.5:1 with white in

@@ -422,14 +422,28 @@ function NoChatForTeam({
       </span>
       <h2>{store ? `${store.name} has no chat` : 'Team unavailable'}</h2>
       <p role="status">{reason}</p>
-      {elsewhere && (
-        <Button
-          variant="primary"
-          onClick={() => onNavigate({ kind: 'chat', ref: elsewhere.id })}
-        >
-          Open Another Team
-        </Button>
-      )}
+      {team || elsewhere ? (
+        <div className="empty-acts">
+          {/* The team itself is still there to open, without its chat. */}
+          {team ? (
+            <Button
+              onClick={() =>
+                onNavigate({ kind: 'group-settings', ref: team.id })
+              }
+            >
+              Open Team
+            </Button>
+          ) : null}
+          {elsewhere ? (
+            <Button
+              variant="primary"
+              onClick={() => onNavigate({ kind: 'chat', ref: elsewhere.id })}
+            >
+              Open Another Team
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
