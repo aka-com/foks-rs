@@ -28,7 +28,6 @@ import {
   filesGridWindow,
 } from './files-grid';
 import {
-  Band,
   Button,
   EmptyState,
   Icon,
@@ -77,9 +76,10 @@ import { useFolderMenu } from './folder-menu';
 import { itemTile } from './item-tile';
 import {
   itemActionProblem,
-  StoreAccessTakeover,
+  StoreAccessNotice,
   storeAccessBands,
 } from './store-access';
+import type { AccessProblem } from './store-access';
 
 /* --------------------------------------------------------------- pieces -- */
 
@@ -837,30 +837,6 @@ export function ItemsScreen({
     );
   }
 
-  if (store && storeDescriptionState(snapshot, store) !== 'normal') {
-    return (
-      <StoreAccessTakeover
-        snapshot={snapshot}
-        store={store}
-        onOpenServer={(profile) =>
-          locations.navigate({ kind: 'settings', section: 'account', profile })
-        }
-        onFinishSetup={() => void onResume(store.id)}
-        headerAction={
-          store.kind === 'team' ? (
-            <Button
-              variant="quiet"
-              icon="settings"
-              title="Team settings"
-              aria-label="Team settings"
-              onClick={() => onSettings(store.id)}
-            />
-          ) : undefined
-        }
-      />
-    );
-  }
-
   const accessBands = storeAccessBands(snapshot);
   const kindMeta = state.kind === 'All' ? null : KINDS[state.kind];
   const availability = (candidate: Store) =>
@@ -981,6 +957,25 @@ export function ItemsScreen({
     : null;
   const readOnly = Boolean(readOnlyReason);
   const expiredHere = Boolean(scopeStore && leaseExpired(scopeStore));
+  // A store that cannot be opened keeps the list layout: its head (with a
+  // lock), the notice saying why and how to recover, and no rows — its
+  // items stay concealed (the catalog withholds them) and the details
+  // column says No Selection.
+  const scopeState = scopeStore
+    ? storeDescriptionState(snapshot, scopeStore)
+    : 'normal';
+  const scopeProblem: AccessProblem | null =
+    scopeState !== 'normal'
+      ? scopeState
+      : expiredHere
+        ? 'check-in-expired'
+        : null;
+  // The lock marks a lapsed or missing check-in, as the sidebar does.
+  const scopeLocked =
+    scopeProblem === 'check-in-expired' ||
+    scopeProblem === 'check-in-unavailable';
+  const openServer = (profile: string): void =>
+    locations.navigate({ kind: 'settings', section: 'account', profile });
 
   const row = (item: Item): ReactNode => (
     <Row
@@ -1060,7 +1055,7 @@ export function ItemsScreen({
     if (
       event.target instanceof Element &&
       event.target.closest(
-        '[data-option-key], .list-head, .bandstrip, .lnotice, .nextup, .notice, .starter, .empty, button, a, input',
+        '[data-option-key], .list-head, .bandstrip, .access-notice, .nextup, .notice, .starter, .empty, button, a, input',
       )
     )
       return;
@@ -1166,26 +1161,27 @@ export function ItemsScreen({
     state.query || readOnly || !dropTarget || dropTarget.blocked
       ? null
       : dropTarget.store.name;
-  const listFoot = scopeStore ? (
-    <div className="list-foot">
-      {dropHint && listShown ? (
-        <span
-          className="drop-hint"
-          title={`Drop a file to add it to ${dropHint}`}
-        >
-          <Icon name="upload" />
-          <span className="t">Drop a file to add it here</span>
-        </span>
-      ) : null}
-      <span className="sp" />
-      <FileUploadsPanel
-        key={scopeStore.id}
-        bridge={bridge}
-        storeId={scopeStore.id}
-        storeName={scopeStore.name}
-      />
-    </div>
-  ) : null;
+  const listFoot =
+    scopeStore && !scopeProblem ? (
+      <div className="list-foot">
+        {dropHint && listShown ? (
+          <span
+            className="drop-hint"
+            title={`Drop a file to add it to ${dropHint}`}
+          >
+            <Icon name="upload" />
+            <span className="t">Drop a file to add it here</span>
+          </span>
+        ) : null}
+        <span className="sp" />
+        <FileUploadsPanel
+          key={scopeStore.id}
+          bridge={bridge}
+          storeId={scopeStore.id}
+          storeName={scopeStore.name}
+        />
+      </div>
+    ) : null;
 
   // The suggestion applies once the vault holds something but no password:
   // the agent can sign in from one without the value living in a file.
@@ -1346,7 +1342,14 @@ export function ItemsScreen({
             ))}
           </nav>
         ) : null}
-        <h2>{scopeLabel}</h2>
+        <h2>
+          {scopeLabel}
+          {scopeLocked ? (
+            <span className="lock" role="img" aria-label="Locked">
+              <Icon name="lock" />
+            </span>
+          ) : null}
+        </h2>
         <p>
           {kindMeta ? (
             <button
@@ -1360,10 +1363,14 @@ export function ItemsScreen({
               <Icon name="close" />
             </button>
           ) : null}
-          {itemReadiness === 'ready'
-            ? itemCount(shownCount)
-            : `${shownCount} items loaded`}
-          {` · ${serverDisplayLabelForStore(snapshot, selectedStore)}`}
+          {/* A store that cannot be read has no count to give: its items
+              are withheld, not absent. */}
+          {scopeProblem
+            ? ''
+            : itemReadiness === 'ready'
+              ? `${itemCount(shownCount)} · `
+              : `${shownCount} items loaded · `}
+          {serverDisplayLabelForStore(snapshot, selectedStore)}
         </p>
       </div>
       {selectedStore.kind === 'team' && selected.path === '/' ? (
@@ -1394,29 +1401,43 @@ export function ItemsScreen({
           {location.kind === 'all' && accessBands.length ? (
             <div className="bandstrip">
               {accessBands.map((band) => (
-                <Band key={band.key}>{band.text}</Band>
+                <Notice
+                  key={band.key}
+                  severity="crit"
+                  icon={band.title === 'Check-in expired' ? 'lock' : undefined}
+                  title={band.title}
+                  actions={
+                    <Button onClick={() => openServer(band.server)}>
+                      Check Status
+                    </Button>
+                  }
+                >
+                  <p>{band.text}</p>
+                </Notice>
               ))}
             </div>
           ) : null}
-          {expiredHere && scopeStore ? (
-            <div className="lnotice" role="status">
-              <Icon name="alert" />
-              <span className="t">
-                <b>Your server session has expired.</b>
-                <p>
-                  Items in {scopeStore.name} are unavailable until it checks in
-                  again.
-                </p>
-              </span>
-              <Button size="sm" onClick={() => void onResume(scopeStore.id)}>
-                Check in
-              </Button>
+          {scopeProblem && scopeStore ? (
+            <div className="access-notice" role="status">
+              <StoreAccessNotice
+                snapshot={snapshot}
+                store={scopeStore}
+                state={scopeProblem}
+                onOpenServer={openServer}
+                onFinishSetup={() => void onResume(scopeStore.id)}
+              />
             </div>
-          ) : null}
-          {items.length > 0 ? (
-            <CollectionStatus state={itemReadiness} label="remaining items" />
-          ) : null}
-          {listBody}
+          ) : (
+            <>
+              {items.length > 0 ? (
+                <CollectionStatus
+                  state={itemReadiness}
+                  label="remaining items"
+                />
+              ) : null}
+              {listBody}
+            </>
+          )}
         </div>
         {listFoot}
       </section>

@@ -40,7 +40,6 @@ import {
   applyLease,
   defaultCreateStore,
   settingsAlertSummary,
-  storeDescriptionState,
   storeOf,
   storeReadable,
   type AgentSnapshot,
@@ -613,14 +612,10 @@ export function VaultShell({
   // away, so the list keeps its width.
   const teamInfoShown =
     !chrome.blocked && filesHere && !detailsShown && infoStore?.kind === 'team';
-  // A store page whose store is gone or cannot be used is a page of its own
-  // (the unavailable notice, the access takeover), not a list.
-  const herePage =
-    here.kind === 'store' &&
-    (() => {
-      const pageStore = storeOf(shown, here.ref);
-      return !pageStore || storeDescriptionState(shown, pageStore) !== 'normal';
-    })();
+  // A store page whose store is gone is a page of its own (the unavailable
+  // notice), not a list. One that cannot be opened keeps the list layout,
+  // with its access notice in the list column and No Selection beside it.
+  const herePage = here.kind === 'store' && !storeOf(shown, here.ref);
   const splitEmpty = filesHere && !herePage && !detailsShown && !teamInfoShown;
   // Chat draws this bar over its own resizable channel column, with the
   // column's add control passed in, so the conversation beside it can carry

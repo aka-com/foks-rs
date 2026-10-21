@@ -20,6 +20,8 @@ export interface NoticeProps {
   footnote?: ReactNode;
   /** The row of controls at the bottom. */
   actions?: ReactNode;
+  /** The leading glyph, where the severity's own does not say what it is about. */
+  icon?: FoksIconName;
 }
 
 export function Notice({
@@ -29,6 +31,7 @@ export function Notice({
   children,
   footnote,
   actions,
+  icon,
 }: NoticeProps): ReactNode {
   // The glyph says the severity before the color does: an alert triangle
   // for anything that needs the reader, an info circle for a quiet note.
@@ -42,7 +45,7 @@ export function Notice({
             : 'notice'
       }
     >
-      <Icon name={severity === 'info' ? 'info' : 'alert'} />
+      <Icon name={icon ?? (severity === 'info' ? 'info' : 'alert')} />
       <div className="t">
         {eyebrow === undefined ? null : <div className="who">{eyebrow}</div>}
         <h2>{title}</h2>

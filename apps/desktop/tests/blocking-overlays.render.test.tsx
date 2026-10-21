@@ -1444,9 +1444,10 @@ test('agent loss closes the new-item store popover without replacing its draft',
     loss.resolve('The agent socket closed.');
     await Promise.resolve();
   });
-  await ui.waitFor(() =>
-    assert.equal(document.querySelector('[role="listbox"]'), null),
-  );
+  // The store popover's listbox (the Files list behind the sheet is a
+  // listbox too, and stays).
+  const popover = '[role="listbox"][aria-label="Save in vault"]';
+  await ui.waitFor(() => assert.equal(document.querySelector(popover), null));
   const retry = await rendered.findByRole('button', { name: 'Retry' });
   assert.equal(document.querySelector('[aria-label="New Password"]'), sheet);
   assert.equal(rendered.getByLabelText('Site'), input);
@@ -1460,7 +1461,7 @@ test('agent loss closes the new-item store popover without replacing its draft',
     assert.equal(document.querySelector('.takeover'), null),
   );
   assert.equal(retries, 1);
-  assert.equal(document.querySelector('[role="listbox"]'), null);
+  assert.equal(document.querySelector(popover), null);
   assert.equal(trigger.textContent, selected);
   assert.equal(input.value, 'retained.example');
   rendered.unmount();

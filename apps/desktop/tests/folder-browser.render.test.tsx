@@ -258,13 +258,16 @@ test('a store with nothing in it is still reachable from the tree', async () => 
 
 test('an empty team displays shared-item details and its Manage command', async () => {
   const { store } = await mount({ kind: 'all' });
-  // "Homelab" is a team with nothing in it.
+  // "Homelab" is a team with nothing in it whose setup did not finish: the
+  // list says so, as its store page does, instead of an empty list.
   ui.fireEvent.click(treeRow('Homelab'));
   await ui.waitFor(() => assert.equal(currentTitle(), 'Homelab'));
+  assert.equal(document.querySelector('.lpane .empty'), null);
   assert.equal(
-    document.querySelector('.lpane .empty p')?.textContent,
-    'Items stored in this team vault are accessible to team members according to their assigned roles.',
+    document.querySelector('.lpane .access-notice h2')?.textContent,
+    'Setup incomplete',
   );
+  assert.ok(ui.screen.getByRole('button', { name: 'Finish setup' }));
   // A team's head offers its page.
   ui.fireEvent.click(treeRow('Household'));
   await ui.waitFor(() => assert.equal(currentTitle(), 'Household'));

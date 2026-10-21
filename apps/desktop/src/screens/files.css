@@ -782,3 +782,31 @@
 .sheet .inset .v.role-row .vis-field input {
   width: 64px;
 }
+
+/* A store that cannot be opened: the access notice under the list head, in
+   place of the rows. */
+.folder-body .access-notice {
+  padding: 4px 14px 0;
+}
+.folder-body .access-notice .notice {
+  margin: 0;
+}
+.list-head h2 .lock {
+  display: inline-flex;
+  flex: none;
+  font-size: 14px;
+  color: var(--muted);
+}
+/* In the list column the notice keeps its glyph beside the text and puts
+   its action under the text. */
+.folder-body .access-notice .notice,
+.folder-body .bandstrip .notice {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  margin: 0;
+}
+.folder-body .access-notice .notice .acts2,
+.folder-body .bandstrip .notice .acts2 {
+  grid-column: 2;
+  margin-left: 0;
+}
