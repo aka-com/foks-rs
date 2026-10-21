@@ -53,7 +53,15 @@ impl Database {
         // Idempotent on message ID: an identical resend returns the original
         // delivery. This precedes the expected_previous_sequence check, so a
         // retry whose own first delivery advanced the channel is answered as a
-        // replay rather than a race.
+        // replay rather than a race. It also precedes the current-key check:
+        // a replay reports the stored delivery even if the channel key has
+        // rotated since. A replay must match the channel, the sender and the
+        // whole send envelope except expected_previous_sequence; any other
+        // difference under the same message ID is RT_MSG_REPLAY_MISMATCH.
+        // go-foks main (server/realtime/messages.go loadReplay) compares only
+        // host, channel and sender and reports any such resend as a replay;
+        // its clients resend the stored envelope byte for byte, so the
+        // stricter rule refuses only a resend that no client produces.
         if let Some((channel, sender, old, sequence, insert_time)) = existing {
             if channel != id || sender != actor.uid || old != envelope {
                 return Err(Error::OperationConflict);

@@ -242,7 +242,13 @@ Behaviour adopted from main so far:
   server stores and re-serves channel metadata including any retained tail.
   A replayed send returns `wasReplay = true`; a send whose message ID is
   already held by a different message is `RT_MSG_REPLAY_MISMATCH` (12007,
-  void payload), which the client treats as a definite rejection.
+  void payload), which the client treats as a definite rejection. The Rust
+  rule for "the same message" is stricter than upstream's: the channel, the
+  sender and the whole send envelope except `expectedPrevSeq` must match,
+  whereas go-foks main (`loadReplay` in `server/realtime/messages.go`)
+  compares only host, channel and sender and answers any other resend under
+  the same ID as a replay. go-foks clients resend the stored envelope byte
+  for byte, so no current client observes the difference.
 - **Pegged messages (`bf9ace5`).** Replies, reactions and edits from go-foks
   main clients are authenticated and count toward history continuity, and
   the desktop shows them as placeholders naming the action; an edit with an
@@ -262,7 +268,13 @@ Behaviour adopted from main so far:
   is an unknown status. On the client side, a team KV write session that
   receives either status activates one replacement view through the team
   loader and replays the refused request; the replacement is used only if
-  the reloaded team opens exactly the same team keys. Cached reads in the
+  the reloaded team opens exactly the same team keys. This covers the KV
+  commands, adapter data writes and the root write after team creation. It
+  cures a view the server reclaimed or let expire, and any refusal without a
+  key change. A role change rotates or adds team keys, so after one the
+  replacement is refused, nothing is replayed and the session returns the
+  server's refusal; the caller must reload the team and start again, as the
+  sealed material of the old session belongs to the old keys. Cached reads in the
   agent already retried on the stale and expired statuses and now also on
   7016. The bytes are checked against a main-generated frame.
 - **Ownerless teams (`df2acf1`).** A new edit that takes the roster from at
