@@ -689,6 +689,8 @@ details.dd li b{color:var(--ink-2)}
 .inset .fr .v{flex:1;min-width:0;overflow-wrap:anywhere}
 .inset .fr input{display:block;width:100%;min-width:0;border:0;outline:0;background:none;font:inherit;font-size:13px}
 .inset .fr input::placeholder{color:var(--faint)}
+.inset .fr .v small.field-error{display:block;margin:4px 0 2px;font-size:12px;line-height:1.45;color:var(--danger-ink)}
+.sheet .inset .fr input[aria-invalid='true']:not([type='checkbox']):not([type='radio']){border-color:var(--danger-border)}
 .inset .fr input.mono{font:12.5px var(--mono)}
 .inset .fr .dim{color:var(--faint);flex:1}
 .inset .fr .btn{height:var(--control-h);font-size:12.5px;padding:0 10px}

@@ -79,7 +79,8 @@ export function Sheet({
  * button in the footer, when it is enabled. A control that uses Return itself
  * keeps it — a text area, a select, an open combobox, a button or link (Return
  * presses the focused one), a picker's popup — and so does a key already
- * handled below, such as an alert over the sheet.
+ * handled below, such as an alert over the sheet. A radio is a choice, not an
+ * action: Return on one presses the default button, as in an AppKit dialog.
  */
 function pressDefaultButton(event: KeyboardEvent<HTMLDivElement>): void {
   if (
@@ -96,12 +97,13 @@ function pressDefaultButton(event: KeyboardEvent<HTMLDivElement>): void {
   if (
     !target ||
     inPopup(target) ||
-    target.closest(
-      'textarea, select, button, a[href], [contenteditable="true"], ' +
-        '[role="combobox"][aria-expanded="true"], [role="option"], ' +
-        '[role="menuitem"], [role="button"], input[type="checkbox"], ' +
-        'input[type="radio"], input[type="file"]',
-    )
+    (!target.closest('[role="radio"]') &&
+      target.closest(
+        'textarea, select, button, a[href], [contenteditable="true"], ' +
+          '[role="combobox"][aria-expanded="true"], [role="option"], ' +
+          '[role="menuitem"], [role="button"], input[type="checkbox"], ' +
+          'input[type="file"]',
+      ))
   )
     return;
   // The sheet this key belongs to, not one further out in the React tree.

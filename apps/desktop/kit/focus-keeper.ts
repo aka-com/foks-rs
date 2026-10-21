@@ -52,6 +52,15 @@ interface Lost {
   /** Selectors that find the element now standing where the lost one stood. */
   identity: string[];
   element: HTMLElement;
+  /**
+   * The element was disabled, hidden or removed while it held the focus (a
+   * button that disables itself while its action runs), as opposed to the
+   * user clicking blank space. It may be usable again by the time the keeper
+   * looks, and the focus still has to come back.
+   */
+  taken?: boolean;
+  /** The user moved the focus off it with a pointer press on blank space. */
+  released?: boolean;
 }
 
 let last: Lost | null = null;
@@ -152,9 +161,29 @@ function resolve(candidate: Candidate): HTMLElement | null {
   return null;
 }
 
+/**
+ * Where the focus lands in a modal dialog whose focused control went away
+ * (a Start button replaced by the phrase it fetched, a submit that failed):
+ * the field in error, the dialog's own initial control, the first control in
+ * its body, its default button, any other footer button (Cancel, when the
+ * failure left nothing else to do), then the dialog itself.
+ */
+const DIALOG_LANDING = [
+  '[aria-invalid="true"]',
+  '[data-dialog-autofocus="true"], [data-sheet-autofocus="true"]',
+  '.sb input, .sb select, .sb textarea, .sb button, .sb [tabindex="0"]',
+  '.ft .btn.primary',
+  '.ft .btn',
+] as const;
+
 function landing(): HTMLElement | null {
   const dialog = topDialog();
-  if (dialog) return dialog;
+  if (dialog) {
+    for (const selector of DIALOG_LANDING)
+      for (const element of dialog.querySelectorAll<HTMLElement>(selector))
+        if (focusable(element)) return element;
+    return dialog;
+  }
   for (const selector of LANDING) {
     const target = resolve(selector);
     if (target) return target;
@@ -178,7 +207,8 @@ function check(): void {
   if (
     !asked.length &&
     !navigated &&
-    (!last || (last.element.isConnected && focusable(last.element)))
+    (!last ||
+      (!last.taken && last.element.isConnected && focusable(last.element)))
   )
     return;
   const candidates: Candidate[] = [
@@ -259,13 +289,21 @@ export function mountFocusKeeper(
     setTimeout(() => (pressing = false), 0);
   };
   const onFocusOut = (event: FocusEvent): void => {
-    if (event.relatedTarget === null) schedule();
+    if (event.relatedTarget !== null) return;
+    if (pressing && last?.element === event.target) last.released = true;
+    schedule();
   };
   const observer =
     typeof MutationObserver === 'undefined'
       ? null
       : new MutationObserver(() => {
-          if (last && (!last.element.isConnected || focusLost())) schedule();
+          if (!last) return;
+          if (
+            !last.released &&
+            (!last.element.isConnected || !usable(last.element))
+          )
+            last.taken = true;
+          if (!last.element.isConnected || focusLost()) schedule();
         });
   observer?.observe(root, {
     childList: true,
