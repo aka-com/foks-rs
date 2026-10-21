@@ -646,7 +646,8 @@ details.dd li b{color:var(--ink-2)}
 .sheet .hd .kic,.sheet .hd .kico,.sheet .hd .store-mark{width:36px;height:36px;border-radius:var(--radius-lg);font-size:18px}
 .sheet .hd .kico .ic{font-size:18px}
 .sheet .hd .t{flex:1;min-width:0}
-.sheet .hd .t .step{display:block;font-size:12.5px;color:var(--muted)}
+.sheet .hd .t .step,.sheet .hd .t .sub{display:block;font-size:12.5px;color:var(--muted)}
+.sheet .hd .t .sub{margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sheet h2{font-size:15px;font-weight:var(--weight-title);letter-spacing:0}
 .sheet .sb{flex:1;min-height:0;overflow:auto;margin:0;padding:4px 20px 8px}
 .sheet p{margin-bottom:8px;font-size:12.5px;line-height:1.45;color:var(--ink-2)}
