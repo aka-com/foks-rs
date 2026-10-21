@@ -899,3 +899,22 @@ test('an invitation prepared after unmount is recovered from the group banner', 
   await ui.within(dialog).findByText(/Creation interrupted/);
   assert.ok(ui.within(dialog).getByRole('button', { name: 'Finish creating' }));
 });
+
+test('the link under Accounts names the invitation it opens', async () => {
+  const r = await group(await fixture());
+
+  // There is no setup-instructions flow; the link issues a team invitation,
+  // so it carries the name of the Add People entry that does the same.
+  assert.equal(r.queryByText('Send setup instructions…'), null);
+  const link = [
+    ...document.querySelectorAll<HTMLButtonElement>('.roster button.lnk'),
+  ].find((candidate) => candidate.textContent === 'Invite New User…');
+  assert.ok(link, 'no Invite New User… link under the roster');
+  ui.fireEvent.click(link);
+  await ui.act(async () => {});
+  assert.ok(
+    ui
+      .within(r.getByRole('dialog'))
+      .getByRole('heading', { name: 'Invite a new user to Engineering' }),
+  );
+});

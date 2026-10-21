@@ -642,8 +642,10 @@ function MembersTab({
         <button type="button" className="lnk" onClick={() => onSheet('add')}>
           Add someone on {serverName}…
         </button>
+        {/* The same invitation workflow as Add People › Invite New User…,
+            under the same name: it issues a team invitation. */}
         <button type="button" className="lnk" onClick={onInvite}>
-          Send setup instructions…
+          Invite New User…
         </button>
       </>
     ) : undefined;
