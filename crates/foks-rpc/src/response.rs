@@ -4,7 +4,7 @@ use foks_snowpack::{encode, Value};
 use super::{
     encode_text, encode_unsigned, frame, Result, DEFAULT_MAX_FRAME_LENGTH, METHOD_RESPONSE,
     RESPONSE_HEADER, STATUS_BAD_PASSPHRASE_ERROR, STATUS_PASSPHRASE_NOT_FOUND_ERROR,
-    STATUS_TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR,
+    STATUS_RT_MSG_REPLAY_MISMATCH, STATUS_TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR,
 };
 
 /// Application errors that a v1 server may place on the v0.1.9 wire.
@@ -88,7 +88,7 @@ impl RpcStatus {
             Self::RtAmbiguousChannel(_) => 12004,
             Self::RtNotFound(_) => 12005,
             Self::RtMessageOrder(_) => 12006,
-            Self::RtMessageReplayMismatch => 12007,
+            Self::RtMessageReplayMismatch => STATUS_RT_MSG_REPLAY_MISMATCH,
             Self::BadArguments(_) => 1030,
             Self::BadInvite => 1019,
             Self::BadPassphrase => STATUS_BAD_PASSPHRASE_ERROR,

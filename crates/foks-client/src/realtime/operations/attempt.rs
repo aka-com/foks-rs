@@ -159,7 +159,7 @@ fn check_send_receipt(
 
 /// `RT_MSG_REPLAY_MISMATCH` (go-foks b41b354): the message ID is already held
 /// by a different message, so this send was not and cannot be stored.
-const RT_MSG_REPLAY_MISMATCH: u64 = 12007;
+const RT_MSG_REPLAY_MISMATCH: u64 = foks_rpc::STATUS_RT_MSG_REPLAY_MISMATCH;
 
 // A completed remote error is not always a pre-commit rejection. In particular,
 // transaction-retry and generic realtime errors retain uncertainty.
