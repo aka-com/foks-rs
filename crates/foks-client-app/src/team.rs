@@ -1342,6 +1342,14 @@ impl CheckedProfileSession<'_> {
             &self.paths.soft_database,
             &mut mutations,
         )?;
+        crate::kv::arm_team_view_remint(
+            &self.client,
+            &mut session,
+            &host,
+            &account.credential,
+            None,
+            &authenticated,
+        );
         // Both team kinds provision this low-visibility Member PTK.
         // Share root discovery while retaining Owner-only root writes.
         let tree = session.ensure_root(Role::member(-0x4000), Role::OWNER)?;

@@ -6,6 +6,8 @@ use foks_client::ProtectedMutationStore as _;
 use foks_client_db::{AdapterLedgerState, AdapterSubmission, MutationOperation};
 
 mod apply;
+#[cfg(test)]
+mod remint_tests;
 use apply::apply_write;
 
 const INTENT_HASH: u64 = 0x3c93_0d54_c728_9a30;
@@ -240,6 +242,16 @@ impl CheckedProfileSession<'_> {
                     &mut protected,
                 )?,
             };
+            if let Some(team) = &team {
+                crate::kv::arm_team_view_remint(
+                    &self.client,
+                    &mut session,
+                    &host,
+                    &account.credential,
+                    Some(&user),
+                    team,
+                );
+            }
             for (child, last) in children {
                 if last
                     && matches!(
@@ -340,6 +352,18 @@ impl CheckedProfileSession<'_> {
                     &mut protected,
                 )?,
             };
+            if let Some(team) = &team {
+                crate::kv::arm_team_view_remint(
+                    &self.client,
+                    &mut session,
+                    &host,
+                    &account.credential,
+                    Some(&user),
+                    team,
+                );
+            }
+            #[cfg(test)]
+            remint_tests::before_team_write();
             session.bind_adapter_intent(id)?;
             session.bind_upload_admission_time(self.adapter_clock.sample()?);
             let mut plaintext = body.as_slice();

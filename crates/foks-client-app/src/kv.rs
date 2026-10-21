@@ -876,21 +876,14 @@ impl CheckedProfileSession<'_> {
             &self.paths.soft_database,
             &mut mutations,
         )?;
-        // The view was activated just above, but a roster change before or
-        // during the operation supersedes it. The session then activates one
-        // replacement through the team loader and replays the refused request.
-        let client = &self.client;
-        let (remint_host, remint_account, remint_user, remint_team) =
-            (&host, &account, &user, &team);
-        session.set_team_view_remint(Box::new(move || {
-            client.remint_team_view(
-                remint_host,
-                &remint_account.credential,
-                &remint_user.verified,
-                &remint_user.puks,
-                remint_team,
-            )
-        }));
+        arm_team_view_remint(
+            &self.client,
+            &mut session,
+            &host,
+            &account.credential,
+            Some(&user),
+            &team,
+        );
         run(&mut session)
     }
 
@@ -2249,6 +2242,44 @@ pub(super) fn display_component(bytes: &[u8]) -> String {
         output
     })
 }
+
+/// Lets a team KV write session replace a refused view token once. A roster
+/// change after the view was activated (an admission, a role change, or the
+/// server reclaiming the token) makes the server answer
+/// `TEAM_BEARER_TOKEN_STALE_ERROR` or `TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR`;
+/// the session then activates one replacement through the team loader and
+/// replays the refused request. The replacement is used only if the reloaded
+/// team opens exactly the same team keys, so a change that rotated them is
+/// returned as a team binding error instead. `user` may be omitted where the
+/// caller holds no authenticated user; it is then authenticated only if a
+/// re-mint is needed.
+pub(crate) fn arm_team_view_remint<'a>(
+    client: &'a FoksClient,
+    session: &mut foks_client::KvWriteSession<'a>,
+    host: &'a foks_client::PinnedHost,
+    credential: &'a DeviceCredential,
+    user: Option<&'a AuthenticatedUserOutcome>,
+    team: &'a AuthenticatedTeamOutcome,
+) {
+    session.set_team_view_remint(Box::new(move || {
+        #[cfg(test)]
+        TEAM_VIEW_REMINTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        match user {
+            Some(user) => {
+                client.remint_team_view(host, credential, &user.verified, &user.puks, team)
+            }
+            None => {
+                let user = client.authenticate_and_pin(host, credential)?;
+                client.remint_team_view(host, credential, &user.verified, &user.puks, team)
+            }
+        }
+    }));
+}
+
+/// Re-mints requested through [`arm_team_view_remint`], for tests.
+#[cfg(test)]
+pub(crate) static TEAM_VIEW_REMINTS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(test)]
 mod tests {
