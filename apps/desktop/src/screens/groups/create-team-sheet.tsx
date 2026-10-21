@@ -61,7 +61,7 @@ export function CreateTeamSheet({
   // Validate the name with the same normalization rules as the client.
   const reservedName = serverTeamName(name);
   const named = kind === 'named';
-  const title = 'Create a team';
+  const title = 'Create a Team';
   useSheetGuard(
     busy
       ? null
@@ -129,11 +129,12 @@ export function CreateTeamSheet({
             disabled={busy || !ready}
             onClick={() => void apply()}
           >
-            {named ? 'Create team' : 'Create share'}
+            {named ? 'Create Team' : 'Create Share'}
           </Button>
         </>
       }
     >
+      <SectionLabel>Kind</SectionLabel>
       <Inset>
         <RadioGroup label="Kind">
           <RadioCard

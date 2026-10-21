@@ -127,7 +127,7 @@ async function group(
 
 /** The channel rows, by the `#name` each draws. */
 function channelRows(): HTMLElement[] {
-  return [...document.querySelectorAll<HTMLElement>('.roster .rt.bare .prow')];
+  return [...document.querySelectorAll<HTMLElement>('.roster .member-row')];
 }
 
 /** Opens the header's Add people menu and picks this choice. */
@@ -135,7 +135,7 @@ function addPeopleChoice(
   rendered: ReturnType<typeof ui.render>,
   label: string,
 ): void {
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Add people' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Add People' }));
   const node = [
     ...document.querySelectorAll<HTMLButtonElement>('.menu button'),
   ].find(
@@ -170,7 +170,7 @@ test('chat-only compatibility keeps Channels usable without a KV inventory or te
   };
   const rendered = await group('team:household', 'channels', { snapshot });
   await ui.waitFor(() =>
-    assert.ok(rendered.getByRole('button', { name: 'Add channel' })),
+    assert.ok(rendered.getByRole('button', { name: 'Add Channel…' })),
   );
   assert.equal(rendered.queryByText('Server identity mismatch'), null);
   const members = rendered.getByRole('tab', { name: 'Members' });
@@ -200,7 +200,7 @@ test('the Channels tab says why a group on a chatless server has none', async ()
   assert.equal(band.querySelector('b')?.textContent, 'No channels here');
   assert.match(band.textContent ?? '', /Chat is not enabled on Acme/);
   // Nothing is offered that the server could not take.
-  assert.equal(rendered.queryByRole('button', { name: 'Add channel' }), null);
+  assert.equal(rendered.queryByRole('button', { name: 'Add Channel…' }), null);
   // The tab itself carries no count, because there is no list to count.
   const tab = [...document.querySelectorAll('[role="tab"]')].find(
     (node) => node.getAttribute('data-tab') === 'channels',
@@ -259,7 +259,7 @@ test('the Channels tab reads the clock afresh, so a lapse closes it', async () =
     band.textContent ?? '',
     /Compatibility verification for Personal server has expired\./,
   );
-  assert.equal(rendered.queryByRole('button', { name: 'Add channel' }), null);
+  assert.equal(rendered.queryByRole('button', { name: 'Add Channel…' }), null);
 });
 
 test('a channel list that arrived with a problem keeps its rows', async () => {
@@ -296,13 +296,10 @@ test('the Channels tab lists the group’s channels and opens one in Chat', asyn
   const rows = channelRows();
   assert.equal(rows.length, 1);
   const general = rows[0];
-  assert.equal(
-    general.querySelector('.who2 .t b span')?.textContent,
-    '#general',
-  );
+  assert.equal(general.querySelector('.t b span')?.textContent, '#general');
   // The channel's own description, else what it says about who can take part.
   assert.equal(
-    general.querySelector('.who2 .t small')?.textContent,
+    general.querySelector('.t small')?.textContent,
     'A place for the whole team.',
   );
   const open = general.querySelector<HTMLButtonElement>(
@@ -329,7 +326,7 @@ test('the Channels tab lists the group’s channels and opens one in Chat', asyn
 test('Add channel opens the creation form with this group selected', async () => {
   const rendered = await group('team:household', 'channels');
   await ui.waitFor(() => assert.ok(channelRows().length));
-  const add = rendered.getByRole('button', { name: 'Add channel' });
+  const add = rendered.getByRole('button', { name: 'Add Channel…' });
   assert.equal(add.hasAttribute('disabled'), false);
   await ui.act(async () => {
     ui.fireEvent.click(add);
@@ -363,7 +360,7 @@ test('a channel created from the group page opens it in Chat', async () => {
   });
   await ui.waitFor(() => assert.ok(channelRows().length));
   await ui.act(async () => {
-    ui.fireEvent.click(rendered.getByRole('button', { name: 'Add channel' }));
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Add Channel…' }));
   });
   await ui.act(async () => {
     ui.fireEvent.change(rendered.getByLabelText('Channel name'), {
@@ -409,7 +406,7 @@ test('channel creation survives leaving the group page without a late redirect',
     }),
   });
   await ui.waitFor(() => assert.equal(channelRows().length, 1));
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Add channel' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Add Channel…' }));
   ui.fireEvent.change(rendered.getByLabelText('Channel name'), {
     target: { value: 'garden' },
   });
@@ -442,13 +439,10 @@ test('channel creation survives leaving the group page without a late redirect',
   });
   await ui.waitFor(() => assert.equal(channelRows().length, 2));
   const garden = channelRows().find(
-    (row) => row.querySelector('.who2 .t b span')?.textContent === '#garden',
+    (row) => row.querySelector('.t b span')?.textContent === '#garden',
   );
   assert.ok(garden);
-  assert.equal(
-    garden.querySelector('.who2 .t small')?.textContent,
-    'planting plans',
-  );
+  assert.equal(garden.querySelector('.t small')?.textContent, 'planting plans');
   assert.equal(journal.length, 0);
   assert.equal(preparations, 1);
   assert.equal(attempts, 1);
@@ -479,9 +473,9 @@ test('the Files tab links to the group vault', async () => {
 
 test('the add sheets name the team and fix the server, each in its own words', async () => {
   const rendered = await group('team:eng', 'people');
-  addPeopleChoice(rendered, 'Add FOKS user…');
+  addPeopleChoice(rendered, 'Add FOKS User…');
   assert.ok(
-    rendered.getByRole('heading', { name: 'Add FOKS user to Engineering' }),
+    rendered.getByRole('heading', { name: 'Add FOKS User to Engineering' }),
   );
   assert.equal(
     document.querySelector('[role="group"][aria-label="What to add"]'),
@@ -544,9 +538,9 @@ test('the add sheets name the team and fix the server, each in its own words', a
 
   // List eligible remote teams and reset the visibility band when opening
   // the team sheet after the user sheet.
-  addPeopleChoice(rendered, 'Add FOKS team…');
+  addPeopleChoice(rendered, 'Add FOKS Team…');
   assert.ok(
-    rendered.getByRole('heading', { name: 'Add FOKS team to Engineering' }),
+    rendered.getByRole('heading', { name: 'Add FOKS Team to Engineering' }),
   );
   const picker = document.querySelector(
     '[role="radiogroup"][aria-label="Team"]',
@@ -587,7 +581,7 @@ test('the add sheet clears the agent’s refusal when the username changes', asy
       },
     }),
   });
-  addPeopleChoice(rendered, 'Add FOKS user…');
+  addPeopleChoice(rendered, 'Add FOKS User…');
   const field = rendered.getByLabelText('Username');
   await ui.act(async () => {
     ui.fireEvent.change(field, { target: { value: 'nobody.one' } });
@@ -622,7 +616,7 @@ test('add-member refusals remain in the sheet without a duplicate toast', async 
       reported.push(options ?? {});
     },
   });
-  addPeopleChoice(rendered, 'Add FOKS user…');
+  addPeopleChoice(rendered, 'Add FOKS User…');
   await ui.act(async () => {
     ui.fireEvent.change(rendered.getByLabelText('Username'), {
       target: { value: 'nobody.one' },
@@ -642,7 +636,7 @@ test('add-member refusals remain in the sheet without a duplicate toast', async 
 
 test('add member dialog rejects usernames already present in roster', async () => {
   const rendered = await group('team:eng', 'people');
-  addPeopleChoice(rendered, 'Add FOKS user…');
+  addPeopleChoice(rendered, 'Add FOKS User…');
   await ui.act(async () => {
     ui.fireEvent.change(rendered.getByLabelText('Username'), {
       target: { value: 'dana.okafor' },
@@ -685,11 +679,13 @@ test('a group whose setup never finished has no tabs, and two ways out', async (
   );
   // What the page can still say about the group it cannot open, and the way
   // out for a creation that finishing cannot fix.
-  const labels = [...document.querySelectorAll('.roster .inset .fr .k')].map(
-    (node) => node.textContent,
-  );
+  const labels = [
+    ...document.querySelectorAll(
+      '.roster .set-row > .k, .roster .set-row > .t > b',
+    ),
+  ].map((node) => node.textContent);
   assert.deepEqual(labels, ['Account', 'Team ID', 'Remove team']);
-  assert.ok(rendered.getByRole('button', { name: 'Remove team…' }));
+  assert.ok(rendered.getByRole('button', { name: 'Remove Team…' }));
 });
 
 test('removing an unfinished group is confirmed by its stored alias', async () => {
@@ -704,7 +700,7 @@ test('removing an unfinished group is confirmed by its stored alias', async () =
     }),
   });
   await ui.act(async () => {
-    ui.fireEvent.click(rendered.getByRole('button', { name: 'Remove team…' }));
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Remove Team…' }));
   });
   const confirm = rendered.getByRole('button', { name: 'Remove team' });
   // Nothing is removed until the alias is typed back.
@@ -808,7 +804,7 @@ test('an explicit team refresh reads one profile and waives the roster reuse', a
   );
   const refresh = [
     ...document.querySelectorAll<HTMLButtonElement>('.menu button'),
-  ].find((candidate) => candidate.textContent?.includes('Refresh team'));
+  ].find((candidate) => candidate.textContent?.includes('Refresh Team'));
   assert.ok(refresh, 'no Refresh team menu item');
   await ui.act(async () => {
     ui.fireEvent.click(refresh);

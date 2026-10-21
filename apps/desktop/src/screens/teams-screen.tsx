@@ -16,7 +16,16 @@ import { useTabSheetState } from '../navigation-guard';
 import { useEffect, useRef, useState } from 'react';
 import { ContextMenu, Menu, Popover } from '/kit/overlay-primitives';
 import type { ReactNode } from 'react';
-import { Band, Button, Chip, Icon, MenuButton, MenuItem } from '../components';
+import {
+  Band,
+  Button,
+  Chip,
+  EmptyState,
+  Icon,
+  MenuButton,
+  MenuItem,
+  StoreMark,
+} from '../components';
 import { InvitationPanel } from '../components/invitation-panel';
 import { InviteNewUserSheet } from '../components/invite-new-user-sheet';
 import { useTeamRequestCounts } from '../operation-queries';
@@ -52,9 +61,8 @@ import { accountAtLocation, normalizeTeamsLocation } from '../location';
 import type { Location, NavigateOptions, TeamsSheetIntent } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { markProfileRostersStale } from '../roster-staleness';
-import { PageHeader } from '../shell/page-header';
+import { BarActions } from '../shell/page-slots';
 import { useToast } from '/kit/toasts';
-import { GroupMark } from './group-mark';
 import {
   discoveryContext,
   manageReason,
@@ -109,7 +117,7 @@ function FindGroups({
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
-        Find teams <Icon name="chevronDown" className="chevron" />
+        Find Teams <Icon name="chevronDown" className="chevron" />
       </Button>
       {open ? (
         <Popover
@@ -119,7 +127,7 @@ function FindGroups({
         >
           <Menu
             className="menu find-groups-menu"
-            aria-label="Find teams"
+            aria-label="Find Teams"
             anchorRef={anchorRef}
             onClose={() => setOpen(false)}
           >
@@ -243,7 +251,7 @@ function TeamRow({
     // The row itself is the button that opens the team; its menu is a sibling
     // of that button, not a control nested inside one.
     <div
-      className="rowline"
+      className="team-row"
       onContextMenu={(event) => {
         if (
           event.target instanceof Element &&
@@ -256,17 +264,15 @@ function TeamRow({
     >
       <button
         type="button"
-        className={state === 'normal' ? 'row' : 'row off'}
+        className={state === 'normal' ? 'set-row' : 'set-row off'}
         onClick={onOpen}
       >
-        <GroupMark store={store} size="sm" />
-        <span className="name">
-          <span className="tt">
-            <span>{store.name}</span>
-          </span>
+        <StoreMark snapshot={snapshot} store={store} size="md" />
+        <span className="t">
+          <b>{store.name}</b>
           <small>{caption}</small>
         </span>
-        <span className="tail">
+        <span className="a">
           {/* The band above the list names the team; the row says it too,
               so on a long list the reader need not match the two by name. */}
           {requests ? (
@@ -280,10 +286,10 @@ function TeamRow({
           <Chip className="kind">
             {store.team_kind === 'adhoc' ? 'Share' : 'Chat'}
           </Chip>
-          {/* The row opens the team, and says so at its end. */}
-          <span className="go" aria-hidden="true">
-            <Icon name="chevronDown" />
-          </span>
+        </span>
+        {/* The row opens the team, and says so at its end. */}
+        <span className="go" aria-hidden="true">
+          <Icon name="chevronRight" />
         </span>
       </button>
       {menu}
@@ -423,7 +429,6 @@ export function TeamsScreen({
   const canCreate = accounts.some(
     (store) => storeOperationAvailability(snapshot, store, 'teams').available,
   );
-  const servers = new Set(accounts.map((store) => store.server));
   // A check's result belongs to the row it was run from. The rows themselves
   // change when an account is added or removed, and a result read against a
   // different set of accounts is stale, so it is dropped with them.
@@ -524,7 +529,7 @@ export function TeamsScreen({
                 finishSetup(store);
               }}
             >
-              Finish setup…
+              Finish Setup…
             </MenuItem>
             {/* Offer removal for incomplete teams whose setup cannot be resumed. */}
             <MenuItem
@@ -535,7 +540,7 @@ export function TeamsScreen({
                 setAbandoning(store);
               }}
             >
-              Remove team…
+              Remove Team…
             </MenuItem>
             <div className="menu-separator" role="separator" />
           </>
@@ -549,7 +554,7 @@ export function TeamsScreen({
           }}
         >
           <span className="menu-choice">
-            <span>Add FOKS user…</span>
+            <span>Add FOKS User…</span>
             <small>Someone with an account on {serverName}</small>
           </span>
         </MenuItem>
@@ -562,7 +567,7 @@ export function TeamsScreen({
           }}
         >
           <span className="menu-choice">
-            <span>Add FOKS team…</span>
+            <span>Add FOKS Team…</span>
             <small>A team from another server</small>
           </span>
         </MenuItem>
@@ -575,7 +580,7 @@ export function TeamsScreen({
           }}
         >
           <span className="menu-choice">
-            <span>Invite new user…</span>
+            <span>Invite New User…</span>
             <small>Create an invitation to share</small>
           </span>
         </MenuItem>
@@ -593,7 +598,7 @@ export function TeamsScreen({
               });
             }}
           >
-            Review requests
+            Review Requests
             {requests ? <kbd>{requests}</kbd> : null}
           </MenuItem>
         ) : null}
@@ -604,7 +609,7 @@ export function TeamsScreen({
             copyId(store);
           }}
         >
-          Copy team ID
+          Copy Team ID
         </MenuItem>
         <MenuItem
           icon="externalLink"
@@ -655,124 +660,125 @@ export function TeamsScreen({
       />
     ));
 
+  const createButton = (
+    <Button
+      icon="plus"
+      disabled={!canCreate || !acting}
+      title={canCreate ? undefined : 'No available account can create a team'}
+      onClick={() => {
+        if (acting) setSheet({ kind: 'create', store: acting });
+      }}
+    >
+      Create a Team…
+    </Button>
+  );
+  // Teams whose setup never finished: each is one band, with the action that
+  // finishes it, ahead of the list.
+  const unfinished = teams.filter((store) => store.active === false);
+
   return (
     <>
-      <PageHeader
-        title="Teams"
-        subtitle={[
-          plural(teams.length, 'team'),
-          plural(servers.size, 'server'),
-        ].join(' · ')}
-        action={
-          <>
-            <FindGroups
-              snapshot={snapshot}
-              accounts={accounts}
-              discovering={discovering}
-              results={results}
-              onCheck={(context) => void discover(context)}
-            />
-            <Button
-              disabled={!acting}
-              title={
-                acting
-                  ? 'Paste an invitation from an administrator of that team.'
-                  : 'Choose an available account to request membership.'
-              }
-              onClick={() => setJoining(acting ?? null)}
-            >
-              Join a team…
-            </Button>
-            <Button
-              variant="primary"
-              icon="plus"
-              disabled={!canCreate || !acting}
-              title={
-                canCreate ? undefined : 'No available account can create a team'
-              }
-              onClick={() => {
-                if (acting) setSheet({ kind: 'create', store: acting });
-              }}
-            >
-              Create a team
-            </Button>
-          </>
-        }
-      />
-      {flaggedTeams.length ? (
-        <div className="bandstrip">
-          {flaggedTeams.map((store) => {
-            const count = requestCounts.get(store.id) ?? 0;
-            return (
-              <Band
-                key={store.id}
-                action={
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    onClick={() =>
-                      onNavigate({
-                        kind: 'group-settings',
-                        ref: store.id,
-                        tab: 'requests',
-                      })
-                    }
-                  >
-                    Review
-                  </Button>
-                }
-              >
-                {count === 1 ? 'One' : count} outstanding{' '}
-                {count === 1 ? 'request' : 'requests'} to join {store.name}.
-              </Band>
-            );
-          })}
-        </div>
-      ) : null}
-      {catalogLoading && !teams.length && teamReadiness === 'unavailable' ? (
-        <CollectionStatus state={teamReadiness} label="teams" />
-      ) : catalogLoading && !teams.length ? (
-        <div
-          className="body app-loading"
-          role="status"
-          aria-label="Loading teams"
+      {/* The bar already names the page; its trailing end carries the
+          page's commands. */}
+      <BarActions>
+        <FindGroups
+          snapshot={snapshot}
+          accounts={accounts}
+          discovering={discovering}
+          results={results}
+          onCheck={(context) => void discover(context)}
+        />
+        <Button
+          disabled={!acting}
+          title={
+            acting
+              ? 'Paste an invitation from an administrator of that team.'
+              : 'Choose an available account to request membership.'
+          }
+          onClick={() => setJoining(acting ?? null)}
         >
-          <span className="spin" aria-hidden="true" />
-        </div>
-      ) : (
-        <div className="body nav-rows">
-          <div className="list-window">
-            <div className="virtual-rows">
-              {teams.length ? (
-                teamRows(teams)
-              ) : (
-                <div className="empty">
-                  <div className="big">
-                    <Icon name="users" />
-                  </div>
-                  <h2>No teams yet</h2>
-                  <p>Share files and channels with a team.</p>
-                  <Button
-                    variant="primary"
-                    icon="plus"
-                    disabled={!canCreate || !acting}
-                    title={
-                      canCreate
-                        ? undefined
-                        : 'No available account can create a team'
+          Join a Team…
+        </Button>
+        {createButton}
+      </BarActions>
+      <div className="body team-page">
+        <div className="team-inner">
+          {flaggedTeams.length || unfinished.length ? (
+            <div className="bandstrip">
+              {flaggedTeams.map((store) => {
+                const count = requestCounts.get(store.id) ?? 0;
+                return (
+                  <Band
+                    key={store.id}
+                    icon="userPlus"
+                    action={
+                      <Button
+                        size="sm"
+                        onClick={() =>
+                          onNavigate({
+                            kind: 'group-settings',
+                            ref: store.id,
+                            tab: 'requests',
+                          })
+                        }
+                      >
+                        Review
+                      </Button>
                     }
-                    onClick={() => {
-                      if (acting) setSheet({ kind: 'create', store: acting });
-                    }}
                   >
-                    Create a team
-                  </Button>
-                </div>
-              )}
+                    {count === 1 ? 'One' : count} outstanding{' '}
+                    {count === 1 ? 'request' : 'requests'} to join{' '}
+                    <b>{store.name}</b>.
+                  </Band>
+                );
+              })}
+              {unfinished.map((store) => (
+                <Band
+                  key={store.id}
+                  icon="warning"
+                  action={
+                    <Button size="sm" onClick={() => finishSetup(store)}>
+                      Finish Setup
+                    </Button>
+                  }
+                >
+                  <b>{store.name}</b> is inactive: its setup on{' '}
+                  {displayServerName(snapshot, store)} did not finish.
+                </Band>
+              ))}
             </div>
-          </div>
+          ) : null}
+          {catalogLoading &&
+          !teams.length &&
+          teamReadiness === 'unavailable' ? (
+            <CollectionStatus state={teamReadiness} label="teams" />
+          ) : catalogLoading && !teams.length ? (
+            <div
+              className="app-loading"
+              role="status"
+              aria-label="Loading teams"
+            >
+              <span className="spin" aria-hidden="true" />
+            </div>
+          ) : teams.length ? (
+            <>
+              <div className="group-card team-list">{teamRows(teams)}</div>
+              <p className="fn">
+                Find Teams checks each account’s server for teams it can see. A
+                team’s page opens from its row.
+              </p>
+            </>
+          ) : (
+            <EmptyState
+              icon="users"
+              title="No Teams Yet"
+              body="Share files and channels with a team."
+            >
+              {createButton}
+            </EmptyState>
+          )}
         </div>
-      )}
+      </div>
       {sheet ? (
         <GroupSheet
           // Each half of the add sheet answers for itself: the band and the
@@ -879,7 +885,7 @@ export function TeamsScreen({
               rosterManageable(snapshot, team),
           )}
           presentation={{
-            title: 'Join a team',
+            title: 'Join a Team',
             onClose: () => setJoining(null),
           }}
           onComplete={() =>

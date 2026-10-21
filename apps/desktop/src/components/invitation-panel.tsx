@@ -406,8 +406,8 @@ export function InvitationPanel({
     </Inset>
   ) : null;
   const glyph = (
-    <span className="kico invite">
-      <Icon name="users" />
+    <span className="kico neutral">
+      <Icon name="door" />
     </span>
   );
   const remoteChoices = (servers ?? []).filter(

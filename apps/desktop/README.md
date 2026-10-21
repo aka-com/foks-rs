@@ -29,9 +29,17 @@ presented with Download and native Replace actions without changing the wire
 or database format.
 
 A group's page is opened from the Teams list and loads the agent's roster and
-federation facts in one call. Its header is the group mark, its name and
-"server · Role"; it has four tabs — Members, Channels, Files and Settings —
-implemented as a tablist. Arrow keys select adjacent tabs, and the selected tab
+federation facts in one call. The panel's bar names it (Teams › name, led by
+Back); the page starts with the header: the tinted group mark, the name, and
+"server · N members · You are Role as account", with Add People (Add FOKS
+User…, Add FOKS Team…, Invite New User…) and the team's ⋯ menu. An inactive
+federated admission is a band over every tab but Settings, with Restore
+Access. The tabs — Members, Channels, Files, Requests and Settings — are a
+segmented tablist addressed by `tab=`. Members groups the roster into
+Accounts, Machines and Groups on other servers, each a card of rows (mark,
+name, kind, role chip with the visibility band, ⋯) with the links that add to
+it; Settings is About this team, Team nesting order, Who can join and a
+Danger zone. Arrow keys select adjacent tabs, and the selected tab
 labels the panel below it. Channels reads the same per-group inbox entry as the
 sidebar and Chat column, so its count and rows use the same data. Each channel row
 displays the name, description or access summary, last activity, unread count,
@@ -97,6 +105,18 @@ of the invitation and approval rows. Member changes are restricted to unique, lo
 manageable usernames.
 An inactive or ambiguous federation admission has no extra payload. Active ad-hoc
 groups retain read-only roster facts but suppress member and federation actions.
+Activity (`screens/activity-screen.tsx`) is a list column beside a details
+column. "Waiting for you" lists the membership requests of every team this
+Mac manages whose shared request count is above zero; "Needs attention" lists
+what `src/activity.ts` derives from the snapshot: a team whose setup did not
+finish, an inactive federated admission, and a server that is unverified or
+whose check-in lapsed. A request's details approve, reject or verify it
+through `useMembershipInbox` (`components/membership-inbox.ts`), the hook the
+Requests tab uses, so both send the same commands and settle the same shared
+rows. Finish Setup and Restore Access run through the team's own operation
+controller; a server notice opens that server's page. Synchronization jobs
+stay in the sidebar's status line. The sidebar's Activity count is the
+requests plus those notices.
 Native clipboard hygiene uses `copy_text`. First run is a location
 inside the same main window, with the sidebar replaced by the setup-step list.
 Its versioned local checkpoint contains only nonsecret progress and display facts;

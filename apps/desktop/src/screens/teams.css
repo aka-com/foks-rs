@@ -2,3 +2,117 @@
    All Teams, a team's page (header, tabs, members, settings, requests) and
    Activity. Rows sit in the page's grouped cards (`.group-card` /
    `.set-row` in shell.css); this sheet only adds what those pages need. */
+
+/* The page column: 28px gutters, content up to 764px. */
+.body.team-page{padding:18px 28px 40px}
+.team-inner{max-width:764px}
+.team-inner>.bandstrip{display:grid;gap:8px;margin-bottom:10px;padding:0}
+.team-inner .band{font-size:13px}
+.team-inner>.band{margin:0 0 10px}
+.team-inner>.band+.band{margin-top:-2px}
+.team-inner p.fn,.team-inner .roster p.fn,.team-inner .group-settings p.fn{margin:10px 0 0;max-width:560px;font-size:12.5px;line-height:1.5;color:var(--muted)}
+.team-inner .sec{min-height:26px;margin:18px 0 6px}
+.team-inner .sec .count{font-variant-numeric:tabular-nums;font-weight:var(--weight-label);color:var(--muted)}
+.team-inner .sec .right .count{margin-right:2px}
+.team-inner .sec.danger-title{color:var(--danger-ink)}
+.team-inner .btns{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.team-inner .roster,.team-inner .group-settings{max-width:none}
+.team-inner .roster>.band{margin:0 0 10px}
+
+/* Rows in a grouped card: mark, name over a caption, trailing chips. */
+.team-inner .set-row>.t{flex:1;min-width:0;display:grid;gap:1px}
+.team-inner .set-row>.t>b{display:flex;align-items:center;gap:6px;min-width:0;font-weight:var(--weight-label)}
+.team-inner .set-row>.t>b>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.team-inner .set-row>.t>small{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.team-inner .set-row>.v small.hint{flex-basis:100%;font-size:12px;color:var(--muted)}
+.team-inner .set-row>.v code{font:12px var(--mono);color:var(--ink-2)}
+.team-inner .group-card>.set-row:first-child{border-radius:var(--radius-lg) var(--radius-lg) 0 0}
+.team-inner .group-card>.set-row:last-child{border-radius:0 0 var(--radius-lg) var(--radius-lg)}
+.team-inner .group-card>.set-row:only-child{border-radius:var(--radius-lg)}
+.team-inner .set-row .rolecell{display:inline-flex}
+.team-inner .set-row>.a>.btn.icon,.team-inner .set-row .menuwrap>.btn.icon{width:26px;height:26px;color:var(--muted)}
+
+/* All Teams: each row is the button that opens the team, with its menu as a
+   sibling placed between the chips and the chevron. */
+.team-row{position:relative}
+.team-row+.team-row>.set-row::before{content:'';position:absolute;top:0;left:16px;right:16px;height:1px;background:var(--line-soft)}
+.team-row>.set-row{min-height:52px;flex-wrap:nowrap}
+.team-row:first-child>.set-row{border-radius:var(--radius-lg) var(--radius-lg) 0 0}
+.team-row:last-child>.set-row{border-radius:0 0 var(--radius-lg) var(--radius-lg)}
+.team-row:only-child>.set-row{border-radius:var(--radius-lg)}
+.team-row>.set-row>.a{margin-right:30px;flex-wrap:nowrap}
+.team-row>.set-row>.go{flex:none;display:inline-flex;color:var(--faint);font-size:14px}
+.team-row>.rowmenu{position:absolute;top:50%;right:42px;transform:translateY(-50%)}
+.team-row>.rowmenu .btn.icon{width:26px;height:26px;color:var(--muted)}
+
+/* A team's header and segmented tabs. */
+.team-hero{padding:4px 0 14px}
+.team-hero h1{display:flex;align-items:center;gap:8px;min-width:0;margin:0;font-size:18px;font-weight:var(--weight-title);letter-spacing:-.01em}
+.team-hero h1>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.team-hero p{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.team-hero .hero-acts{flex:none;align-items:center;flex-wrap:nowrap}
+.team-inner>.tabs{display:inline-flex;align-items:center;gap:2px;max-width:100%;margin:0 0 4px;padding:2px;border:0;border-radius:var(--radius-md);background:var(--seg-bg);overflow-x:auto}
+.team-inner>.tabs .tab{height:22px;padding:0 10px;border-radius:4px;gap:6px;font-size:12.5px;font-weight:var(--weight-label);color:var(--muted);white-space:nowrap}
+.team-inner>.tabs .tab:hover{background:transparent;color:var(--ink)}
+.team-inner>.tabs .tab.on{background:var(--seg-on);color:var(--ink);font-weight:var(--weight-label);box-shadow:var(--shadow-seg)}
+.team-inner>.tabs .tab.on::after{content:none}
+.team-inner>.tabs .tab .n,.team-inner>.tabs .tab.on .n{padding:0;background:none;font-size:12px;font-weight:var(--weight-label);line-height:inherit;color:var(--faint)}
+.team-panel{min-width:0}
+
+/* Members: initials or a glyph tile, and the links under a card. */
+.member-row{min-height:52px}
+.member-mark{width:22px;height:22px;flex:none;display:inline-grid;place-items:center;border-radius:50%;color:var(--on-accent);font-size:var(--mark-type);font-weight:var(--weight-title)}
+.member-tile{width:28px;height:28px;flex:none;display:grid;place-items:center;border-radius:var(--radius-md);background:var(--chip-bg);color:var(--muted);font-size:14px}
+.member-row>.store-mark.md{margin:0 2px}
+.member-acts{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:10px 16px 12px;border-top:1px solid var(--line-soft)}
+.member-card>.member-acts:first-child{border-top:0}
+.team-inner .lnk{padding:0;border:0;background:none;color:var(--accent-ink);font-size:12.5px;font-weight:var(--weight-label);text-align:left}
+.team-inner .lnk:hover{text-decoration:underline}
+.team-inner .empty.in-list{padding:24px 0}
+
+/* Requests (the team's Requests tab; the same controls in Activity). */
+.requests>p[role='alert']{margin:0 0 8px;color:var(--danger-ink)}
+.request-row{flex-wrap:wrap}
+.request-row>.a{flex-wrap:wrap;justify-content:flex-end}
+.request-checks{flex-basis:100%;display:grid;gap:8px;padding:2px 0 4px 34px}
+.activity-detail .request-checks{padding:8px 0}
+.request-server{display:flex;align-items:center;gap:12px;font-size:12.5px}
+.request-server .k{color:var(--muted)}
+.request-pin{margin:0 0 10px}
+.role-select,.request-server select{height:var(--control-h);padding:0 24px 0 8px;border:1px solid var(--line-mid);border-radius:var(--radius-md);background-color:var(--btn-bg);color:var(--ink);font-size:12.5px;box-shadow:var(--shadow-btn)}
+.role-select:disabled{color:var(--faint)}
+.member-mark.lg{width:40px;height:40px;font-size:15px}
+
+/* Activity: the list column under the shell's search bar, and the details
+   column the page portals into. */
+.activity-list{flex:1;min-height:0;overflow:auto}
+.activity-list .row.act{--rule-x:31px;padding-left:14px}
+.activity-list .act-dot{width:7px;height:7px;flex:none;border-radius:50%;background:var(--warning-dot)}
+.activity-list .act-dot.bad{background:var(--danger)}
+.activity-list .act-status{margin:0;padding:8px 14px 8px 31px;font-size:12px;color:var(--muted)}
+.activity-list>.band{margin:8px 14px}
+.activity-details>.bar{flex:none;border-bottom:1px solid var(--bar-rule)}
+.activity-details>.empty{flex:1;display:grid;place-items:center;color:var(--faint)}
+.activity-detail .hero{padding-bottom:10px}
+.activity-detail .hero .bigtile.warn{background:var(--amber-wash);color:var(--amber-strong)}
+.activity-detail .hero .bigtile.bad{background:var(--danger-wash);color:var(--danger-ink)}
+.activity-detail .hero .member-mark.lg{margin:4px}
+.activity-detail p.note{margin:4px 0 8px;font-size:12.5px;line-height:1.5;color:var(--ink-2)}
+.activity-detail p[role='alert']{margin:0 0 8px;color:var(--danger-ink)}
+.activity-detail .prop-row .dim{color:var(--muted)}
+.activity-detail .prop-row>.v>.store-mark{margin-right:2px}
+.activity-detail .prop-row.admit>.a{flex-wrap:wrap}
+.activity-detail .chip .ic{font-size:12px}
+
+/* Team sheets: the Visibility stepper as one joined control, and the
+   member line in the Remove alert. */
+.stepper{display:inline-flex;align-items:center;border:1px solid var(--line-mid);border-radius:var(--radius-md);background:var(--btn-bg);box-shadow:var(--shadow-btn);overflow:hidden}
+.stepper>.btn{width:26px;min-width:0;height:24px;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;color:var(--ink-2);font-size:14px}
+.stepper>.btn:hover:not(:disabled){background:var(--btn-hover)}
+.stepper>.btn:disabled{color:var(--faint)}
+.stepper>.vis-value{padding:0 10px;border-left:1px solid var(--line-mid);border-right:1px solid var(--line-mid);font-size:12.5px;font-weight:var(--weight-label);line-height:24px;font-variant-numeric:tabular-nums}
+.sheet .inset .fr.visibility-row{min-height:42px}
+.alert .alert-fact{margin:8px 0 0;font-size:12.5px;color:var(--muted)}
+.alert .alert-fact b{font-weight:var(--weight-label);color:var(--ink)}
+.team-inner .group-card.danger .set-row>.t>small{white-space:normal}
+.team-inner .group-card.danger .set-row>.t>small{white-space:normal}

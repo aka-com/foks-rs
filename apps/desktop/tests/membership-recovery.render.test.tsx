@@ -129,7 +129,7 @@ for (const action of ['add', 'demote', 'promote'] as const) {
     await ui.act(async () => {
       ui.fireEvent.click(
         rendered.getByRole('button', {
-          name: addition ? 'Add jules.park' : 'Change role',
+          name: addition ? 'Add jules.park' : 'Change Role',
         }),
       );
     });

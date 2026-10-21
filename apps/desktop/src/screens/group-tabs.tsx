@@ -12,9 +12,8 @@ import {
   Band,
   Button,
   Chip,
+  EmptyState,
   Icon,
-  Inset,
-  InsetRow,
   SectionLabel,
 } from '../components';
 import {
@@ -166,10 +165,25 @@ export function ChannelsTab({
           {entry.error || entry.note}
         </Band>
       ) : null}
-      <SectionLabel>
+      <SectionLabel
+        action={
+          <Button
+            icon="plus"
+            disabled={listed === undefined}
+            title={
+              listed === undefined
+                ? 'Wait for this team’s channels before adding one.'
+                : 'Create a channel in this team'
+            }
+            onClick={onAddChannel}
+          >
+            Add Channel…
+          </Button>
+        }
+      >
         Channels
         {listed === undefined ? null : (
-          <span className="count">— {plural(listed.length, 'channel')}</span>
+          <span className="count">{plural(listed.length, 'channel')}</span>
         )}
       </SectionLabel>
       {listed === undefined ? (
@@ -177,19 +191,9 @@ export function ChannelsTab({
           Loading channels…
         </p>
       ) : listed.length === 0 ? (
-        <div className="callout">
-          <span
-            className="kico"
-            style={{ background: 'var(--chip-bg)', color: 'var(--muted)' }}
-          >
-            <Icon name="chat" />
-          </span>
-          <span className="t">
-            <b>No channels yet.</b>
-          </span>
-        </div>
+        <EmptyState inList icon="chat" title="No Channels Yet" />
       ) : (
-        <div className="rt bare">
+        <div className="group-card">
           {listed.map((option) => {
             const meta = channelMeta(option, entry?.blockedChannels);
             const about =
@@ -203,28 +207,19 @@ export function ChannelsTab({
             const preview = option.conversation?.preview;
             const when = preview ? previewTime(preview.insert_time, now) : '';
             return (
-              <div className="prow" key={option.channel.id}>
-                <span className="who2">
-                  <span
-                    className="kico round"
-                    style={{
-                      background: 'var(--chip-bg)',
-                      color: 'var(--muted)',
-                    }}
-                    aria-hidden="true"
-                  >
-                    <Icon name="chat" />
-                  </span>
-                  <span className="t">
-                    <b>
-                      <span>{channelTitle(option.channel)}</span>
-                    </b>
-                    <small>{meta ? `${meta} · ${about}` : about}</small>
-                  </span>
+              <div className="set-row member-row" key={option.channel.id}>
+                <span className="member-tile" aria-hidden="true">
+                  <Icon name="hash" />
                 </span>
-                <span className="rowtail">
+                <span className="t">
+                  <b>
+                    <span>{channelTitle(option.channel)}</span>
+                  </b>
+                  <small>{meta ? `${meta} · ${about}` : about}</small>
+                </span>
+                <span className="a">
                   {when ? <span className="when">{when}</span> : null}
-                  {unread ? <Chip tone="warn">{unread} unread</Chip> : null}
+                  {unread ? <Chip tone="you">{unread} unread</Chip> : null}
                   <Button
                     size="sm"
                     aria-label={`Open ${channelTitle(option.channel)} in Chat`}
@@ -244,24 +239,10 @@ export function ChannelsTab({
           })}
         </div>
       )}
-      <div className="roster-actions">
-        <Button
-          icon="plus"
-          disabled={listed === undefined}
-          title={
-            listed === undefined
-              ? 'Wait for this team’s channels before adding one.'
-              : 'Create a channel in this team'
-          }
-          onClick={onAddChannel}
-        >
-          Add channel
-        </Button>
-        <p className="fn">
-          Channels are encrypted with the team key. Access is determined by each
-          member’s role.
-        </p>
-      </div>
+      <p className="fn">
+        Channels are encrypted with the team key. Access is determined by each
+        member’s role.
+      </p>
     </div>
   );
 }
@@ -292,34 +273,29 @@ export function FilesTab({
   }
   return (
     <div className="roster">
-      <Inset className="settings-inset">
-        <InsetRow
-          className="doorway"
-          action={
+      <SectionLabel>Team vault</SectionLabel>
+      <div className="group-card">
+        <div className="set-row member-row">
+          {/* Lead with the destination and use the Files folder mark,
+              corresponding to the Chat marks used by channel rows. */}
+          <span className="member-tile" aria-hidden="true">
+            <Icon name="folder" />
+          </span>
+          <span className="t">
+            <b>{store.name}</b>
+            <small>{plural(itemCountOf(snapshot, store), 'item')}</small>
+          </span>
+          <span className="a">
             <Button
-              variant="primary"
               icon="externalLink"
               onClick={() => onNavigate({ kind: 'store', ref: store.id })}
             >
               Open in Files
             </Button>
-          }
-        >
-          {/* Lead with the destination and use the Files folder mark,
-              corresponding to the Chat marks used by channel rows. */}
-          <span
-            className="kico"
-            style={{ background: 'var(--chip-bg)', color: 'var(--muted)' }}
-            aria-hidden="true"
-          >
-            <Icon name="folder" />
           </span>
-          <span className="t">
-            <b>View {store.name}’s items in Files</b>
-          </span>
-        </InsetRow>
-      </Inset>
-      <p className="fn">Files for this team are managed in the Files tab.</p>
+        </div>
+      </div>
+      <p className="fn">Files for this team are managed in Files.</p>
     </div>
   );
 }
@@ -354,76 +330,69 @@ export function IncompleteGroupPage({
   // takeover reads the same copy, so the two cannot describe it differently.
   const copy = accessCopy('setup-incomplete', store, serverName);
   return (
-    <div className="body">
-      <div className="groups-wrap">
-        <div className="roster">
-          <Band
-            label={copy.title}
-            action={
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={onFinish}
-                disabled={copy.actionDisabled}
-              >
-                {copy.actionLabel ?? 'Finish setup'}
-              </Button>
-            }
-          >
-            {copy.detail}
-          </Band>
-          <SectionLabel>Local details</SectionLabel>
-          <Inset>
-            <InsetRow
-              label="Account"
-              action={
-                <Button
-                  size="sm"
-                  icon="externalLink"
-                  onClick={() =>
-                    onNavigate({
-                      kind: 'settings',
-                      section: 'account',
-                      profile: store.server,
-                    })
-                  }
-                >
-                  Open server
-                </Button>
+    <div className="roster">
+      <Band
+        label={copy.title}
+        action={
+          <Button size="sm" onClick={onFinish} disabled={copy.actionDisabled}>
+            {copy.actionLabel ?? 'Finish setup'}
+          </Button>
+        }
+      >
+        {copy.detail}
+      </Band>
+      <SectionLabel>Local details</SectionLabel>
+      <div className="group-card">
+        <div className="set-row">
+          <span className="k">Account</span>
+          <span className="v">
+            {account?.username ?? store.account} on {serverName}
+          </span>
+          <span className="a">
+            <Button
+              icon="externalLink"
+              onClick={() =>
+                onNavigate({
+                  kind: 'settings',
+                  section: 'account',
+                  profile: store.server,
+                })
               }
             >
-              {account?.username ?? store.account} on {serverName}
-            </InsetRow>
-            <InsetRow
-              label="Team ID"
-              action={
-                <Button size="sm" icon="copy" onClick={onCopyId}>
-                  Copy
-                </Button>
-              }
-            >
-              <code title={store.team_id_hex}>
-                {shortId(store.team_id_hex)}
-              </code>
-            </InsetRow>
-          </Inset>
-          {/* Finishing setup cannot succeed for every record that reaches this
+              Open Server
+            </Button>
+          </span>
+        </div>
+        <div className="set-row">
+          <span className="k">Team ID</span>
+          <span className="v">
+            <code title={store.team_id_hex}>{shortId(store.team_id_hex)}</code>
+          </span>
+          <span className="a">
+            <Button icon="copy" onClick={onCopyId}>
+              Copy
+            </Button>
+          </span>
+        </div>
+      </div>
+      {/* Finishing setup cannot succeed for every record that reaches this
               page — a name the server refused stays refused — so the page also
               offers the only other way out. */}
-          <SectionLabel>Remove</SectionLabel>
-          <Inset>
-            <InsetRow
-              label="Remove team"
-              action={
-                <Button size="sm" danger icon="trash" onClick={onRemove}>
-                  Remove team…
-                </Button>
-              }
-            >
+      <SectionLabel className="danger-title">Danger zone</SectionLabel>
+      <div className="group-card danger">
+        <div className="set-row">
+          <span className="t">
+            <b>Remove team</b>
+            <small>
               Drops this team’s saved identity and keys from this Mac. Use it
               when setup cannot be finished.
-            </InsetRow>
-          </Inset>
+            </small>
+          </span>
+          <span className="a">
+            <Button danger icon="trash" onClick={onRemove}>
+              Remove Team…
+            </Button>
+          </span>
         </div>
       </div>
     </div>

@@ -33,14 +33,17 @@ import {
   Band,
   Button,
   Chip,
+  EmptyState,
   Icon,
   Inset,
   InsetRow,
+  Mark,
   MenuButton,
   MenuItem,
   Notice,
   SectionLabel,
   SheetDialog,
+  StoreMark,
   tabId,
   tabPanelId,
   Tabs,
@@ -56,6 +59,7 @@ import {
   partyName,
   plural,
   readersOf,
+  roleName,
   roleRank,
   serverDisplayLabel,
   serverDisplayLabelForStore as displayServerName,
@@ -183,17 +187,42 @@ function targetReason(
   return 'This member cannot be changed from this device.';
 }
 
-/** The mark before a member's name: an initial, or a machine's glyph. */
+/** Up to two initials for a name: "sam.ortiz" is SO, "vitalik" V. */
+function initials(name: string): string {
+  return name
+    .split(/[._\-\s@]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part.slice(0, 1).toUpperCase())
+    .join('');
+}
+
+/** The mark before a member's name: initials, or a machine's glyph. */
 function PartyMark({ party }: { party: Party }): ReactNode {
-  const machine = isMachine(party);
   const name = partyName(party);
+  if (isMachine(party))
+    return (
+      <span className="member-tile" aria-hidden="true">
+        <Icon name="terminal" />
+      </span>
+    );
   return (
     <span
-      className="kico round"
-      style={{ background: machine ? 'var(--c-none)' : hue(name) }}
+      className="member-mark"
+      style={{ background: hue(name) }}
+      aria-hidden="true"
     >
-      {machine ? <Icon name="terminal" /> : name.slice(0, 1).toUpperCase()}
+      {initials(name)}
     </span>
+  );
+}
+
+/** The mark before a federated team's name: its initial on a tint. */
+function TeamMark({ name }: { name: string }): ReactNode {
+  return (
+    <Mark hue={hue(name)} size="md">
+      {name.slice(0, 1).toUpperCase()}
+    </Mark>
   );
 }
 
@@ -225,18 +254,16 @@ function PartyRow({
   return (
     // Only people and machines reach this row, and their access is their
     // membership: there is no inactive state to dim.
-    <div className="prow">
-      <span className="who2">
-        <PartyMark party={party} />
-        <span className="t">
-          <b>
-            <span>{name}</span>
-            {party.label ? <Chip tone="you">you</Chip> : null}
-          </b>
-          <small>{partySubtitle(party)}</small>
-        </span>
+    <div className="set-row member-row">
+      <PartyMark party={party} />
+      <span className="t">
+        <b>
+          <span>{name}</span>
+          {party.label ? <Chip tone="you">you</Chip> : null}
+        </b>
+        <small>{partySubtitle(party)}</small>
       </span>
-      <span className="rowtail">
+      <span className="a">
         <RoleChip role={party.destination_role} />
         <MenuButton
           variant="quiet"
@@ -261,7 +288,7 @@ function PartyRow({
                   onSheet('promote', party);
                 }}
               >
-                Raise role…
+                Raise Role…
               </MenuItem>
               <MenuItem
                 reason={
@@ -277,8 +304,9 @@ function PartyRow({
                   onSheet('demote', party);
                 }}
               >
-                Lower role…
+                Lower Role…
               </MenuItem>
+              <div className="menu-separator" role="separator" />
               <MenuItem
                 danger
                 reason={actionable ? undefined : reason}
@@ -318,23 +346,36 @@ function SituationBand({ store, tab }: { store: Store; tab: Tab }): ReactNode {
   return null;
 }
 
-/** A sub-section of the Members tab: its label, its count, and its rows. */
-function MemberSection({
+/**
+ * A sub-section of the Members tab: its label with the count at the trailing
+ * edge, then its rows in one card, then the links that add to it.
+ */
+function MemberGroup({
   title,
   count,
+  footer,
   children,
 }: {
   title: string;
-  count?: string;
-  children: ReactNode;
+  count?: number;
+  footer?: ReactNode;
+  children?: ReactNode;
 }): ReactNode {
   return (
     <>
-      <SectionLabel>
+      <SectionLabel
+        action={
+          count === undefined ? undefined : (
+            <span className="count">{count}</span>
+          )
+        }
+      >
         {title}
-        {count ? <span className="count">— {count}</span> : null}
       </SectionLabel>
-      <div className="rt bare">{children}</div>
+      <div className="group-card member-card">
+        {children}
+        {footer ? <div className="member-acts">{footer}</div> : null}
+      </div>
     </>
   );
 }
@@ -382,23 +423,15 @@ function TeamPartyRow({
 }): ReactNode {
   const name = teamPartyName(party);
   return (
-    <div className="prow">
-      <span className="who2">
-        <span
-          className="kico round"
-          style={{ background: hue(name) }}
-          aria-hidden="true"
-        >
-          {name.slice(0, 1).toUpperCase()}
-        </span>
-        <span className="t">
-          <b>
-            <span>{name}</span>
-          </b>
-          <small>team on {teamPartyHost(party)}</small>
-        </span>
+    <div className="set-row member-row">
+      <TeamMark name={name} />
+      <span className="t">
+        <b>
+          <span>{name}</span>
+        </b>
+        <small>team on {teamPartyHost(party)}</small>
       </span>
-      <span className="rowtail">
+      <span className="a">
         <RoleChip role={party.destination_role} />
         <Chip tone="warn" title={chipTitle}>
           {chip}
@@ -440,36 +473,25 @@ function FederationEntryRow({
     'Every member of a federated team holds the role shown on its row. They are managed on their own server and cannot be changed or removed one by one.';
   return (
     <div
-      className="prow"
+      className="set-row member-row"
       key={`${entry.remote_host_id_hex}|${entry.remote_team_id_hex}`}
     >
-      <span className="who2">
-        <span
-          className="kico round"
-          style={{ background: hue(entry.remote_team_alias) }}
-          aria-hidden="true"
-        >
-          {entry.remote_team_alias.slice(0, 1).toUpperCase()}
-        </span>
-        <span className="t">
-          <b>
-            <span>{entry.remote_team_alias}</span>
-          </b>
-          {/* The server the team lives on is what a reader of the roster
-              needs. The host and operation identifiers are for reporting a
-              failed member addition, so they are in the row's menu instead. */}
-          <small>team on {remoteName}</small>
-        </span>
+      <TeamMark name={entry.remote_team_alias} />
+      <span className="t">
+        <b>
+          <span>{entry.remote_team_alias}</span>
+        </b>
+        {/* The server the team lives on is what a reader of the roster
+            needs. The host and operation identifiers are for reporting a
+            failed member addition, so they are in the row's menu instead. */}
+        <small>team on {remoteName}</small>
       </span>
-      <span className="rowtail">
-        <RoleChip role={entry.destination} />
+      <span className="a">
         <Chip tone={entry.active ? 'ok' : 'warn'}>
           {entry.active ? 'Active' : 'Inactive'}
         </Chip>
         {!entry.active && entry.operation_id_hex ? (
           <Button
-            size="sm"
-            icon="refresh"
             disabled={!manageable}
             title={
               manageable
@@ -478,9 +500,10 @@ function FederationEntryRow({
             }
             onClick={() => onRerun(entry.operation_id_hex!)}
           >
-            Restore access
+            Restore Access
           </Button>
         ) : null}
+        <RoleChip role={entry.destination} />
         <MenuButton
           variant="quiet"
           icon="ellipsis"
@@ -491,8 +514,8 @@ function FederationEntryRow({
         >
           {(close) => (
             <>
-              <MenuItem reason={memberReason}>Lower role…</MenuItem>
-              <MenuItem reason={memberReason}>Remove a member…</MenuItem>
+              <MenuItem reason={memberReason}>Lower Role…</MenuItem>
+              <MenuItem reason={memberReason}>Remove a Member…</MenuItem>
               <MenuItem
                 icon="copy"
                 title="Copies this federated membership’s host and operation identifiers, for reporting a failure."
@@ -504,7 +527,7 @@ function FederationEntryRow({
                   );
                 }}
               >
-                Copy membership details
+                Copy Membership Details
               </MenuItem>
               <div className="menu-separator" role="separator" />
               <MenuItem
@@ -522,7 +545,7 @@ function FederationEntryRow({
                   onRemove(entry);
                 }}
               >
-                Remove federated team…
+                Remove Federated Team…
               </MenuItem>
             </>
           )}
@@ -557,10 +580,15 @@ function MembersTab({
   onRerun,
   onRemoveFederatedMembership,
   onCopy,
+  onInvite,
+  serverName,
 }: {
   snapshot: AgentSnapshot;
   store: Store;
   onSheet: (sheet: Sheet, party?: Party) => void;
+  /** Opens Invite New User, for someone without an account here. */
+  onInvite: () => void;
+  serverName: string;
   /**
    * Why the roster cannot be added to, and why no federated team can be added —
    * each row's own menu states its own reason, because the two are decided
@@ -603,17 +631,31 @@ function MembersTab({
     ? { entries: [], unmatched: [], ambiguous: [] }
     : federatedTeamMembers(snapshot, store);
   const teamCount = entries.length + unmatched.length + ambiguous.length;
+  const named = store.kind === 'team' && store.team_kind === 'named';
+  const ready = !failure && !federationFailure && memberReadiness === 'ready';
+  // The links under a section add to it, where this account can: a person
+  // on this server (or an invitation for someone without an account) under
+  // Accounts, a team from another server under Groups.
+  const accountLinks =
+    named && manageable ? (
+      <>
+        <button type="button" className="lnk" onClick={() => onSheet('add')}>
+          Add someone on {serverName}…
+        </button>
+        <button type="button" className="lnk" onClick={onInvite}>
+          Send setup instructions…
+        </button>
+      </>
+    ) : undefined;
+  const groupLinks =
+    named && federationManageable ? (
+      <button type="button" className="lnk" onClick={() => onSheet('add-team')}>
+        Add a group…
+      </button>
+    ) : undefined;
   return (
     <div className="roster">
       <SituationBand store={store} tab="people" />
-      <SectionLabel>
-        Members
-        {!failure && !federationFailure && memberReadiness === 'ready' ? (
-          <span className="count">
-            — {plural(memberCountOf(snapshot, store), 'member')}
-          </span>
-        ) : null}
-      </SectionLabel>
       {!failure && !federationFailure ? (
         <CollectionStatus state={memberReadiness} label="members" />
       ) : null}
@@ -628,9 +670,45 @@ function MembersTab({
         >
           {failure.message}
         </Band>
-      ) : people.length || teamCount ? (
-        <div className="rt bare">
+      ) : null}
+      {/* With the roster unread its rows, the federation's among them, are
+          not drawn, so a federation failure with the same sentence would only
+          repeat the band above. One with its own sentence still says it. */}
+      {federationFailure &&
+      (!failure || federationFailure.message !== failure.message) ? (
+        <Band
+          label="Federation unavailable"
+          action={
+            federationFailure.retryable ? (
+              <Button onClick={onRetryFederation}>Refresh</Button>
+            ) : undefined
+          }
+        >
+          {federationFailure.message}
+        </Band>
+      ) : null}
+      {!failure &&
+      (people.length || (memberReadiness === 'ready' && accountLinks)) ? (
+        <MemberGroup
+          title="Accounts"
+          count={ready ? people.length : undefined}
+          footer={accountLinks}
+        >
           {people.map(row)}
+        </MemberGroup>
+      ) : null}
+      {!failure && machines.length ? (
+        <MemberGroup title="Machines" count={machines.length}>
+          {machines.map(row)}
+        </MemberGroup>
+      ) : null}
+      {failure ||
+      !(teamCount || (memberReadiness === 'ready' && groupLinks)) ? null : (
+        <MemberGroup
+          title="Groups on other servers"
+          count={ready ? teamCount : undefined}
+          footer={groupLinks}
+        >
           {entries.map((entry) => (
             <FederationEntryRow
               key={`${entry.remote_host_id_hex}|${entry.remote_team_id_hex}`}
@@ -658,40 +736,15 @@ function MembersTab({
               chipTitle="The roster lists this team once, but several membership records on this device match it, so none of them can be acted on."
             />
           ))}
-        </div>
-      ) : memberReadiness !== 'ready' ? null : (
-        <div className="callout">
-          <span
-            className="kico"
-            style={{ background: 'var(--chip-bg)', color: 'var(--muted)' }}
-          >
-            <Icon name="users" />
-          </span>
-          <span className="t">
-            <b>No members yet.</b>
-          </span>
-        </div>
+        </MemberGroup>
       )}
-      {/* With the roster unread its rows, the federation's among them, are
-          not drawn, so a federation failure with the same sentence would only
-          repeat the band above. One with its own sentence still says it. */}
-      {federationFailure &&
-      (!failure || federationFailure.message !== failure.message) ? (
-        <Band
-          label="Federation unavailable"
-          action={
-            federationFailure.retryable ? (
-              <Button onClick={onRetryFederation}>Refresh</Button>
-            ) : undefined
-          }
-        >
-          {federationFailure.message}
-        </Band>
-      ) : null}
-      {machines.length ? (
-        <MemberSection title="Machines" count={`${machines.length} connected`}>
-          {machines.map(row)}
-        </MemberSection>
+      {!failure &&
+      memberReadiness === 'ready' &&
+      !people.length &&
+      !machines.length &&
+      !teamCount &&
+      !accountLinks ? (
+        <EmptyState inList icon="users" title="No Members Yet" />
       ) : null}
     </div>
   );
@@ -852,68 +905,53 @@ function SettingsTab({
         .map(({ party }) => party)
     : [];
   const total = itemsOf(snapshot, store.id).length;
+  const serverLabel = server ? serverDisplayLabel(server) : store.server;
+  const openServer = (): void =>
+    onNavigate({ kind: 'settings', section: 'account', profile: store.server });
   return (
     <div className="group-settings">
       <SituationBand store={store} tab="settings" />
       <SectionLabel>About this team</SectionLabel>
-      <Inset>
-        <InsetRow
+      <div className="group-card">
+        <SetRow
           label="Name"
           action={
             // Inert rather than disabled: the native web view shows no
             // tooltip on a disabled control, and the title is the only place
             // the reason is stated.
             <Button
-              size="sm"
               aria-disabled="true"
               title="Team names cannot be changed after creation."
             >
-              Cannot change
+              Cannot Change
             </Button>
           }
         >
           {store.name}
-        </InsetRow>
-        <InsetRow
+        </SetRow>
+        <SetRow
           label="Server"
-          action={
-            <Button
-              size="sm"
-              onClick={() =>
-                onNavigate({
-                  kind: 'settings',
-                  section: 'account',
-                  profile: store.server,
-                })
-              }
-            >
-              Open server
-            </Button>
-          }
+          action={<Button onClick={openServer}>Open Server</Button>}
         >
-          {server ? serverDisplayLabel(server) : store.server}
-        </InsetRow>
-        <InsetRow label="Your account">
+          {serverLabel}
+        </SetRow>
+        <SetRow label="Your account">
           {account?.username ?? store.account} · {mine ? roleText(mine) : '—'}
-        </InsetRow>
-        <InsetRow label="Owner">
+        </SetRow>
+        <SetRow label="Owner">
           {owner ? partyName(owner) : 'No owner designated'}
-        </InsetRow>
-        <InsetRow
+        </SetRow>
+        <SetRow
           label="Team ID"
           action={
-            <Button
-              size="sm"
-              icon="copy"
-              onClick={() => onCopy(store.team_id_hex)}
-            >
+            <Button icon="copy" onClick={() => onCopy(store.team_id_hex)}>
               Copy
             </Button>
           }
         >
           <code title={store.team_id_hex}>{shortId(store.team_id_hex)}</code>
-        </InsetRow>
-      </Inset>
+        </SetRow>
+      </div>
       {manageable && onRange && store.team_kind === 'named' ? (
         <>
           <SectionLabel>Team nesting order</SectionLabel>
@@ -924,10 +962,10 @@ function SettingsTab({
           </p>
           <div className="btns">
             <Button onClick={() => onRange(false)}>
-              Lower this team’s range
+              Lower This Team’s Range
             </Button>
             <Button onClick={() => onRange(true)}>
-              Raise this team’s range
+              Raise This Team’s Range
             </Button>
           </div>
         </>
@@ -939,20 +977,27 @@ function SettingsTab({
       ) : (
         <>
           <SectionLabel>Who can join</SectionLabel>
-          <Inset>
-            <InsetRow label="Join policy">
+          <div className="group-card">
+            <SetRow label="Join policy">
               Invite only
-              <span className="hint">
+              <small className="hint">
                 An administrator adds members or approves membership requests.
-              </span>
-            </InsetRow>
-          </Inset>
+              </small>
+            </SetRow>
+          </div>
         </>
       )}
-      <SectionLabel>Danger</SectionLabel>
-      <Inset className="danger settings-inset">
-        <InsetRow
-          action={
+      <SectionLabel className="danger-title">Danger zone</SectionLabel>
+      <div className="group-card danger">
+        <div className="set-row">
+          <span className="t">
+            <b>Remove a team member</b>
+            <small>
+              Removing anyone rotates the team key and blocks their future
+              reads. Copies already downloaded are not erased.
+            </small>
+          </span>
+          <span className="a">
             <MenuButton
               variant="danger"
               label="Remove…"
@@ -981,43 +1026,41 @@ function SettingsTab({
                 ))
               }
             </MenuButton>
-          }
-        >
-          <span className="t">
-            <b>Remove a team member</b>
-            <small>
-              Removing anyone rotates the team key and blocks their future
-              reads. Copies already downloaded are not erased.
-            </small>
           </span>
-        </InsetRow>
-        <InsetRow
-          action={
-            <Button
-              icon="externalLink"
-              onClick={() =>
-                onNavigate({
-                  kind: 'settings',
-                  section: 'account',
-                  profile: store.server,
-                })
-              }
-            >
-              Servers
-            </Button>
-          }
-        >
+        </div>
+        <div className="set-row">
           <span className="t">
-            <b>
-              Reset this device’s state for{' '}
-              {server ? serverDisplayLabel(server) : store.server}
-            </b>
+            <b>Reset this device’s state for {serverLabel}</b>
             <small>
               Removes locally stored keys and server data from this device.
             </small>
           </span>
-        </InsetRow>
-      </Inset>
+          <span className="a">
+            <Button icon="externalLink" onClick={openServer}>
+              Servers
+            </Button>
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** A page's property row: label, value, and trailing controls. */
+function SetRow({
+  label,
+  action,
+  children,
+}: {
+  label: string;
+  action?: ReactNode;
+  children: ReactNode;
+}): ReactNode {
+  return (
+    <div className="set-row">
+      <span className="k">{label}</span>
+      <span className="v">{children}</span>
+      {action ? <span className="a">{action}</span> : null}
     </div>
   );
 }
@@ -1399,11 +1442,17 @@ export function GroupSettingsScreen({
   const canManageRoster = rosterReason === undefined;
   const named = store.team_kind === 'named';
   const serverName = displayServerName(snapshot, store);
-  // The header's badges: server, then the member count, each dropped
-  // rather than guessed when it is not known. The count is silent while the
-  // roster or the federated teams could not be read, the same as the Members
-  // tab's own count.
-  const headerChips = [
+  // The header's facts: server, the member count, and the role this Mac's
+  // account holds, each dropped rather than guessed when it is not known.
+  // The count is silent while the roster or the federated teams could not be
+  // read, the same as the Members tab's own count.
+  const mine = parties.find((party) => party.label === 'you');
+  const mineRole = mine ? parseRole(mine.destination_role) : null;
+  const actingName = snapshot.accounts.find(
+    (candidate) =>
+      candidate.alias === store.account && candidate.server === store.server,
+  )?.username;
+  const headerFacts = [
     serverName,
     !canReadRoster ||
     rosterFailure ||
@@ -1412,6 +1461,9 @@ export function GroupSettingsScreen({
     groupDetailReadiness(snapshot, store.id, 'federation') !== 'ready'
       ? null
       : plural(memberCount, 'member'),
+    mineRole && actingName
+      ? `You are ${roleName(mineRole)} as ${actingName}`
+      : null,
   ].filter(Boolean);
   // The channels this group's inbox entry holds, or `undefined` while the
   // service has not answered for it. A hidden conversation is listed on the
@@ -1470,342 +1522,418 @@ export function GroupSettingsScreen({
       )
       .catch((error: unknown) => onMutationError(error));
   };
+  // Inactive federated admissions, stated over every tab but Settings with
+  // the action that restores them; the row under Members says it as well.
+  const inactiveAdmissions = federationFailure
+    ? []
+    : snapshot.federation.filter(
+        (entry) => entry.store === store.id && !entry.active,
+      );
   return (
     <>
-      <div className="ghero">
-        <button
-          type="button"
-          className="back"
-          title="Teams home"
-          aria-label="Teams home"
-          onClick={() => onNavigate({ kind: 'teams' })}
-        >
-          <Icon name="chevronDown" />
-        </button>
-        <GroupMark store={store} size="big" />
-        <div className="t">
-          <h1>
-            <span>{store.name}</span>
-            {inactive ? <Chip tone="warn">Inactive</Chip> : null}
-          </h1>
-          {/* The role this account holds here is not repeated in the header;
-              it already reads on this account's own row under Members. */}
-          <div className="sub">
-            {headerChips.map((label, index) => (
-              <Chip key={index}>{label}</Chip>
-            ))}
-          </div>
-        </div>
-        <div className="header-action">
-          {/* A person by username here, or a team from another server: one
+      {/* The bar names the team and leads back to Teams; the page starts
+          with the team's own header. */}
+      <div className="body team-page">
+        <div className="team-inner">
+          <div className="hero team-hero">
+            <StoreMark snapshot={snapshot} store={store} size="lg" />
+            <div className="t">
+              <h1>
+                <span>{store.name}</span>
+                {inactive ? <Chip tone="warn">Inactive</Chip> : null}
+              </h1>
+              {/* Server, member count, and who acts here: the team may belong
+              to an account other than the one the sidebar shows. */}
+              <p>{headerFacts.join(' · ')}</p>
+            </div>
+            <div className="hero-acts">
+              {/* A person by username here, or a team from another server: one
               control, two choices, each stating its own reason when it does
               not apply, rather than three separate buttons for what is really
               one decision. Ad-hoc teams have a fixed membership and get
               neither. */}
-          {named && !unavailable && !inactive ? (
-            <MenuButton
-              variant="primary"
-              icon="plus"
-              label="Add people"
-              menuLabel="Add people"
-            >
-              {(close) => (
-                <>
-                  <MenuItem
-                    icon="user"
-                    reason={rosterReason}
-                    onClick={() => {
-                      close();
-                      openSheet('add');
-                    }}
-                  >
-                    <span className="menu-choice">
-                      <b>Add FOKS user…</b>
-                      <small>Someone with an account on {serverName}</small>
-                    </span>
-                  </MenuItem>
-                  <MenuItem
-                    icon="users"
-                    reason={federationReason}
-                    onClick={() => {
-                      close();
-                      openSheet('add-team');
-                    }}
-                  >
-                    <span className="menu-choice">
-                      <b>Add FOKS team…</b>
-                      <small>A team from another server</small>
-                    </span>
-                  </MenuItem>
-                  <div className="menu-separator" role="separator" />
-                  {/* The third way in, kept apart from the two that name a
+              {named && !unavailable && !inactive ? (
+                <MenuButton
+                  icon="userPlus"
+                  label="Add People"
+                  menuLabel="Add People"
+                >
+                  {(close) => (
+                    <>
+                      <MenuItem
+                        icon="user"
+                        reason={rosterReason}
+                        onClick={() => {
+                          close();
+                          openSheet('add');
+                        }}
+                      >
+                        <span className="menu-choice">
+                          <b>Add FOKS User…</b>
+                          <small>Someone with an account on {serverName}</small>
+                        </span>
+                      </MenuItem>
+                      <MenuItem
+                        icon="users"
+                        reason={federationReason}
+                        onClick={() => {
+                          close();
+                          openSheet('add-team');
+                        }}
+                      >
+                        <span className="menu-choice">
+                          <b>Add FOKS Team…</b>
+                          <small>A team from another server</small>
+                        </span>
+                      </MenuItem>
+                      <div className="menu-separator" role="separator" />
+                      {/* The third way in, kept apart from the two that name a
                       party: an invitation is issued now and answered later,
                       by someone this device cannot name yet. */}
-                  <MenuItem
-                    icon="door"
-                    reason={rosterReason}
-                    onClick={() => {
-                      close();
-                      setInviting(true);
-                    }}
-                  >
-                    <span className="menu-choice">
-                      <b>Invite new user…</b>
-                      <small>Create an invitation to share</small>
-                    </span>
-                  </MenuItem>
-                </>
-              )}
-            </MenuButton>
-          ) : null}
-          {/* The group ID and the vault are local facts, so the menu stays even
+                      <MenuItem
+                        icon="door"
+                        reason={rosterReason}
+                        onClick={() => {
+                          close();
+                          setInviting(true);
+                        }}
+                      >
+                        <span className="menu-choice">
+                          <b>Invite New User…</b>
+                          <small>Create an invitation to share</small>
+                        </span>
+                      </MenuItem>
+                    </>
+                  )}
+                </MenuButton>
+              ) : null}
+              {/* The group ID and the vault are local facts, so the menu stays even
               while the server is out of reach; only what needs the server is
               disabled, with the reason in the item. */}
-          <MenuButton
-            variant="quiet"
-            icon="ellipsis"
-            trailingIcon={null}
-            label=""
-            menuLabel="Team actions"
-            // Named for the team it acts on: several triggers on this page
-            // read "More" otherwise, and none of them says what it acts on.
-            title={`Actions for ${store.name}`}
-            aria-label={`Actions for ${store.name}`}
-          >
-            {(close) => (
-              <>
-                <MenuItem
-                  icon="refresh"
-                  reason={
-                    unavailable
-                      ? `Restore access to ${displayServerName(snapshot, store)} first.`
-                      : inactive
-                        ? 'Finish setting up this team first.'
-                        : undefined
-                  }
-                  onClick={() => {
-                    close();
-                    // Nothing was written, so the team's chain sequence is
-                    // unchanged and the profile read would reuse the roster it
-                    // already holds. The user asked for a roster read, so say
-                    // so; without this the button does nothing visible.
-                    markProfileRostersStale(store.server);
-                    void onApplied('Team refreshed', store.server).catch(
-                      onError,
-                    );
-                  }}
-                >
-                  Refresh team
-                </MenuItem>
-                <MenuItem
-                  icon="copy"
-                  onClick={() => {
-                    close();
-                    void copy(store.team_id_hex, 'Team ID copied.');
-                  }}
-                >
-                  Copy team ID
-                </MenuItem>
-              </>
-            )}
-          </MenuButton>
-        </div>
-      </div>
-      {unavailable ? (
-        <StoreAccessTakeover
-          operation="metadata"
-          snapshot={snapshot}
-          store={store}
-          variant="band"
-          onOpenServer={(profile) =>
-            onNavigate({ kind: 'settings', section: 'account', profile })
-          }
-          onFinishSetup={finishSetup}
-        />
-      ) : inactive ? (
-        // A group with incomplete setup has no members, channels, items, or
-        // tabs. Show its status and recovery actions instead.
-        <IncompleteGroupPage
-          snapshot={snapshot}
-          store={store}
-          onFinish={finishSetup}
-          onRemove={() => setAbandoning(true)}
-          onCopyId={() => void copy(store.team_id_hex, 'Team ID copied.')}
-          onNavigate={onNavigate}
-        />
-      ) : (
-        <>
-          {/* Combine blocking membership operations and invitation activity
-              in one review entry point. */}
-          {reviewing ? null : (
-            <UnfinishedActivity
-              bridge={bridge}
+              <MenuButton
+                variant="quiet"
+                icon="ellipsis"
+                trailingIcon={null}
+                label=""
+                menuLabel="Team actions"
+                // Named for the team it acts on: several triggers on this page
+                // read "More" otherwise, and none of them says what it acts on.
+                title={`Actions for ${store.name}`}
+                aria-label={`Actions for ${store.name}`}
+              >
+                {(close) => (
+                  <>
+                    {/* The page's own places for pending work: the Requests
+                        tab and the Unfinished activity sheet. */}
+                    {named && !unavailable && !inactive && canManageRoster ? (
+                      <>
+                        <MenuItem
+                          icon="users"
+                          onClick={() => {
+                            close();
+                            setTab('requests');
+                            onNavigate(
+                              {
+                                kind: 'group-settings',
+                                ref: store.id,
+                                tab: 'requests',
+                              },
+                              { replace: true },
+                            );
+                          }}
+                        >
+                          Membership Requests
+                        </MenuItem>
+                        <MenuItem
+                          icon="activity"
+                          onClick={() => {
+                            close();
+                            setReviewing(true);
+                          }}
+                        >
+                          Unfinished Activity…
+                        </MenuItem>
+                        <div className="menu-separator" role="separator" />
+                      </>
+                    ) : null}
+                    <MenuItem
+                      icon="refresh"
+                      reason={
+                        unavailable
+                          ? `Restore access to ${displayServerName(snapshot, store)} first.`
+                          : inactive
+                            ? 'Finish setting up this team first.'
+                            : undefined
+                      }
+                      onClick={() => {
+                        close();
+                        // Nothing was written, so the team's chain sequence is
+                        // unchanged and the profile read would reuse the roster it
+                        // already holds. The user asked for a roster read, so say
+                        // so; without this the button does nothing visible.
+                        markProfileRostersStale(store.server);
+                        void onApplied('Team refreshed', store.server).catch(
+                          onError,
+                        );
+                      }}
+                    >
+                      Refresh Team
+                    </MenuItem>
+                    <MenuItem
+                      icon="copy"
+                      onClick={() => {
+                        close();
+                        void copy(store.team_id_hex, 'Team ID copied.');
+                      }}
+                    >
+                      Copy Team ID
+                    </MenuItem>
+                  </>
+                )}
+              </MenuButton>
+            </div>
+          </div>
+          {unavailable ? (
+            <StoreAccessTakeover
+              operation="metadata"
+              snapshot={snapshot}
               store={store}
-              membership={membershipPending}
-              invitations={canManageRoster}
-              onError={onError}
-              onReview={() => setReviewing(true)}
+              variant="band"
+              onOpenServer={(profile) =>
+                onNavigate({ kind: 'settings', section: 'account', profile })
+              }
+              onFinishSetup={finishSetup}
             />
-          )}
-          <Tabs
-            label="Team sections"
-            idBase={GROUP_TABS}
-            value={tab}
-            onChange={(next) => {
-              setTab(next);
-              // Selection follows focus on the strip, so walking it with the
-              // arrows is one navigation per key. A tab is a place within this
-              // page rather than a page of its own, so each one replaces the
-              // last instead of stacking a step behind the reader.
-              onNavigate(
-                { kind: 'group-settings', ref: store.id, tab: next },
-                { replace: true },
-              );
-            }}
-            items={GROUP_SETTINGS_TABS.filter(
-              (id) => id !== 'requests' || canManageRoster,
-            ).map((id) =>
-              id === 'people'
-                ? {
-                    id,
-                    label: 'Members',
-                    ...(!canReadRoster ||
-                    rosterFailure ||
-                    federationFailure ||
-                    groupDetailReadiness(snapshot, store.id, 'roster') !==
-                      'ready' ||
-                    groupDetailReadiness(snapshot, store.id, 'federation') !==
-                      'ready'
-                      ? {}
-                      : { count: memberCount }),
-                  }
-                : id === 'channels'
-                  ? {
-                      id,
-                      label: 'Channels',
-                      // The count is the service's, so it is drawn only once
-                      // the service has answered for this group.
-                      ...(channelCount === undefined
-                        ? {}
-                        : { count: channelCount }),
-                    }
-                  : id === 'files'
+          ) : inactive ? (
+            // A group with incomplete setup has no members, channels, items, or
+            // tabs. Show its status and recovery actions instead.
+            <IncompleteGroupPage
+              snapshot={snapshot}
+              store={store}
+              onFinish={finishSetup}
+              onRemove={() => setAbandoning(true)}
+              onCopyId={() => void copy(store.team_id_hex, 'Team ID copied.')}
+              onNavigate={onNavigate}
+            />
+          ) : (
+            <>
+              {tab === 'settings'
+                ? null
+                : inactiveAdmissions.map((entry) => (
+                    <Band
+                      key={`${entry.remote_host_id_hex}|${entry.remote_team_id_hex}`}
+                      icon="warning"
+                      action={
+                        entry.operation_id_hex ? (
+                          <Button
+                            size="sm"
+                            disabled={federationReason !== undefined}
+                            title={federationReason}
+                            onClick={() =>
+                              resumeFederatedMemberAdd(entry.operation_id_hex!)
+                            }
+                          >
+                            Restore Access
+                          </Button>
+                        ) : undefined
+                      }
+                    >
+                      {entry.remote_team_alias}’s membership is inactive.{' '}
+                      {entry.remote_team_alias} members cannot access{' '}
+                      {store.name} until it is restored.
+                    </Band>
+                  ))}
+              {/* Combine blocking membership operations and invitation activity
+              in one review entry point. */}
+              {reviewing ? null : (
+                <UnfinishedActivity
+                  bridge={bridge}
+                  store={store}
+                  membership={membershipPending}
+                  invitations={canManageRoster}
+                  onError={onError}
+                  onReview={() => setReviewing(true)}
+                />
+              )}
+              <Tabs
+                label="Team sections"
+                idBase={GROUP_TABS}
+                value={tab}
+                onChange={(next) => {
+                  setTab(next);
+                  // Selection follows focus on the strip, so walking it with the
+                  // arrows is one navigation per key. A tab is a place within this
+                  // page rather than a page of its own, so each one replaces the
+                  // last instead of stacking a step behind the reader.
+                  onNavigate(
+                    { kind: 'group-settings', ref: store.id, tab: next },
+                    { replace: true },
+                  );
+                }}
+                items={GROUP_SETTINGS_TABS.filter(
+                  (id) => id !== 'requests' || canManageRoster,
+                ).map((id) =>
+                  id === 'people'
                     ? {
                         id,
-                        label: 'Files',
-                        ...(storeOperationAvailability(snapshot, store, 'vault')
-                          .available
-                          ? { count: itemCountOf(snapshot, store) }
-                          : {}),
+                        label: 'Members',
+                        ...(!canReadRoster ||
+                        rosterFailure ||
+                        federationFailure ||
+                        groupDetailReadiness(snapshot, store.id, 'roster') !==
+                          'ready' ||
+                        groupDetailReadiness(
+                          snapshot,
+                          store.id,
+                          'federation',
+                        ) !== 'ready'
+                          ? {}
+                          : { count: memberCount }),
                       }
-                    : id === 'requests'
+                    : id === 'channels'
                       ? {
                           id,
-                          label: 'Requests',
-                          // No pending request reads as no count, not zero:
-                          // the tab is drawn the same as Channels and Files
-                          // before their own counts are known.
-                          ...(requestCount ? { count: requestCount } : {}),
+                          label: 'Channels',
+                          // The count is the service's, so it is drawn only once
+                          // the service has answered for this group.
+                          ...(channelCount === undefined
+                            ? {}
+                            : { count: channelCount }),
                         }
-                      : { id, label: 'Settings' },
-            )}
-          />
-          {/* Fixed IDs associate each tab button with its tabpanel. */}
-          <div
-            className="body"
-            role="tabpanel"
-            id={tabPanelId(GROUP_TABS, tab)}
-            aria-labelledby={tabId(GROUP_TABS, tab)}
-          >
-            <div className="groups-wrap">
-              {tab === 'people' && !canReadRoster ? (
-                <StoreAccessTakeover
-                  snapshot={snapshot}
-                  store={store}
-                  operation="teams"
-                  variant="band"
-                  onOpenServer={(profile) =>
-                    onNavigate({
-                      kind: 'settings',
-                      section: 'account',
-                      profile,
-                    })
-                  }
-                  onFinishSetup={finishSetup}
-                />
-              ) : tab === 'people' ? (
-                <MembersTab
-                  snapshot={snapshot}
-                  store={store}
-                  onSheet={openSheet}
-                  {...(rosterReason ? { rosterReason } : {})}
-                  {...(federationReason ? { federationReason } : {})}
-                  menuParty={menuParty}
-                  failure={rosterFailure}
-                  federationFailure={federationFailure}
-                  onRetry={() => {
-                    // As with "Refresh team": these retry a roster read that
-                    // failed or looked stale, and no write moved the chain, so
-                    // the reuse has to be waived explicitly.
-                    markProfileRostersStale(store.server);
-                    void onApplied('Refreshing team members…', store.server);
-                  }}
-                  onRetryFederation={() => {
-                    markProfileRostersStale(store.server);
-                    void onApplied('Refreshing external teams…', store.server);
-                  }}
-                  onRerun={resumeFederatedMemberAdd}
-                  onRemoveFederatedMembership={setRemovalTarget}
-                  onCopy={(text, message) => void copy(text, message)}
-                />
-              ) : tab === 'channels' ? (
-                <ChannelsTab
-                  snapshot={snapshot}
-                  store={store}
-                  accessOptions={accessOptions}
-                  onNavigate={onNavigate}
-                  onAddChannel={() => setAddingChannel(true)}
-                />
-              ) : tab === 'files' ? (
-                <FilesTab
-                  snapshot={snapshot}
-                  store={store}
-                  onNavigate={onNavigate}
-                />
-              ) : tab === 'settings' ? (
-                <SettingsTab
-                  snapshot={snapshot}
-                  store={store}
-                  onSheet={openSheet}
-                  onNavigate={onNavigate}
-                  onCopy={(text) => void copy(text, 'Team ID copied.')}
-                  onRange={changeRange}
-                  manageable={canManageRoster}
-                  rekeyOpen={rekeyArmed}
-                />
-              ) : null}
-              {/* Mounted for the life of the page, not just while the
+                      : id === 'files'
+                        ? {
+                            id,
+                            label: 'Files',
+                            ...(storeOperationAvailability(
+                              snapshot,
+                              store,
+                              'vault',
+                            ).available
+                              ? { count: itemCountOf(snapshot, store) }
+                              : {}),
+                          }
+                        : id === 'requests'
+                          ? {
+                              id,
+                              label: 'Requests',
+                              // No pending request reads as no count, not zero:
+                              // the tab is drawn the same as Channels and Files
+                              // before their own counts are known.
+                              ...(requestCount ? { count: requestCount } : {}),
+                            }
+                          : { id, label: 'Settings' },
+                )}
+              />
+              {/* Fixed IDs associate each tab button with its tabpanel. */}
+              <div
+                className="team-panel"
+                role="tabpanel"
+                id={tabPanelId(GROUP_TABS, tab)}
+                aria-labelledby={tabId(GROUP_TABS, tab)}
+              >
+                <div>
+                  {tab === 'people' && !canReadRoster ? (
+                    <StoreAccessTakeover
+                      snapshot={snapshot}
+                      store={store}
+                      operation="teams"
+                      variant="band"
+                      onOpenServer={(profile) =>
+                        onNavigate({
+                          kind: 'settings',
+                          section: 'account',
+                          profile,
+                        })
+                      }
+                      onFinishSetup={finishSetup}
+                    />
+                  ) : tab === 'people' ? (
+                    <MembersTab
+                      snapshot={snapshot}
+                      store={store}
+                      onSheet={openSheet}
+                      {...(rosterReason ? { rosterReason } : {})}
+                      {...(federationReason ? { federationReason } : {})}
+                      menuParty={menuParty}
+                      failure={rosterFailure}
+                      federationFailure={federationFailure}
+                      onRetry={() => {
+                        // As with "Refresh team": these retry a roster read that
+                        // failed or looked stale, and no write moved the chain, so
+                        // the reuse has to be waived explicitly.
+                        markProfileRostersStale(store.server);
+                        void onApplied(
+                          'Refreshing team members…',
+                          store.server,
+                        );
+                      }}
+                      onRetryFederation={() => {
+                        markProfileRostersStale(store.server);
+                        void onApplied(
+                          'Refreshing external teams…',
+                          store.server,
+                        );
+                      }}
+                      onRerun={resumeFederatedMemberAdd}
+                      onRemoveFederatedMembership={setRemovalTarget}
+                      onCopy={(text, message) => void copy(text, message)}
+                      onInvite={() => setInviting(true)}
+                      serverName={serverName}
+                    />
+                  ) : tab === 'channels' ? (
+                    <ChannelsTab
+                      snapshot={snapshot}
+                      store={store}
+                      accessOptions={accessOptions}
+                      onNavigate={onNavigate}
+                      onAddChannel={() => setAddingChannel(true)}
+                    />
+                  ) : tab === 'files' ? (
+                    <FilesTab
+                      snapshot={snapshot}
+                      store={store}
+                      onNavigate={onNavigate}
+                    />
+                  ) : tab === 'settings' ? (
+                    <SettingsTab
+                      snapshot={snapshot}
+                      store={store}
+                      onSheet={openSheet}
+                      onNavigate={onNavigate}
+                      onCopy={(text) => void copy(text, 'Team ID copied.')}
+                      onRange={changeRange}
+                      manageable={canManageRoster}
+                      rekeyOpen={rekeyArmed}
+                    />
+                  ) : null}
+                  {/* Mounted for the life of the page, not just while the
                   Requests tab is open, so its count is known before the
                   reader ever switches to it; only its visibility follows the
                   tab. */}
-              {canManageRoster ? (
-                <div hidden={tab !== 'requests'}>
-                  <MembershipRequests
-                    key={store.id}
-                    bridge={bridge}
-                    team={store}
-                    serverLabel={serverName}
-                    servers={snapshot.servers}
-                    onComplete={() =>
-                      onApplied('Team requests updated', store.server)
-                    }
-                    onInvite={() => setInviting(true)}
-                    onActivity={() => setReviewing(true)}
-                  />
+                  {canManageRoster ? (
+                    <div hidden={tab !== 'requests'}>
+                      <MembershipRequests
+                        key={store.id}
+                        bridge={bridge}
+                        team={store}
+                        serverLabel={serverName}
+                        servers={snapshot.servers}
+                        onComplete={() =>
+                          onApplied('Team requests updated', store.server)
+                        }
+                        onInvite={() => setInviting(true)}
+                        onActivity={() => setReviewing(true)}
+                      />
+                    </div>
+                  ) : null}
                 </div>
-              ) : null}
-            </div>
-          </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+      {unavailable || inactive ? null : (
+        <>
           {removalEntry ? (
             <FederationRemovalSheet
               bridge={bridge}

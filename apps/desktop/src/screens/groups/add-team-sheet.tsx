@@ -15,6 +15,7 @@ import {
   RadioGroup,
   SectionLabel,
   SheetDialog,
+  StoreMark,
 } from '../../components';
 import { isNestingRefusal } from '../../invitation-writes';
 import {
@@ -32,7 +33,6 @@ import {
 } from '../../model/workflow-availability';
 import { useTabSheetState } from '../../navigation-guard';
 import { markProfileRostersStale } from '../../roster-staleness';
-import { GroupMark } from '../group-mark';
 import { manageReason } from '../group-model';
 import {
   DetailUnavailable,
@@ -71,7 +71,7 @@ export function AddTeamSheet({
   const { busy: writing, write } = useSheetWrite(onApplied, onClose);
   const busy = writing || rangeBusy;
   const serverName = displayServerName(snapshot, store);
-  const title = `Add FOKS team to ${store.name}`;
+  const title = `Add FOKS Team to ${store.name}`;
   const federationTarget = {
     profile: store.server,
     account: store.account,
@@ -142,7 +142,7 @@ export function AddTeamSheet({
     <SheetDialog
       onClose={onClose}
       dismissible={!busy}
-      glyph={<GroupMark store={store} />}
+      glyph={<StoreMark snapshot={snapshot} store={store} size="sheet" />}
       title={title}
       footer={
         <>

@@ -14,6 +14,7 @@ import {
   RadioGroup,
   SectionLabel,
   SheetDialog,
+  StoreMark,
 } from '../../components';
 import {
   groupDetailFailure,
@@ -24,7 +25,6 @@ import {
 } from '../../model';
 import { useSheetGuard, useTabSheetState } from '../../navigation-guard';
 import { markProfileRostersStale } from '../../roster-staleness';
-import { GroupMark } from '../group-mark';
 import {
   DetailUnavailable,
   useSheetWrite,
@@ -58,7 +58,7 @@ export function AddPersonSheet({
   const callerRank = callerParty ? roleRank(callerParty.destination_role) : 0;
   const serverName = displayServerName(snapshot, store);
   const requiredFailure = groupDetailFailure(snapshot, store.id, 'roster');
-  const title = `Add FOKS user to ${store.name}`;
+  const title = `Add FOKS User to ${store.name}`;
   // Reject an existing roster member locally. The server validates all other
   // username errors.
   const existing = partiesOf(snapshot, store.id).find(
@@ -117,7 +117,7 @@ export function AddPersonSheet({
     <SheetDialog
       onClose={onClose}
       dismissible={!busy}
-      glyph={<GroupMark store={store} />}
+      glyph={<StoreMark snapshot={snapshot} store={store} size="sheet" />}
       title={title}
       footer={
         <>
@@ -134,7 +134,7 @@ export function AddPersonSheet({
             }
             onClick={() => void apply()}
           >
-            Add {username.trim() || 'someone'}
+            Add {username.trim() || 'Someone'}
           </Button>
         </>
       }
@@ -199,17 +199,13 @@ export function AddPersonSheet({
             );
           })}
         </RadioGroup>
+        {/* The band a Member reads at, under the role it belongs to. */}
+        {role.role === 'Member' ? (
+          <InsetRow label="Visibility" className="visibility-row">
+            <VisibilityStepper value={visibility} onChange={setVisibility} />
+          </InsetRow>
+        ) : null}
       </Inset>
-      {role.role === 'Member' ? (
-        <Inset className="visibility-inset">
-          <InsetRow
-            label="Visibility"
-            action={
-              <VisibilityStepper value={visibility} onChange={setVisibility} />
-            }
-          />
-        </Inset>
-      ) : null}
       {onInvite ? (
         <p className="fn">
           No account yet?{' '}

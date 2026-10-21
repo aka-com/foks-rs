@@ -1,15 +1,14 @@
 /** Confirms and applies removal of a team member. */
 
 import type { ReactNode } from 'react';
-import { Button, Inset, Notice, SheetDialog } from '../../components';
+import { AlertDialog, Notice } from '../../components';
 import { groupDetailFailure, partyName } from '../../model';
 import type { Party } from '../../model';
 import { markProfileRostersStale } from '../../roster-staleness';
-import { GroupMark } from '../group-mark';
 import {
   canTarget,
   DetailUnavailable,
-  PartyFactRow,
+  roleText,
   useSheetWrite,
 } from './sheet-support';
 import type { GroupSheetBaseProps } from './sheet-support';
@@ -44,37 +43,24 @@ export function RemoveMemberSheet({
     );
   };
   return (
-    <SheetDialog
-      danger
-      onClose={onClose}
-      dismissible={!busy}
-      glyph={<GroupMark store={store} />}
+    // A destructive confirmation is an alert: Cancel is the default button,
+    // ⌘⌫ confirms, and the scrim does nothing.
+    <AlertDialog
+      destructive
+      icon="users"
       title={title}
-      footer={
-        <>
-          <Button disabled={busy} onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            variant="primary"
-            danger
-            disabled={busy || Boolean(requiredFailure) || !actionable}
-            onClick={() => void apply()}
-          >
-            Remove and rekey
-          </Button>
-        </>
-      }
+      message="Removing blocks future reads and rekeys the team. This user may retain a local copy of their current records."
+      confirmLabel="Remove"
+      busy={busy}
+      confirmDisabled={Boolean(requiredFailure) || !actionable}
+      onConfirm={() => void apply()}
+      onCancel={onClose}
     >
       {requiredFailure ? <DetailUnavailable failure={requiredFailure} /> : null}
-      <p>
-        Removing blocks future reads and rekeys the team. This user may retain a
-        local copy of their current records.
-      </p>
       {target ? (
-        <Inset>
-          <PartyFactRow party={target} />
-        </Inset>
+        <p className="alert-fact">
+          <b>{partyName(target)}</b> · {roleText(target)}
+        </p>
       ) : null}
       {target && !actionable ? (
         <Notice title={`${name} cannot be removed here`}>
@@ -82,6 +68,6 @@ export function RemoveMemberSheet({
           <p>This member is managed by another server or account.</p>
         </Notice>
       ) : null}
-    </SheetDialog>
+    </AlertDialog>
   );
 }

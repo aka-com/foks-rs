@@ -45,25 +45,27 @@ test.after(async () => vite.close());
 /** The row a name is drawn in. */
 function row(name: string): HTMLElement {
   const node = [
-    ...document.querySelectorAll<HTMLElement>('.nav-rows .row'),
-  ].find((candidate) => candidate.querySelector('.tt')?.textContent === name);
+    ...document.querySelectorAll<HTMLElement>('.team-row > .set-row'),
+  ].find(
+    (candidate) => candidate.querySelector('.t > b')?.textContent === name,
+  );
   assert.ok(node, `no row named ${name}`);
   return node;
 }
 
 /** The state chip a row carries, or `null` when the row reports nothing wrong. */
 function stateChip(node: HTMLElement): string | null {
-  return node.querySelector('.tail .chip.warn')?.textContent ?? null;
+  return node.querySelector('.a .chip.warn')?.textContent ?? null;
 }
 
 /** The chip naming this account's role in a Teams row's team. */
 function roleChip(node: HTMLElement): string | null {
-  return node.querySelector('.tail .chip.role')?.textContent ?? null;
+  return node.querySelector('.a .chip.role')?.textContent ?? null;
 }
 
 /** The Chat/Share pill naming a Teams row's kind. */
 function kindChip(node: HTMLElement): string | null {
-  return node.querySelector('.tail .chip.kind')?.textContent ?? null;
+  return node.querySelector('.a .chip.kind')?.textContent ?? null;
 }
 
 async function fixture(): Promise<AgentSnapshot> {
@@ -188,9 +190,9 @@ test('Teams centers a spinner while the initial catalog is loading', async () =>
   const rendered = await teams(() => {}, { snapshot });
   const loading = rendered.getByRole('status', { name: 'Loading teams' });
   assert.ok(loading.classList.contains('app-loading'));
-  assert.ok(loading.classList.contains('body'));
+  assert.ok(loading.closest('.body'));
   assert.ok(loading.querySelector('.spin'));
-  assert.equal(rendered.queryByText('No teams yet'), null);
+  assert.equal(rendered.queryByText('No Teams Yet'), null);
 });
 
 test('a Teams row in an abnormal state carries the same chip, and opens team settings', async () => {
@@ -203,12 +205,12 @@ test('a Teams row in an abnormal state carries the same chip, and opens team set
   // pill says what it is; the caption says only the catalog facts it has.
   assert.equal(kindChip(homelab), 'Share');
   assert.equal(
-    homelab.querySelector('.name small')?.textContent,
+    homelab.querySelector('.t small')?.textContent,
     'Personal server · 0 members',
   );
 
   const eng = row('Engineering');
-  assert.equal(eng.className, 'row');
+  assert.equal(eng.className, 'set-row');
   // A normal row's only state is what its shared request count says, once
   // that has been read; the fixture's inbox holds two requests for it.
   await ui.waitFor(() => assert.equal(stateChip(eng), '2 requests'));
@@ -296,13 +298,10 @@ test('a Teams row displays the server, member count, and user role', async () =>
   // the team's own details call loaded on refresh (every party, the way the
   // team page's own summary counts them). The role this account holds is a
   // chip at the row's end.
-  assert.equal(
-    eng.querySelector('.name small')?.textContent,
-    'Acme · 6 members',
-  );
+  assert.equal(eng.querySelector('.t small')?.textContent, 'Acme · 6 members');
   assert.equal(roleChip(eng), 'Admin');
   assert.equal(
-    row('Household').querySelector('.name small')?.textContent,
+    row('Household').querySelector('.t small')?.textContent,
     'Personal server · 2 members',
   );
   assert.equal(roleChip(row('Household')), 'Owner');
@@ -312,14 +311,14 @@ test('a Teams row displays the server, member count, and user role', async () =>
 
 test('Find teams lists accounts under their servers', async () => {
   const rendered = await teams();
-  assert.equal(rendered.queryByRole('menu', { name: 'Find teams' }), null);
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Find teams' }));
+  assert.equal(rendered.queryByRole('menu', { name: 'Find Teams' }), null);
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Find Teams' }));
   assert.ok(rendered.getByRole('group', { name: 'Personal server' }));
   assert.ok(rendered.getByRole('group', { name: 'Acme' }));
   assert.ok(rendered.getByRole('menuitem', { name: 'Check as satoshi' }));
   assert.ok(rendered.getByRole('menuitem', { name: 'Check as vitalik' }));
-  assert.ok(rendered.getByText('Create a team'));
-  assert.ok(rendered.getByText('Join a team…'));
+  assert.ok(rendered.getByText('Create a Team…'));
+  assert.ok(rendered.getByText('Join a Team…'));
 });
 
 test('Find teams keeps two accounts on one server distinct', async () => {
@@ -341,7 +340,7 @@ test('Find teams keeps two accounts on one server distinct', async () => {
       ],
     },
   });
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Find teams' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Find Teams' }));
   const server = rendered.getByRole('group', { name: 'Acme' });
   assert.equal(server.querySelectorAll('button').length, 2);
   assert.ok(server.textContent?.includes('Check as vitalik'));
@@ -353,16 +352,16 @@ test('Find teams provides an empty state without an account', async () => {
   const rendered = await teams(() => {}, {
     snapshot: { ...snapshot, accounts: [], stores: [] },
   });
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Find teams' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Find Teams' }));
   assert.ok(rendered.getByText('Add an account to find its teams.'));
   assert.equal(rendered.queryByRole('menuitem'), null);
   ui.fireEvent.pointerDown(document.body);
-  assert.equal(rendered.queryByRole('menu', { name: 'Find teams' }), null);
+  assert.equal(rendered.queryByRole('menu', { name: 'Find Teams' }), null);
 });
 
 test('discovery keeps its result in the open menu and across reopening', async () => {
   const rendered = await teams();
-  const trigger = rendered.getByRole('button', { name: 'Find teams' });
+  const trigger = rendered.getByRole('button', { name: 'Find Teams' });
   ui.fireEvent.click(trigger);
   const check = rendered.getByRole('menuitem', { name: 'Check as vitalik' });
   assert.equal(check.querySelector('[role="status"]')?.textContent, '');
@@ -375,9 +374,9 @@ test('discovery keeps its result in the open menu and across reopening', async (
       /for vitalik/,
     ),
   );
-  assert.ok(rendered.getByRole('menu', { name: 'Find teams' }));
+  assert.ok(rendered.getByRole('menu', { name: 'Find Teams' }));
   ui.fireEvent.keyDown(document, { key: 'Escape' });
-  assert.equal(rendered.queryByRole('menu', { name: 'Find teams' }), null);
+  assert.equal(rendered.queryByRole('menu', { name: 'Find Teams' }), null);
   assert.equal(document.activeElement, trigger);
   ui.fireEvent.click(trigger);
   assert.match(
@@ -411,7 +410,7 @@ test('a discovery failure is rendered only in its result row', async () => {
       reported.push(options);
     },
   });
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Find teams' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Find Teams' }));
   const check = rendered.getByRole('menuitem', { name: 'Check as vitalik' });
   await ui.act(async () => {
     ui.fireEvent.click(check);
@@ -443,7 +442,7 @@ test('nonretryable and cancelled discovery failures render appropriate results',
     }),
     mutationError: async () => {},
   });
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Find teams' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Find Teams' }));
   const check = rendered.getByRole('menuitem', { name: 'Check as vitalik' });
   await ui.act(async () => {
     ui.fireEvent.click(check);
@@ -520,19 +519,19 @@ test('a Teams row menu says why an action does not apply', async () => {
   openRowMenu('Engineering');
   // The list asks the add question the way the team page does: two choices,
   // each with its own reason, and its own line saying how it works.
-  const user = choiceItem('Engineering', 'Add FOKS user…');
+  const user = choiceItem('Engineering', 'Add FOKS User…');
   assert.equal(inert(user), false);
   assert.equal(
     user.querySelector('.menu-choice small')?.textContent,
     'Someone with an account on Acme',
   );
-  const federated = choiceItem('Engineering', 'Add FOKS team…');
+  const federated = choiceItem('Engineering', 'Add FOKS Team…');
   assert.equal(inert(federated), false);
   assert.equal(
     federated.querySelector('.menu-choice small')?.textContent,
     'A team from another server',
   );
-  const invite = choiceItem('Engineering', 'Invite new user…');
+  const invite = choiceItem('Engineering', 'Invite New User…');
   assert.equal(inert(invite), false);
   assert.equal(
     invite.querySelector('.menu-choice small')?.textContent,
@@ -542,20 +541,20 @@ test('a Teams row menu says why an action does not apply', async () => {
 
   // An ad-hoc share has no membership to change, and its setup is unfinished.
   openRowMenu('Homelab');
-  const add = choiceItem('Homelab', 'Add FOKS user…');
+  const add = choiceItem('Homelab', 'Add FOKS User…');
   assert.equal(inert(add), true);
   assert.equal(
     add.getAttribute('title'),
     'Memberships can’t be changed in an ad-hoc team.',
   );
-  assert.equal(inert(choiceItem('Homelab', 'Add FOKS team…')), true);
-  assert.equal(inert(choiceItem('Homelab', 'Invite new user…')), true);
-  assert.equal(inert(menuItem('Homelab', 'Finish setup…')), false);
+  assert.equal(inert(choiceItem('Homelab', 'Add FOKS Team…')), true);
+  assert.equal(inert(choiceItem('Homelab', 'Invite New User…')), true);
+  assert.equal(inert(menuItem('Homelab', 'Finish Setup…')), false);
   // Finishing cannot succeed for every stuck creation, so the way out sits
   // beside it — and only on a row whose setup never finished.
-  assert.equal(inert(menuItem('Homelab', 'Remove team…')), false);
+  assert.equal(inert(menuItem('Homelab', 'Remove Team…')), false);
   // Copying the team ID is a local fact, so it applies throughout.
-  assert.equal(inert(menuItem('Homelab', 'Copy team ID')), false);
+  assert.equal(inert(menuItem('Homelab', 'Copy Team ID')), false);
   openRowMenu('Engineering');
   assert.equal(
     [
@@ -564,7 +563,7 @@ test('a Teams row menu says why an action does not apply', async () => {
           '.menu[aria-label="Actions for Engineering"] button',
         )
         .values(),
-    ].some((node) => (node.textContent ?? '').trim() === 'Remove team…'),
+    ].some((node) => (node.textContent ?? '').trim() === 'Remove Team…'),
     false,
   );
 });
@@ -582,7 +581,7 @@ test('a Teams row removes a creation that finishing cannot fix', async () => {
   });
   openRowMenu('Homelab');
   await ui.act(async () => {
-    ui.fireEvent.click(menuItem('Homelab', 'Remove team…'));
+    ui.fireEvent.click(menuItem('Homelab', 'Remove Team…'));
   });
   const confirm = rendered.getByRole('button', { name: 'Remove team' });
   assert.equal(confirm.hasAttribute('disabled'), true);
@@ -622,7 +621,7 @@ test('a roster failure gives the Teams row menu its own reasons', async () => {
   // stated as zero; with it goes the caller's own role, since that party list
   // is what it would have come from.
   assert.equal(
-    row('Engineering').querySelector('.name small')?.textContent,
+    row('Engineering').querySelector('.t small')?.textContent,
     'Acme',
   );
   const unread = 'The roster could not be read. Refresh before making changes.';
@@ -630,10 +629,10 @@ test('a roster failure gives the Teams row menu its own reasons', async () => {
   // Both ways in are refused for the same reason — the role that would permit
   // either is a roster fact, so an unread roster settles nothing about them —
   // and each choice states it for itself.
-  const add = choiceItem('Engineering', 'Add FOKS user…');
+  const add = choiceItem('Engineering', 'Add FOKS User…');
   assert.equal(inert(add), true);
   assert.equal(add.getAttribute('title'), unread);
-  assert.equal(inert(choiceItem('Engineering', 'Add FOKS team…')), true);
+  assert.equal(inert(choiceItem('Engineering', 'Add FOKS Team…')), true);
 });
 
 test('an unavailable account explains why discovery is disabled', async () => {
@@ -649,19 +648,16 @@ test('an unavailable account explains why discovery is disabled', async () => {
   const eng = row('Engineering');
   assert.equal(stateChip(eng), 'Check-in expired');
   assert.equal(kindChip(eng), 'Chat');
-  assert.equal(
-    eng.querySelector('.name small')?.textContent,
-    'Acme · 6 members',
-  );
+  assert.equal(eng.querySelector('.t small')?.textContent, 'Acme · 6 members');
   assert.equal(roleChip(eng), 'Admin');
-  const trigger = rendered.getByRole('button', { name: 'Find teams' });
+  const trigger = rendered.getByRole('button', { name: 'Find Teams' });
   assert.equal(trigger.getAttribute('aria-expanded'), 'false');
   ui.fireEvent.click(trigger);
   const check = rendered.getByRole('menuitem', { name: /Check as vitalik/ });
   assert.equal(check.getAttribute('aria-disabled'), 'true');
   assert.ok(check.querySelector('small')?.textContent);
   ui.fireEvent.click(check);
-  assert.ok(rendered.getByRole('menu', { name: 'Find teams' }));
+  assert.ok(rendered.getByRole('menu', { name: 'Find Teams' }));
 });
 
 /** The server and account the create sheet is seeded to. */
@@ -681,8 +677,8 @@ test('creating and joining act as the account the address names', async () => {
   });
   // The sheet opens on mount, on the account the address named.
   assert.equal(
-    created.getByRole('heading', { name: 'Create a team' }).textContent,
-    'Create a team',
+    created.getByRole('heading', { name: 'Create a Team' }).textContent,
+    'Create a Team',
   );
   // The account choice identifies the server without a repeated subtitle.
   assert.equal(
@@ -691,7 +687,7 @@ test('creating and joining act as the account the address names', async () => {
   );
   assert.equal(seededAccount(), 'Acme');
   // The action label stays stable while the group name is edited.
-  assert.ok(created.getByRole('button', { name: 'Create team' }));
+  assert.ok(created.getByRole('button', { name: 'Create Team' }));
   ui.cleanup();
 
   // Another account in the address seeds the sheet to that one instead.
@@ -712,7 +708,7 @@ test('creating and joining act as the account the address names', async () => {
     open: 'join',
     follow: true,
   });
-  assert.ok(joining.getByRole('heading', { name: 'Join a team' }));
+  assert.ok(joining.getByRole('heading', { name: 'Join a Team' }));
   // The Teams page already names the account, so the sheet does not.
   assert.equal(document.querySelector('.sheet .hd small'), null);
 });
@@ -730,7 +726,7 @@ test('the address opens the sheet it names and then drops the intent', async () 
     open: 'create',
     follow: true,
   });
-  assert.ok(created.getByRole('heading', { name: 'Create a team' }));
+  assert.ok(created.getByRole('heading', { name: 'Create a Team' }));
   assert.equal(seededAccount(), 'Acme');
   // The intent is spent: the page replaces its address with the plain list,
   // so nothing reopens the sheet on a later render or on the way back.
@@ -745,7 +741,7 @@ test('the address opens the sheet it names and then drops the intent', async () 
     open: 'join',
     follow: true,
   });
-  assert.ok(joining.getByRole('heading', { name: 'Join a team' }));
+  assert.ok(joining.getByRole('heading', { name: 'Join a Team' }));
   assert.deepEqual(journal, [
     { location: { kind: 'teams', store: 'acct:work' }, replace: true },
   ]);
@@ -779,7 +775,7 @@ test('a created group closes its sheet when only the post-write refresh fails', 
     target: { value: 'Platform' },
   });
   await ui.act(async () => {
-    ui.fireEvent.click(rendered.getByRole('button', { name: 'Create team' }));
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Create Team' }));
   });
   await ui.waitFor(() => assert.equal(rendered.queryByRole('dialog'), null));
   assert.equal(reads, 1);
@@ -838,7 +834,7 @@ test('group creation replaces a cancelled foreground catalog load without repeat
     target: { value: 'Platform' },
   });
   await ui.act(async () => {
-    ui.fireEvent.click(rendered.getByRole('button', { name: 'Create team' }));
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Create Team' }));
   });
   await ui.waitFor(() => assert.deepEqual(forces, [true]));
   await ui.act(async () => {
@@ -878,7 +874,7 @@ test('Teams waits for team inventory even after servers and accounts have arrive
     },
   });
   assert.ok(rendered.getByRole('status', { name: 'Loading teams' }));
-  assert.equal(rendered.queryByText('No teams yet'), null);
+  assert.equal(rendered.queryByText('No Teams Yet'), null);
 });
 
 test('Teams does not count unread rosters as zero members', async () => {

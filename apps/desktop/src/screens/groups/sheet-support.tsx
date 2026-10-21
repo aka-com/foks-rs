@@ -137,7 +137,7 @@ export function VisibilityStepper({
   onChange: (next: number) => void;
 }): ReactNode {
   return (
-    <>
+    <span className="stepper">
       <Button
         size="sm"
         aria-label="Lower the visibility band"
@@ -155,7 +155,7 @@ export function VisibilityStepper({
       >
         +
       </Button>
-    </>
+    </span>
   );
 }
 

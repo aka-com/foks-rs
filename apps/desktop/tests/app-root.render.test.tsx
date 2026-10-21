@@ -150,8 +150,13 @@ test('the account header names the active account and opens its menu', async () 
 
 test('a row navigates, and Control-Tab walks the places in sidebar order', async () => {
   testingLibrary.fireEvent.click(place('teams'));
+  // The page is named once, by the bar's crumb.
   await testingLibrary.waitFor(() => {
-    assert.equal(document.querySelector('.loc h1')?.textContent, 'Teams');
+    assert.equal(
+      document.querySelector('.topbar .crumbs [aria-current="page"]')
+        ?.textContent,
+      'Teams',
+    );
   });
   assert.equal(place('teams').getAttribute('aria-current'), 'page');
 

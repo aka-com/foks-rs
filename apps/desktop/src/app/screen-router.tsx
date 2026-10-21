@@ -195,7 +195,16 @@ export function ScreenRouter({
       location={here}
     />
   ) : here.kind === 'activity' ? (
-    <ActivityScreen onNavigate={(location) => locations.navigate(location)} />
+    <ActivityScreen
+      key={`activity:${concealSignal}`}
+      snapshot={shown}
+      bridge={bridge}
+      query={state.query}
+      onNavigate={(location) => locations.navigate(location)}
+      onApplied={refresh}
+      onError={commandError}
+      onMutationError={mutationError}
+    />
   ) : (
     <PlaceholderScreen location={here} />
   );

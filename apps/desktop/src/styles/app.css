@@ -1,79 +1,3 @@
-/* Group hero header */
-.ghero {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 20px 0;
-}
-
-.ghero .back {
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
-  display: grid;
-  place-items: center;
-  color: var(--muted);
-  font-size: 16px;
-  margin-left: -8px;
-}
-
-.ghero .back:hover {
-  background: var(--hover);
-  color: var(--ink);
-}
-
-.ghero .back .ic {
-  transform: rotate(90deg);
-}
-
-.ghero .t {
-  flex: 1;
-  min-width: 0;
-}
-
-.ghero h1 {
-  font-size: 19px;
-  font-weight: 700;
-  letter-spacing: -0.015em;
-  line-height: 1.2;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.ghero h1 span {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.ghero .sub {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--muted);
-  margin-top: 2px;
-}
-
-.ghero .header-action {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  align-self: flex-start;
-  margin-top: 2px;
-}
-
-.ghero .header-action .btn {
-  height: 30px;
-  font-size: 13px;
-}
-
-.ghero .header-action .btn.icon {
-  width: 30px;
-}
-
 /* Navigation tabs and badge counters */
 .tabs {
   display: flex;
@@ -194,63 +118,6 @@
   max-width: 880px;
 }
 
-.rt {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-}
-
-/* Roster table rows */
-.rt .prow {
-  min-height: 54px;
-  border-top: 1px solid var(--line-soft);
-  cursor: default;
-  width: 100%;
-  text-align: left;
-}
-
-.rt .prow:first-of-type {
-  border-top: 0;
-}
-
-.rt .prow:hover {
-  background: var(--hover);
-}
-
-.who2 {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.who2 .t {
-  min-width: 0;
-  line-height: 1.3;
-}
-
-.who2 .t b {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 500;
-}
-
-.who2 .t b span {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.who2 .t small {
-  display: block;
-  font-size: 12px;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .rolecell {
   display: flex;
   flex-direction: column;
@@ -268,44 +135,6 @@
   color: var(--muted);
 }
 
-.rt.bare {
-  border: 0;
-  border-radius: 0;
-}
-
-.roster > .rt.bare {
-  border-bottom: 1px solid var(--line-soft);
-}
-
-.rt.bare .prow {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 52px;
-  padding: 0 4px;
-  border-top: 1px solid var(--line-soft);
-}
-
-.rt.bare .prow:first-of-type {
-  border-top: 1px solid var(--line-soft);
-}
-
-.rt.bare .prow .who2 {
-  flex: 1;
-}
-
-.rowtail {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 8px;
-}
-
-.rowtail .btn {
-  height: 28px;
-  font-size: 13px;
-}
-
 /* Files tab doorway row */
 .settings-inset .fr.doorway {
   align-items: center;
@@ -314,13 +143,6 @@
   flex-direction: row;
   align-items: center;
   gap: 10px;
-}
-
-/* Channel activity timestamp */
-.rowtail .when {
-  font-size: 12px;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
 }
 
 .kico.round {
@@ -334,23 +156,12 @@
   font-size: 15px;
 }
 
-.roster-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 14px;
-}
-
 /* Roster footnote */
 .roster p.fn {
   font-size: 12.5px;
   color: var(--muted);
   line-height: 1.5;
   margin: 10px 2px 0;
-}
-
-.roster-actions p.fn {
-  margin: 0;
 }
 
 /* Menu action styling */

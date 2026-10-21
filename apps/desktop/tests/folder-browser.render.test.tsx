@@ -558,7 +558,7 @@ test('the tree’s New team button lands on Teams with the create sheet up', asy
   await ui.waitFor(() =>
     assert.ok(
       [...document.querySelectorAll('.sheet [role="heading"], .sheet h2')].some(
-        (node) => node.textContent === 'Create a team',
+        (node) => node.textContent === 'Create a Team',
       ),
       'the create sheet is open',
     ),
