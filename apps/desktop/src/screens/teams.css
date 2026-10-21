@@ -101,7 +101,12 @@
 .activity-detail p[role='alert']{margin:0 0 8px;color:var(--danger-ink)}
 .activity-detail .prop-row .dim{color:var(--muted)}
 .activity-detail .prop-row>.v>.store-mark{margin-right:2px}
-.activity-detail .prop-row.admit>.a{flex-wrap:wrap}
+/* Admit as: the role in the value column, the decisions at the trailing
+   edge. Where the column cannot hold all three on one line (an 860px
+   window), the decisions take a second line under the role, in the value
+   column, rather than squeezing the role select. */
+.activity-detail .prop-row.admit .role-select{flex:none}
+@container (max-width:419px){.activity-detail .prop-row.admit{grid-template-columns:var(--key-w,150px) minmax(0,1fr);row-gap:8px;padding-bottom:8px}.activity-detail .prop-row.admit>.a{grid-column:2;justify-content:flex-start}}
 .activity-detail .chip .ic{font-size:12px}
 
 /* Team sheets: the Visibility stepper as one joined control, and the

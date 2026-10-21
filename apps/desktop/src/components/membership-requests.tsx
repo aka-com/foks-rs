@@ -138,37 +138,56 @@ export function RequestChecks({
  * Admit-as, Reject, Approve and (for a remote request) Verify: the same
  * controls, calling the same actions, on the Requests tab and in Activity.
  */
+/** The role a verified request will be admitted with. */
+export function RequestRole({
+  inbox,
+  row,
+}: {
+  inbox: MembershipInbox;
+  row: InvitationRow;
+}): ReactNode {
+  if (!row.verified) return null;
+  const name = row.username ?? 'Unknown user';
+  return (
+    <select
+      className="role-select"
+      aria-label={`Role for ${name}`}
+      value={inbox.roleOf(row)}
+      disabled={inbox.busy || Boolean(row.remote)}
+      title={
+        row.remote ? 'Teams from other servers join as Member.' : undefined
+      }
+      onChange={(e) =>
+        inbox.setRole(row, e.target.value as InvitationGrantRole)
+      }
+    >
+      <option value="member">Member</option>
+      {row.remote ? null : <option value="admin">Admin</option>}
+      {row.remote ? null : <option value="owner">Owner</option>}
+    </select>
+  );
+}
+
+/**
+ * A request's actions: its role, Verify for a team from another server,
+ * Reject and Approve. `role={false}` leaves the role out for a caller that
+ * draws `RequestRole` in a value column of its own.
+ */
 export function RequestActions({
   inbox,
   team,
   row,
+  role = true,
 }: {
   inbox: MembershipInbox;
   team: TeamStore;
   row: InvitationRow;
+  role?: boolean;
 }): ReactNode {
-  const name = row.username ?? 'Unknown user';
   const remote = inbox.remoteProfileOf(row);
   return (
     <>
-      {row.verified ? (
-        <select
-          className="role-select"
-          aria-label={`Role for ${name}`}
-          value={inbox.roleOf(row)}
-          disabled={inbox.busy || Boolean(row.remote)}
-          title={
-            row.remote ? 'Teams from other servers join as Member.' : undefined
-          }
-          onChange={(e) =>
-            inbox.setRole(row, e.target.value as InvitationGrantRole)
-          }
-        >
-          <option value="member">Member</option>
-          {row.remote ? null : <option value="admin">Admin</option>}
-          {row.remote ? null : <option value="owner">Owner</option>}
-        </select>
-      ) : null}
+      {role ? <RequestRole inbox={inbox} row={row} /> : null}
       {row.remote ? (
         <Button
           icon="shield"

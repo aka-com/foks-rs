@@ -41,6 +41,7 @@ import {
   RequestActions,
   RequestChecks,
   RequesterMark,
+  RequestRole,
 } from '../components/membership-requests';
 import { activityNoticeText, activityNotices } from '../activity';
 import type { ActivityNotice } from '../activity';
@@ -219,11 +220,17 @@ function RequestDetail({
         </div>
       ) : null}
       <PropertyGroup>
+        {/* The role is the row's value; the decisions sit at its trailing
+            edge, so the row keeps one line down to an 860px window. */}
         <PropertyRow
           label="Admit as"
           className="admit"
-          actions={<RequestActions inbox={inbox} team={team} row={row} />}
-        />
+          actions={
+            <RequestActions inbox={inbox} team={team} row={row} role={false} />
+          }
+        >
+          <RequestRole inbox={inbox} row={row} />
+        </PropertyRow>
       </PropertyGroup>
     </>
   );
