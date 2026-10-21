@@ -107,22 +107,45 @@
   transform: none;
 }
 
-/* Keep the drop affordance at the bottom of the Files pane. */
-.lpane > .dropzone {
+/* The list foot: where a dropped file goes, and the store's uploads. */
+.lpane > .list-foot {
   flex: none;
-  margin: 0 14px 12px;
-  padding: 8px;
-  border: 1px dashed var(--line-mid);
-  border-radius: var(--radius-lg);
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: 8px;
+  height: 32px;
+  padding: 0 14px;
+  border-top: 1px solid var(--line-soft);
   color: var(--faint);
   font-size: 12px;
 }
-.lpane > .dropzone .ic {
-  font-size: 14px;
+.lpane > .list-foot .drop-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lpane > .list-foot .drop-hint .ic {
+  flex: none;
+  font-size: 13px;
+}
+.lpane > .list-foot .sp {
+  flex: 1;
+}
+.lpane > .list-foot .uploads-open {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 12px;
+  font-weight: var(--weight-label);
+  color: var(--muted);
+}
+.lpane > .list-foot .uploads-open:hover {
+  color: var(--ink);
 }
 
 /* The onboarding tip: the text is the control that opens New Password. */
@@ -214,72 +237,81 @@
   background: var(--btn-hover);
 }
 
-/* ------------------------------------------------- empty and first run */
+/* ------------------------------------------------- empty and first run
+   An empty vault: a short heading and three flat cards — New Password,
+   Add Document and the CLI import command — over the panel. */
 
 .folder-body .starter {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 18px;
-  padding: 24px 24px 32px;
+  gap: 16px;
+  padding: 48px 20px 32px;
   text-align: center;
 }
 .folder-body .starter h2 {
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-size: 15px;
+  font-weight: var(--weight-title);
   color: var(--ink);
 }
 .folder-body .starter p {
   max-width: 44ch;
   margin-top: 4px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12.5px;
   line-height: 1.45;
 }
 .folder-body .cards {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  width: min(620px, 100%);
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+  width: min(560px, 100%);
 }
 .folder-body .card {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 8px;
-  min-height: 118px;
-  padding: 14px;
+  gap: 6px;
+  min-height: 112px;
+  padding: 12px;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--btn-bg);
+  border-radius: var(--radius-lg);
+  background: var(--card);
   text-align: left;
 }
 .folder-body button.card:hover {
-  border-color: var(--accent);
-  background: var(--accent-wash);
+  background: var(--hover);
 }
 .folder-body .card .ci {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 9px;
-  background: var(--accent-wash-2);
+  width: 24px;
+  height: 24px;
+  margin-bottom: 2px;
+  border-radius: var(--radius-md);
+  background: var(--chip-bg);
+  color: var(--ink-3);
+  font-size: 14px;
+}
+.folder-body .card .ci.pw {
+  background: var(--amber-wash);
+  color: var(--amber-strong);
+}
+.folder-body .card .ci.file {
+  background: var(--accent-wash);
   color: var(--accent-ink);
-  font-size: 17px;
 }
 .folder-body .card b {
   display: block;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: var(--weight-label);
   color: var(--ink);
 }
 .folder-body .card small {
   color: var(--muted);
   font-size: 12px;
-  line-height: 1.35;
+  line-height: 1.4;
 }
 .folder-body .card kbd,
 .folder-body .card .cli {
@@ -287,19 +319,19 @@
 }
 .folder-body .card kbd {
   padding: 0 5px;
-  border: 1px solid var(--line);
-  border-radius: 5px;
+  border: 1px solid var(--line-mid);
+  border-radius: var(--radius-sm);
   background: var(--btn-bg);
   font: 12px var(--sans);
   line-height: 1.5;
-  color: var(--faint);
+  color: var(--muted);
 }
 .folder-body .card .cli {
   max-width: 100%;
-  padding: 3px 7px;
-  border-radius: 5px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
   background: var(--chip-bg);
-  font: 12px var(--sans);
+  font: 12px var(--mono);
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -539,20 +571,21 @@
   border-top: 0;
 }
 
-.file-uploads {
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--line);
+.sheet .inset.file-uploads .fr .v {
+  display: grid;
+  gap: 1px;
 }
-.file-uploads > div {
-  max-height: 220px;
-  overflow: auto;
-}
-.file-uploads li {
-  margin-block: 8px;
+.sheet .inset.file-uploads code {
+  font: 12px var(--mono);
   overflow-wrap: anywhere;
 }
-.file-uploads button {
-  margin-inline-end: 8px;
+.sheet .inset.file-uploads small {
+  font-size: 12px;
+  color: var(--muted);
+}
+.sheet .inset.file-uploads .fr .a {
+  display: flex;
+  gap: 6px;
 }
 
 /* ---------------------------------------------------------- item sheets

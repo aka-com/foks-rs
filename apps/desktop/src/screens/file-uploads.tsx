@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
+import { Button, Inset, InsetRow, SheetDialog } from '../components';
 import type { Bridge } from '../bridge';
 import { normalizeCommandError } from '../bridge';
 import type { FileUploads } from '../bridge/uploads';
@@ -19,13 +20,19 @@ const uploadLabels: Record<string, string> = {
   cancelled: 'Cancelled',
 };
 
-/** On-demand local inventory: opening the Files view does not fan out to servers. */
+/**
+ * The store's prepared and recorded uploads, behind the list foot's
+ * Uploads… button. On-demand local inventory: opening the Files view does not
+ * fan out to servers, and the sheet reads the inventory only when it opens.
+ */
 export function FileUploadsPanel({
   bridge,
   storeId,
+  storeName,
 }: {
   bridge: Bridge;
   storeId: string;
+  storeName: string;
 }): ReactNode {
   const [open, setOpen] = useState(false);
   const [inventory, setInventory] = useState<FileUploads | null>(null);
@@ -52,20 +59,35 @@ export function FileUploadsPanel({
     }
   }
   return (
-    <section className="file-uploads" aria-label="File uploads">
+    <>
       <button
         type="button"
-        aria-expanded={open}
-        disabled={busy}
+        className="lnk uploads-open"
+        aria-haspopup="dialog"
         onClick={() => {
-          setOpen(!open);
-          if (!open) void act();
+          setOpen(true);
+          void act();
         }}
       >
-        Uploads
+        Uploads…
       </button>
       {open ? (
-        <div>
+        <SheetDialog
+          title="Uploads"
+          subtitle={storeName}
+          onClose={() => setOpen(false)}
+          footer={
+            <>
+              <Button disabled={busy} onClick={() => void act()}>
+                Refresh
+              </Button>
+              <span className="spacer" />
+              <Button variant="primary" onClick={() => setOpen(false)}>
+                Done
+              </Button>
+            </>
+          }
+        >
           <p>
             Prepared uploads can resume without the source file. For uploads
             marked “Check destination,” inspect the destination to confirm the
@@ -73,78 +95,92 @@ export function FileUploadsPanel({
             after completion. Encrypted local files are removed in the
             background; reserved space remains charged until removal finishes.
           </p>
-          <button type="button" disabled={busy} onClick={() => void act()}>
-            Refresh uploads
-          </button>
-          {error ? <p role="alert">{error}</p> : null}
-          {busy ? <p role="status">Checking upload…</p> : null}
+          {error ? (
+            <p className="action-error" role="alert">
+              {error}
+            </p>
+          ) : null}
+          {busy ? (
+            <p className="hint" role="status">
+              Checking uploads…
+            </p>
+          ) : null}
           {inventory ? (
             <>
-              <p>
+              <Inset className="file-uploads">
+                {inventory.uploads.length === 0 ? (
+                  <InsetRow>
+                    <span className="dim">No recorded uploads.</span>
+                  </InsetRow>
+                ) : (
+                  inventory.uploads.map((upload) => (
+                    <InsetRow
+                      key={upload.uploadId}
+                      label={uploadLabels[upload.state]}
+                      action={
+                        <>
+                          {![
+                            'awaiting-source',
+                            'needs-source',
+                            'cancelled',
+                            'inline-untracked',
+                          ].includes(upload.state) ? (
+                            <Button
+                              disabled={busy}
+                              onClick={() => void act(upload.uploadId)}
+                            >
+                              {upload.state === 'completed'
+                                ? 'Show Saved Receipt'
+                                : 'Resume'}
+                            </Button>
+                          ) : null}
+                          {!['publishing', 'verified'].includes(
+                            upload.state,
+                          ) ? (
+                            <Button
+                              disabled={busy}
+                              onClick={() => void act(upload.uploadId, false)}
+                            >
+                              {[
+                                'completed',
+                                'cancelled',
+                                'inline-untracked',
+                              ].includes(upload.state)
+                                ? 'Clean Up Local Spool'
+                                : 'Cancel Upload'}
+                            </Button>
+                          ) : null}
+                        </>
+                      }
+                    >
+                      <code>{upload.uploadId}</code>
+                      <small>
+                        {upload.acknowledgedChunks}/{upload.preparedChunks}{' '}
+                        chunks acknowledged · {fmtSize(upload.reservedBytes)}{' '}
+                        reserved
+                      </small>
+                    </InsetRow>
+                  ))
+                )}
+              </Inset>
+              <p className="hint">
                 Local encrypted spool limit:{' '}
                 {fmtSize(inventory.capacity.maxReservedBytes)} ·{' '}
                 {inventory.capacity.maxPending} pending uploads ·{' '}
                 {inventory.capacity.maxReceipts} retained receipts
               </p>
-              {inventory.uploads.length === 0 ? (
-                <p>No recorded uploads.</p>
-              ) : (
-                <ul>
-                  {inventory.uploads.map((upload) => (
-                    <li key={upload.uploadId}>
-                      <code>{upload.uploadId}</code> ·{' '}
-                      {uploadLabels[upload.state]} · {upload.acknowledgedChunks}
-                      /{upload.preparedChunks} chunks acknowledged ·{' '}
-                      {fmtSize(upload.reservedBytes)} reserved
-                      {![
-                        'awaiting-source',
-                        'needs-source',
-                        'cancelled',
-                        'inline-untracked',
-                      ].includes(upload.state) ? (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void act(upload.uploadId)}
-                        >
-                          {' '}
-                          {upload.state === 'completed'
-                            ? 'Show saved receipt'
-                            : 'Resume'}
-                        </button>
-                      ) : null}
-                      {!['publishing', 'verified'].includes(upload.state) ? (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void act(upload.uploadId, false)}
-                        >
-                          {[
-                            'completed',
-                            'cancelled',
-                            'inline-untracked',
-                          ].includes(upload.state)
-                            ? 'Clean up local spool'
-                            : 'Cancel upload'}
-                        </button>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              )}
               {inventory.next ? (
-                <button
-                  type="button"
+                <Button
                   disabled={busy}
                   onClick={() => void act(undefined, true, inventory.next)}
                 >
-                  Next uploads
-                </button>
+                  Next Uploads
+                </Button>
               ) : null}
             </>
           ) : null}
-        </div>
+        </SheetDialog>
       ) : null}
-    </section>
+    </>
   );
 }

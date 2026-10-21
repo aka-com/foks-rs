@@ -1131,7 +1131,7 @@ export function DetailsPanel({
                   >
                     Copy Path
                   </MenuItem>
-                  <div className="sep" role="separator" />
+                  <div className="menu-separator" role="separator" />
                   {onMove ? (
                     <MenuItem
                       reason={writeProblem}
