@@ -679,6 +679,8 @@ mod drain_tests {
                 updated_at: 1,
                 tier: RtChannelTier::Bottom,
                 unreadable: false,
+                no_push: false,
+                trailing: Default::default(),
             },
             inbox_version: version,
             read_through: 0,

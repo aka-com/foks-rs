@@ -128,6 +128,8 @@ impl ChatSession<'_> {
             updated_at: version,
             tier,
             unreadable: false,
+            no_push: false,
+            trailing: Default::default(),
         };
         self.prepare(
             store,

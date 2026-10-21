@@ -2,7 +2,7 @@ use foks_client::{
     ChatTransport, EncryptedFileMutationStore, NamedTeamSecrets, RealtimeConnection,
 };
 use foks_client_db::{ChatOperationState as State, ChatSubmission, HardStateStore};
-use foks_proto::{RtChannelId, RtChannelTier, SecretSeed};
+use foks_proto::{RealtimeWire, RtChannelId, RtChannelTier, SecretSeed};
 use foks_rpc::{RealtimeRequest as Request, RealtimeResponse as Response};
 use foks_server_testkit::{TestAccountSpec, TestClient, TestEnvironment};
 use std::{cell::Cell, path::PathBuf, rc::Rc};
@@ -296,4 +296,143 @@ fn combined_submit_reuses_verified_work_and_preserves_durable_boundaries() {
         State::Uncertain
     );
     assert_eq!(rpc.sends, sends, "absent uncertain message was resent");
+}
+
+/// Delivers sends to the Rust server and then shapes the answer the client
+/// sees, as a Go-main server would on a lost-ack resend.
+enum SendShape {
+    Deliver,
+    /// Send twice and return the second (replay) receipt.
+    Resend,
+    /// Deliver, then claim a replay at the message's own predecessor.
+    ReplayAtPredecessor,
+}
+struct ReplayTransport {
+    connection: RealtimeConnection,
+    shape: SendShape,
+    receipts: Vec<foks_proto::ChatSendReceipt>,
+}
+impl ChatTransport for ReplayTransport {
+    fn request(&mut self, request: &Request) -> foks_client::Result<Response> {
+        let Request::Send(argument) = request else {
+            return self.connection.call(request);
+        };
+        let response = self.connection.call(request)?;
+        let response = match self.shape {
+            SendShape::Deliver => response,
+            SendShape::Resend => self.connection.call(request)?,
+            SendShape::ReplayAtPredecessor => {
+                let Response::Sent(receipt) = response else {
+                    panic!("send receipt")
+                };
+                Response::Sent(foks_proto::ChatSendReceipt {
+                    sequence: argument.send.metadata.previous_sequence,
+                    was_replay: true,
+                    ..receipt
+                })
+            }
+        };
+        if let Response::Sent(receipt) = &response {
+            self.receipts.push(receipt.clone());
+        }
+        Ok(response)
+    }
+}
+
+#[test]
+fn replayed_send_receipts_confirm_only_when_consistent() {
+    let environment = TestEnvironment::new().unwrap();
+    let _server = environment.start_server().unwrap();
+    let client = TestClient::new(&environment, "replay-receipt").unwrap();
+    let probe = client.probe_and_pin().unwrap();
+    let owner = client
+        .create_account(&probe.pinned, &TestAccountSpec::new("replayowner", 0x72))
+        .unwrap();
+    let secrets = NamedTeamSecrets {
+        member_min: SecretSeed::new([0x41; 32]),
+        member: SecretSeed::new([0x42; 32]),
+        admin: SecretSeed::new([0x43; 32]),
+        owner: SecretSeed::new([0x44; 32]),
+        removal_key: SecretSeed::new([0x45; 32]),
+        team_name_commitment_key: [0x46; 16],
+    };
+    let team = client
+        .foks()
+        .create_single_owner_named_team(&probe.pinned, &owner.credential, "replaytest", &secrets)
+        .unwrap();
+    let mut chat = client
+        .foks()
+        .chat_session(&probe.pinned, &owner.credential, &team.team)
+        .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let mut protected =
+        EncryptedFileMutationStore::open(directory.path(), zeroize::Zeroizing::new([8; 32]))
+            .unwrap();
+    let mut rpc = ReplayTransport {
+        connection: chat.connection().unwrap(),
+        shape: SendShape::Deliver,
+        receipts: Vec::new(),
+    };
+    let prepared = chat
+        .prepare_channel(
+            &mut rpc,
+            &mut protected,
+            "replays",
+            "test channel",
+            RtChannelTier::Bottom,
+        )
+        .unwrap();
+    let channel = RtChannelId(
+        chat.attempt_operation(&mut rpc, &mut protected, &prepared.id)
+            .unwrap()
+            .scope
+            .channel,
+    );
+    let first = chat
+        .prepare_send(&mut rpc, &mut protected, channel, "first")
+        .unwrap();
+    assert_eq!(
+        chat.attempt_operation(&mut rpc, &mut protected, &first.id)
+            .unwrap()
+            .state,
+        State::Confirmed
+    );
+    assert!(!rpc.receipts[0].was_replay);
+
+    // A lost-ack resend answered with the original delivery is confirmed.
+    rpc.shape = SendShape::Resend;
+    let second = chat
+        .prepare_send(&mut rpc, &mut protected, channel, "second")
+        .unwrap();
+    let confirmed = chat
+        .attempt_operation(&mut rpc, &mut protected, &second.id)
+        .unwrap();
+    assert_eq!(confirmed.state, State::Confirmed);
+    let replayed = rpc.receipts.last().unwrap();
+    assert!(replayed.was_replay);
+    assert_eq!(replayed.sequence, 2);
+    assert_eq!(
+        foks_proto::ChatSendReceipt::decode(confirmed.confirmation.as_ref().unwrap()).unwrap(),
+        *replayed
+    );
+
+    // A replay flag cannot make a sequence at the message's own predecessor
+    // consistent; the operation stays uncertain rather than confirmed.
+    rpc.shape = SendShape::ReplayAtPredecessor;
+    let third = chat
+        .prepare_send(&mut rpc, &mut protected, channel, "third")
+        .unwrap();
+    assert!(matches!(
+        chat.attempt_operation(&mut rpc, &mut protected, &third.id),
+        Err(foks_client::Error::ChatIntegrity(_))
+    ));
+    assert_eq!(
+        HardStateStore::open(client.hard_state_path())
+            .unwrap()
+            .chat_operation(&third.id)
+            .unwrap()
+            .unwrap()
+            .state,
+        State::Uncertain
+    );
 }

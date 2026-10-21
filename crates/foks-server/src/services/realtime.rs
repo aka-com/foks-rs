@@ -281,9 +281,10 @@ fn db_error(error: DbError) -> RpcStatus {
         }
         DbError::Duplicate("realtime channel") => RpcStatus::RtChannelExists,
         DbError::NotFound(_) => RpcStatus::RtNotFound("realtime object not found".into()),
-        DbError::OperationConflict => {
-            RpcStatus::RtRace("message ID conflicts with an existing message".into())
-        }
+        // The only realtime source is an rtSend whose message ID already
+        // exists with a different sender, channel or envelope. The status
+        // carries no payload, so the existing message's location is not disclosed.
+        DbError::OperationConflict => RpcStatus::RtMessageReplayMismatch,
         DbError::Invalid(_) | DbError::IntegerRange => {
             RpcStatus::BadArguments("invalid realtime value".into())
         }

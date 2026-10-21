@@ -116,6 +116,8 @@ fn realtime_reconciliation_benchmark() {
                 updated_at: 1,
                 tier: RtChannelTier::Bottom,
                 unreadable: false,
+                no_push: false,
+                trailing: Default::default(),
             };
             let mut ordinary = f
                 .client

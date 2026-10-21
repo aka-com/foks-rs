@@ -334,6 +334,8 @@ pub(crate) fn realtime_text() {
         updated_at: 1,
         tier: RtChannelTier::Bottom,
         unreadable: false,
+        no_push: false,
+        trailing: Default::default(),
     };
     let mut writer = fixture
         .client
@@ -426,7 +428,29 @@ pub(crate) fn realtime_text() {
         },
     });
     let send_receipt = writer.call(&first).unwrap();
-    assert_eq!(writer.call(&first).unwrap(), send_receipt);
+    // Exact resends return the original delivery, reported as a replay.
+    let Response::Sent(delivered) = &send_receipt else {
+        panic!("send receipt")
+    };
+    assert!(!delivered.was_replay);
+    let replayed = Response::Sent(ChatSendReceipt {
+        was_replay: true,
+        ..delivered.clone()
+    });
+    assert_eq!(writer.call(&first).unwrap(), replayed);
+    // The same message ID with a different envelope is RT_MSG_REPLAY_MISMATCH.
+    let mut mismatched = first.clone();
+    let Request::Send(arg) = &mut mismatched else {
+        panic!("send request")
+    };
+    arg.send.metadata.send_time += 1;
+    assert!(matches!(
+        writer.call(&mismatched),
+        Err(foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
+            code: 12007,
+            ..
+        }))
+    ));
     let recent = Request::Recents(RtRecentsArgument {
         channel: md.id,
         stop_at: 0,
@@ -881,7 +905,7 @@ pub(crate) fn realtime_text() {
             .len(),
         2
     );
-    assert_eq!(writer.call(&first).unwrap(), send_receipt);
+    assert_eq!(writer.call(&first).unwrap(), replayed);
     // Restart with exact ciphertext and ChatSendReceipts intact. A new connection must
     // select the host again; no in-memory chat state is required for recovery.
     drop(writer);
@@ -895,7 +919,7 @@ pub(crate) fn realtime_text() {
         .foks()
         .realtime_connection(&fixture.probe.pinned, &owner.credential)
         .unwrap();
-    assert_eq!(writer.call(&first).unwrap(), send_receipt);
+    assert_eq!(writer.call(&first).unwrap(), replayed);
     let Response::Messages(messages) = writer.call(&recent).unwrap() else {
         panic!()
     };

@@ -126,6 +126,9 @@ impl ChannelPolicy {
             md.last_message = None;
             md.mtime = md.ctime;
             md.unreadable = true;
+            // Fields from newer clients that this server cannot classify are
+            // withheld along with the description, as Go withholds desc/lastMsg.
+            md.trailing.clear_unknown();
         }
         Some(md)
     }

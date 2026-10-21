@@ -1,7 +1,7 @@
 //! Pinned v0.1.9 realtime wire values. Authorization belongs to the service/client.
 use crate::{
-    array, binary, boolean, entity, fixed_blob, integer, list, option, unsigned, variant, Error,
-    FqParty, Result, Role, RoleAndGeneration, SecretBox, Value,
+    array, binary, boolean, decode_grown, entity, fixed_blob, integer, list, option, unsigned,
+    variant, Error, FqParty, Result, Role, RoleAndGeneration, SecretBox, TrailingFields, Value,
 };
 use foks_snowpack::{decode_sensitive, encode_ref, ValueRef};
 use zeroize::{Zeroize, Zeroizing};
@@ -232,7 +232,48 @@ rt_entity!(
     crate::ENTITY_USER | crate::ENTITY_NAMED_TEAM | crate::ENTITY_AD_HOC_TEAM
 );
 
+/// Positional realtime structs. The plain form decodes with an exact field
+/// count, as signed, hashed or re-served canonical objects require. The
+/// `grown` form is for unsigned RPC structs that upstream extends by appending
+/// fields: the listed optional fields decode as their default when a peer
+/// omits them and are encoded only up to the last non-default one (or as far
+/// as a decoded value carried them), and fields after them are retained in
+/// `trailing` so a decoded value re-encodes to the same bytes.
 macro_rules! rt_struct {
+    ($name:ident {$($field:ident : $ty:ty),+ $(,)?} grown {$($opt:ident : $oty:ty),+ $(,)?}) => {
+        #[derive(Clone,Debug,Eq,PartialEq)]
+        pub struct $name {$(pub $field:$ty,)+ $(pub $opt:$oty,)+ pub trailing:TrailingFields}
+        impl $name {
+            fn optional_fields_to_encode(&self)->usize{
+                self.trailing.optional_fields_to_encode(&[$(self.$opt != <$oty>::default()),+])
+            }
+        }
+        impl RealtimeWire for $name {
+            fn validate(&self)->Result<()> { $(self.$field.validate()?;)+ $(self.$opt.validate()?;)+ Ok(()) }
+            fn to_value_ref(&self)->ValueRef<'_>{
+                let mut fields=vec![$(self.$field.to_value_ref()),+];
+                fields.extend([$(self.$opt.to_value_ref()),+].into_iter().take(self.optional_fields_to_encode()));
+                fields.extend(self.trailing.unknown().iter().map(ValueRef::Value));
+                ValueRef::Array(fields)
+            }
+            fn to_value(&self)->Value{
+                let mut fields=vec![$(RealtimeWire::to_value(&self.$field)),+];
+                fields.extend([$(RealtimeWire::to_value(&self.$opt)),+].into_iter().take(self.optional_fields_to_encode()));
+                fields.extend(self.trailing.unknown().iter().cloned());
+                Value::Array(fields)
+            }
+            fn from_value(v:&Value)->Result<Self>{
+                let grown=decode_grown(v,[$(stringify!($field)),+].len(),[$(stringify!($opt)),+].len())?;
+                let mut required=grown.required.iter();
+                let mut optional=grown.optional.into_iter();
+                Ok(Self{
+                    $($field:<$ty>::from_value(required.next().expect("validated field count"))?,)+
+                    $($opt:optional.next().expect("one entry per optional field").map(<$oty>::from_value).transpose()?.unwrap_or_default(),)+
+                    trailing:grown.trailing,
+                })
+            }
+        }
+    };
     ($name:ident {$($field:ident : $ty:ty),+ $(,)?}) => {
         #[derive(Clone,Debug,Eq,PartialEq)]
         pub struct $name {$(pub $field:$ty),+}
@@ -246,7 +287,7 @@ macro_rules! rt_struct {
                 Ok(Self{$($field:<$ty>::from_value(fields.next().expect("validated field count"))?),+})
             }
         }
-    }
+    };
 }
 
 fn arm(n: u64, tag: &str, v: Value) -> Value {
@@ -492,7 +533,9 @@ rt_struct!(RtMessageNoncer { metadata: RtMessageMetadata, sender: Option<FqParty
 
 rt_struct!(RtLastMessage { sequence: u64, kind: RtMessageType, insert_time: u64, sender: Option<RtPartyId>, further_user_attribution: Option<RtUserId> });
 
-rt_struct!(RtChannelMetadata { id: RtChannelId, team: RtTeamId, app: RtAppId, sequence: u64, name: RtBox, description: Option<RtBox>, roles: RtRolePair, last_message: Option<RtLastMessage>, ctime: u64, mtime: u64, updated_at: u64, tier: RtChannelTier, unreadable: bool });
+// go-foks c334c97 appended `noPush @13`; not hashed or signed, and re-served
+// by the Rust server to other members, so unknown later fields are retained.
+rt_struct!(RtChannelMetadata { id: RtChannelId, team: RtTeamId, app: RtAppId, sequence: u64, name: RtBox, description: Option<RtBox>, roles: RtRolePair, last_message: Option<RtLastMessage>, ctime: u64, mtime: u64, updated_at: u64, tier: RtChannelTier, unreadable: bool } grown { no_push: bool });
 
 rt_struct!(RtChannelSet { version: u64, channels: Vec<RtChannelMetadata>, mtime: u64 });
 
@@ -537,9 +580,13 @@ rt_struct!(RtSend {
     expected_previous_sequence: u64
 });
 
+// go-foks b41b354 appended `wasReplay @2`: the message ID had already been
+// delivered and the sequence and insert time are the original delivery's.
 rt_struct!(ChatSendReceipt {
     sequence: u64,
     insert_time: u64
+} grown {
+    was_replay: bool
 });
 
 /// Legacy protocol name retained for source compatibility with v0.1.9 tooling.

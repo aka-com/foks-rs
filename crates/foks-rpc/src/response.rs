@@ -18,6 +18,9 @@ pub enum RpcStatus {
     RtAmbiguousChannel(String),
     RtNotFound(String),
     RtMessageOrder(String),
+    /// `RT_MSG_REPLAY_MISMATCH`, added upstream after the pinned baseline
+    /// (go-foks b41b354). Void: the status carries no detail.
+    RtMessageReplayMismatch,
     BadArguments(String),
     BadInvite,
     BadPassphrase,
@@ -32,7 +35,10 @@ pub enum RpcStatus {
     MerkleVerify(String),
     KvNoEnt,
     KvRace(String),
-    KvPermission { operation: u64, resource: u64 },
+    KvPermission {
+        operation: u64,
+        resource: u64,
+    },
     KeyNotFound(String),
     KexBadSecret,
     NameInUse,
@@ -77,6 +83,7 @@ impl RpcStatus {
             Self::RtAmbiguousChannel(_) => 12004,
             Self::RtNotFound(_) => 12005,
             Self::RtMessageOrder(_) => 12006,
+            Self::RtMessageReplayMismatch => 12007,
             Self::BadArguments(_) => 1030,
             Self::BadInvite => 1019,
             Self::BadPassphrase => STATUS_BAD_PASSPHRASE_ERROR,

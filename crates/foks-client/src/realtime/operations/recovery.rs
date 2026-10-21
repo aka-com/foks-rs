@@ -72,6 +72,8 @@ impl ChatSession<'_> {
                             ChatSendReceipt {
                                 sequence: m.sequence,
                                 insert_time: m.insert_time,
+                                was_replay: false,
+                                trailing: Default::default(),
                             },
                         )?;
                         return self.terminal_outcome(store, id);
