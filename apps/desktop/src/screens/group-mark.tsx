@@ -1,13 +1,16 @@
 /**
- * A group's mark: its initial drawn in a hue derived from its name, over a
- * tint of that hue (`.kico.tinted`), or the inactive gray. One mark for a group everywhere it is listed, so the Teams
+ * A group's mark: its initial drawn in the hue its store mark has (the
+ * shell's `StoreHueContext`, falling back to a hue derived from its name),
+ * over a tint of that hue (`.kico.tinted`), or the inactive gray. One mark for a group everywhere it is listed, so the Teams
  * row, the Files row, the Chat column and the group's own page agree.
  *
  * It lives in its own module because every list that draws a group draws it,
  * and none of them should have to pull in the group page to do so.
  */
 
+import { useContext } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
+import { StoreHueContext } from '../components/store-mark';
 import { hue } from '../model';
 import type { Store } from '../model';
 
@@ -19,6 +22,7 @@ export function GroupMark({
   /** `sm` is the list row's 26px mark; `md` a sheet's; `big` the page hero's. */
   size?: 'sm' | 'md' | 'big';
 }): ReactNode {
+  const hues = useContext(StoreHueContext);
   return (
     <span
       className={['kico', size === 'sm' ? '' : size, 'group', 'tinted']
@@ -32,7 +36,7 @@ export function GroupMark({
           '--h':
             store.kind === 'team' && store.active === false
               ? 'var(--c-none)'
-              : hue(store.name),
+              : (hues?.get(store.id) ?? hue(store.name)),
         } as CSSProperties
       }
     >

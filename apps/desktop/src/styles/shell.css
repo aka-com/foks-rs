@@ -48,6 +48,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 /* Borderless toolbar button: 26px, muted ink, a quiet fill on hover. */
 .tbtn{width:26px;height:26px;flex:none;display:inline-grid;place-items:center;padding:0;border:0;border-radius:var(--radius-md);background:transparent;color:var(--muted);font-size:16px}
 .tbtn:hover:not(:disabled){background:var(--hover);color:var(--ink-2)}
+.tbtn:active:not(:disabled){background:var(--hover-2);color:var(--ink)}
 .tbtn[aria-haspopup][aria-expanded="true"],.tbtn[aria-pressed="true"]{background:var(--hover-2);color:var(--ink)}
 .tbtn:disabled{opacity:.4;cursor:default}
 .tbtn .ic{font-size:16px}
@@ -66,6 +67,8 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side-head .brand{margin-left:8px;font-size:13px;font-weight:var(--weight-title);color:var(--ink)}
 .side-head .side-collapse{margin-left:auto}
 .side-scroll{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding-top:2px;display:flex;flex-direction:column;gap:14px}
+/* Rows scrolled under the foot: a hairline marks where the list continues */
+.side-scroll.overflows{border-bottom:1px solid var(--line)}
 .nav-group{display:flex;flex-direction:column;gap:1px}
 .side-tree{display:flex;flex-direction:column;gap:inherit}
 .side .nav-h{display:flex;align-items:center;height:26px;padding:0 4px 0 8px;font-size:13px;font-weight:var(--weight-label);color:var(--side-muted);letter-spacing:0;text-transform:none}
@@ -73,6 +76,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side .nav-h .tbtn .ic{font-size:14px}
 .side .nav{display:flex;align-items:center;gap:8px;width:100%;min-height:28px;padding:0 8px;border:0;border-radius:var(--radius-md);background:transparent;text-align:left;font-size:13px;font-weight:var(--weight-label);line-height:1.3;color:var(--ink-2);white-space:nowrap}
 .side .nav:hover:not(:disabled){background:var(--hover)}
+.side .nav:active:not(:disabled){background:var(--hover-2)}
 .side .nav.on{background:var(--side-sel);color:var(--ink)}
 .side .nav>.ic{font-size:16px;color:var(--side-muted)}
 .side .nav.on>.ic{color:var(--ink-2)}
@@ -340,7 +344,7 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
    labels at 500. The primary fill is --accent-fill (4.5:1 with white in
    both appearances). A disabled primary keeps the bezel with a faint label
    rather than a washed-out fill. */
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:5px;height:var(--control-h);padding:0 10px;border:1px solid var(--line-mid);border-radius:var(--radius-md);background:var(--btn-bg);box-shadow:var(--shadow-btn);font-size:12.5px;font-weight:var(--weight-label);color:var(--ink);white-space:nowrap;flex:none}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:5px;height:var(--control-h);padding:0 10px;border:1px solid var(--btn-border);border-radius:var(--radius-md);background:var(--btn-bg);box-shadow:var(--shadow-btn);font-size:12.5px;font-weight:var(--weight-label);color:var(--ink);white-space:nowrap;flex:none}
 .btn:hover{background:var(--btn-hover)}
 .btn:active:not([disabled]){background:var(--hover-2)}
 .btn.primary{background:var(--accent-fill);border-color:transparent;color:var(--on-accent)}
@@ -352,7 +356,8 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .btn.primary.danger[disabled]:hover{background:var(--danger-solid)}
 .btn[disabled]{opacity:.45;cursor:default;box-shadow:none}
 .btn[disabled]:hover{background:var(--btn-bg)}
-.btn.primary[disabled],.btn.primary[disabled]:hover{opacity:1;background:var(--btn-bg);border-color:var(--line-mid);color:var(--faint)}
+/* A disabled default button dims as a whole, as AppKit draws it, so it never reads as a second enabled button */
+.btn.primary[disabled],.btn.primary[disabled]:hover{opacity:.45;background:var(--btn-bg);border-color:var(--btn-border);color:var(--ink)}
 .btn[aria-disabled='true']{color:var(--faint);cursor:default}
 .btn[aria-disabled='true']:hover{background:var(--btn-bg)}
 .btn .ic{font-size:14px}
@@ -361,6 +366,7 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 /* A borderless icon button (`variant="quiet"`): the toolbar button. */
 .btn.icon{width:var(--control-h);padding:0;border-color:transparent;background:transparent;box-shadow:none;color:var(--muted)}
 .btn.icon:hover:not([disabled]){background:var(--hover);color:var(--ink-2)}
+.btn.icon:active:not([disabled]){background:var(--hover-2);color:var(--ink)}
 .btn.icon[aria-expanded="true"]{background:var(--hover-2);color:var(--ink)}
 .btn.icon .ic{font-size:16px}
 .btn.icon.on{background:var(--hover-2);border-color:transparent;color:var(--ink)}
@@ -928,6 +934,7 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
 .rows .row{position:relative;display:flex;align-items:center;gap:10px;width:100%;height:auto;min-height:var(--row-h);padding:5px 14px;border:0;border-radius:0;background:transparent;text-align:left;line-height:1.3;cursor:default;--rule-x:48px}
 .rows .row::after{content:'';position:absolute;left:var(--rule-x);right:14px;bottom:0;height:1px;background:var(--row-rule);pointer-events:none}
 .rows .row:hover{background:var(--hover)}
+.rows .row:active{background:var(--hover-2)}
 .rows .row.sel{background:var(--row-sel)}
 .rows .row.sel::after{content:none}
 .rows .row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
@@ -958,7 +965,7 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
 .list-head .crumb button:hover{color:var(--ink);text-decoration:underline}
 .list-head .crumb .ic{font-size:12px}
 /* Store and team marks: the hue as ink on a tint of itself. */
-.store-mark{--h:var(--mark-teal);width:16px;height:16px;flex:none;display:inline-grid;place-items:center;border-radius:4px;background:color-mix(in srgb,var(--h) var(--mark-tint),var(--panel));color:color-mix(in srgb,var(--h) var(--mark-ink-mix),var(--ink-inverse));font-size:var(--mark-type);font-weight:var(--weight-title);line-height:1;letter-spacing:0}
+.store-mark{--h:var(--mark-teal);width:16px;height:16px;flex:none;display:inline-grid;place-items:center;border-radius:4px;background:color-mix(in srgb,var(--h) var(--mark-tint),var(--panel));color:color-mix(in srgb,var(--h) var(--mark-ink-mix),var(--mark-ink-base));font-size:var(--mark-type);font-weight:var(--weight-title);line-height:1;letter-spacing:0}
 .side .store-mark{background:color-mix(in srgb,var(--h) calc(var(--mark-tint) + 2%),var(--ground))}
 .store-mark.md{width:24px;height:24px;border-radius:6px;font-size:12px}
 .store-mark.sheet{width:36px;height:36px;border-radius:var(--radius-lg);font-size:15px}
@@ -1010,3 +1017,13 @@ button.set-row:hover{background:var(--hover)}
 .set-row>.v{flex:1;min-width:96px;display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 .set-row>.a{flex:none;margin-left:auto;display:flex;align-items:center;gap:6px}
 @media (max-width:1099px){.set-row>.k{width:104px}}
+
+/* Focus on a button: a ring outside the bezel, visible on a filled default
+   button too (an alert's Cancel, a sheet's Create) */
+.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* Native selects share one field style and chevron with the custom pickers */
+select:not([multiple]){appearance:none;-webkit-appearance:none;height:var(--control-h);min-width:0;padding:0 26px 0 8px;border:1px solid var(--line-field);border-radius:var(--radius-md);background-color:var(--field-bg);background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 13px) 50%,calc(100% - 9px) 50%;background-size:4px 4px;background-repeat:no-repeat;color:var(--ink);font:inherit;font-size:13px}
+select:not([multiple]):focus-visible{outline:2px solid var(--accent-border);outline-offset:0;border-color:var(--accent)}
+select:not([multiple]):disabled{opacity:.45}
+/* An inactive team reads muted in the sidebar, as its mark does */
+.side .fn.off>.nav .t{color:var(--side-muted)}

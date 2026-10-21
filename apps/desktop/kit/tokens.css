@@ -147,6 +147,10 @@
   --mark-brown: #8a6d4c;
   --mark-tint: 16%;
   --mark-ink-mix: 100%;
+  /* What the mark ink is mixed toward below 100%. */
+  --mark-ink-base: #fff;
+  /* The plain button's bezel line. */
+  --btn-border: var(--line-mid);
   /* Store mark initials (< 12px type floor exemption) */
   --mark-type: 10px;
   --store-mark-bg: #62666e;
@@ -291,8 +295,17 @@
   --c-password-wash: rgba(224, 179, 92, 0.1);
   --c-folder-wash: rgba(224, 179, 92, 0.1);
 
-  --mark-tint: 20%;
-  --mark-ink-mix: 62%;
+  /* Dark has its own lighter mark hues, drawn at full strength. */
+  --mark-violet: #9a91e0;
+  --mark-amber: #d6a756;
+  --mark-teal: #63b2c4;
+  --mark-red: #e07c80;
+  --mark-green: #5fbf8f;
+  --mark-purple: #c08ad4;
+  --mark-blue: #8aa2e8;
+  --mark-brown: #b8977a;
+  --mark-tint: 18%;
+  --mark-ink-mix: 100%;
   --store-mark-bg: #555965;
   --key-gold: #e0b35c;
   --folder-amber: #e0b35c;
@@ -330,6 +343,12 @@
     --muted-2: #4d5058;
     --faint: #52555c;
     --side-muted: #46494f;
+    /* Control boundaries of at least 3:1: bezels, field borders, and mark
+       initials darkened toward the ink. */
+    --btn-border: rgba(16, 20, 32, 0.5);
+    --line-field: rgba(16, 20, 32, 0.55);
+    --mark-ink-mix: 70%;
+    --mark-ink-base: var(--ink);
   }
   :root[data-theme='dark'] {
     --line: rgba(255, 255, 255, 0.2);
@@ -343,6 +362,9 @@
     --muted-2: #a9adb5;
     --faint: #a3a7af;
     --side-muted: #a9adb5;
+    --btn-border: rgba(255, 255, 255, 0.45);
+    --line-field: rgba(255, 255, 255, 0.5);
+    --mark-ink-mix: 80%;
   }
 }
 

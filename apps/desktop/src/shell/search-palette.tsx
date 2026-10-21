@@ -46,6 +46,7 @@ import {
   roleName,
   serverDisplayLabelForStore,
   storeDescription,
+  storeDescriptionState,
   storeNavigationOrder,
   storeOf,
 } from '../model';
@@ -546,8 +547,16 @@ function SearchSheet({
   ]);
   const peopleReadiness = combineReadiness([
     inventory,
+    // Only teams whose roster can be read: an inactive team, or one whose
+    // setup did not finish, has no roster to search, and its missing roster
+    // is not a failure of the search.
     ...snapshot.stores
-      .filter((store) => store.kind === 'team')
+      .filter(
+        (store) =>
+          store.kind === 'team' &&
+          store.active !== false &&
+          storeDescriptionState(snapshot, store) === 'normal',
+      )
       .map((store) => groupDetailReadiness(snapshot, store.id, 'roster')),
   ]);
   const readiness = combineReadiness([

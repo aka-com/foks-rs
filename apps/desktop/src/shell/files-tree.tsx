@@ -68,6 +68,7 @@ function TreeRow({
   expandable,
   disabled,
   position,
+  inactive = false,
   onSelect,
   onToggle,
 }: {
@@ -83,12 +84,19 @@ function TreeRow({
   disabled: boolean;
   /** 1-based position among its siblings, and their number. */
   position: { index: number; of: number };
+  /** An inactive team: its name is muted, as its mark is. */
+  inactive?: boolean;
   onSelect: () => void;
   onToggle: () => void;
 }): ReactNode {
   return (
     <div
-      className={['fn', depth === 0 ? 'root' : '', active ? 'on' : '']
+      className={[
+        'fn',
+        depth === 0 ? 'root' : '',
+        active ? 'on' : '',
+        inactive ? 'off' : '',
+      ]
         .filter(Boolean)
         .join(' ')}
       data-folder-store={storeId}
@@ -314,6 +322,7 @@ export function FilesTree({
           expandable={root.folders.length > 0}
           disabled={disabled}
           position={{ index: index + 1, of: group.length }}
+          inactive={store.kind === 'team' && store.active === false}
           onSelect={() => onOpen(`${store.id}|/`)}
           onToggle={() => toggle(key)}
         />

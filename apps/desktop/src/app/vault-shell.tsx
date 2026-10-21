@@ -63,6 +63,7 @@ import {
   devicesAlertSummary,
 } from '../screens/device-alert';
 import { DetailsPanel } from '../screens/details-panel';
+import { StoreHueContext, storeMarkHues } from '../components/store-mark';
 import { FirstRunExperience } from '../screens/first-run-screen';
 import { unroutedNotices } from '../screens/account-section';
 import { ALL_ITEMS, folderSelection, listsItems } from '../screens/scope';
@@ -495,6 +496,8 @@ export function VaultShell({
     deviceAlertRegistry(bridge).getSnapshot,
   );
   const appRef = useRef<HTMLDivElement>(null);
+  // One hue per store for every mark, the group marks included.
+  const storeHues = useMemo(() => storeMarkHues(shown), [shown]);
   const portalRoot = useMemo(
     () =>
       typeof document === 'undefined'
@@ -1104,17 +1107,19 @@ export function VaultShell({
   );
 
   const withToasts = (
-    <ToastProvider controller={toasts} portalRoot={portalRoot}>
-      <NavigationGuardProvider store={locations}>
-        <MetadataRepositoryContext.Provider value={deviceCache.repository}>
-          <DeviceCacheContext.Provider value={deviceCache}>
-            <DeviceMetadataContext.Provider value={deviceMetadata}>
-              {shell}
-            </DeviceMetadataContext.Provider>
-          </DeviceCacheContext.Provider>
-        </MetadataRepositoryContext.Provider>
-      </NavigationGuardProvider>
-    </ToastProvider>
+    <StoreHueContext.Provider value={storeHues}>
+      <ToastProvider controller={toasts} portalRoot={portalRoot}>
+        <NavigationGuardProvider store={locations}>
+          <MetadataRepositoryContext.Provider value={deviceCache.repository}>
+            <DeviceCacheContext.Provider value={deviceCache}>
+              <DeviceMetadataContext.Provider value={deviceMetadata}>
+                {shell}
+              </DeviceMetadataContext.Provider>
+            </DeviceCacheContext.Provider>
+          </MetadataRepositoryContext.Provider>
+        </NavigationGuardProvider>
+      </ToastProvider>
+    </StoreHueContext.Provider>
   );
   if (!portalRoot) return withToasts;
   return (

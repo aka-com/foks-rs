@@ -848,6 +848,26 @@ export function Sidebar({
 }: SidebarProps): ReactNode {
   const resize = useSidebarResize(!collapsed && !blocked);
   const sourceList = useSourceListKeys(resize.ref);
+  // When the rows run under the foot (a 640px window with a tree open), a
+  // hairline marks the edge, and the current row is scrolled into view.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [overflows, setOverflows] = useState(false);
+  const measureOverflow = (): void => {
+    const element = scrollRef.current;
+    if (!element) return;
+    setOverflows(
+      element.scrollHeight - element.scrollTop - element.clientHeight > 1,
+    );
+  };
+  useLayoutEffect(measureOverflow);
+  const currentFolder = files?.folder;
+  useEffect(() => {
+    // Only when the place changes, so a badge update never undoes the
+    // reader's own scrolling.
+    scrollRef.current
+      ?.querySelector<HTMLElement>('.nav[aria-current]')
+      ?.scrollIntoView?.({ block: 'nearest' });
+  }, [location, currentFolder]);
   const chatInbox = useSidebarInbox();
   const unread = snapshot ? chatUnread(snapshot, chatInbox) : null;
   const here = railTabOf(location);
@@ -979,7 +999,17 @@ export function Sidebar({
           </button>
         ) : null}
       </TrafficStrip>
-      <div className={blocked ? 'side-scroll is-blocked' : 'side-scroll'}>
+      <div
+        ref={scrollRef}
+        className={[
+          'side-scroll',
+          blocked ? 'is-blocked' : '',
+          overflows ? 'overflows' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+        onScroll={measureOverflow}
+      >
         <div className="nav-group">{KIND_ROWS.map(kindRow)}</div>
         {snapshot ? (
           <FilesTree

@@ -9,6 +9,7 @@
  * hue `storeHues` assigns it. An inactive team draws the faint ink.
  */
 
+import { createContext } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import {
   storeHues,
@@ -50,6 +51,26 @@ export function Mark({
     >
       {children}
     </span>
+  );
+}
+
+/**
+ * The hue each store is marked with on screen, for marks drawn by code that
+ * has no snapshot to hand (`GroupMark`). The shell provides it from the same
+ * `storeMarkFace` the sidebar uses, so a team has one colour everywhere.
+ */
+export const StoreHueContext = createContext<ReadonlyMap<
+  string,
+  string
+> | null>(null);
+
+/** Every store's mark hue, keyed by store id. */
+export function storeMarkHues(snapshot: AgentSnapshot): Map<string, string> {
+  return new Map(
+    snapshot.stores.map((store) => [
+      store.id,
+      storeMarkFace(snapshot, store).hue,
+    ]),
   );
 }
 

@@ -40,7 +40,7 @@ import {
   displayPath,
   displayPathComponent,
   fmtSize,
-  formatRole,
+  roleChipLabel,
   hue as nameHue,
   isLogin,
   kindLabel,
@@ -126,10 +126,13 @@ function assertExactRead(
   }
 }
 
-/** "Owner" / "Member · visibility 0", from either shape of the wire. */
+/**
+ * "Owner" / "Member · sees level 0", from either shape of the wire: the same
+ * words the team page's role chips use (`roleChipLabel`).
+ */
 function roleText(wire: RoleWire): string {
   const role = parseRole(wire);
-  if (role) return formatRole(role);
+  if (role) return roleChipLabel(role);
   return typeof wire === 'string' ? wire : wire.role;
 }
 
