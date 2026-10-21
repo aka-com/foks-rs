@@ -538,7 +538,7 @@ test('the account menu switches account, adds one, and locks the app', async () 
 
   menu = await open();
   const add = [...menu.querySelectorAll('button')].find(
-    (button) => button.textContent === 'Add account or server…',
+    (button) => button.textContent === 'Add Account or Server…',
   );
   assert.ok(add);
   ui.fireEvent.click(add);
@@ -570,7 +570,7 @@ test('a stopped account is dimmed and carries the way to restore it', async () =
     assert.ok(node);
     return node;
   });
-  // The current account is the one with the mark at the right end.
+  // The current account is the one whose row leads with the tick.
   const current = [...menu.querySelectorAll('.acct')].find((row) =>
     row.textContent?.includes('satoshi'),
   );
