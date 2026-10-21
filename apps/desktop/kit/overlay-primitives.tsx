@@ -13,6 +13,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 
+import { restoreFocusIfLost } from './focus-keeper';
 import { placeAnchoredMenu, type MenuAlign } from './menu-position';
 
 const FOCUSABLE_SELECTOR =
@@ -70,6 +71,35 @@ const mountedDialogs = new Set<HTMLElement>();
  */
 export function anyDialogOpen(): boolean {
   return mountedDialogs.size > 0;
+}
+
+/**
+ * Mounted transient popups: dropdown menus, pickers and context menus. A
+ * list that is part of a page (the Files list, Activity) may carry
+ * `role="listbox"` too, so shell shortcuts ask this rather than querying
+ * roles.
+ */
+const mountedPopups = new Set<HTMLElement>();
+
+/**
+ * Returns whether a transient popup is open: a `Popover` or `ContextMenu`
+ * from this module, or a combobox whose listbox is expanded. Shell shortcuts
+ * that a popup should swallow (Back, ⌘N) check this beside `anyDialogOpen`.
+ */
+export function anyPopupOpen(): boolean {
+  if (mountedPopups.size > 0) return true;
+  if (typeof document === 'undefined') return false;
+  return (
+    document.querySelector('[role="combobox"][aria-expanded="true"]') !== null
+  );
+}
+
+/**
+ * Whether `target` is inside a transient popup. Outside-click handlers use it
+ * to leave a click on a menu item or picker option alone.
+ */
+export function inPopup(target: Element): boolean {
+  return target.closest('[data-popup]') !== null;
 }
 
 /**
@@ -223,8 +253,12 @@ export function Dialog({
       mountedDialogs.delete(dialog);
       for (const release of releases.reverse()) release();
       queueMicrotask(() => {
-        if (!dialog.isConnected && opener && canRestoreFocus(opener, dialogs))
-          opener.focus();
+        if (dialog.isConnected) return;
+        if (opener && canRestoreFocus(opener, dialogs)) opener.focus();
+        // No opener to return to (a shortcut opened it from <body>, or the
+        // opener went away with the change the dialog made): the focus
+        // keeper lands it in the window rather than leaving it on <body>.
+        else restoreFocusIfLost();
       });
     };
   }, [dialogs, environment]);
@@ -520,6 +554,9 @@ export function Popover({
       if (!(target instanceof Node)) return;
       if (anchor.contains(target) || popover.contains(target)) return;
       onCloseRef.current();
+      // A click on blank space or plain text takes the focus nowhere; it
+      // goes back to the control that opened the popup.
+      restoreFocusIfLost(anchor);
     };
     const keyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape') return;
@@ -528,12 +565,14 @@ export function Popover({
       onCloseRef.current();
       if (canRestoreFocus(anchor, dialogs)) anchor.focus();
     };
+    mountedPopups.add(popover);
     position();
     window.addEventListener('resize', position);
     window.addEventListener('scroll', position, true);
     document.addEventListener('pointerdown', pointerDown, true);
     document.addEventListener('keydown', keyDown, true);
     return () => {
+      mountedPopups.delete(popover);
       window.removeEventListener('resize', position);
       window.removeEventListener('scroll', position, true);
       document.removeEventListener('pointerdown', pointerDown, true);
@@ -555,6 +594,7 @@ export function Popover({
     <div
       ref={popoverRef}
       className={className}
+      data-popup=""
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}
     >
@@ -578,6 +618,9 @@ export function ContextMenu({
   const blocking = useDismissOnOverlayBlock(onClose);
   const { portalRoot } = useOverlayEnvironment();
   const contextRef = useRef<HTMLDivElement>(null);
+  // The control that had the focus when the menu opened: the row it was
+  // opened on, or the control Shift+F10 was pressed on.
+  const openerRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
@@ -598,21 +641,33 @@ export function ContextMenu({
       )}px`;
       context.style.visibility = 'visible';
     };
+    if (
+      !openerRef.current &&
+      document.activeElement instanceof HTMLElement &&
+      document.activeElement !== document.body &&
+      !context.contains(document.activeElement)
+    )
+      openerRef.current = document.activeElement;
     const pointerDown = (event: PointerEvent) => {
-      if (event.target instanceof Node && !context.contains(event.target))
+      if (event.target instanceof Node && !context.contains(event.target)) {
         onCloseRef.current();
+        restoreFocusIfLost(openerRef.current);
+      }
     };
     const keyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
       event.stopPropagation();
       onCloseRef.current();
+      restoreFocusIfLost(openerRef.current);
     };
+    mountedPopups.add(context);
     position();
     window.addEventListener('resize', position);
     document.addEventListener('pointerdown', pointerDown, true);
     document.addEventListener('keydown', keyDown, true);
     return () => {
+      mountedPopups.delete(context);
       window.removeEventListener('resize', position);
       document.removeEventListener('pointerdown', pointerDown, true);
       document.removeEventListener('keydown', keyDown, true);
@@ -621,7 +676,7 @@ export function ContextMenu({
 
   if (blocking) return null;
   return createPortal(
-    <div ref={contextRef} className={className}>
+    <div ref={contextRef} className={className} data-popup="">
       {children}
     </div>,
     portalRoot,
