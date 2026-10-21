@@ -13,10 +13,11 @@ click. Copy value and Download stay in Rust. List rows use
 width, so it can scroll through the full loaded catalog. Account-store creates
 use must-not-exist; edits, removes and file replacements carry the catalog's
 selected dirent identity and exact version.
-List rows show Name and Shared readers; the catalog has no write timestamp, so
-the UI does not invent a Modified value from its version counter. Folder view
-derives a folders-only tree from the filtered catalog, and search temporarily
-returns to the flat list without changing the selected New-item destination.
+List rows show the name, the place (store › folder) and the size; the catalog
+has no write timestamp, so the UI does not invent a Modified value from its
+version counter. The folder tree is the sidebar's (Vaults and Teams), not a
+view of the list, and searching does not change the selected New-item
+destination.
 Active authenticated groups can create the same four product kinds as account
 stores. Group creates carry explicit read and write roles, with their reader
 preview computed from the selected role and live roster. Text edits, streamed
@@ -57,8 +58,8 @@ count, and Open in Files. Both tabs are addressable as `tab=channels` and
 adding a history entry.
 Members splits the one roster into Accounts, Machines and Groups on other
 servers: a row carries the name, a "you" chip, the kind of party as its only
-second line, and one role chip with the visibility band inside it ("Member
-(0)"). Role badges and actions appear on each member row. Unavailable actions
+second line, and one role chip with the visibility level inside it ("Member
+· sees level 0"). Role badges and actions appear on each member row. Unavailable actions
 remain visible in a disabled state with an explanatory tooltip, clarifying why
 the action is currently restricted. An admitted group's row adds its
 admission state, Restore access and Remove admission. A roster party that names
@@ -194,7 +195,11 @@ Items and folders can be renamed or moved within their current vault from their
 context menu; items also expose Rename or Move… in the details panel's More menu. The destination
 is an exact absolute path in an existing folder, never an overwrite. The source
 dirent identity and version remain fixed through concurrent-write retries.
-Deleting and recreating the same path cannot redirect a stale selection to the
+The sheet reads Rename when only the name changes and Move otherwise, says
+when a destination moves an item between Passwords and Documents, and on
+success the item is selected at its new path with its row focused, opening
+its folder when the current view does not list it; a new item and a new
+folder land the same way (`Landing` from the write sheets). Deleting and recreating the same path cannot redirect a stale selection to the
 replacement, even when its numeric version is the same.
 
 Folder deletion is not supported in the desktop.
@@ -311,7 +316,7 @@ authenticated in the catalog.
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/main.tsx`             | Entry point. One window; mounts `src/app-root.tsx`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `src/app-root.tsx`         | App shell: window, sidebar, screen, details panel, deep links.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `src/components/`          | Components: Button, Chip, Tag, Badge, KindIcon, Inset, SectionLabel, Notice, Band, SegmentedControl, SplitButton, MenuButton, SearchField.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `src/components/`          | Components: Button, Chip, KindIcon, Inset, Field, SectionLabel, Notice, Band, SegmentedControl, MenuButton and MenuItem, SearchField, Sheet and SheetDialog, AlertDialog, RadioGroup and RadioCard (`useRadioGroupKeys`), EmptyState, PropertyGroup and PropertyRow, StoreMark, `useListbox`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `src/shell/`               | Window chrome: `sidebar.tsx` (the source list), `files-tree.tsx` (its store tree), `topbar.tsx` (the panel's first bar: search, view menu and add control, or crumbs and Back), `files-view-menu.tsx`, `sync-status.tsx` (the status line and its popover), `page-header.tsx`, `search-palette.tsx` (⌘K), `toolbar.tsx` (the New menu); the shell's keyboard and focus rules are under Keyboard and focus.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `src/screens/`             | Screens: `items-screen.tsx` (list, cards, notices, empties), `groups-screen.tsx` (the group page, its Members and Settings tabs and the add/role/remove/create sheets), `group-tabs.tsx` (the Channels and Files tabs and the unfinished-group page), `group-model.ts` (the permission rules and reasons the Teams list and the group page share), `group-mark.tsx` (the one mark a group carries everywhere), `store-access.tsx` (the shared unavailable-store takeover and All items summaries), `first-run-screen.tsx`, `servers-screen.tsx` (`ServersSection`, the server list Settings draws, and one server's page), `settings-screen.tsx` (the Settings tab and its sub-navigation), `devices-screen.tsx` (one account's devices, security key enrollments and recovery phrases as a grouped list, and one key's details beside it), `device-sheets.tsx` (the sheets Devices and Settings share), `device-model.ts` (the four per-account key calls and the one row model Accounts and Devices share), `account-switcher.tsx` (the switcher Accounts, Devices and Settings share), `details-panel.tsx`, `write-workflows.tsx`, `edit-value.ts`, `account-section.tsx` (Settings › Account: the attention list and the account profile: teams, devices, keys and the account rows), `teams-screen.tsx`, `chat-tab.tsx` (the Chat tab: the inbox column, the open conversation and the info panel), `chat-teams.tsx` (the cross-team inbox column), `chat-new.tsx` (the two-step New chat sheet), `chat-screen.tsx` (one team's conversation), `chat-info.tsx` (the channel info panel), `scope.ts` (what is listed, in what order). |
 | `src/bridge.ts`            | The typed `Bridge` interface and the Tauri implementation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -323,7 +328,7 @@ authenticated in the catalog.
 | `src/sidebar-prefs.ts`     | Whether the sidebar is hidden: the `sideCollapsed` `localStorage` key.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `src/icons.ts`             | The mock's 47 icons as structured data.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `src/components/icon.tsx`  | `<Icon name size />`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `src/styles/shell.css`     | `wave6/shell.css` copied in full, minus the shared tokens.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `src/styles/shell.css`     | The shell and shared component styles of the redesign (the `base` cascade layer); tokens are in `kit/tokens.css`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `src/styles/app.css`       | Styles that replace the mock browser chrome with the app window.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `tests/`                   | `node:test` via `tsx`: goldens, source invariants, render tests.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
@@ -334,7 +339,9 @@ authenticated in the catalog.
 strip (`.traffic`, 52px, `data-tauri-drag-region`) with the product name and
 the control that hides the sidebar; All Items, Passwords and Documents (All
 Items narrowed by kind); the Vaults and Teams groups, each store with a
-disclosure over its folder tree (`src/shell/files-tree.tsx`), and All Teams;
+disclosure over its folder tree (`src/shell/files-tree.tsx`), and All Teams
+(the Teams heading's + is a menu: Create a Team…, Join a Team…, Show All
+Teams);
 Chat and Activity. The foot holds the Finish setting up card, Devices and
 Settings, the account switcher and the sync status line. The native build
 leaves the strip's left end empty for the controls macOS draws at
@@ -404,7 +411,10 @@ Move…, Delete… ⌘⌫). Under it the hero (kind tile, name, kind and server,
 Edit, or Download and Replace… for a file) and property rows in groups divided
 by hairlines: the value rows with Show/Hide and Copy at the trailing edge;
 Vault, Path, Version and Size; Read and Write access; Sharing. Editing a value
-puts Cancel and Save Changes in the bar. A store that cannot be read draws a
+puts Cancel and Save Changes in the bar (after the fields in the DOM, so Tab
+reaches them from the last field); Return in a field, ⌘Return and ⌘S save, and
+the panel then shows the fields it wrote for the new version until another
+version or a conceal replaces them. A store that cannot be read draws a
 lock notice with Check Status and leaves every action disabled with its reason.
 The list foot holds the drop hint and the store's Uploads… sheet; the item
 sheets (New Password, New Document, New Folder, Rename or Move) carry the kind
@@ -472,7 +482,13 @@ the page as `Bridge.onMenuCommand` and run the page's own command. Delete…
 has no menu-bar item: a native ⌘⌫ would take delete-to-line-start from text
 fields. Menus and listboxes type-select. Return in a sheet presses its
 enabled default button (the footer's last primary button) unless a text
-area, select, button or open popup has the focus.
+area, select, button or open popup has the focus; a radio is a choice, not an
+action, so Return on one presses the default too. Every radio group
+(`RadioGroup`, or `useRadioGroupKeys` on a `role=radiogroup`) is one Tab stop,
+the checked radio, and the arrow keys move to and choose the next one. The
+window's Escape (clear the search, then the selection) belongs to the page:
+it does nothing with the focus in the sidebar or the panel's bar. ⌘N, ⇧⌘N
+and New Folder… in a store that cannot take items say why in a toast.
 
 The focus never rests on `<body>`. `kit/focus-keeper.ts`, mounted by the
 shell, moves it when the focused control unmounts or is disabled: to a
@@ -480,7 +496,14 @@ target a caller asked for (`restoreFocusIfLost`), to the control last focused
 in a place the reader returns to (each location is a focus context, so Back
 returns to the row the reader left from), to the element that took the lost
 one's place (same `data-focus-key`, `id`, `data-row-key` or `data-place`), or
-to the place's list (selected option, first row), heading or `.main`. It does
+to the first control left in the lost one's row or group, or to the place's
+list (selected option, first row), heading or `.main`. A control with no key
+is remembered by its label, so Back from a team page lands on its row. In a
+dialog the focus lands on the field in error (`Field error=` sets
+`aria-invalid`), the dialog's autofocus control, the first control in its
+body, then its footer; a sheet that replaces another (Add a Device ›
+Continue) returns to the first sheet's opener when it closes. The lock card
+takes the focus, and Unlock returns it to the control that had it. It does
 not move the focus before anything has been focused, nor after a click on
 blank space that leaves a usable control behind. A delete selects and focuses
 the next row; Escape in the details returns to the item's row, Escape in the
@@ -582,15 +605,20 @@ its own items under a head naming it, with the folders above it as a crumb;
 a store's root lists its own items, then a section per first-level folder
 (its label opens the folder) holding that folder's subfolders and items, and,
 for a team, Manage…. The second line then gives the kind and version. The
-list is a listbox: one Tab stop, Up/Down/Home/End and typing a name move the
-selection, Return or ⌘↓ opens a folder row, ⌘↑ goes up, and the rows' hover
+list is a listbox: one Tab stop, Up/Down/Home/End, PageUp/PageDown and typing
+a name move the selection (in Cards, Left/Right step a card and Up/Down a
+line), Return or ⌘↓ opens a folder row, ⌘↑ goes up, and the rows' hover
 actions are pointer shortcuts that the context menu repeats. An item row
 selects on the mouse press, not the release. Clicking the
 list's empty space or pressing Escape in the details clears the selection
 (guarded, so unsaved edits ask first); the bars, menus and sidebar leave it
 alone. A store that cannot be opened keeps this layout: its head with a lock
 for a lapsed check-in, the access notice where the rows would be, and No
-Selection beside it. Team Info opens in the details column. Search runs over
+Selection beside it. Team Info opens in the details column, built from the
+same hero and property rows as an item's details. Down in the list's search
+field moves to the first result, Return selects it, and Escape in an empty
+field returns to the list. Empty folders (a `Folder` catalog entry, such as one
+New Folder… just made) are listed in the tree and the list like any other. Search runs over
 the sidebar's selection. Teams lists the groups and
 shares — the group mark, name, server, the roster summary the per-group
 `list_group_details` call loaded on the last refresh, the role this Mac's
@@ -606,22 +634,18 @@ The tab and its headings say Teams; the object in
 body copy is a group. Beside the row, not inside it, sits a menu of that
 group's actions; an action that does not apply stays, inert, with its reason in
 the item's `title` — the server-dependent entries while its
-server is out of reach. Below the
-list, the per-account checks are folded into one disclosure row, "Check other
-servers for groups", counting the servers those accounts sign in to: discovery
-is an occasional per-server action, not a landing surface. Opened, it is one
-row per account store, headed by the server it signs in to: what that server
-lists when Check for groups is pressed, announced on the row itself and
-nowhere else, and the same
-abnormal-state chip at the row's end. The disclosure opens when an account
-enters an abnormal state. After the user changes the disclosure state, that
-preference is preserved. The
-header carries Create a group and Join a group…, which opens the existing
-invitation panel. Creating and joining act as one account — the one
-`?state=teams&store=<StoreRef>` names, else this Mac's first — and the Create
-sheet opens on that account, seeded to it and saying who is creating the group
-on which server, so the account
-menu keeps the page when it switches. There is no setup-instructions message;
+server is out of reach. Discovery is an occasional per-server action, not a
+landing surface: the bar's Find Teams menu lists each server this Mac signs in
+to, with one Check item per account on it, and what the check found is said in
+that item; an account whose server cannot be reached keeps its item, inert,
+with the reason. The bar also carries Join a Team…, which opens the existing
+invitation panel, and Create a Team…; the sidebar's Teams heading has the same
+two plus Show All Teams in its + menu. Request bands above the list say how
+many membership changes wait and open them with Review, and a foot line
+counts the teams and their servers. Creating and joining act as one account —
+the one `?state=teams&store=<StoreRef>` names, else this Mac's first — and the
+Create sheet opens on that account, seeded to it and saying who is creating
+the team on which server, so the account menu keeps the page when it switches. There is no setup-instructions message;
 inviting someone without an account is Invite New User…, part of the team
 invitation workflow:
 Members → Invitations and requests lets administrators create invitations,
@@ -637,32 +661,22 @@ until all four reads have answered, because counting what has not been read
 yet would report zeroes. Device keys and security-key enrollments are tracked
 separately: a hardware token stores an account device key, while
 `list_yubi_accounts` returns enrollments for the entire server profile. Each
-record uses its corresponding type in the header, row, and detail page. The three sections are Macs and device keys
-(a laptop or key glyph, the name, the
-kind and the role, the shortened key id, a
-“This device” chip on the one that cannot remove itself and Remove… with a
-typed confirmation on the other Macs; a key on a card carries a Key on a card chip
-and no Remove, because a card's key is revoked under its enrollment rather
-than removed here), Recovery phrases (each enrollment's name and shortened id,
-Revoke…, Add a recovery phrase…, and the row that recovers an account from one) and
-Security key enrollments (each enrollment with its Enrolled or Incomplete
-chip, its own
-Revoke… — off, with the reason, while the enrollment is unfinished — and the
-note that the agent reports no serial for one, the serial of the card connected
-now with Provision… and PIN Status — which asks the card in the port, so a
-connected card and an enrollment to name are all it needs — and the
-card PIN's link to Settings › Servers). That last section is the one part of
-the page that is not about the account above it: enrollments are listed for
-the server, and an enrollment's own page is captioned with the server rather
-than the account. The mock
-draws one flat list of keys;
-the page keeps the three sections deliberately, because each kind has actions
-a flat list has nowhere to put: Add a recovery phrase…, the recovery menu, and the
-connected card and Card PIN rows all belong to one section and to no row.
+record uses its corresponding type in the header, row, and detail page. The
+list's three groups are Devices (a laptop or key glyph, the name, the kind and
+the role, and a “This device” chip on this Mac; a key on a card carries a Key on
+a card chip), Security keys (each enrollment with its Enrolled or Incomplete
+state) and Recovery phrases (each phrase's name). Actions belong to the
+selected entry and live in the details column, not on the rows: Remove… or
+Revoke… in its Danger zone, and on a security key's page the Card operations
+group (Sync, Passphrase and Recovery rows, plus Provision… and PIN Status for
+the card connected now). The Security keys group is the one part of the page
+that is not about the account above it: enrollments are listed for the
+server, and an enrollment's own page is captioned with the server rather than
+the account.
 A phrase you write down is called a
 recovery phrase
 on these tabs, while the enrollment keeps the name the agent stores for it. The
-header's Add a device or recovery phrase opens a chooser — four cards, each with the
+bar's Add a device opens a chooser — four cards, each with the
 glyph of what it adds: pair another Mac, enter a
 pairing phrase, recovery phrase, security key — that leads into the pairing sheet in
 the direction it names, and into the recovery-phrase and provisioning
@@ -697,14 +711,14 @@ the key id for a Mac or a recovery phrase and `yubi:<alias>` for an enrollment,
 which the agent names by alias and reports no id for. A `device=` that no
 longer resolves says the key is not on this account rather than showing an
 empty page. The nine card operations that are recovery paths for a key already in
-trouble, and creating an account on a hardware key, sit in the enrollment
-section's menu, each saying there when it does not apply, and each menu entry
-and the sheet it opens read the same label. A stopped account
+trouble sit in the security key's Card operations, each saying there when it
+does not apply, and each button and the sheet it opens read the same label;
+creating an account on a hardware key is one of Settings › Account's tools. A stopped account
 lists nothing and disables every action with the reason.
-Each section is an ARIA region focused via the `section` query parameter. When
-a dialog opens immediately upon loading a scene, keyboard focus is constrained
-within the dialog, and the target section receives focus only after the dialog
-closes. A scene is entered once: concealing a phrase remounts the tab without
+The list is one region (`section.lpane`, labelled Devices) holding the three
+groups, and a `section=` address focuses it. When a dialog
+opens immediately upon loading a scene, keyboard focus is constrained within
+the dialog, and the list receives focus only after the dialog closes. A scene is entered once: concealing a phrase remounts the tab without
 reopening the dialog that the scene opened. Navigating to an account ID that is
 no longer present locally displays an account-unavailable screen listing valid
 accounts, rather than reporting that no accounts are configured. Settings is a
@@ -712,7 +726,7 @@ sub-navigation of three pages. Account runs: the account hero, the Account
 group, Needs attention (only when something does), Servers on this device with
 Add a Server… beside its heading, and Account tools (bezel buttons). Servers requiring attention stay
 at the top of that group; each row has its state chip, a Check on the
-never-checked and lapsed rows, and Open for the server's own page, which holds
+never-checked and lapsed rows, and Manage › for the server's own page, which holds
 that server's security keys and its own reset. Passphrase… sits beside Change…
 on the Username row (the sheet defaults to Change and switches to Set or Verify
 in place; an account whose access has stopped explains why the button is
@@ -720,7 +734,7 @@ disabled). Preferences contains Desktop alerts — this device's desktop-alert
 and message-preview preferences, which the desktop persists locally; channel
 overrides stay in Chat's info panel, with a link here, and none of these
 preferences sync between devices; its Accent color sets the accent, not the
-sidebar, which stays neutral. Device: Application (version, Lock Now),
+sidebar, which stays neutral. Storage (`section=mac`): Application (version, Lock Now),
 Agent (status with Retry Connection while it is not ready, socket with Copy),
 FOKS data (export, import, Verify Online, Choose Folder… to move the data
 folder) and a danger
@@ -732,9 +746,8 @@ the profile ids, when they differ. Older `section=` addresses — `credentials`,
 page that holds their content.
 A server's own page
 carries a Check in its header, and the band a never-checked or lapsed server
-draws offers the same check beside the reason. Under the check-in rows, one
-disclosure — Inspect last check response — holds the whole diagnostic
-response. Then the page answers what stops if this server lapses: Accounts on
+draws offers the same check beside the reason. Under the check-in rows the
+page answers what stops if this server lapses: Accounts on
 this server (the account's mark, username and alias, with Accounts) and Teams on
 this server (each group or share on it, the same caption the other lists
 write, its roster summary or its
@@ -771,8 +784,8 @@ be a second file browser over the same catalog; and a Created-by line and a
 removal actions are omitted. The annotation strips in the mocks describe the
 design rather than the group and are not built either.
 
-Item pages open in the folder browser. The toolbar's list / grid / folders
-toggle still chooses, and the choice survives the next navigation.
+The Files list's View menu chooses List or Cards, and the choice survives the
+next navigation.
 
 ### The Chat tab
 
@@ -805,22 +818,23 @@ chat.
 panel — so a team switch replaces only the conversation, and exactly one
 `useChatConversation` is mounted at a time. The column (`chat-teams.tsx`) is
 the whole inbox: every named team whose server offers chat is listed at once,
-under one "Conversations" label, in the shell's navigation order, ensuring
-consistent team ordering across Files, Teams, and Chat for spatial
-predictability. A team whose channels are the general channel alone is a single row —
-its mark, its name, the last message ("You: …", "sam.ortiz: …", else "No
-messages yet"), when that message arrived and its unread badge. That row is the
-channel's row, so the count it is bold for, the badge's muted styling and the
-caption beside it ("Muted", "Hidden", "Restricted", "Channel stopped") are the
-ones the channel would have drawn. Teams with custom channels render as a group
-heading with nested channels. Each channel carries its own unread count and, for
-an admins-only channel, a lock; nothing folds away, so a heading selects nothing
-and its gear, which opens that team's group settings, is the one control it
-carries. The team's name is a heading of level 3 and its channels are a `group`
-labeled by it. The open channel's row carries `aria-current="page"`, from the
-first render that resolves it: the column and the pane resolve the open channel
-through the same `openChannel` helper, so neither marks a row the other did not
-mount.
+under one "Teams" label, in the shell's navigation order, ensuring consistent
+team ordering across Files, Teams, and Chat for spatial predictability. Every
+team is a heading — its mark, its name and a caption or state line — over its
+channel rows, and the whole heading is the fold control (`aria-expanded`); a
+team whose list has not arrived has no rows to fold, so its heading opens the
+pane, which states why. A team with only the general channel folds the same
+way, and opening it opens #general. Each channel row carries its own unread
+count, the last message's preview and time, and for an admins-only channel a
+lock; a muted, hidden, restricted or stopped channel says so in a caption
+("Muted", "Hidden", "Restricted", "Channel stopped"). Context menus carry the
+rest: a team heading's has Go to Team, Add FOKS User…, Add FOKS Team… and
+Invite New User…; a channel row's has Open Channel and Channel Info (Edit and
+Delete stay listed, inert, with the reason); the column's blank space has
+Create Channel. The open channel's row carries
+`aria-current="page"`, from the first render that resolves it: the column and
+the pane resolve the open channel through the same `openChannel` helper, so
+neither marks a row the other did not mount.
 
 Every row is built from `useSidebarInbox()` — the `TeamInbox` projections
 `ChatInboxService` already keeps and polls for each eligible team, the same
@@ -843,8 +857,8 @@ rather than a count, so "…", "!", "3+" and "5·" appear there and a bare numbe
 does not. A hidden conversation keeps its channel listed, marked "Hidden",
 dimmed and placed last, rather than being dropped, which used to make a team
 whose only conversation was hidden claim it had no channels. Named teams whose server
-offers no chat sit dimmed at the foot under "No chat" with the reason; shares
-are not listed. Unread counts use `--unread` wherever they
+offers no chat sit dimmed at the foot under "Chat unavailable" with the
+reason; shares are not listed. Unread counts use `--unread` wherever they
 appear.
 
 The column's search field filters teams and channels by name across the whole
@@ -853,12 +867,13 @@ its team's heading and that channel — and says when nothing matches.
 The input is a `type="search"` field with its own accessible name rather than a
 wrapper `<label>`. Search match counts are announced via a visually hidden
 `role="status"` element so screen reader users are notified when the team list
-filters. It searches the "No chat" teams too, so it is live whenever the column
-lists anything, not only when a team has chat. There is
-no message-content search: the agent has no message index, so the conversation
-header's search button focuses this field rather than promising one.
+filters. It searches the "Chat unavailable" teams too, so it is live whenever
+the column lists anything, not only when a team has chat. There is no
+message-content search: the agent has no message index, so the field filters
+the column only.
 
-New chat (`chat-new.tsx`) opens from the column's header as a two-step sheet:
+New chat (`chat-new.tsx`) opens from the column bar's New channel control (New
+team, which opens Teams, when no team has chat) as a two-step sheet:
 step one picks a team, with a team that cannot chat listed inert and carrying
 its reason rather than hidden; step two picks one of that team's channels or
 creates one. A channel says the same thing about itself here as in the column —
@@ -909,19 +924,17 @@ character (retaining the first mapped scalar) to align with backend length
 checks. Form submission via Enter is disabled whenever the Create button is
 disabled. The pane's empty state opens the same sheet on the team it is showing.
 
-The conversation view is implemented in `chat-screen.tsx`: the header displays
-"Team · #channel", where the team name truncates with an ellipsis first under
-constrained widths to prioritize channel name visibility, with
-the description and access line ("Member can read and write" — the visibility
-band is a FOKS internal and is not drawn, except when the read and write roles
-differ by the band alone, where the band is the only thing that tells them
-apart), and carries one Refresh that reloads the history, the channel list and
-the saved work, the search that returns to the column, Team files, and the ⓘ
-that opens `chat-info.tsx` — rendered as a third column when space permits, and
-as an overlay covering the conversation pane below 1000px tab width to preserve
-readability at the 960px minimum window width. The overlay covers the entire
-conversation pane to avoid partially obscuring message text and header
-controls. The team column remains visible to allow navigating away at any time. It carries the channel's description, who can take part, the
+The conversation view is implemented in `chat-screen.tsx` and
+`chat/chat-thread.tsx`. Its bar names the channel (#name), with the channel's
+description (or its member count) beside it, an Admins or Restricted chip
+where one applies, and ⓘ, which opens `chat-info.tsx`: a third column when
+the window is at least 1100px wide (`COLUMN_QUERY`), and below that a dialog
+over the conversation, with the team column still visible to navigate away.
+History, channel list and saved work reload with the inbox's own schedule and
+the sidebar's status line, so the bar carries no Refresh. Channel info shows
+the access line ("Member can read and write" — the visibility band is a FOKS
+internal and is not drawn, except when the read and write roles differ by the
+band alone, where the band is the only thing that tells them apart). It carries the channel's description, who can take part, the
 team roster with its size and roles (the shell's `roleName`, never the band —
 the chat contract's own role text is stripped by `roleTextWithoutBand`, which is
 named for what it does so the two cannot be confused), the per-device alert
@@ -940,7 +953,7 @@ Saved work that has not finished sits above the conversation in a bounded
 last of it is accounted for the section says "All caught up" rather than
 disappearing without a word. When the team's server check-in has lapsed the
 column stays and the pane carries the notice, with "Check in" opening that
-server in Settings › Servers; every other unavailable state is stated without
+server in Settings › Account (its server page); every other unavailable state is stated without
 an action, because no button in Chat resolves it, and "Open Another Team" is
 offered only when another team can actually be opened. A location naming a team
 that has no chat says so in the pane rather than waiting for an inbox that will
@@ -956,9 +969,9 @@ no `ChatAction` reaches them: reactions, "Retry all" and "Discard" over every
 pending operation at once (one attempt per operation is the rule the recovery
 model keeps), Leave / Delete / Mute / Edit description in the ⓘ panel, and a
 "Join a team" button, which has no FOKS equivalent
-— a team arrives through an invitation or a per-server check for groups, both
-of which live in Teams, so the column's foot keeps the one "Create or join a
-team" button.
+— a team arrives through an invitation or a per-server check for teams, both
+of which live in Teams; when no team has chat, the column bar's add control
+is New team, which opens Teams.
 
 The conversation bar names the channel and carries ⓘ for Channel info; the
 inbox refreshes on its own schedule and with the sidebar's status line.
@@ -1009,6 +1022,12 @@ on it in later cascade layers. Layout custom properties live on `.window`:
 (8px) and `--bar-h` (44px). Under `prefers-reduced-motion` nothing travels:
 the overlay keyframes read their distance from tokens that drop to zero, and
 transitions keep only colour and opacity, so sheets, alerts and menus fade.
+This is a deliberate change from the build before the redesign, which cut
+every animation and transition to 0.01ms: design A's review (self-review-2
+P1-9) chose a short fade over no motion, and `styles-geometry.test.ts` now
+asserts colour/opacity-only transitions and zeroed travel tokens instead of
+the 0.01ms durations. Under `prefers-contrast: more` hairlines, field borders,
+muted inks and the quiet selection tints are darkened in `kit/tokens.css`.
 
 **Appearance:** Preferences offers Light, Dark, and System. Light is the default;
 the choice is stored locally as `appearance`. `public/theme-init.js` applies the
@@ -1017,7 +1036,7 @@ changes. Dark overrides live in `kit/tokens.css`.
 
 ## Navigation guards
 
-Sheets are not addressable by `Location` or a URL. Rail-tab switches retain
+Sheets are not addressable by `Location` or a URL. Place switches (sidebar, Control-Tab) retain
 approved input forms in the optional `LocationState.sheet` memory: new items,
 new channels, member addition, group creation, invitation details, and typed
 pairing acceptance. Screens explicitly opt their selectors and fields into
@@ -1077,7 +1096,12 @@ All user navigation requests pass through the guards, including the sidebar rows
 and the ⌘K palette. A palette item result is one move rather than two:
 `openFiles(folder, kind, selection)` opens the item's folder with the item
 selected in it, so a held-back navigation cannot leave another page's item in
-the details panel; the item's row then takes the focus.
+the details panel; the item's row then takes the focus. The palette lists its
+places (Go to All Items … Open Settings) first while the field is empty, and
+keeps those whose words match a query ahead of the results; channels are
+listed as Chat names them (#general for the general channel), with the team
+in the detail line. The empty query's Items group is the head of the catalog,
+not recent items: nothing records which items were opened.
 
 Two shortcuts sit on the document, where an open dialog cannot intercept them,
 so they test `anyDialogOpen()` themselves: Control-Tab in `shell/sidebar.tsx`,
@@ -1107,8 +1131,9 @@ The unit and render-test layers live in `tests/`:
   shell's grid, read off the CSS since jsdom computes no layout.
 - `shell-keyboard.render.test.tsx` and `focus-keeper.test.ts` — the sidebar's
   source-list keys and tree, ⌘F and the sidebar toggle, Return in sheets, the
-  palette landing on a row, the focus after a delete, and the focus keeper's
-  rules.
+  palette landing on a row, the focus after a delete, the window Escape's
+  scope, and the focus keeper's rules; `sheet-focus.render.test.tsx` — radio
+  groups, field errors and the opener of a replaced sheet.
 - `sync-status.render.test.tsx` — the sidebar's status line: one button, and
   the Refresh status popover it opens on hover. The popover is portaled, so the
   pointer leaves the button's wrapper on the way into it; the test holds that
@@ -1116,6 +1141,15 @@ The unit and render-test layers live in `tests/`:
 - `app-root.render.test.tsx` — jsdom plus Vite `ssrLoadModule`, the same boot
   as `ui/tests/app-root.render.test.tsx`: the app mounts itself into `#root`
   from `src/main.tsx`, exactly as it does in the browser.
+
+Tests the redesign removed with the features they covered, so that a later
+audit need not look for them: the folder tree's keyboard resize and stored
+width (`filesSidebarWidth`; the tree is in the sidebar now, whose resize test
+remains in `sidebar-collapse.render.test.tsx`), the `hue()` golden values
+(presentation), and the narrow rail's collapse calls (the sidebar hides
+rather than collapsing to icons). No behaviour, security or data-handling
+assertion was removed; the reduced-motion policy above is the one assertion
+that was changed rather than renamed.
 
 The Rust command layer covers runtime-dependent behavior. App lock, clipboard
 concealment/clearing, native picker/drop streaming and webview resident-set
@@ -1150,10 +1184,10 @@ kept so deep links defined in the design specification resolve to this location.
 | `folders`                                                                            | All items                               | shows the list: folders are the sidebar tree and the list's folder sections |
 | `lease`                                                                              | Work (Acme)                             | `lease=lapsed` — the whole snapshot, not a place                                                        |
 | `inactive`                                                                           | Homelab                                 | group reports inactive; Resume creation uses its resumable operation                                    |
-| `alerts`                                                                             | Accounts, on its attention list         | `lease=lapsed`, so the list has its critical entry                                                      |
+| `alerts`                                                                             | Settings › Account | `lease=lapsed`, so Needs attention has its critical entry |
 | `agent-lost`                                                                         | Full window stop                        | Retry reconnects and refreshes without replay                                                           |
-| `groups`                                                                             | Teams                                   | the list, then the collapsed Check-other-servers row; `store=` names the account create/join act as     |
-| `people`                                                                             | Accounts                                | the attention list over one account's panel; `store=` names the account                                 |
+| `groups`                                                                             | Teams | the list; Find Teams in the bar checks each server; `store=` names the account create/join act as |
+| `people`                                                                             | Settings › Account | the account panel; `store=` names the account |
 | `group-people` · `party` · `federation`                                              | Engineering group page                  | Members tab; `party` opens a member row's menu                                                          |
 | `group-channels`                                                                     | Household group page                    | Channels tab, on the group whose server offers chat; `tab=channels` reaches it on any group             |
 | `group-files`                                                                        | Engineering group page                  | Files tab; `tab=files` reaches it on any group                                                          |
@@ -1161,25 +1195,25 @@ kept so deep links defined in the design specification resolve to this location.
 | `store` · `items`                                                                    | Engineering                             | group vault                                                                                             |
 | `add` · `promote` · `demote` · `remove` · `admit`                                                | Engineering group page                  | the named Group sheet; `add` and `admit` are the two halves of one sheet                                |
 | `invite`                                                                             | Engineering group page                  | the Invite sheet, seeded to the account holding the group                                               |
-| `create`                                                                             | Teams                                   | named/ad-hoc Create group sheet on the acting account; `store=` names it, else this Mac's first         |
+| `create`                                                                             | Teams                                   | named/ad-hoc Create a Team sheet on the acting account; `store=` names it, else this Mac's first |
 | `groups-lease` · `groups-inactive`                                                   | Engineering group page or Homelab vault | distinct lease/inactive takeovers                                                                       |
 | `manage`                                                                             | Household group page                    | Members tab, without a Manage overlay                                                                   |
 | `party-remove`                                                                       | Engineering group page                  | the non-local removal refusal                                                                           |
-| `join`                                                                               | Teams                                   | account-specific discovery and invite choices                                                           |
+| `join`                                                                               | Teams | the Join a Team sheet on the acting account |
 | `join-invite`                                                                        | Teams                                   | invite sheet opened on the exact `acct:work` fixture store                                              |
 | `boot` · `who` · `address` · `no-address` · `checked` · `compare` · `error`          | First run, steps 0–2                    | `path=invited` or `path=own` selects the setup route                                                    |
 | `account` · `existing` · `protect` · `phrase`                                        | First run, steps 3–4                    | account creation/recovery and the one-time backup sheet                                                 |
 | `waiting` · `added`                                                                  | First run, steps 5–6                    | invited group discovery and completion                                                                  |
 | `checklist-invited` · `checklist-own`                                                | Get started inside the ordinary shell   | resumable nonsecret progress summary                                                                    |
 | `first-run&step=<step>&path=<path>`                                                  | the resumable first-run location codec  | used after the first in-app transition and across reload                                                |
-| `servers-list` · `servers-server` · `servers-lapsed` · `servers-rollback`            | Settings › Servers                      | the list, then one server's page; `profile=` opens it                                                   |
-| `servers-reset` · `servers-add` · `servers-unprobed` · `servers-check`               | Settings › Servers                      | typed removal, add/check and explicit result states                                                     |
-| `settings&section=servers` · `settings&section=preferences` · `settings&section=mac` | Settings                                | the three pages of the sub-navigation; retired section names resolve to the page that holds them        |
-| `settings-macs` · `settings-macs-work` · `settings-phrase`                           | Devices                                 | Macs, pairing and the one-time recovery-phrase reveal; `settings-macs-work` names the exact `acct:work` store |
-| `settings-keys` · `settings-enrol`                                                   | Devices                                 | the Security key enrollments section and the hardware-key account sheet                                 |
+| `servers-list` · `servers-server` · `servers-lapsed` · `servers-rollback`            | Settings › Account | the Servers group at its foot, then one server's page; `profile=` opens it |
+| `servers-reset` · `servers-add` · `servers-unprobed` · `servers-check`               | Settings › Account | typed removal, add/check and explicit result states on a server's page |
+| `settings&section=servers` · `settings&section=preferences` · `settings&section=mac` | Settings | Preferences and Storage (`mac`); `servers` is a retired name for Account, and other retired section names resolve to the page that holds them |
+| `settings-macs` · `settings-macs-work` · `settings-phrase`                           | Devices | the list, pairing and the one-time recovery-phrase reveal; `settings-macs-work` names the exact `acct:work` store |
+| `settings-keys` · `settings-enrol`                                                   | Devices | the list and the hardware-key account sheet |
 | `devices&store=<StoreRef>&device=<key>`                                              | Devices › one key                       | that key's details in the details column; `device=` is the key id, or `yubi:<alias>` for an enrollment                       |
-| `settings-account`                                                                   | Accounts                                | the account panel and its workflows                                                                     |
-| `settings-agent` · `settings-about`                                                  | Settings › Device                       | the application version and lock, the agent status and socket                                           |
+| `settings-account`                                                                   | Settings › Account | the account panel and its workflows |
+| `settings-agent` · `settings-about`                                                  | Settings › Storage | the application version and lock, the agent status and socket |
 
 `decodeLocation` returns `null` for display mode, item selection, or lease
 modifiers because those properties represent presentation options or environmental
