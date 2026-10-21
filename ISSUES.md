@@ -197,9 +197,16 @@ identify them accurately:
 - The Rust realtime server stores go-foks main clients' replies, reactions and
   edits (pegged messages) in Basic channels, but the Rust client only shows
   them as placeholders and cannot compose them, and only text messages raise
-  notifications. The server refuses the other non-Basic message types, which
-  go-foks main stores (`Database::rt_send` in
+  notifications. The server refuses the other non-Basic message types with
+  `BAD_ARGS` (1030), which go-foks main stores (`Database::rt_send` in
   `crates/foks-server-db/src/realtime/messages.rs`); no client sends them.
+- Once a channel holds a pegged message, a pinned v0.1.9 Go member's thread
+  reads (`GetThread`, `GetMsgs`) of any range containing it fail with
+  `VERSION_NOT_SUPPORTED`: v0.1.9 `openMessage` (`client/librt/minder.go`)
+  opens only Basic bodies and the error fails the whole page. Inbox sync
+  continues. go-foks main and v0.1.9 Go hosts serve pegged messages to v0.1.9
+  clients in the same way; on Rust hosts this is new with pegged-send
+  acceptance.
 - The pinned v0.1.9 Go client cannot open rotated invitation certificates
   because its stacked-signature verifier uses the reverse order. go-foks fixed
   the verifier in `e07f30b` (#350, after v0.1.9), so Go clients built from main

@@ -10,6 +10,53 @@ use foks_client_db::{ChatOperationState as State, SoftStateStore};
 use foks_proto::*;
 use foks_rpc::{RealtimeRequest as Request, RealtimeResponse as Response};
 use foks_server_testkit::{TestAccountSpec, TestClient, TestEnvironment};
+use foks_snowpack::{encode, Value};
+
+/// Seals `body` under `noncer` without the arm check in
+/// `RealtimeKeys::seal_message`, deriving the Data key from the team seed as
+/// chapter 16 of the book specifies. Only a faulty or hostile sender
+/// produces a body whose arm disagrees with the metadata type.
+fn seal_unchecked(
+    seed: &SecretSeed,
+    noncer: &RtMessageNoncer,
+    body: &RtMessageBody,
+) -> RtCiphertext {
+    use crypto_secretbox::aead::{Aead, KeyInit};
+    use hmac::Mac;
+    let mac = |key: &[u8], type_id: u64, object: Value| -> [u8; 32] {
+        let mut mac = <hmac::Hmac<sha2::Sha512_256> as Mac>::new_from_slice(key).unwrap();
+        mac.update(&type_id.to_be_bytes());
+        mac.update(&encode(&object).unwrap());
+        mac.finalize().into_bytes().into()
+    };
+    let app = mac(
+        seed.as_slice(),
+        0xd35c_dcc9_5cae_f674,
+        Value::Array(vec![Value::Unsigned(5), Value::Variant(None)]),
+    );
+    let realtime = mac(
+        &app,
+        APP_KEY_DERIVATION_TYPE_ID,
+        Value::Array(vec![
+            Value::Unsigned(0),
+            Value::Variant(Some((b"0".to_vec(), Box::new(Value::Unsigned(1))))),
+        ]),
+    );
+    let data = mac(
+        &realtime,
+        RT_KEY_DERIVATION_TYPE_ID,
+        Value::Array(vec![
+            RtAppId::Chat.to_value(),
+            Value::Array(vec![RtKeyType::Data.to_value(), Value::Variant(None)]),
+        ]),
+    );
+    let nonce = foks_crypto::realtime_message_nonce(noncer).unwrap();
+    RtCiphertext(
+        crypto_secretbox::XSalsa20Poly1305::new((&data).into())
+            .encrypt((&nonce).into(), body.encoded().unwrap().as_ref())
+            .unwrap(),
+    )
+}
 
 #[test]
 fn pegged_sends_are_stored_and_render_as_placeholders_without_breaking_continuity() {
@@ -253,4 +300,65 @@ fn pegged_sends_are_stored_and_render_as_placeholders_without_breaking_continuit
         latest.messages[0].message.metadata.previous_id,
         RtMessageId([0x55; 16])
     );
+
+    // A pegged message whose body arm disagrees with its metadata type is
+    // stored (the server cannot see the arm), and the Rust reader refuses
+    // it like any unopenable message: the history read fails and the inbox
+    // blocks the channel instead of showing a preview.
+    let mismatch = RtMessageMetadata {
+        id: RtMessageId([0x5e; 16]),
+        previous_id: latest.messages[0].message.metadata.id,
+        previous_sequence: 6,
+        send_time: 1_700_000_000_010,
+        kind: RtMessageType::Reaction,
+        further_user_attribution: None,
+    };
+    let mismatch_noncer = RtMessageNoncer {
+        metadata: mismatch.clone(),
+        sender: Some(sender.clone()),
+        app: RtAppId::Chat,
+        team: team_party.clone(),
+        channel,
+    };
+    let reaction = RtMessageBody::Pegged {
+        kind: RtMessageType::Reaction,
+        body: b"x".to_vec(),
+        reply_to: root_id,
+    };
+    // The helper seals exactly what seal_message seals for a consistent body.
+    assert_eq!(
+        seal_unchecked(seed, &mismatch_noncer, &reaction),
+        keys.seal_message(&mismatch_noncer, &reaction).unwrap()
+    );
+    let mut send = seal(&mismatch, &reaction);
+    let Request::Send(arg) = &mut send else {
+        panic!("send")
+    };
+    let RtMessageWrapper::Encrypted(boxed) = &mut arg.send.wrapper else {
+        panic!("encrypted")
+    };
+    boxed.ciphertext = seal_unchecked(
+        seed,
+        &mismatch_noncer,
+        &RtMessageBody::Pegged {
+            kind: RtMessageType::Edit,
+            body: b"x".to_vec(),
+            reply_to: root_id,
+        },
+    );
+    let Response::Sent(receipt) = connection.call(&send).unwrap() else {
+        panic!("send receipt")
+    };
+    assert_eq!(receipt.sequence, 7);
+    assert!(matches!(
+        chat.read_recent(&mut connection, channel, 10),
+        Err(foks_client::Error::ChatChannelIntegrity(_))
+    ));
+    let synced = chat.sync_inbox(&mut connection, &mut soft).unwrap();
+    assert!(synced.inbox.blocked_channels.contains(&channel));
+    assert!(synced
+        .inbox
+        .conversations
+        .iter()
+        .all(|c| c.channel.metadata.id != channel || c.preview.is_none()));
 }

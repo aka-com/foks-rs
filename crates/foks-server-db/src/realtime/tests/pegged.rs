@@ -108,7 +108,8 @@ fn go_main_pegged_sends_are_stored_and_reserved_byte_for_byte() {
         assert_eq!(commit.value.sequence, index as u64 + 2);
         assert_eq!(commit.value.insert_time, at(index) / 1000);
         assert!(!commit.value.was_replay);
-        // Fan-out is the same as for Basic: every member is woken.
+        // Fan-out is the same as for Basic: the owner, the member and the
+        // go-foks main sender are woken.
         assert_eq!(commit.wake.len(), 3);
         assert_eq!(last_kind(&f), *kind);
     }
@@ -273,6 +274,23 @@ fn other_kinds_and_malformed_pegged_metadata_are_refused() {
             arg.send.metadata.kind
         );
     }
+    // A member below the channel's write role cannot send a pegged message.
+    f.db.connection
+        .execute(
+            "UPDATE team_members SET role_type=1,visibility=-1 WHERE party_id=?1",
+            params![go.uid],
+        )
+        .unwrap();
+    assert!(matches!(
+        f.db.rt_send(&go, &reply, at(0)),
+        Err(Error::AuthorizationChanged)
+    ));
+    f.db.connection
+        .execute(
+            "UPDATE team_members SET role_type=1,visibility=0 WHERE party_id=?1",
+            params![go.uid],
+        )
+        .unwrap();
     assert_eq!(f.count("rt_messages"), 1);
     assert_eq!(last_kind(&f), RtMessageType::Basic);
     // The refusals left nothing behind: the fixture send is still fresh.

@@ -53,6 +53,8 @@ foks-rpc = { workspace = true }
 foks-snowpack = { workspace = true }
 foks-verify = { workspace = true }
 foks-yubi = { workspace = true }
+crypto_secretbox = { workspace = true }
+hmac = "0.12"
 rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

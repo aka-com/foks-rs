@@ -21,7 +21,11 @@ impl Database {
         // go-foks main (server/realtime/messages.go insertMessage) stores
         // any kind from Basic to Leave; the others have no body arm, so no
         // client can open them, and System, Join and Leave are reserved for
-        // server-authored messages.
+        // server-authored messages. These request-only checks precede the
+        // channel lookup and authorization, as they did for Basic; go-foks
+        // checks the type last, so a refused kind can be reported here where
+        // go-foks would report a permission error. The answer does not
+        // depend on the channel or the sender's membership.
         if !matches!(
             send.metadata.kind,
             RtMessageType::Basic

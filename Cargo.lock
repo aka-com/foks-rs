@@ -2251,6 +2251,7 @@ name = "foks-server-testkit"
 version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
+ "crypto_secretbox",
  "foks-agent-client",
  "foks-agent-proto",
  "foks-client",
@@ -2269,6 +2270,7 @@ dependencies = [
  "foks-snowpack",
  "foks-verify",
  "foks-yubi",
+ "hmac",
  "http-body-util",
  "hyper",
  "hyper-util",
