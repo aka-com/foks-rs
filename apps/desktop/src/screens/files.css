@@ -230,50 +230,6 @@
   font-size: 12px;
 }
 
-/* A store that can still be read but no longer written. */
-.folder-body .lnotice {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  margin: 4px 2px 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--amber-border);
-  border-radius: 10px;
-  background: var(--amber-wash);
-  color: var(--amber-ink);
-}
-.folder-body .lnotice > .ic {
-  flex: none;
-  margin-top: 1px;
-  font-size: 16px;
-}
-.folder-body .lnotice .t {
-  flex: 1;
-  min-width: 0;
-}
-.folder-body .lnotice b {
-  display: block;
-  font-size: 13px;
-  font-weight: 650;
-}
-.folder-body .lnotice p {
-  margin-top: 1px;
-  font-size: 12.5px;
-  opacity: 0.9;
-}
-.folder-body .lnotice .btn.cap {
-  flex: none;
-  height: 26px;
-  padding: 0 10px;
-  border-radius: var(--radius-md);
-  border-color: var(--line-mid);
-  background: var(--btn-bg);
-  color: var(--ink);
-}
-.folder-body .lnotice .btn.cap:hover {
-  background: var(--btn-hover);
-}
-
 /* ------------------------------------------------- empty and first run
    An empty vault: a short heading and three flat cards — New Password,
    Add Document and the CLI import command — over the panel. */

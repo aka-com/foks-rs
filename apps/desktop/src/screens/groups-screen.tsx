@@ -44,7 +44,6 @@ import {
   Mark,
   MenuButton,
   MenuItem,
-  Notice,
   SectionLabel,
   SheetDialog,
   StoreMark,
@@ -92,7 +91,6 @@ import type { GroupSettingsTab, Location, NavigateOptions } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { useSheetGuard } from '../navigation-guard';
 import { markProfileRostersStale } from '../roster-staleness';
-import { PageHeader } from '../shell/page-header';
 import { NewChatSheet } from './chat-new';
 import {
   ChannelsTab,
@@ -1420,17 +1418,13 @@ export function GroupSettingsScreen({
 
   if (!store || store.kind !== 'team') {
     return (
-      <>
-        <PageHeader title="Team unavailable" subtitle="" />
-        <div className="body">
-          {/* A store that is gone is the same class of problem as an account
-              that is gone, and takes the same treatment: a danger row alert
-              whose body is a paragraph like every other notice's. */}
-          <Notice severity="crit" title="Team no longer available">
-            <p>Refresh the page, or select another team from the Teams tab.</p>
-          </Notice>
-        </div>
-      </>
+      <div className="body">
+        <EmptyState
+          icon="users"
+          title="Team Unavailable"
+          body="This team is no longer on this device. Refresh, or choose another team from All Teams."
+        />
+      </div>
     );
   }
   const access = storeDescriptionState(snapshot, store, {

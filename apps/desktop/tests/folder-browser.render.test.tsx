@@ -486,10 +486,10 @@ test('typing a query leaves the folder tree unchanged', async () => {
 });
 
 test('a missing store renders the unavailable state', async () => {
-  await mount({ kind: 'store', ref: 'acct:gone' }, undefined, '.notice');
+  await mount({ kind: 'store', ref: 'acct:gone' }, undefined, '.main .empty');
   assert.match(
-    document.querySelector('.notice')?.textContent ?? '',
-    /Vault no longer available/,
+    document.querySelector('.main .empty')?.textContent ?? '',
+    /Vault Unavailable.*no longer on this device/,
   );
   // Neither the empty-folder invitation nor an empty list.
   assert.equal(document.querySelector('.list-window'), null);

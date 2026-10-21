@@ -1,4 +1,4 @@
-/** Status labels, classification tags, and optional numeric count badges. */
+/** Status labels: the design's `.chip`. */
 
 import type { ReactNode } from 'react';
 
@@ -25,39 +25,6 @@ export function Chip({
   return (
     <span className={classes} title={title}>
       {children}
-    </span>
-  );
-}
-
-export interface TagProps {
-  tone?: 'default' | 'warn';
-  title?: string;
-  children: ReactNode;
-}
-
-export function Tag({
-  tone = 'default',
-  title,
-  children,
-}: TagProps): ReactNode {
-  return (
-    <span className={tone === 'warn' ? 'tag warn' : 'tag'} title={title}>
-      {children}
-    </span>
-  );
-}
-
-export interface BadgeProps {
-  count: number;
-  /** Accessible label describing the counted entity. */
-  label?: string;
-}
-
-export function Badge({ count, label }: BadgeProps): ReactNode {
-  if (!count) return null;
-  return (
-    <span className="badge" title={label}>
-      {count}
     </span>
   );
 }

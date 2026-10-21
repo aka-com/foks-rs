@@ -38,7 +38,6 @@ import {
 } from '../components';
 import type { ListboxOptionProps } from '../components';
 import type { FoksIconName } from '../icons';
-import { PageHeader } from '../shell/page-header';
 import {
   KINDS,
   catalog,
@@ -859,14 +858,13 @@ export function ItemsScreen({
   // a store that is no longer present.
   if (location.kind === 'store' && !store) {
     return (
-      <>
-        <PageHeader title="Vault unavailable" subtitle="" />
-        <div className="body">
-          <Notice severity="crit" title="Vault no longer available">
-            <p>Refresh, or choose another vault from the sidebar.</p>
-          </Notice>
-        </div>
-      </>
+      <div className="body">
+        <EmptyState
+          icon="lock"
+          title="Vault Unavailable"
+          body="This vault is no longer on this device. Refresh, or choose another vault from the sidebar."
+        />
+      </div>
     );
   }
 

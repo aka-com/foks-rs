@@ -108,8 +108,7 @@ export type Location =
   | { kind: 'files' }
   /**
    * Activity: the place for requests, unfinished operations and server trust
-   * notices across accounts. Only the route exists so far; the page is a
-   * placeholder.
+   * notices across accounts.
    */
   | { kind: 'activity' }
   /**
