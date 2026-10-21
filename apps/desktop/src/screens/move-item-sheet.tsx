@@ -146,6 +146,7 @@ export function MoveSheet({
           autoFocus
           value={destination}
           disabled={saving || uncertain}
+          error={error ?? undefined}
           onChange={(value) => {
             setDestination(value);
             setError(null);
@@ -156,9 +157,11 @@ export function MoveSheet({
         Enter the full path, including the new name, in an existing folder of{' '}
         {storeName}. An item already at that path is never overwritten.
       </p>
-      {problem || error ? (
+      {/* A refused destination is stated on the field itself; this is the
+          account's access to the item, which no path can change. */}
+      {problem ? (
         <p className="action-error" role="alert">
-          {problem ?? error}
+          {problem}
         </p>
       ) : null}
     </SheetDialog>
