@@ -180,8 +180,20 @@ identify them accurately:
   has no RSVP precondition.
 - Lost local acceptance, remote acceptance and rejection replies can remain
   permanently unknown when no authorized exact read-back exists.
-- The pinned Go client cannot open rotated invitation certificates because its
-  stacked-signature verifier uses the reverse order.
+- A team whose chain already contains a link that left it without an owner
+  does not load in the Rust client: `foks_verify` refuses such a link during
+  replay, while go-foks replays it (only new edits are refused upstream, since
+  `df2acf1`). Teams stranded by an earlier go-foks client therefore stay
+  unreadable here.
+- A team KV write replays a request refused for a stale or unknown view token
+  only against servers that return `TEAM_BEARER_TOKEN_STALE_ERROR` or
+  `TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR`. Rust servers before this change
+  returned `EXPIRED_ERROR` on the KV path, which the write session does not
+  treat as a token refusal.
+- The pinned v0.1.9 Go client cannot open rotated invitation certificates
+  because its stacked-signature verifier uses the reverse order. go-foks fixed
+  the verifier in `e07f30b` (#350, after v0.1.9), so Go clients built from main
+  open them; the fixture test for the signing order stays.
 - Reliable minimized/background operation, native multi-window ownership,
   post-quit operation and non-macOS native notifications remain deferred.
 - Extended channel management, edits, deletion, reactions, threads, mentions and

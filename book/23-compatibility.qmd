@@ -194,6 +194,64 @@ drift is therefore structurally unable to grant anything. Clients that
 consult the artifact learn whether the Rust implementation is currently
 known to work against that host without trusting a mutable web page.
 
+## Following upstream past the pinned release
+
+The baseline stays v0.1.9, but go-foks main (`35dc037`, the unreleased
+v0.1.10) already changes behaviour that peers observe. Two mechanisms let the
+Rust implementation follow it without disturbing the pinned contract.
+
+**Statuses newer than the baseline.** The pinned artifact cannot supply a
+status that upstream added later, and it is not regenerated for one. The
+handwritten policy (`crates/foks-server/protocol/policy-v1.toml`) instead
+lists such codes in `[[post_baseline_status]]` tables, each with its alias,
+upstream name, explicit value and the upstream revision that defines it.
+Merging refuses an entry whose name or value the pinned artifact already
+defines, so an entry can neither shadow nor reuse a baseline status; the
+renderer emits the constant into `status_codes.rs` after the pinned ones,
+with its provenance as a comment, and into `protocol-v1.toml`. The drift
+extractor treats these names as statuses the Rust code depends on. When the
+baseline moves to a release that contains a status, its entry becomes an
+ordinary alias. The two entries today are
+`TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR` (7016, `5a9ff13`) and
+`RT_MSG_REPLAY_MISMATCH` (12007, `b41b354`).
+
+**Fixtures generated from main.** `tools/foks-main-oracle` links the
+pseudo-version of go-foks main and writes frames under
+`crates/foks-snowpack/tests/fixtures/foks-main/<area>/`, each directory with
+a README naming its generator and a `SHA256SUMS` file. The v0.1.9 fixture
+tree is not touched.
+
+Behaviour adopted from main so far:
+
+- **Unknown team view tokens (7016).** A go-foks main server answers a
+  view-only team bearer token it holds no row for with
+  `TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR` (void payload), and its client then
+  activates a new view and replays the operation once. The Rust server
+  returns 7016 where it holds no row for the token (never issued, evicted or
+  reclaimed after expiry) and `TEAM_BEARER_TOKEN_STALE_ERROR` where a row
+  exists but has expired or its membership was superseded; earlier it
+  returned `EXPIRED_ERROR` on the KV, chain-load and user-load paths. The
+  stale status stays wherever a row exists because v0.1.9 Go clients
+  recover only from that one (in their realtime sender lookup); to them 7016
+  is an unknown status. On the client side, a team KV write session that
+  receives either status activates one replacement view through the team
+  loader and replays the refused request; the replacement is used only if
+  the reloaded team opens exactly the same team keys. Cached reads in the
+  agent already retried on the stale and expired statuses and now also on
+  7016. The bytes are checked against a main-generated frame.
+- **Ownerless teams (`df2acf1`).** A new edit that takes the roster from at
+  least one owner to none is refused locally by the Rust team editor (the
+  counterpart of go-foks `GameplanOpts.RequireOwner`) and by the Rust server
+  with `TEAM_ROSTER_ERROR` and upstream's message, "edit would leave team
+  without an owner". The server check runs on the decoded change before
+  link verification so that the status matches go-foks; `foks_verify` would
+  otherwise refuse the link with a generic team error. Admitting a remote
+  user's RSVP when that user is already in the roster is refused, as go-foks
+  `TeamAdmit` refuses it; local users and teams were already refused. One
+  difference remains: go-foks replays an existing chain that left its team
+  without an owner, while `foks_verify` refuses such a link in replay as
+  well, so a team that go-foks stranded does not load in a Rust client.
+
 ## Quirks preserved bug-for-bug
 
 Differential testing finds the places where the reference implementation
@@ -202,9 +260,13 @@ them, because a Rust implementation that was "more correct" than Go would
 be incompatible with it.
 
 **Bare payloads for team and Kex protocols.** Described in
-[Chapter 17](17-wire.qmd): five protocols omit the `DataWrap` envelope
-because of how their Go source files were generated. Found by AST
-inspection, pinned by a Go test.
+[Chapter 17](17-wire.qmd): five client-to-server protocols (31 methods) omit
+the `DataWrap` envelope because their `.snowp` declarations omit the
+`argHeader` and `resHeader` modifiers; the generator treats every file the
+same way. Found by AST inspection, pinned by a Go test. Unchanged in go-foks
+main as of `35dc037` (2026-10-11): `proto-src/rem/team.snowp`,
+`proto-src/rem/kex.snowp`, `proto/rem/gen.go` and the `go-snowpack-compiler`
+version are identical to v0.1.9.
 
 **The Merkle epoch limit at 65,536.** Go's canonical checker for signed
 objects rejects any `array16` with 31 or fewer elements, even though
@@ -213,19 +275,30 @@ MessagePack has no shorter encoding for 16 to 31 elements
 root ([Chapter 12](12-epochs.qmd)) grows with the number of trailing zero
 bits in the epoch, so it first reaches 16 entries at epoch 65,536 and has
 16 or more at every later multiple of 32,768. A root at such an
-epoch could not be encoded in a form Go would accept as signable. Rust
-therefore refuses to build back-pointer arrays of 16 to 31 entries and
-exposes `MAX_CANONICAL_MERKLE_EPOCH = 65,536` as a documented limit rather
-than silently diverging.
+epoch could not be encoded in a form Go would accept as signable, and since
+roots are sequential no later epoch can be reached either. The cause is one
+bound in `lib/core/snowp.go`: the `mpArray16` case rejects lengths up to
+`0x1f`, the `str8` bound, where the fixarray bound is `0x0f`. Rust therefore
+refuses to build back-pointer arrays of 16 to 31 entries and exposes
+`MAX_CANONICAL_MERKLE_EPOCH = 65,536` as a documented limit rather than
+silently diverging. Unchanged in go-foks main as of `35dc037` (2026-10-11):
+v0.1.9..main touches no canonical encoding code in `lib/core` (`snowp.go`,
+`crypto.go`, `sigs.go` and `sigs2.go` are identical) and nothing in
+`lib/merkle`.
 
 **Rotated invitation certificate signature order.** A team certificate for
 an invitation carries stacked signatures ([Chapter 15](15-teams.qmd)). When
 the team's admin key has rotated since the certificate was first issued,
-the pinned Go client verifies the signatures in the reverse of the order
-one would expect. The Rust fixture test decodes Go's `rotated` certificate,
-re-creates it byte-exactly, and asserts that swapping the two signatures
-makes verification fail, so Rust matches Go's order rather than its own
-preference.
+the pinned v0.1.9 Go client verifies the signatures in the reverse of the
+order in which they were applied (`[current PTK, generation-1 PTK]`), so it
+cannot open any rotated certificate, whether a Go or a Rust host issued it.
+Rust signs and verifies in the stacked order. The Rust fixture test decodes Go's
+`rotated` certificate, re-creates it byte-exactly, and asserts that swapping
+the two signatures makes verification fail. go-foks fixed its verifier in
+`e07f30b` (#350, after v0.1.9): `openCert` now delegates to
+`team.OpenTeamCert` and uses the stacked order, so Go clients built from main
+open Rust-issued rotated certificates. Only the pinned v0.1.9 client still
+has the quirk; the fixture test stays.
 
 **Seed-chain receiver binding.** When a team's shared key rotates, Go builds
 one seed chain per rotation and binds its informational "receiver" field
@@ -261,6 +334,8 @@ same domain-separated-nonce convention as the wire cryptography.
 - `tools/foks-server`: `generate-protocol.sh`, `diff-upstream-protocol.sh`.
 - `foks-protocol-metadata`: `lib.rs` (pinned digest, merge and validation
   of the local policy, rendering).
+- `tools/foks-main-oracle`: `frames.go`, `team_fixture_test.go`; fixtures
+  under `crates/foks-snowpack/tests/fixtures/foks-main/`.
 - `tools/foks-v019-oracle`: `main.go`, `live_compat_test.go`,
   `go_client_rust_live_test.go`, `rpc_fixture_descriptor_test.go`,
   `README.md`.

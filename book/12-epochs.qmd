@@ -222,9 +222,14 @@ it:
   means.
 
 Because epoch 65,536 cannot be published, a compatible tree cannot advance
-past epoch 65,535 at all. At one epoch per mutation, that is the number of
-mutations a v0.1.9-compatible host can accept in its lifetime. The crate's
-README states the situation and the way out: "Raising the ceiling requires a
+past epoch 65,535 at all. Later epochs that are not multiples of 32,768
+(65,537 has one pointer) could be hashed in isolation, but roots are minted in
+sequence. Epoch 1 is the empty tree written when the host is initialized, and
+a root minted only to record a hostchain change ([host-key
+rotation](#host-key-rotation)) consumes an epoch without a mutation. At one
+mutation per epoch, a v0.1.9-compatible host therefore accepts at most 65,534
+mutations in its lifetime, and one fewer for each hostchain-only root. The
+crate's README states the situation and the way out: "Raising the ceiling requires a
 coordinated upstream canonicality/wire fix." An implementation that quietly
 emitted a different encoding would produce roots that every existing client
 rejects, which is worse than stopping.
