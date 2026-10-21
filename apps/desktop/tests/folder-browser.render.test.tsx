@@ -380,7 +380,7 @@ test('cards preserve browsing state, sorting, and selected details and persist a
   assert.equal(await checked('As Cards'), true);
   assert.equal(document.querySelectorAll('.files-grid .row').length, 1);
   assert.equal(
-    document.querySelector('.files-grid .row')?.getAttribute('aria-pressed'),
+    document.querySelector('.files-grid .row')?.getAttribute('aria-selected'),
     'true',
   );
   assert.equal(await checked('Descending'), true);
@@ -410,7 +410,9 @@ test('folder cards navigate with the keyboard and retain the cards and kind filt
     '.files-grid [data-folder-path="/logins"]',
   );
   assert.ok(folder);
-  assert.equal(folder.querySelector('.name small')?.textContent, 'Folder');
+  // At a store's root a first-level folder is the label of its section.
+  assert.equal(folder.getAttribute('role'), 'option');
+  assert.match(folder.getAttribute('aria-label') ?? '', /^logins, folder/);
   ui.fireEvent.keyDown(folder, { key: 'Enter' });
   assert.equal(store.getSnapshot().folder, '/logins');
   assert.equal(store.getSnapshot().kind, 'Password');

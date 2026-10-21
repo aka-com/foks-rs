@@ -15,13 +15,18 @@ import { CollectionStatus } from '../components/collection-status';
  */
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { KeyboardEvent, ReactNode } from 'react';
+import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
 import { anyDialogOpen, ContextMenu, Menu } from '/kit/overlay-primitives';
 import { useDismissedOnboardingTip } from '../onboarding-tips';
 import { virtualListWindow } from '/kit/virtual-list';
 import { useFilesView } from '../files-view-pref';
-import { filesGridWindow } from './files-grid';
+import {
+  FILES_CARD_GAP,
+  FILES_CARD_HEIGHT,
+  FILES_CARD_HEIGHT_WITH_LOCATION,
+  filesGridWindow,
+} from './files-grid';
 import {
   Band,
   Button,
@@ -29,7 +34,9 @@ import {
   Icon,
   MenuItem,
   Notice,
+  useListbox,
 } from '../components';
+import type { ListboxOptionProps } from '../components';
 import type { FoksIconName } from '../icons';
 import { PageHeader } from '../shell/page-header';
 import {
@@ -41,7 +48,6 @@ import {
   kindLabel,
   kindOf,
   nameOf,
-  partiesOf,
   prefixOf,
   serverDisplayLabelForStore,
   storeDescription,
@@ -66,6 +72,7 @@ import {
   scopedItems,
   whereOf,
 } from './scope';
+import type { FolderNode } from './scope';
 import { useFolderMenu } from './folder-menu';
 import { itemTile } from './item-tile';
 import {
@@ -102,6 +109,8 @@ interface RowProps {
   onDelete: (item: Item) => void;
   onMove?: (item: Item) => void;
   accessNow: () => number;
+  /** The row's listbox option attributes (`useListbox`). */
+  option: ListboxOptionProps;
 }
 
 function Row({
@@ -118,6 +127,7 @@ function Row({
   onDelete,
   onMove,
   accessNow,
+  option,
 }: RowProps): ReactNode {
   const rowRef = useRef<HTMLDivElement>(null);
   const [menuPoint, setMenuPoint] = useState<{ x: number; y: number } | null>(
@@ -156,6 +166,7 @@ function Row({
     <button
       type="button"
       title={label}
+      tabIndex={-1}
       aria-label={`${label} ${name}`}
       onClick={(event) => {
         event.stopPropagation();
@@ -169,13 +180,17 @@ function Row({
     <>
       <div
         ref={rowRef}
-        className={['row', 'item', selected ? 'sel' : '', readOnly ? 'ro' : '']
+        className={[
+          'row',
+          'item',
+          selected ? 'sel' : '',
+          readOnly ? 'ro' : '',
+          menuPoint ? 'menu-target' : '',
+        ]
           .filter(Boolean)
           .join(' ')}
         data-row-key={`${item.store}|${item.path}`}
-        role="button"
-        tabIndex={0}
-        aria-pressed={selected}
+        {...option}
         aria-haspopup="menu"
         onClick={onSelect}
         onContextMenu={(event) => {
@@ -209,7 +224,9 @@ function Row({
           <small>{where}</small>
         </span>
         <span className="r">{fmtSize(item.size)}</span>
-        <span className="acts">
+        {/* Pointer shortcuts only: the context menu (Shift+F10) carries the
+            same actions for the keyboard and VoiceOver. */}
+        <span className="acts" aria-hidden="true">
           {item.kind !== 'File' ? (
             <>
               {action('Copy', 'copy', onCopy)}
@@ -263,6 +280,7 @@ function Row({
               </>
             )}
             <MenuItem
+              icon="folder"
               reason={readProblem}
               onClick={choose(() => onCopyPath(item))}
             >
@@ -271,6 +289,7 @@ function Row({
             <div className="menu-separator" role="separator" />
             {onMove ? (
               <MenuItem
+                icon="pencil"
                 reason={writeProblem}
                 onClick={choose(() => onMove(item))}
               >
@@ -293,6 +312,22 @@ function Row({
   );
 }
 
+/** The list key of a folder row or section. */
+function folderRowKey(storeId: string, path: string): string {
+  return `${storeId}|${path}/`;
+}
+
+/** Return, Space and ⌘↓ open a folder row or section. */
+function opensFolder(event: KeyboardEvent<HTMLElement>): boolean {
+  if (event.target !== event.currentTarget) return false;
+  return (
+    ((event.key === 'Enter' || event.key === ' ') &&
+      !event.metaKey &&
+      !event.altKey) ||
+    (event.key === 'ArrowDown' && event.metaKey)
+  );
+}
+
 /** A subfolder of the selected folder, listed above its items. */
 function FolderRow({
   name,
@@ -300,25 +335,27 @@ function FolderRow({
   onSelect,
   storeId,
   path,
+  option,
 }: {
   storeId: string;
   path: string;
   name: string;
   count: number;
   onSelect: () => void;
+  option: ListboxOptionProps;
 }): ReactNode {
   return (
     <div
       className="row folder"
       data-folder-store={storeId}
       data-folder-path={path}
-      data-row-key={`${storeId}|${path}/`}
+      data-row-key={folderRowKey(storeId, path)}
       aria-haspopup="menu"
-      role="button"
-      tabIndex={0}
+      {...option}
+      aria-selected={false}
       onClick={onSelect}
       onKeyDown={(event) => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
+        if (!opensFolder(event)) return;
         event.preventDefault();
         onSelect();
       }}
@@ -333,6 +370,51 @@ function FolderRow({
         <small>Folder</small>
       </span>
       <span className="r">{itemCount(count)}</span>
+    </div>
+  );
+}
+
+/**
+ * A first-level folder's section at a store's root: its name and count over
+ * its own items. The label is itself an option that opens the folder, so
+ * the folder stays reachable from the list with the keyboard and its
+ * context menu.
+ */
+function FolderSection({
+  name,
+  count,
+  onSelect,
+  storeId,
+  path,
+  option,
+}: {
+  storeId: string;
+  path: string;
+  name: string;
+  count: number;
+  onSelect: () => void;
+  option: ListboxOptionProps;
+}): ReactNode {
+  return (
+    <div
+      className="gsec folder-sec"
+      data-folder-store={storeId}
+      data-folder-path={path}
+      data-row-key={folderRowKey(storeId, path)}
+      aria-haspopup="menu"
+      aria-label={`${name}, folder, ${itemCount(count)}`}
+      title={`Open ${name}`}
+      {...option}
+      aria-selected={false}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (!opensFolder(event)) return;
+        event.preventDefault();
+        onSelect();
+      }}
+    >
+      <span className="nm">{name}</span>
+      <span className="n">{count}</span>
     </div>
   );
 }
@@ -474,6 +556,18 @@ export interface ItemsScreenProps {
 /** The window's list row: two lines at 13/1.3 and 12/1.3 with 5px padding. */
 const ROW_HEIGHT = 42;
 
+/** `pendingFocus` value for the first row of whatever the list shows next. */
+const FIRST_ROW = '*';
+
+/** One row of the list: an item, a folder row, or a folder's section. */
+type ListEntry =
+  | { type: 'item'; key: string; item: Item }
+  | { type: 'folder' | 'section'; key: string; node: FolderNode };
+
+function itemEntry(item: Item): ListEntry {
+  return { type: 'item', key: `${item.store}|${item.path}`, item };
+}
+
 /** Whether `path` is `folder` itself or lies under it. */
 function underFolder(path: string, folder: string): boolean {
   return folder === '/' || path === folder || path.startsWith(`${folder}/`);
@@ -525,7 +619,8 @@ export function ItemsScreen({
     onNavigate: (location) => locations.navigate(location),
     accessNow,
   });
-  // The row arrow keys moved to, focused once it has rendered.
+  // The row to focus once it has rendered (after opening a folder, or going
+  // up to the enclosing one), or FIRST_ROW.
   const pendingFocus = useRef<string | null>(null);
   const { location } = state;
   const store =
@@ -557,6 +652,125 @@ export function ItemsScreen({
   const selectedNode = selectedRoot
     ? (folderAt(selectedRoot, selected.path) ?? selectedRoot)
     : undefined;
+
+  // Search and All Items window a flat result set in either layout; a store
+  // or folder lists its direct children.
+  const flatMode = Boolean(state.query) || selected.store === ALL_ITEMS;
+  const viewport = {
+    listTop: listMetrics.top,
+    scrollTop,
+    viewport: listMetrics.viewport,
+    overscan: 3,
+  };
+  const gridWindow = filesGridWindow({
+    ...viewport,
+    count: items.length,
+    width: listMetrics.width,
+    location: selected.store === ALL_ITEMS,
+    overscan: 1,
+  });
+  const rowWindow =
+    view === 'grid'
+      ? gridWindow
+      : virtualListWindow({
+          ...viewport,
+          heights: items.map(() => ROW_HEIGHT),
+        });
+  const visibleRows = items.slice(rowWindow.start, rowWindow.end);
+
+  const inOrder = <T,>(list: readonly T[]): T[] =>
+    state.sortDirection === 'desc' ? [...list].reverse() : [...list];
+  const folders = inOrder(selectedNode?.folders ?? []);
+  const folderScopedItems = selectedNode?.items ?? [];
+  const showEmptyFolder =
+    Boolean(selectedStore) && !folders.length && !folderScopedItems.length;
+
+  // What a store or folder lists, in order. A folder lists its subfolders,
+  // then its items. A store's root lists its own items, then a section per
+  // first-level folder holding that folder's subfolders and items, so the
+  // store's contents (and a selected item in a folder) are on screen.
+  const atStoreRoot =
+    !flatMode && Boolean(selectedStore) && selected.path === '/';
+  const paneEntries: ListEntry[] = [];
+  if (selectedStore && !flatMode) {
+    const storeId = selectedStore.id;
+    const folderEntry = (
+      type: 'folder' | 'section',
+      node: FolderNode,
+    ): ListEntry => ({ type, key: folderRowKey(storeId, node.path), node });
+    if (atStoreRoot) {
+      paneEntries.push(...folderScopedItems.map(itemEntry));
+      for (const folder of folders) {
+        paneEntries.push(
+          folderEntry('section', folder),
+          ...inOrder(folder.folders).map((sub) => folderEntry('folder', sub)),
+          ...folder.items.map(itemEntry),
+        );
+      }
+    } else {
+      paneEntries.push(
+        ...folders.map((folder) => folderEntry('folder', folder)),
+        ...folderScopedItems.map(itemEntry),
+      );
+    }
+  }
+  const listEntries = flatMode ? items.map(itemEntry) : paneEntries;
+  const entryAt = new Map(
+    listEntries.map((entry, index) => [entry.key, { entry, index }]),
+  );
+  const selectedKey = state.selection
+    ? `${state.selection.store}|${state.selection.path}`
+    : null;
+
+  /** Scrolls a windowed list so the row at `index` is mounted and in view. */
+  const revealIndex = (index: number): void => {
+    const body = bodyRef.current;
+    if (!body || !flatMode) return;
+    const lineHeight =
+      view === 'grid'
+        ? (selected.store === ALL_ITEMS
+            ? FILES_CARD_HEIGHT_WITH_LOCATION
+            : FILES_CARD_HEIGHT) + FILES_CARD_GAP
+        : ROW_HEIGHT;
+    const line =
+      view === 'grid' ? Math.floor(index / gridWindow.columns) : index;
+    const top = listMetrics.top + line * lineHeight;
+    const height = body.clientHeight || listMetrics.viewport;
+    let next = body.scrollTop;
+    if (top < next) next = top;
+    else if (top + lineHeight > next + height) next = top + lineHeight - height;
+    if (next === body.scrollTop) return;
+    body.scrollTop = next;
+    setScrollTop(next);
+  };
+
+  // The rows are one listbox: one Tab stop, Up/Down/Home/End and
+  // type-select. Reaching an item selects it; a folder row only takes focus,
+  // and Return opens it.
+  const listbox = useListbox({
+    keys: listEntries.map((entry) => entry.key),
+    selectedKey,
+    renderedKeys: flatMode
+      ? visibleRows.map((item) => `${item.store}|${item.path}`)
+      : undefined,
+    labelOf: (key) => {
+      const entry = entryAt.get(key)?.entry;
+      if (!entry) return '';
+      return entry.type === 'item'
+        ? nameOf(entry.item.path)
+        : displayPathComponent(entry.node.name);
+    },
+    onMove: (key) => {
+      const found = entryAt.get(key);
+      if (!found) return;
+      revealIndex(found.index);
+      if (found.entry.type === 'item')
+        locations.select({
+          store: found.entry.item.store,
+          path: found.entry.item.path,
+        });
+    },
+  });
 
   useLayoutEffect(() => {
     const body = bodyRef.current;
@@ -594,10 +808,14 @@ export function ItemsScreen({
   useEffect(() => {
     const key = pendingFocus.current;
     if (!key) return;
-    const row = [
+    const rows = [
       ...(bodyRef.current?.querySelectorAll<HTMLElement>('[data-row-key]') ??
         []),
-    ].find((candidate) => candidate.dataset.rowKey === key);
+    ];
+    const row =
+      key === FIRST_ROW
+        ? rows[0]
+        : rows.find((candidate) => candidate.dataset.rowKey === key);
     if (!row) return;
     pendingFocus.current = null;
     row.focus({ preventScroll: true });
@@ -655,6 +873,7 @@ export function ItemsScreen({
 
   /** Selects `path` in `target`, keeping a store page's address. */
   const selectFolder = (target: Store, path: string): void => {
+    pendingFocus.current ??= FIRST_ROW;
     const samePage = storePage && target.id === location.ref;
     if (storePage && !samePage) locations.navigate({ kind: 'all' });
     locations.setFolder(folderKey(samePage, target.id, path));
@@ -703,39 +922,6 @@ export function ItemsScreen({
         onUpload={onUploadDroppedFile}
       />
     ) : null;
-
-  // Search and All Items window a flat result set in either layout; a store
-  // or folder lists its direct children.
-  const flatMode = Boolean(state.query) || selected.store === ALL_ITEMS;
-  const viewport = {
-    listTop: listMetrics.top,
-    scrollTop,
-    viewport: listMetrics.viewport,
-    overscan: 3,
-  };
-  const gridWindow = filesGridWindow({
-    ...viewport,
-    count: items.length,
-    width: listMetrics.width,
-    location: selected.store === ALL_ITEMS,
-    overscan: 1,
-  });
-  const rowWindow =
-    view === 'grid'
-      ? gridWindow
-      : virtualListWindow({
-          ...viewport,
-          heights: items.map(() => ROW_HEIGHT),
-        });
-  const visibleRows = items.slice(rowWindow.start, rowWindow.end);
-
-  const folders =
-    state.sortDirection === 'desc'
-      ? [...(selectedNode?.folders ?? [])].reverse()
-      : (selectedNode?.folders ?? []);
-  const folderScopedItems = selectedNode?.items ?? [];
-  const showEmptyFolder =
-    Boolean(selectedStore) && !folders.length && !folderScopedItems.length;
 
   /* ------------------------------------------------------- row actions -- */
 
@@ -823,52 +1009,62 @@ export function ItemsScreen({
         if (allowAction(item, true)) onDelete(item);
       }}
       accessNow={accessNow}
+      option={listbox.optionProps(`${item.store}|${item.path}`)}
     />
   );
 
   const paneRows = selectedStore
-    ? [
-        ...folders.map((folder) => (
-          <FolderRow
-            storeId={selectedStore.id}
-            path={folder.path}
-            key={folder.path}
-            name={displayPathComponent(folder.name)}
-            count={folder.count}
-            onSelect={() => selectFolder(selectedStore, folder.path)}
-          />
-        )),
-        ...folderScopedItems.map(row),
-      ]
+    ? paneEntries.map((entry) => {
+        if (entry.type === 'item') return row(entry.item);
+        const props = {
+          storeId: selectedStore.id,
+          path: entry.node.path,
+          name: displayPathComponent(entry.node.name),
+          count: entry.node.count,
+          onSelect: () => selectFolder(selectedStore, entry.node.path),
+          option: listbox.optionProps(entry.key),
+        };
+        return entry.type === 'section' ? (
+          <FolderSection key={entry.key} {...props} />
+        ) : (
+          <FolderRow key={entry.key} {...props} />
+        );
+      })
     : [];
 
-  /**
-   * Up and Down move the selection along the rows the list shows, and the
-   * focus with it, so the keyboard keeps working after a click.
-   */
-  const shownItems = flatMode ? items : folderScopedItems;
-  const onListKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-    if (event.altKey || event.metaKey || event.ctrlKey) return;
-    const target = event.target as HTMLElement;
-    if (!target.matches('.row')) return;
-    const current = shownItems.findIndex(
-      (item) =>
-        item.store === state.selection?.store &&
-        item.path === state.selection.path,
-    );
-    const next =
-      current < 0
-        ? 0
-        : Math.min(
-            Math.max(current + (event.key === 'ArrowDown' ? 1 : -1), 0),
-            shownItems.length - 1,
-          );
-    const item = shownItems[next];
-    if (!item) return;
+  /** ⌘↑ goes to the enclosing folder, with the folder just left focused. */
+  const onListPaneKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
+    folderMenu.handlers.onKeyDown(event);
+    if (event.defaultPrevented) return;
+    if (event.key !== 'ArrowUp' || !event.metaKey || event.altKey) return;
+    if (!selectedStore || selected.path === '/') return;
+    if (
+      event.target instanceof Element &&
+      event.target.closest('input, textarea, select')
+    )
+      return;
     event.preventDefault();
-    pendingFocus.current = `${item.store}|${item.path}`;
-    locations.select({ store: item.store, path: item.path });
+    const parent =
+      selected.path.slice(0, selected.path.lastIndexOf('/')) || '/';
+    pendingFocus.current = folderRowKey(selectedStore.id, selected.path);
+    selectFolder(selectedStore, parent);
+  };
+
+  /**
+   * A click on the list's empty space clears the selection, as in Finder;
+   * a click anywhere else (bars, sidebar, menus) leaves it alone. The
+   * selection change is guarded, so unsaved edits prompt first.
+   */
+  const onListBodyClick = (event: MouseEvent<HTMLDivElement>): void => {
+    if (!state.selection || event.button !== 0) return;
+    if (
+      event.target instanceof Element &&
+      event.target.closest(
+        '[data-option-key], .list-head, .bandstrip, .lnotice, .nextup, .notice, .starter, .empty, button, a, input',
+      )
+    )
+      return;
+    locations.select(null, { closeDetails: true });
   };
 
   /** The current view's name in the list head. */
@@ -882,10 +1078,6 @@ export function ItemsScreen({
         : (selectedStore?.name ?? 'All Items');
   const shownCount =
     selected.store === ALL_ITEMS ? items.length : (selectedNode?.count ?? 0);
-  const people =
-    selectedStore?.kind === 'team'
-      ? partiesOf(snapshot, selectedStore.id).length
-      : 0;
 
   /* ------------------------------------------------------- empty states -- */
 
@@ -1043,15 +1235,27 @@ export function ItemsScreen({
       ) : (
         <div className="list-window">
           {nextUp}
-          <div className="virtual-rows" ref={listRef}>
+          <div
+            className="virtual-rows"
+            ref={(node) => {
+              listRef.current = node;
+              listbox.listProps.ref.current = node;
+            }}
+            role={listbox.listProps.role}
+            aria-label={scopeLabel}
+            onKeyDown={listbox.listProps.onKeyDown}
+            onFocus={listbox.listProps.onFocus}
+          >
             {rowWindow.padTop ? (
               <div
                 className="virtual-spacer"
+                aria-hidden="true"
                 style={{ height: rowWindow.padTop }}
               />
             ) : null}
             {view === 'grid' ? (
               <div
+                role="presentation"
                 className={
                   selected.store === ALL_ITEMS
                     ? 'files-grid with-location'
@@ -1070,6 +1274,7 @@ export function ItemsScreen({
             {rowWindow.padBottom ? (
               <div
                 className="virtual-spacer"
+                aria-hidden="true"
                 style={{ height: rowWindow.padBottom }}
               />
             ) : null}
@@ -1085,7 +1290,11 @@ export function ItemsScreen({
     ) : (
       <div className="list-window">
         {nextUp}
-        <div className={view === 'grid' ? 'files-grid' : 'virtual-rows'}>
+        <div
+          className={view === 'grid' ? 'files-grid' : 'virtual-rows'}
+          {...listbox.listProps}
+          aria-label={scopeLabel}
+        >
           {paneRows}
         </div>
       </div>
@@ -1111,7 +1320,12 @@ export function ItemsScreen({
     <div className="list-head">
       <div className="t">
         <h2>Results for “{state.query}”</h2>
-        <p className="search-scope">in {scopeLabel}</p>
+        <p className="search-scope">
+          in {scopeLabel}
+          {kindMeta && selected.store !== ALL_ITEMS
+            ? ` · ${kindMeta.plural}`
+            : ''}
+        </p>
       </div>
     </div>
   ) : selectedStore ? (
@@ -1134,10 +1348,21 @@ export function ItemsScreen({
         ) : null}
         <h2>{scopeLabel}</h2>
         <p>
+          {kindMeta ? (
+            <button
+              type="button"
+              className="kind-filter"
+              title="Show all kinds"
+              aria-label={`Showing ${kindMeta.plural.toLowerCase()} only. Show all kinds`}
+              onClick={() => locations.setKind('All')}
+            >
+              {kindMeta.plural}
+              <Icon name="close" />
+            </button>
+          ) : null}
           {itemReadiness === 'ready'
             ? itemCount(shownCount)
             : `${shownCount} items loaded`}
-          {people ? ` · ${people} ${people === 1 ? 'member' : 'members'}` : ''}
           {` · ${serverDisplayLabelForStore(snapshot, selectedStore)}`}
         </p>
       </div>
@@ -1157,13 +1382,13 @@ export function ItemsScreen({
         className="lpane"
         aria-label="Folder contents"
         onContextMenu={folderMenu.handlers.onContextMenu}
-        onKeyDown={folderMenu.handlers.onKeyDown}
+        onKeyDown={onListPaneKeyDown}
       >
         <div
           className="body folder-body rows"
           ref={bodyRef}
           onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
-          onKeyDown={onListKeyDown}
+          onClick={onListBodyClick}
         >
           {listHead}
           {location.kind === 'all' && accessBands.length ? (

@@ -147,9 +147,12 @@ async function cards(): Promise<void> {
 }
 
 function row(name: string): HTMLElement {
-  const row = [...document.querySelectorAll<HTMLElement>('.lpane .row')].find(
-    (element) => element.querySelector('.nm')?.textContent === name,
-  );
+  // Rows, and the folder sections a store's root lists its folders under.
+  const row = [
+    ...document.querySelectorAll<HTMLElement>(
+      '.lpane .row, .lpane .folder-sec',
+    ),
+  ].find((element) => element.querySelector('.nm')?.textContent === name);
   assert.ok(row);
   return row;
 }
@@ -273,28 +276,28 @@ test('vault and team roots expose scoped folder creation and team info without s
   )!;
   ui.fireEvent.contextMenu(vault);
   assert.equal(
-    ui.screen.queryByRole('menuitem', { name: 'Delete folder' }),
+    ui.screen.queryByRole('menuitem', { name: 'Delete Folder' }),
     null,
   );
-  assert.equal(ui.screen.queryByRole('menuitem', { name: 'Team info' }), null);
+  assert.equal(ui.screen.queryByRole('menuitem', { name: 'Team Info' }), null);
   assert.equal(
-    ui.screen.queryByRole('menuitem', { name: 'Invite new user…' }),
+    ui.screen.queryByRole('menuitem', { name: 'Invite New User…' }),
     null,
   );
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'New folder' }));
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'New Folder…' }));
   assert.deepEqual(mounted.folders, [{ storeId: 'acct:personal', path: '/' }]);
   const before = mounted.locations.getSnapshot();
   const team = document.querySelector<HTMLElement>(
     '.side-tree [data-folder-store="team:eng"][data-folder-path="/"] .fselect',
   )!;
   ui.fireEvent.keyDown(team, { key: 'F10', shiftKey: true });
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Team info' }));
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Team Info' }));
   assert.deepEqual(mounted.teamInfo, ['team:eng']);
   assert.equal(mounted.locations.getSnapshot(), before);
   for (const [label, intent] of [
-    ['Add FOKS user…', 'add'],
-    ['Add FOKS team…', 'add-team'],
-    ['Invite new user…', 'invite'],
+    ['Add FOKS User…', 'add'],
+    ['Add FOKS Team…', 'add-team'],
+    ['Invite New User…', 'invite'],
   ] as const) {
     ui.fireEvent.contextMenu(team);
     const menu = ui.screen.getByRole('menu');
@@ -321,14 +324,14 @@ test('tree and content folders target their own path and explain unsupported del
     '.side-tree [data-folder-store="acct:personal"][data-folder-path="/logins"] .fselect',
   )!;
   ui.fireEvent.contextMenu(folder);
-  const deletion = ui.screen.getByRole('menuitem', { name: 'Delete folder' });
+  const deletion = ui.screen.getByRole('menuitem', { name: 'Delete Folder' });
   assert.equal(deletion.getAttribute('aria-disabled'), 'true');
   assert.match(
     document.getElementById(deletion.getAttribute('aria-describedby')!)!
       .textContent,
     /not supported by the desktop agent/,
   );
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'New folder' }));
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'New Folder…' }));
   assert.deepEqual(mounted.folders, [
     { storeId: 'acct:personal', path: '/logins' },
   ]);
@@ -338,7 +341,7 @@ test('tree and content folders target their own path and explain unsupported del
   )!;
   assert.ok(content);
   ui.fireEvent.keyDown(content, { key: 'ContextMenu' });
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'New folder' }));
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'New Folder…' }));
   assert.equal(mounted.folders[1].path, '/logins');
   ui.fireEvent.keyDown(content, { key: 'ContextMenu' });
   ui.fireEvent.keyDown(document, { key: 'Escape' });
@@ -352,9 +355,14 @@ test('grid cards keep item selection, quick actions, and keyboard context menus'
   const password = row('github.com');
   assert.ok(password.closest('.files-grid'));
   ui.fireEvent.keyDown(password, { key: ' ' });
-  assert.equal(password.getAttribute('aria-pressed'), 'true');
+  assert.equal(password.getAttribute('aria-selected'), 'true');
   ui.fireEvent.click(
-    ui.within(password).getByRole('button', { name: 'Copy github.com' }),
+    // The hover actions are pointer shortcuts, hidden from assistive
+    // technology (the context menu carries the same actions).
+    ui.within(password).getByRole('button', {
+      name: 'Copy github.com',
+      hidden: true,
+    }),
   );
   assert.equal(mounted.copies[0]?.path, '/logins/github.com');
   ui.fireEvent.keyDown(password, { key: 'F10', shiftKey: true });
@@ -389,11 +397,13 @@ test('grid folder menus preserve their scope for right click and Shift+F10', asy
     open();
     assert.equal(
       ui.screen
-        .getByRole('menuitem', { name: 'Delete folder' })
+        .getByRole('menuitem', { name: 'Delete Folder' })
         .getAttribute('aria-disabled'),
       'true',
     );
-    ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'New folder' }));
+    ui.fireEvent.click(
+      ui.screen.getByRole('menuitem', { name: 'New Folder…' }),
+    );
     assert.equal(mounted.locations.getSnapshot().folder, 'acct:personal|/');
   }
   assert.deepEqual(mounted.folders, [

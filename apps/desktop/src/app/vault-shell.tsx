@@ -106,6 +106,7 @@ import {
 } from './shell-overlays';
 import { useShellRuntime } from './shell-runtime';
 import { ShellSearch } from './shell-search';
+import { itemActionProblem } from '../screens/store-access';
 import { useWindowRuntime } from './window-runtime';
 
 function incompleteFirstRunCheckpoint(): FirstRunCheckpoint | null {
@@ -531,8 +532,10 @@ export function VaultShell({
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [openNewItem]);
   // ⌘⌫ deletes the selected item, through the same alert the item's menu
-  // opens, and only while nothing else holds the keyboard: a text field, a
-  // menu or a dialog.
+  // opens, and only while nothing else holds the keyboard (a text field, a
+  // menu or a dialog) and the focus is on the Files list or its details: a
+  // destructive key acts on the view that has focus. An item the account
+  // cannot delete is refused with the reason, without opening the alert.
   const selectedItem =
     filesHere && state.selection
       ? shown.items.find(
@@ -553,12 +556,24 @@ export function VaultShell({
       )
         return;
       if (anyDialogOpen() || anyPopupOpen()) return;
+      const focused = document.activeElement;
+      if (
+        focused &&
+        focused !== document.body &&
+        !focused.closest('.lpane, .details')
+      )
+        return;
       event.preventDefault();
+      const problem = itemActionProblem(shown, selectedItem, true, accessNow());
+      if (problem) {
+        toasts.show(problem, { tone: 'warning' });
+        return;
+      }
       setWorkflow({ kind: 'delete', item: selectedItem });
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [chrome.blocked, selectedItem, setWorkflow]);
+  }, [accessNow, chrome.blocked, selectedItem, setWorkflow, shown, toasts]);
   useEffect(() => {
     if (!bridge.native) return;
     let disposed = false;
@@ -658,6 +673,8 @@ export function VaultShell({
                 direction={state.sortDirection}
                 onSort={(sort, direction) => locations.setSort(sort, direction)}
                 locationSort={newSelection?.store === ALL_ITEMS}
+                kind={state.kind}
+                onKind={(kind) => locations.setKind(kind)}
                 disabled={chrome.blocked}
               />
             ),
@@ -929,9 +946,9 @@ export function VaultShell({
               revealRequest={revealRequest}
               onRevealHandled={() => setRevealRequest(null)}
               selection={state.selection}
-              onClose={() => {
-                locations.setDetails(false);
-              }}
+              // Clearing the selection is guarded, so unsaved edits in the
+              // panel ask before they are discarded.
+              onClose={() => locations.select(null, { closeDetails: true })}
               onMove={(item) => setWorkflow({ kind: 'move', item })}
               onOpenFolder={(storeId, path) =>
                 locations.openFiles(`${storeId}|${path}`, 'All')
