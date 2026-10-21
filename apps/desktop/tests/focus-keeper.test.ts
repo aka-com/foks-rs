@@ -150,3 +150,58 @@ test('a place the window settles on before any input is not a navigation', async
     stop();
   }
 });
+
+test('a lost focus in a dialog lands on the invalid field, else the body, else the footer', async () => {
+  page('');
+  document.body.insertAdjacentHTML(
+    'beforeend',
+    '<div role="dialog" aria-modal="true" tabindex="-1"><div class="sheet"><div class="sb"><input id="path"><button id="start">Start</button></div><div class="ft"><button class="btn" id="cancel">Cancel</button><button class="btn primary" id="go">Move</button></div></div></div>',
+  );
+  const stop = mountFocusKeeper();
+  try {
+    const go = document.getElementById('go') as HTMLButtonElement;
+    go.focus();
+    // The submit fails: the field is marked invalid, the button disables
+    // itself while it ran and comes back.
+    document.getElementById('path')!.setAttribute('aria-invalid', 'true');
+    go.disabled = true;
+    go.blur();
+    await tick();
+    assert.equal(document.activeElement?.id, 'path');
+
+    // A swapped body control with nothing invalid: the first body control.
+    document.getElementById('path')!.removeAttribute('aria-invalid');
+    const start = document.getElementById('start')!;
+    start.focus();
+    start.remove();
+    await tick();
+    assert.equal(document.activeElement?.id, 'path');
+
+    // Everything in the body disabled and the default too: Cancel.
+    const path = document.getElementById('path') as HTMLInputElement;
+    path.disabled = true;
+    path.blur();
+    await tick();
+    assert.equal(document.activeElement?.id, 'cancel');
+  } finally {
+    stop();
+    document.querySelector('[role="dialog"]')?.remove();
+  }
+});
+
+test('a button that disables itself while it works gets the focus back', async () => {
+  page('<button id="check">Check</button><button id="other">Other</button>');
+  const stop = mountFocusKeeper();
+  try {
+    const check = document.getElementById('check') as HTMLButtonElement;
+    check.focus();
+    check.disabled = true;
+    check.blur();
+    // Re-enabled before the keeper looks: it is still where the focus goes.
+    check.disabled = false;
+    await tick();
+    assert.equal(document.activeElement?.id, 'check');
+  } finally {
+    stop();
+  }
+});

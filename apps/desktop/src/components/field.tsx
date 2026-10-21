@@ -5,6 +5,7 @@
  * descriptive hint variants.
  */
 
+import { useId } from 'react';
 import type { ReactNode } from 'react';
 import { InsetRow } from './inset';
 
@@ -26,6 +27,12 @@ export interface FieldProps {
   hint?: ReactNode;
   /** Takes the focus when its dialog opens (`data-dialog-autofocus`). */
   autoFocus?: boolean;
+  /**
+   * Why the value was refused. The input is marked `aria-invalid` and
+   * described by the message, which is drawn under it as an alert; the focus
+   * keeper lands a dialog's lost focus on the invalid field.
+   */
+  error?: string;
 }
 
 export function Field({
@@ -41,7 +48,9 @@ export function Field({
   action,
   hint,
   autoFocus = false,
+  error,
 }: FieldProps): ReactNode {
+  const errorId = useId();
   return (
     <InsetRow
       label={label}
@@ -53,6 +62,8 @@ export function Field({
         disabled={disabled}
         aria-label={label}
         data-dialog-autofocus={autoFocus ? 'true' : undefined}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? errorId : undefined}
         className={mono ? 'mono' : undefined}
         placeholder={placeholder}
         min={min}
@@ -61,6 +72,11 @@ export function Field({
         onChange={(event) => onChange(event.target.value)}
       />
       {hint === undefined ? null : <small>{hint}</small>}
+      {error ? (
+        <small id={errorId} className="field-error" role="alert">
+          {error}
+        </small>
+      ) : null}
     </InsetRow>
   );
 }
