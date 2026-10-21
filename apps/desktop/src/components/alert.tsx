@@ -84,6 +84,34 @@ export function AlertDialog({
       confirmRef.current?.click();
     }
   };
+  const cancelButton = (
+    <Button
+      ref={cancelRef}
+      variant={destructive ? 'primary' : 'plain'}
+      disabled={busy}
+      data-dialog-autofocus={destructive ? 'true' : undefined}
+      onClick={onCancel}
+    >
+      {cancelLabel}
+    </Button>
+  );
+  const confirmButton = (
+    <Button
+      ref={confirmRef}
+      variant={destructive ? 'plain' : 'primary'}
+      danger={destructive}
+      disabled={busy || confirmDisabled}
+      title={confirmTitle}
+      aria-describedby={confirmDescribedBy}
+      data-dialog-autofocus={destructive ? undefined : 'true'}
+      aria-keyshortcuts={destructive ? 'Meta+Backspace' : undefined}
+      onClick={onConfirm}
+    >
+      {confirmLabel}
+    </Button>
+  );
+  // The default button sits at the trailing edge, as macOS draws it: Cancel
+  // in a destructive alert, the confirm button otherwise.
   return (
     <DismissibleDialog
       className="backdrop alert-back"
@@ -94,38 +122,15 @@ export function AlertDialog({
       onKeyDown={onKeyDown}
     >
       <div className="alert">
-        <span
-          className={destructive ? 'alert-mark danger' : 'alert-mark'}
-          aria-hidden="true"
-        >
+        <span className="alert-mark" aria-hidden="true">
           <Icon name={icon} />
         </span>
         <h2 id={titleId}>{title}</h2>
         {message ? <p>{message}</p> : null}
         {children ? <div className="alert-body">{children}</div> : null}
         <div className="btns">
-          <Button
-            ref={cancelRef}
-            variant={destructive ? 'primary' : 'plain'}
-            disabled={busy}
-            data-dialog-autofocus={destructive ? 'true' : undefined}
-            onClick={onCancel}
-          >
-            {cancelLabel}
-          </Button>
-          <Button
-            ref={confirmRef}
-            variant={destructive ? 'plain' : 'primary'}
-            danger={destructive}
-            disabled={busy || confirmDisabled}
-            title={confirmTitle}
-            aria-describedby={confirmDescribedBy}
-            data-dialog-autofocus={destructive ? undefined : 'true'}
-            aria-keyshortcuts={destructive ? 'Meta+Backspace' : undefined}
-            onClick={onConfirm}
-          >
-            {confirmLabel}
-          </Button>
+          {destructive ? confirmButton : cancelButton}
+          {destructive ? cancelButton : confirmButton}
         </div>
       </div>
     </DismissibleDialog>
