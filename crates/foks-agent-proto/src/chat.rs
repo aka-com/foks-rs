@@ -317,9 +317,10 @@ pub enum ChatContent {
     /// An authenticated reply, reaction, edit or deletion that names an
     /// earlier message. Shown as a placeholder; its body is not forwarded.
     /// `target` is the hex message ID, or null when the sender named the
-    /// all-zero ID.
+    /// all-zero ID. The key is required, as the desktop decoder requires it.
     Pegged {
         action: ChatPeggedAction,
+        #[serde(deserialize_with = "Option::deserialize")]
         target: Option<String>,
     },
     Unsupported,
