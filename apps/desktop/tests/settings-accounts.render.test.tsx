@@ -589,7 +589,7 @@ test('a notice this page can route elsewhere is not repeated here', async () => 
   // server page, Homelab's own page, and Engineering's federated-members list — so
   // none of them are drawn on this page; it would be a second copy of a
   // state the reader can already see where it is acted on.
-  assert.equal(rendered.container.querySelector('.people-attention'), null);
+  assert.equal(rendered.container.querySelector('.attention-note'), null);
   assert.equal(rendered.queryByText('Acme is locked'), null);
   assert.equal(rendered.queryByText('Homelab is inactive'), null);
   assert.equal(rendered.queryByText('Homelab cannot access Engineering'), null);
@@ -621,20 +621,26 @@ test('a server note and a team roster note both route away, by the ids the agent
   };
   const { rendered } = await renderPeople(withRealIds, 'acct:personal');
 
-  assert.equal(rendered.container.querySelector('.people-attention'), null);
+  assert.equal(rendered.container.querySelector('.attention-note'), null);
   assert.equal(rendered.queryByText('Acme is locked'), null);
   assert.equal(rendered.queryByText('Team member list is unavailable'), null);
 });
 
-test('with nothing needing attention the band is hidden', async () => {
+test('with nothing needing attention the group is hidden', async () => {
   const snapshot = await fixture();
-  const { rendered } = await renderPeople({ ...snapshot, notifications: [] });
+  // No notices, and no connected server left unpaired.
+  const { rendered } = await renderPeople({
+    ...snapshot,
+    notifications: [],
+    servers: snapshot.servers.filter((server) => server.accounts.length > 0),
+  });
 
-  assert.equal(rendered.container.querySelector('.people-attention'), null);
+  assert.equal(rendered.container.querySelector('.attention-note'), null);
   assert.equal(
     rendered.queryByRole('region', { name: /^Needs attention/ }),
     null,
   );
+  assert.equal(rendered.queryByText('Needs attention'), null);
 });
 
 test('a team note with the same alias on two profiles routes to neither', async () => {
@@ -650,26 +656,25 @@ test('a team note with the same alias on two profiles routes to neither', async 
   assert.equal(rendered.queryByRole('button', { name: 'Open Homelab' }), null);
   const list = rendered.getByRole('region', { name: /^Needs attention/ });
   assert.ok(ui.within(list).getByText('Resume creation'));
-  // The band qualifies this account's facts, so it stays above both the
-  // unpaired-server row and those facts rather than ahead of the account the
-  // page names.
-  const section = list.closest('.people-attention');
-  assert.ok(section, 'the notes are drawn in the page’s notice section');
-  assert.ok(
-    section.closest('.account-main'),
-    'the section is in the page body, under the header that names the account',
+  // Design A: the group has its own heading and follows the account's
+  // facts, before the server list. Notices come first in its card, then the
+  // unpaired server.
+  assert.ok(list.closest('.account-main'));
+  assert.equal(
+    list.querySelector('.settings-heading')?.textContent,
+    'Needs attention',
   );
-  const unpaired = section.nextElementSibling;
-  if (!unpaired) throw new Error('the unpaired server row is missing');
-  assert.ok(unpaired.classList.contains('inset'));
-  assert.match(unpaired.textContent ?? '', /Connected, not paired/);
-  // The facts follow under their own heading.
-  const heading = unpaired.nextElementSibling;
-  assert.equal(heading?.textContent, 'Account');
-  assert.ok(
-    heading?.nextElementSibling?.classList.contains('settings-inset'),
-    'the server row precedes the account facts',
+  const rows = [...list.querySelectorAll('.settings-inset .fr')];
+  assert.ok(rows[0]?.classList.contains('attention-note'));
+  const unpaired = rows.at(-1);
+  assert.match(unpaired?.textContent ?? '', /Connected, not paired/);
+  const page = [...document.querySelectorAll('.account-main > *')];
+  const facts = page.findIndex((node) => node.textContent === 'Account');
+  const servers = page.findIndex((node) =>
+    node.classList.contains('server-list-label'),
   );
+  assert.ok(facts >= 0 && facts < page.indexOf(list));
+  assert.ok(servers < 0 || page.indexOf(list) < servers);
 });
 
 test('a fed- note linked to two hosts routes to neither', async () => {
@@ -737,11 +742,15 @@ test('unlinked notifications display the agent action label as a chip', async ()
   // No wrong page is offered; the chip reads what the agent asked for, and
   // the caption that would repeat it word for word is not drawn.
   const list = rendered.getByRole('region', { name: /^Needs attention/ });
+  // The note's own row; the group's other row is the unpaired server, whose
+  // Pair button is not the note's.
+  const note = list.querySelector<HTMLElement>('.attention-note');
+  assert.ok(note);
   assert.ok(
-    ui.within(list).getByText('A federated membership needs attention'),
+    ui.within(note).getByText('A federated membership needs attention'),
   );
-  assert.equal(ui.within(list).queryByRole('button'), null);
-  assert.ok(ui.within(list).getByText('Restore access'));
+  assert.equal(note.querySelector('button') === null, true);
+  assert.ok(ui.within(note).getByText('Restore access'));
   assert.equal(
     ui.within(list).queryByText(/the agent reports this as/),
     null,

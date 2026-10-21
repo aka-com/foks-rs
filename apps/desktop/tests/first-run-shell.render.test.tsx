@@ -104,7 +104,7 @@ test('first-run resume reports an unreachable managed local server', async () =>
   const resumed = ui.render(createElement(App, { bridge }));
   await resumed.findByRole('heading', { name: 'Set up FOKS' });
   await resumed.findByText('Local server unavailable');
-  await resumed.findByRole('button', { name: 'Check again' });
+  await resumed.findByRole('button', { name: 'Check Again' });
   assert.deepEqual(describedProfiles, ['personal']);
   resumed.unmount();
   window.localStorage.removeItem(FIRST_RUN_CHECKPOINT_KEY);
@@ -153,7 +153,7 @@ test('first-run retry reconnects the agent transport after a connection loss', a
     }),
   );
   const retry = await rendered.findByRole('button', {
-    name: 'Retry setup',
+    name: 'Retry Setup',
     hidden: true,
   });
   const statusCallsBeforeRetry = statusCalls;
@@ -169,4 +169,42 @@ test('first-run retry reconnects the agent transport after a connection loss', a
     'the reconnect used retryAgentConnection rather than agentStatus',
   );
   rendered.unmount();
+});
+
+test('the Added step is a page in the panel, not a list column beside empty details', async () => {
+  const { App } = (await vite.ssrLoadModule(
+    '/src/app-root.tsx',
+  )) as typeof import('../src/app-root');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { FIRST_RUN_CHECKPOINT_KEY } = (await vite.ssrLoadModule(
+    '/src/first-run-state.ts',
+  )) as typeof import('../src/first-run-state');
+  window.localStorage.removeItem(FIRST_RUN_CHECKPOINT_KEY);
+  window.history.replaceState(null, '', '/?state=added');
+  const rendered = ui.render(
+    createElement(App, { bridge: mockBridge(FIXTURE) }),
+  );
+  const open = await rendered.findByRole('button', { name: 'Open Team' });
+
+  // The step used to be laid out in the Files list column (`with-details`),
+  // which clipped its notice's actions at every window size.
+  const app = document.querySelector('.app');
+  assert.ok(app);
+  assert.equal(app.classList.contains('with-details'), false);
+  assert.equal(document.querySelector('.app > .details'), null);
+  const main = open.closest('main.first-run-main');
+  assert.ok(main, 'Open team is in the step’s own panel');
+  // The panel opens on its bar, which names the team; the page does not
+  // repeat it as a heading.
+  const bar = main.querySelector(':scope > .topbar.bar');
+  assert.ok(bar);
+  assert.equal(bar.querySelector('.crumbs .cur')?.textContent, 'Engineering');
+  assert.equal(main.querySelector('.path'), null);
+  rendered.unmount();
+  resetLocation();
 });

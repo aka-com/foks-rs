@@ -507,36 +507,22 @@
     animation: none;
   }
 }
-.chat-info-head {
-  display: flex;
+.chat-info-bar {
   flex: none;
-  align-items: center;
-  gap: 8px;
   height: var(--bar-h);
-  padding: 0 10px 0 16px;
   border-bottom: 1px solid var(--bar-rule);
 }
-.app.no-side .chat-info-head {
+.app.no-side .chat-info-bar {
   height: 52px;
-  padding-top: 8px;
 }
-.chat-info-head b {
-  flex: 1;
-  font-size: 13px;
-  font-weight: var(--weight-title);
+/* Over the conversation (under 1100px) the panel starts below the
+   conversation's bar, so the channel name and the ⓘ toggle that closes it
+   stay visible. */
+.chat-info.overlay {
+  top: var(--bar-h);
 }
-.chat-info-head .btn.icon {
-  width: 26px;
-  height: 26px;
-  flex: none;
-  border: 0;
-  box-shadow: none;
-  background: transparent;
-  color: var(--muted);
-}
-.chat-info-head .btn.icon:hover {
-  background: var(--btn-hover);
-  color: var(--ink);
+.app.no-side .chat-info.overlay {
+  top: 52px;
 }
 
 /* Channel identity. */
@@ -678,8 +664,8 @@
 .chat-info-alerts .chat-alert-mode .fr .k {
   flex: none;
   width: auto;
-  color: var(--ink);
-  font-weight: 500;
+  color: var(--muted);
+  font-weight: 400;
 }
 .chat-info-alerts .chat-alert-mode .fr .v {
   display: flex;
@@ -751,17 +737,16 @@
   color: var(--danger-ink);
 }
 .chat-info-foot {
-  display: flex;
   flex: none;
-  flex-direction: column;
-  gap: 8px;
   margin-top: auto;
-  padding: 12px 14px;
-  border-top: 1px solid var(--line-soft);
+  padding: 12px 16px;
 }
-.chat-info-foot .btn {
-  width: 100%;
-  justify-content: center;
+.chat-info-foot .lnk {
+  font-size: 12.5px;
+  color: var(--accent-ink);
+}
+.chat-info-foot .lnk:hover {
+  text-decoration: underline;
 }
 
 .chat-conversation > .band,
@@ -1063,7 +1048,7 @@
   align-items: end;
   gap: 0 6px;
   padding: 6px 6px 6px 12px;
-  margin: 10px 16px 14px;
+  margin: 10px 16px 24px;
   border: 1px solid var(--line-field);
   border-radius: var(--radius-lg);
   background: var(--field-bg);
@@ -1170,47 +1155,13 @@
 .chat-create .fr .v small {
   font-size: 12px;
 }
-/* Name and description fill the value column. */
-.chat-create .inset .fr {
-  align-items: flex-start;
-  padding: 9px 12px;
-}
-.chat-create .inset .fr .k {
-  padding-top: 7px;
-}
+/* Name and description fill the value column. The fields, and the team
+   picker as a compact select, use the shared bordered sheet field (26px in
+   a 42px row); only an error under a field adds height. */
 .chat-create .inset .fr .v {
   display: flex;
   flex-direction: column;
   gap: 5px;
-}
-.chat-create .inset .fr input,
-.chat-create .inset .fr textarea {
-  display: block;
-  width: 100%;
-  border: 1px solid var(--line-field);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  padding: 6px 10px;
-  font-size: 13px;
-  line-height: 1.4;
-  outline: 0;
-  resize: none;
-  color: var(--ink);
-}
-.chat-create .card-select-trigger {
-  border: 1px solid var(--line-field);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  padding: 6px 10px;
-  font-size: 13px;
-  line-height: 1.4;
-}
-.chat-create .inset .fr input:focus,
-.chat-create .inset .fr textarea:focus,
-.chat-create .card-select-trigger:focus-visible {
-  border-color: var(--accent-border);
-  background: var(--main-surface);
-  box-shadow: 0 0 0 3px var(--accent-wash);
 }
 .chat-create .inset .fr input.over,
 .chat-create .inset .fr textarea.over {
@@ -1219,10 +1170,6 @@
 .chat-create .inset .fr input.over:focus,
 .chat-create .inset .fr textarea.over:focus {
   box-shadow: 0 0 0 3px var(--danger-wash);
-}
-.chat-create .inset .fr input:disabled,
-.chat-create .inset .fr textarea:disabled {
-  opacity: 0.6;
 }
 .chat-create .inset .fr .v small {
   color: var(--muted);

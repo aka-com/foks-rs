@@ -178,13 +178,13 @@ test('local setup without a managed server reports why it cannot continue', asyn
   assert.equal(
     (
       rendered.view.getByRole('button', {
-        name: 'Recover an existing account…',
+        name: 'Recover an Existing Account…',
       }) as HTMLButtonElement
     ).disabled,
     true,
   );
   assert.ok(
-    rendered.view.getByRole('button', { name: 'Connect to another server…' }),
+    rendered.view.getByRole('button', { name: 'Connect to Another Server…' }),
   );
 });
 
@@ -229,7 +229,7 @@ test('a username with no usable characters blocks account creation', async () =>
     ),
   );
   const create = rendered.view.getByRole('button', {
-    name: 'Create my account',
+    name: 'Create My Account',
   }) as HTMLButtonElement;
   assert.equal(create.disabled, true);
   ui.fireEvent.click(create);
@@ -306,11 +306,11 @@ test('shows why the Personal vault is unavailable and provides a link to server 
     ),
   );
   assert.equal(
-    rendered.view.queryByRole('button', { name: 'Continue to my vault' }),
+    rendered.view.queryByRole('button', { name: 'Continue to My Vault' }),
     null,
   );
   ui.fireEvent.click(
-    rendered.view.getByRole('button', { name: 'Review server settings' }),
+    rendered.view.getByRole('button', { name: 'Review Server Settings' }),
   );
   assert.deepEqual(seen.at(-1), {
     kind: 'settings',
@@ -319,7 +319,7 @@ test('shows why the Personal vault is unavailable and provides a link to server 
   });
   assert.ok(
     rendered.view.getByRole('button', {
-      name: 'Retry loading Personal vault',
+      name: 'Retry Loading Personal Vault',
     }),
   );
 });
@@ -369,14 +369,14 @@ test('checklist allows retrying Personal vault loading while the account is not 
   assert.equal(
     (
       rendered.view.getByRole('button', {
-        name: 'Continue to my vault',
+        name: 'Continue to My Vault',
       }) as HTMLButtonElement
     ).disabled,
     true,
   );
   ui.fireEvent.click(
     rendered.view.getByRole('button', {
-      name: 'Retry loading Personal vault',
+      name: 'Retry Loading Personal Vault',
     }),
   );
   await rendered.view.findByText('Inventory unavailable');

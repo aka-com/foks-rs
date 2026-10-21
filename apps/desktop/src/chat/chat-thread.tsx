@@ -257,7 +257,7 @@ export function ChatThread({
                     Load older messages
                   </Button>
                 ) : messages.length > 0 ? (
-                  <small>Beginning of the channel</small>
+                  <small>Beginning of {channelTitle(channel)}</small>
                 ) : null}
               </div>
               {initialLoading && (

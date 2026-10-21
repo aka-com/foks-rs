@@ -414,6 +414,15 @@ test('a federated team is one row: role, membership state and its own actions', 
     rendered.getAllByRole('button', { name: 'Restore Access' }).length,
     2,
   );
+  // The band names the team by the display name this device holds it
+  // under; the row keeps the membership record's alias.
+  assert.ok(
+    [...document.querySelectorAll('.band')].some((band) =>
+      (band.textContent ?? '').startsWith(
+        'Homelab’s membership is inactive. Homelab members cannot access Engineering',
+      ),
+    ),
+  );
   ui.fireEvent.click(
     rendered.getByRole('button', { name: 'Actions for homelab' }),
   );
@@ -898,4 +907,40 @@ test('an invitation prepared after unmount is recovered from the group banner', 
   const dialog = returned.getByRole('dialog');
   await ui.within(dialog).findByText(/Creation interrupted/);
   assert.ok(ui.within(dialog).getByRole('button', { name: 'Finish creating' }));
+});
+
+test('the link under Accounts names the invitation it opens', async () => {
+  const r = await group(await fixture());
+
+  // There is no setup-instructions flow; the link issues a team invitation,
+  // so it carries the name of the Add People entry that does the same.
+  assert.equal(r.queryByText('Send setup instructions…'), null);
+  const link = [
+    ...document.querySelectorAll<HTMLButtonElement>('.roster button.lnk'),
+  ].find((candidate) => candidate.textContent === 'Invite New User…');
+  assert.ok(link, 'no Invite New User… link under the roster');
+  ui.fireEvent.click(link);
+  await ui.act(async () => {});
+  assert.ok(
+    ui
+      .within(r.getByRole('dialog'))
+      .getByRole('heading', { name: 'Invite a new user to Engineering' }),
+  );
+});
+
+test('the remove alert names the rekey on its confirm button', async () => {
+  const rendered = await group(await fixture());
+  ui.fireEvent.click(
+    rendered.getByRole('button', { name: 'Actions for dana.okafor' }),
+  );
+  ui.fireEvent.click(menuItem('Remove…'));
+  await ui.act(async () => {});
+  const alert = rendered.getByRole('alertdialog');
+  // Removal rekeys the team; the button says so, as the typed confirmation
+  // before the redesign did. Cancel stays the default.
+  assert.ok(ui.within(alert).getByRole('button', { name: 'Remove and Rekey' }));
+  assert.equal(
+    document.activeElement,
+    ui.within(alert).getByRole('button', { name: 'Cancel' }),
+  );
 });

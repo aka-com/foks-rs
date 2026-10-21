@@ -1,5 +1,11 @@
 /** Only public recovery metadata enters the query repository. Invitation payloads remain local. */
-import { useCallback, useEffect, useMemo } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+} from 'react';
 import {
   enqueueProfileWork,
   isAgentSessionError,
@@ -17,7 +23,7 @@ import {
   useMetadataQuery,
   useMetadataRepository,
 } from './query-hooks';
-import type { MetadataRepository } from './metadata-repository';
+import type { MetadataQuery, MetadataRepository } from './metadata-repository';
 import type { InvitationReply } from './invitation-contract';
 import { manageReason } from './screens/group-model';
 
@@ -309,10 +315,7 @@ export function usePendingGroupOperations(
   const operations = useMemo(
     () =>
       (state.data ?? []).filter(
-        (row) =>
-          row.alias === alias &&
-          (row.kind === 'team-member-addition' ||
-            row.kind === 'team-member-edit'),
+        (row) => row.alias === alias && blocksMembership(row),
       ),
     [alias, state.data],
   );
@@ -334,4 +337,112 @@ export function usePendingGroupOperations(
     [query],
   );
   return { operations, refresh, generation };
+}
+
+/** The pending-operation kinds a team's Unfinished activity band counts. */
+function blocksMembership(operation: PendingOperation): boolean {
+  return (
+    operation.kind === 'team-member-addition' ||
+    operation.kind === 'team-member-edit'
+  );
+}
+
+const NO_COUNTS: ReadonlyMap<StoreRef, number> = new Map();
+
+/**
+ * Unfinished membership work per team, read only from what earlier reads
+ * left in the shared repository: the profile's pending-operation journal
+ * (the team's own membership operations, as its page filters them) plus the
+ * team's invitation recovery count. These are the two numbers the team
+ * page's Unfinished activity band adds up. A team neither has been read for
+ * is left out, and a team whose total is zero is not listed.
+ *
+ * Nothing here reads: the queries are found with `peek` and observed with
+ * `watch`, so they are neither created nor made due for reconciliation.
+ * When the team page or its sheet re-reads them, the counts follow.
+ */
+export function useCachedUnfinishedCounts(
+  bridge: Bridge,
+  teams: readonly TeamStore[],
+  /** As for `useTeamRequestCounts`: for a caller above the shell's provider. */
+  fallback?: MetadataRepository,
+): ReadonlyMap<StoreRef, number> {
+  const devices = useDeviceCache();
+  const repository = useMetadataRepository(
+    bridge,
+    fallback ?? devices?.repository,
+  );
+  const teamsKey = teams
+    .map((team) => `${team.id}|${team.server}|${team.alias}`)
+    .join(',');
+  // The team list is identified by its key, so a new array with the same
+  // teams keeps the subscription.
+  const teamsRef = useRef(teams);
+  teamsRef.current = teams;
+  const cached = useRef<{
+    signature: string;
+    counts: ReadonlyMap<StoreRef, number>;
+  }>({
+    signature: '',
+    counts: NO_COUNTS,
+  });
+  const sources = useCallback(() => {
+    const operations = new Map<string, MetadataQuery<PendingOperation[]>>();
+    const recovery = new Map<StoreRef, MetadataQuery<number>>();
+    for (const team of teamsRef.current) {
+      const journal = repository.peek<PendingOperation[]>(
+        pendingOperationKey(team.server),
+      );
+      if (journal) operations.set(team.server, journal);
+      const invitations = repository.peek<number>(invitationRecoveryKey(team));
+      if (invitations) recovery.set(team.id, invitations);
+    }
+    return { operations, recovery };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repository, teamsKey]);
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      let released: (() => void)[] = [];
+      const attach = (): void => {
+        for (const release of released) release();
+        const { operations, recovery } = sources();
+        released = [
+          ...[...operations.values()].map((query) => query.watch(listener)),
+          ...[...recovery.values()].map((query) => query.watch(listener)),
+        ];
+      };
+      attach();
+      const stopEntries = repository.watchEntries(() => {
+        attach();
+        listener();
+      });
+      return () => {
+        stopEntries();
+        for (const release of released) release();
+      };
+    },
+    [repository, sources],
+  );
+  const getSnapshot = useCallback((): ReadonlyMap<StoreRef, number> => {
+    const { operations, recovery } = sources();
+    const entries: [StoreRef, number][] = [];
+    for (const team of teamsRef.current) {
+      const journal = operations.get(team.server)?.getSnapshot().data;
+      const invitations = recovery.get(team.id)?.getSnapshot().data;
+      const total =
+        (journal?.filter(
+          (operation) =>
+            operation.alias === team.alias && blocksMembership(operation),
+        ).length ?? 0) + (invitations ?? 0);
+      if (total > 0) entries.push([team.id, total]);
+    }
+    const signature = JSON.stringify(entries);
+    if (signature !== cached.current.signature)
+      cached.current = {
+        signature,
+        counts: entries.length ? new Map(entries) : NO_COUNTS,
+      };
+    return cached.current.counts;
+  }, [sources]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

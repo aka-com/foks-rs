@@ -1,24 +1,26 @@
 /**
- * The rail's persisted color preference.
+ * The persisted accent color preference.
  *
  * Persisted in `localStorage` as `railColor` and applied as `data-rail` on the
- * document. Rules in `kit/tokens.css` map it to `--rail` for dependent
- * components. Unrecognized values use the default `--rail` value.
+ * document; both names predate the redesign, when the choice tinted the
+ * sidebar. Rules in `kit/tokens.css` map it to `--accent-hue` and
+ * `--accent-fill` (buttons, focus rings, links, selection washes). The
+ * sidebar itself is neutral. Unrecognized values use the default accent.
  */
 
 export interface RailColor {
   id: string;
   label: string;
-  /** The paired colors from `tokens.css`, used by the split preview. */
-  hex: string;
-  darkHex: string;
+  /** The `--accent-fill` value from `tokens.css`, drawn by the swatch. The
+   *  fill is the same in both appearances. */
+  fill: string;
 }
 
 export const RAIL_COLORS: readonly RailColor[] = [
-  { id: 'default', label: 'Blue', hex: '#4c6be1', darkHex: '#3c4e91' },
-  { id: 'iris', label: 'Iris', hex: '#6a6ff0', darkHex: '#5a4f96' },
-  { id: 'sky', label: 'Sky', hex: '#3b81f6', darkHex: '#315d99' },
-  { id: 'slate', label: 'Slate', hex: '#5468b3', darkHex: '#46578e' },
+  { id: 'default', label: 'Blue', fill: '#4c6be1' },
+  { id: 'iris', label: 'Iris', fill: '#5b62e6' },
+  { id: 'sky', label: 'Sky', fill: '#2b6fe0' },
+  { id: 'slate', label: 'Slate', fill: '#5468b3' },
 ];
 
 export const DEFAULT_RAIL_COLOR = RAIL_COLORS[0].id;

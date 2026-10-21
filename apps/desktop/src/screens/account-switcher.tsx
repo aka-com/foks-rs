@@ -22,6 +22,20 @@ import type { AccountStore, AgentSnapshot } from '../model';
  * it. These surfaces name the account by the username the server knows it by,
  * so the mark stands for that name; a store elsewhere keeps `GroupMark`.
  */
+/**
+ * The mark's letters: the first letter of each of the first two words of a
+ * display name ("Team member" → "TM"), or the one initial of a username.
+ */
+export function markInitials(name: string): string {
+  return name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((word) => word.slice(0, 1))
+    .join('')
+    .toUpperCase();
+}
+
 export function AccountMark({
   name,
   size = 'sm',
@@ -51,7 +65,7 @@ export function AccountMark({
       aria-hidden="true"
       style={{ background: hue(name) }}
     >
-      {name.slice(0, 1).toUpperCase()}
+      {markInitials(name)}
     </span>
   );
 }

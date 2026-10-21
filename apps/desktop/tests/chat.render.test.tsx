@@ -614,12 +614,12 @@ test('definite preparation errors allow input correction', async () => {
   }));
   const name = await openChannelSheet();
   ui.fireEvent.change(name, { target: { value: 'refused' } });
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create channel' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create Channel' }));
   await ui.screen.findByText('That name is not allowed here.');
   assert.equal((name as HTMLInputElement).disabled, false);
   ui.fireEvent.change(name, { target: { value: 'valid' } });
   assert.equal((name as HTMLInputElement).value, 'valid');
-  assert.ok(ui.screen.getByRole('dialog', { name: 'Create channel' }));
+  assert.ok(ui.screen.getByRole('dialog', { name: 'Create Channel' }));
 });
 
 test('ambiguous channel preparation keeps its submission after the sheet closes', async () => {
@@ -653,7 +653,7 @@ test('ambiguous channel preparation keeps its submission after the sheet closes'
     name: 'Channel description',
   });
   ui.fireEvent.change(description, { target: { value: 'Team Decisions' } });
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create channel' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create Channel' }));
   await ui.screen.findByText('Preparation reply lost');
   assert.equal((description as HTMLInputElement).disabled, true);
   // The application retains the submission when the sheet is dismissed.
@@ -663,14 +663,11 @@ test('ambiguous channel preparation keeps its submission after the sheet closes'
   );
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Close' }));
   assert.equal(ui.screen.queryByRole('dialog'), null);
+  // Reopened on the open team, the sheet takes up that team's unresolved
+  // creation by itself.
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New channel' }));
   ui.fireEvent.click(
-    await ui.screen.findByRole('button', {
-      name: /Engineering · #recoverable/,
-    }),
-  );
-  ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Retry channel creation' }),
+    await ui.screen.findByRole('button', { name: 'Retry channel creation' }),
   );
   await ui.screen.findByRole('button', { name: /#recoverable/ });
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
@@ -684,11 +681,10 @@ test('team members opens the existing membership workflow in the same window', a
   await setup(undefined, true, (location) => {
     destination = location;
   });
-  // Team membership management is accessed via the conversation header's Members button.
+  // Team membership management is reached through Channel info's Members
+  // row.
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Channel info' }));
-  ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Manage in Teams' }),
-  );
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: /^Members/ }));
   assert.deepEqual(destination, {
     kind: 'group-settings',
     ref: 'team:eng',
@@ -1849,17 +1845,14 @@ test('channel info keeps channel overrides and links to device notification sett
     },
   );
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Channel info' }));
-  const panel = await ui.screen.findByRole('complementary', {
+  const panel = await ui.screen.findByRole('dialog', {
     name: 'Channel info',
   });
   assert.equal(document.activeElement, panel);
   assert.ok(panelFocus.length > 0);
   assert.ok(panelFocus.every((options) => options?.preventScroll === true));
   ui.fireEvent.keyDown(panel, { key: 'Escape' });
-  assert.equal(
-    ui.screen.queryByRole('complementary', { name: 'Channel info' }),
-    null,
-  );
+  assert.equal(ui.screen.queryByRole('dialog', { name: 'Channel info' }), null);
   assert.equal(
     document.activeElement,
     ui.screen.getByRole('button', { name: 'Channel info' }),
@@ -1995,10 +1988,12 @@ test('the provider stops periodic team synchronization while the window is hidde
 });
 
 test('clicking outside channel info dismisses it without stealing focus or toggling it back open', async () => {
+  // jsdom's window is under 1100px, so the panel is drawn over the
+  // conversation: a dialog that closes on a click outside it.
   await setup();
   const toggle = ui.screen.getByRole('button', { name: 'Channel info' });
   ui.fireEvent.click(toggle);
-  const panel = await ui.screen.findByRole('complementary', {
+  const panel = await ui.screen.findByRole('dialog', {
     name: 'Channel info',
   });
   const pointer = (target: Element) =>
@@ -2007,20 +2002,45 @@ test('clicking outside channel info dismisses it without stealing focus or toggl
       new window.MouseEvent('pointerdown', { bubbles: true, button: 0 }),
     );
   pointer(panel);
-  assert.ok(ui.screen.queryByRole('complementary', { name: 'Channel info' }));
+  assert.ok(ui.screen.queryByRole('dialog', { name: 'Channel info' }));
   const composer = ui.screen.getByRole('textbox', { name: 'Message' });
   composer.focus();
   pointer(composer);
-  assert.equal(
-    ui.screen.queryByRole('complementary', { name: 'Channel info' }),
-    null,
-  );
+  assert.equal(ui.screen.queryByRole('dialog', { name: 'Channel info' }), null);
   assert.equal(document.activeElement, composer);
   ui.fireEvent.click(toggle);
   pointer(toggle);
   ui.fireEvent.click(toggle);
-  assert.equal(
-    ui.screen.queryByRole('complementary', { name: 'Channel info' }),
-    null,
-  );
+  assert.equal(ui.screen.queryByRole('dialog', { name: 'Channel info' }), null);
+});
+
+test('over the conversation, Tab stays inside channel info', async () => {
+  await setup();
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Channel info' }));
+  const panel = await ui.screen.findByRole('dialog', { name: 'Channel info' });
+  const stops = [
+    ...panel.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), select:not([disabled]), [tabindex="0"]',
+    ),
+  ];
+  assert.ok(stops.length > 1);
+  // Tab from the last control wraps to the first; Shift+Tab from the first
+  // wraps to the last, instead of walking into the covered conversation.
+  stops.at(-1)!.focus();
+  ui.fireEvent.keyDown(stops.at(-1)!, { key: 'Tab' });
+  assert.equal(document.activeElement, stops[0]);
+  ui.fireEvent.keyDown(stops[0], { key: 'Tab', shiftKey: true });
+  assert.equal(document.activeElement, stops.at(-1));
+});
+
+test('the thread names its channel at the top, and marks carry two initials for a two-word name', async () => {
+  await setup();
+  assert.ok(await ui.screen.findByText(/^Beginning of #/));
+  assert.equal(ui.screen.queryByText('Beginning of the channel'), null);
+  const { markInitials } = (await vite.ssrLoadModule(
+    '/src/screens/account-switcher.tsx',
+  )) as typeof import('../src/screens/account-switcher');
+  assert.equal(markInitials('Team member'), 'TM');
+  assert.equal(markInitials('satoshi'), 'S');
+  assert.equal(markInitials('  dana  okafor smith '), 'DO');
 });

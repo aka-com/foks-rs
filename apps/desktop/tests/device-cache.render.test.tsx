@@ -131,7 +131,7 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
   // now observable, in whether PIN status can run.
   const openPrimary = await ui.waitFor(() => {
     const button = document.querySelector<HTMLButtonElement>(
-      'button[aria-label="Open primary key"]',
+      '[role="option"][aria-label="primary key"]',
     );
     assert.ok(button);
     return button;
