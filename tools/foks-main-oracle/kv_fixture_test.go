@@ -114,5 +114,25 @@ func TestKVReplayResultFixtures(t *testing.T) {
 	if decode(serve(0, false)) || !decode(serve(0, true)) {
 		t.Fatal("struct result did not round-trip")
 	}
+
+	// The generated v0.1.9 client declares both methods void and decodes
+	// their result into rpc.DataWrap[lib.Header, interface{}] (lib.Header
+	// and go-snowpack-rpc are unchanged between v0.1.9 and main), so a v0.1.9
+	// client keeps accepting the struct results.
+	for _, position := range []rpc.Position{0, 7} {
+		for _, wasReplay := range []bool{false, true} {
+			var b []byte
+			if err := codec.NewEncoderBytes(&b, core.Codec()).Encode(serve(position, wasReplay)); err != nil {
+				t.Fatal(err)
+			}
+			var tmp rpc.DataWrap[proto.Header, interface{}]
+			if err := codec.NewDecoderBytes(b, core.Codec()).Decode(&tmp); err != nil {
+				t.Fatalf("v0.1.9 void decode of method %d: %v", position, err)
+			}
+			if v, err := tmp.Header.GetV(); err != nil || v != proto.HeaderVersion_V1 {
+				t.Fatalf("v0.1.9 void decode of method %d lost the header", position)
+			}
+		}
+	}
 	d.finish()
 }
