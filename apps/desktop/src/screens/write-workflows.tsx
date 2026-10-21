@@ -322,8 +322,9 @@ function memberVisibility(role: KvRoleInput): number {
 
 /**
  * One access row: the role level as a menu and, for Member, the visibility
- * level it applies at as a number field beside it, so Read and Write fit the
- * sheet at the window's 640px minimum height.
+ * level it applies at as a number field beside it ("Member · sees level 0",
+ * the wording the details panel and the team page use), so Read and Write
+ * fit the sheet at the window's 640px minimum height.
  */
 function RoleRow({
   label,
@@ -352,11 +353,11 @@ function RoleRow({
       </select>
       {level === 'Member' ? (
         <label className="vis-field">
-          <span>Visibility</span>
+          <span>sees level</span>
           <input
             type="number"
             className="mono"
-            aria-label={`${label} visibility`}
+            aria-label={`${label}: Member sees level`}
             min={-32768}
             max={32767}
             value={String(visibility)}
@@ -1078,7 +1079,7 @@ function ExistsSheet({
               })
             }
           >
-            Change path
+            Change Path
           </Button>
           <Button
             variant="primary"
@@ -1086,7 +1087,7 @@ function ExistsSheet({
               void onOpenExisting(workflow).then(close, onError);
             }}
           >
-            Open existing item
+            Open Existing Item
           </Button>
         </>
       }
@@ -1289,7 +1290,7 @@ function ConflictSheet({
                 {replacing ? 'Keep replacing' : 'Keep editing'}
               </Button>
               <Button variant="primary" danger onClick={onDiscardConflict}>
-                Discard changes
+                Discard Changes
               </Button>
             </>
           }
@@ -1330,7 +1331,7 @@ function ConflictSheet({
                 );
               }}
             >
-              Refresh and review
+              Refresh and Review
             </Button>
           </>
         }
