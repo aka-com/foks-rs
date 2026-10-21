@@ -16,19 +16,32 @@ export interface RailColor {
   fill: string;
 }
 
+/** Hues far enough apart to tell at swatch size; none is the danger red or
+ *  the warning amber, which carry meaning elsewhere. */
 export const RAIL_COLORS: readonly RailColor[] = [
   { id: 'default', label: 'Blue', fill: '#4c6be1' },
-  { id: 'iris', label: 'Iris', fill: '#5b62e6' },
-  { id: 'sky', label: 'Sky', fill: '#2b6fe0' },
-  { id: 'slate', label: 'Slate', fill: '#5468b3' },
+  { id: 'purple', label: 'Purple', fill: '#8048d9' },
+  { id: 'pink', label: 'Pink', fill: '#c43a7e' },
+  { id: 'green', label: 'Green', fill: '#22803f' },
+  { id: 'graphite', label: 'Graphite', fill: '#5f646d' },
 ];
+
+/** Choices that were removed, and the one each stored value now means. */
+const RETIRED: Readonly<Record<string, string>> = {
+  lavender: 'purple',
+  iris: 'purple',
+  sky: 'default',
+  slate: 'graphite',
+};
 
 export const DEFAULT_RAIL_COLOR = RAIL_COLORS[0].id;
 
 const KEY = 'railColor';
 
-function known(id: string | null | undefined): string {
-  if (id === 'lavender') return 'iris';
+/** A stored id as a current choice: retired ids map forward, unknown ones
+ *  fall back to the default. */
+export function resolveRailColor(id: string | null | undefined): string {
+  if (id && RETIRED[id]) return RETIRED[id];
   return RAIL_COLORS.some((color) => color.id === id)
     ? (id as string)
     : DEFAULT_RAIL_COLOR;
@@ -37,7 +50,7 @@ function known(id: string | null | undefined): string {
 /** The stored color id; the default when unset or unreadable. */
 export function storedRailColor(): string {
   try {
-    return known(
+    return resolveRailColor(
       typeof window !== 'undefined' ? window.localStorage.getItem(KEY) : null,
     );
   } catch {
@@ -58,7 +71,7 @@ export function rememberRailColor(id: string): void {
 export function applyRailColor(id: string): void {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;
-  const resolved = known(id);
+  const resolved = resolveRailColor(id);
   if (resolved === DEFAULT_RAIL_COLOR) delete root.dataset.rail;
   else root.dataset.rail = resolved;
 }

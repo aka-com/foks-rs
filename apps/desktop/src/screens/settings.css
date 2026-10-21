@@ -219,6 +219,21 @@
   min-width: 96px;
 }
 
+/* The username is short and its two buttons belong on its line: the value
+   gives up width (wrapping a long name) before the buttons drop under it. */
+.subnav-page .settings-inset .fr.account-username {
+  flex-wrap: nowrap;
+}
+
+.subnav-page .settings-inset .fr.account-username .v {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.subnav-page .settings-inset .fr.account-username .a {
+  flex-wrap: nowrap;
+}
+
 .subnav-page .settings-inset .fr .v b {
   font-weight: var(--weight-label);
 }

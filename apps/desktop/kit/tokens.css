@@ -208,19 +208,23 @@
   --light-edge: rgba(0, 0, 0, 0.12);
 }
 
-/* Accent color options (`data-rail`). Iris and Sky darken their fill so
-   white text on it keeps 4.5:1. */
-:root[data-rail='iris'] {
-  --accent-hue: #6a6ff0;
-  --accent-fill: #5b62e6;
+/* Accent color options (`data-rail`). Each fill keeps 4.5:1 with white
+   text: purple 5.5:1, pink 4.9:1, green 5.0:1, graphite 6.0:1. */
+:root[data-rail='purple'] {
+  --accent-hue: #8048d9;
+  --accent-fill: #8048d9;
 }
-:root[data-rail='sky'] {
-  --accent-hue: #3b81f6;
-  --accent-fill: #2b6fe0;
+:root[data-rail='pink'] {
+  --accent-hue: #c43a7e;
+  --accent-fill: #c43a7e;
 }
-:root[data-rail='slate'] {
-  --accent-hue: #5468b3;
-  --accent-fill: #5468b3;
+:root[data-rail='green'] {
+  --accent-hue: #22803f;
+  --accent-fill: #22803f;
+}
+:root[data-rail='graphite'] {
+  --accent-hue: #5f646d;
+  --accent-fill: #5f646d;
 }
 
 :root[data-theme='dark'] {

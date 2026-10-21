@@ -604,7 +604,7 @@ test('Preferences holds desktop alert preferences and the accent color', async (
     [...accent.querySelectorAll('[role="radio"]')].map((swatch) =>
       swatch.getAttribute('aria-label'),
     ),
-    ['Blue', 'Iris', 'Sky', 'Slate'],
+    ['Blue', 'Purple', 'Pink', 'Green', 'Graphite'],
   );
   assert.equal(rendered.queryByText('Sidebar color'), null);
 });
@@ -1066,9 +1066,9 @@ test('a lapsed server says its check-in expired and offers the check', async () 
     where: { profile: 'acme' },
   });
 
-  // The band leads with the condition, which the row's chip also names.
+  // The notice leads with the condition, which the row's chip also names.
   assert.ok(
-    [...document.querySelectorAll('.band b')].some(
+    [...document.querySelectorAll('.notice.stop h2')].some(
       (node) => node.textContent === 'Check-in expired',
     ),
   );
@@ -1081,7 +1081,13 @@ test('a never-checked server says what a check would discover', async () => {
     where: { profile: 'partner' },
   });
 
-  assert.ok(rendered.getByText('Not checked yet'));
+  // The same words as the Servers list's chip and Activity.
+  assert.ok(
+    [...document.querySelectorAll('.notice.info h2')].some(
+      (node) => node.textContent === 'Not verified',
+    ),
+  );
+  assert.ok(rendered.getByRole('button', { name: 'Check Now' }));
   assert.ok(rendered.getByText('Discovered upon first verification'));
   assert.ok(rendered.getByText('Not verified yet'));
 });

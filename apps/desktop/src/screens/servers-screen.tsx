@@ -21,6 +21,7 @@ import {
   Icon,
   Inset,
   InsetRow,
+  Notice,
   SectionLabel,
   SheetDialog,
 } from '../components';
@@ -28,6 +29,7 @@ import type { Location } from '../location';
 import { useSheetGuard } from '../navigation-guard';
 import {
   plural,
+  SERVER_NOT_VERIFIED,
   serverAvailability,
   serverDisplayLabelOrLoading,
   shortId,
@@ -198,7 +200,8 @@ function StatusChip({ state }: { state: ServerUiState }): ReactNode {
   // A server that answered is the ordinary case, and the row's mark already
   // reads as one: only a state worth acting on carries a chip.
   if (state === 'checked') return null;
-  if (state === 'unprobed') return <Chip tone="warn">Not verified</Chip>;
+  if (state === 'unprobed')
+    return <Chip tone="warn">{SERVER_NOT_VERIFIED.state}</Chip>;
   return (
     <Chip tone={state === 'pending' ? 'default' : 'bad'}>
       {STATE_LABEL[state]}
@@ -359,13 +362,15 @@ export function ServersSection({
         onOpenAccount={(store) =>
           onNavigate({ kind: 'settings', section: 'account', store })
         }
-      />
-      <ProfileKeys
-        key={selected.profileName}
-        snapshot={agentSnapshot}
-        server={selected}
-        bridge={bridge}
-        onError={onError}
+        keys={
+          <ProfileKeys
+            key={selected.profileName}
+            snapshot={agentSnapshot}
+            server={selected}
+            bridge={bridge}
+            onError={onError}
+          />
+        }
       />
     </>
   ) : (
@@ -407,7 +412,14 @@ export function ServersSection({
                 <p>
                   {selectedAccount && !isLocked(selectedState)
                     ? `Signed in as ${selectedAccount.username}`
-                    : selected.configuredEndpoint}
+                    : // A server with no label is titled by its address;
+                      // the line under it says whose it is instead.
+                      serverDisplayLabelOrLoading(selected) !==
+                        selected.configuredEndpoint
+                      ? selected.configuredEndpoint
+                      : selectedAccount
+                        ? 'Account hidden while locked'
+                        : 'No account on this server'}
                 </p>
               </div>
               <div className="hero-acts">
@@ -470,8 +482,9 @@ function StatusLine({
   if (state === 'unprobed')
     return (
       <>
-        <b>Not verified</b>
-        {sep}Verify this server before use
+        <b>{SERVER_NOT_VERIFIED.state}</b>
+        {sep}
+        {SERVER_NOT_VERIFIED.hint}
       </>
     );
   if (state === 'lapsed')
@@ -570,7 +583,7 @@ function ServerRow({
       <ServerMark state={state} />
       <span className="t">
         {/* Before its first check a server has no display label yet; the
-            row names it by its address rather than "Loading...". */}
+            row names it by its address. */}
         <b>
           <span>{rowTitle}</span>
         </b>
@@ -658,7 +671,9 @@ function ServerList({
 }
 
 /**
- * Displays an alert banner and primary action for servers requiring attention.
+ * The notice a server page opens on when the server needs attention: a bold
+ * title, the explanation in ink, and the action, as the team and store pages
+ * draw the same conditions.
  */
 function StatusBand({
   state,
@@ -673,99 +688,98 @@ function StatusBand({
   onCheck: () => void;
   onRemove: () => void;
 }): ReactNode {
+  const checkNow = (
+    <Button icon="refresh" disabled={busy} onClick={onCheck}>
+      Check Now
+    </Button>
+  );
   if (state === 'unprobed')
     return (
-      <Band
+      <Notice
         severity="info"
-        label="Not checked yet"
-        action={
-          <Button
-            size="sm"
-            variant="primary"
-            icon="refresh"
-            disabled={busy}
-            onClick={onCheck}
-          >
-            Check Now
-          </Button>
-        }
+        title={SERVER_NOT_VERIFIED.state}
+        actions={checkNow}
       >
-        The address is saved. Check the server to verify its certificate and
-        connection.
-      </Band>
+        <p>
+          The address is saved. Check the server to verify its certificate and
+          connection.
+        </p>
+      </Notice>
     );
   if (state === 'lapsed')
     return (
-      <Band
-        severity="crit"
-        label="Check-in expired"
-        action={
-          <Button
-            variant="plain"
-            size="sm"
-            icon="refresh"
-            disabled={busy}
-            onClick={onCheck}
-          >
-            Check Now
-          </Button>
-        }
-      >
-        Signed compatibility verification expired {expires(expiry)}. A newer
-        signed result is required; checking the server identity does not renew
-        it.
-      </Band>
+      <Notice severity="crit" title="Check-in expired" actions={checkNow}>
+        <p>
+          Signed compatibility verification expired {expires(expiry)}. A newer
+          signed result is required; checking the server identity does not renew
+          it.
+        </p>
+      </Notice>
     );
   if (state === 'recovery-required')
     return (
-      <Band severity="crit" label="Saved security state is missing">
-        Restore or inspect the saved client security state before reconnecting.
-        FOKS will not establish a replacement identity automatically.
-      </Band>
+      <Notice severity="crit" title="Saved security state is missing">
+        <p>
+          Restore or inspect the saved client security state before
+          reconnecting. FOKS will not establish a replacement identity
+          automatically.
+        </p>
+      </Notice>
     );
   if (state === 'unavailable')
     return (
-      <Band severity="crit" label="Check-in status unknown">
-        Cannot verify the status of this server. This server is locked until a
-        valid status is confirmed. Use the Check button in the header to check
-        status.
-      </Band>
+      <Notice severity="crit" title="Check-in status unknown">
+        <p>
+          Cannot verify the status of this server. This server is locked until a
+          valid status is confirmed. Use the Check button in the header to check
+          status.
+        </p>
+      </Notice>
     );
   if (state === 'blocked')
     return (
-      <Band
+      <Notice
         severity="crit"
-        label="Server identity mismatch"
-        action={
-          <Button size="sm" variant="danger" onClick={onRemove}>
+        title="Server identity mismatch"
+        actions={
+          <Button variant="danger" onClick={onRemove}>
             Remove…
           </Button>
         }
       >
-        The server certificate or security history does not match the pinned
-        identity on this device. Access has been blocked for your security.
-      </Band>
+        <p>
+          The server certificate or security history does not match the pinned
+          identity on this device. Access has been blocked for your security.
+        </p>
+      </Notice>
     );
   if (state === 'incompatible')
     return (
-      <Band severity="crit" label="Protocol incompatible">
-        Compatibility verification does not permit operations with this server.
-        This is not an identity mismatch; resetting trust will not resolve it.
-      </Band>
+      <Notice severity="crit" title="Protocol incompatible">
+        <p>
+          Compatibility verification does not permit operations with this
+          server. This is not an identity mismatch; resetting trust will not
+          resolve it.
+        </p>
+      </Notice>
     );
   if (state === 'schema')
     return (
-      <Band severity="crit" label="Server schema incompatible">
-        This client cannot safely read the server’s saved schema. Review the
-        supported versions; FOKS will not reset this data automatically.
-      </Band>
+      <Notice severity="crit" title="Server schema incompatible">
+        <p>
+          This client cannot safely read the server’s saved schema. Review the
+          supported versions; FOKS will not reset this data automatically.
+        </p>
+      </Notice>
     );
   if (state === 'import-verification')
     return (
-      <Band severity="crit" label="Imported profile needs verification">
-        Verify this imported profile online before accessing its vaults. Use the
-        Check button in the header to verify the profile.
-      </Band>
+      <Notice severity="crit" title="Imported profile needs verification">
+        <p>
+          Verify this imported profile online before accessing its vaults. Use
+          the Check button in the header to verify the profile.
+        </p>
+      </Notice>
     );
   return null;
 }
@@ -782,7 +796,10 @@ function ServerBody({
   onCopy,
   onOpenGroup,
   onOpenAccount,
+  keys,
 }: {
+  /** The server's security keys section, drawn before the Danger zone. */
+  keys?: ReactNode;
   snapshot: AgentSnapshot;
   server: Server;
   /** The signed status this page checked itself; see `leaseExpiry`. */
@@ -852,9 +869,7 @@ function ServerBody({
             <span className="stopped">Not verified yet</span>
           </InsetRow>
         ) : state === 'lapsed' ? (
-          <InsetRow label="Expired">
-            <b className="danger-title">{expires(expiry)}</b>
-          </InsetRow>
+          <InsetRow label="Expired">{expires(expiry)}</InsetRow>
         ) : state === 'unavailable' ? (
           <InsetRow label="Expires">
             <span className="stopped">Unknown</span>
@@ -1019,6 +1034,7 @@ function ServerBody({
         </Inset>
       )}
 
+      {keys}
       <SectionLabel className="danger-title">Danger zone</SectionLabel>
       <Inset className="settings-inset middle danger-box">
         <InsetRow
