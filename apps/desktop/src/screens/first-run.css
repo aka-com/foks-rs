@@ -358,21 +358,6 @@ button.check {
   color: var(--ink);
 }
 
-button.check .bx {
-  width: 14px;
-  height: 14px;
-  border-radius: 4px;
-  background: var(--field-bg);
-  font-size: 12px;
-  line-height: 1;
-}
-
-button.check.on .bx {
-  border-color: var(--accent-fill);
-  background: var(--accent-fill);
-  color: var(--on-accent);
-}
-
 /* Fields in the setup steps are bordered with the accent focus ring, as in
    a sheet: the base `.inset .fr input` reset draws them as plain text. */
 .first-run-main .inset .fr input:not([type='checkbox']):not([type='radio']),

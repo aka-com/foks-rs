@@ -244,6 +244,8 @@ export function ChatThread({
               data-chat-store={storeId}
               ref={scroller}
               onScroll={onScroll}
+              // A log: VoiceOver reads messages as they arrive (politely).
+              role="log"
               aria-label="Message history"
               aria-busy={busy}
             >

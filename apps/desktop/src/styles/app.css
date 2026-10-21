@@ -135,16 +135,6 @@
   color: var(--muted);
 }
 
-/* Files tab doorway row */
-.settings-inset .fr.doorway {
-  align-items: center;
-}
-.settings-inset .fr.doorway .v {
-  flex-direction: row;
-  align-items: center;
-  gap: 10px;
-}
-
 .kico.round {
   width: 30px;
   height: 30px;
@@ -186,84 +176,6 @@
 .menu button[disabled]:hover,
 .menu button[aria-disabled='true']:hover {
   background: transparent;
-}
-
-/* Teams list summary */
-.nav-rows .row .tail .summary {
-  color: var(--muted);
-  font-size: 12.5px;
-}
-
-/* Read-only nav row */
-.nav-rows .row.flat {
-  cursor: default;
-  border-bottom: 0;
-  /* Disclosure inset alignment */
-  padding: 9px 8px;
-}
-
-.nav-rows .row.flat:hover {
-  background: transparent;
-}
-
-.nav-rows .row.flat > .kic,
-.nav-rows .row.flat > .kico {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  font-size: 14px;
-}
-
-.nav-rows .row.flat > .kic .ic,
-.nav-rows .row.flat > .kico .ic {
-  font-size: 15px;
-}
-
-/* Group row line */
-.nav-rows .rowline {
-  position: relative;
-  display: flex;
-  align-items: center;
-  padding-right: 10px;
-  border-bottom: 1px solid var(--line-soft);
-}
-
-.nav-rows .rowline:hover {
-  background: var(--wash);
-}
-
-.nav-rows .rowline .row {
-  flex: 1;
-  min-width: 0;
-  border-bottom: 0;
-}
-
-.nav-rows .rowline .row:hover {
-  background: transparent;
-}
-
-/* Row action menu */
-.nav-rows .rowmenu {
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: flex;
-  opacity: 0;
-  transition: opacity 0.12s;
-}
-
-.nav-rows .rowline:hover .rowmenu,
-.nav-rows .rowmenu:focus-within,
-.nav-rows .rowmenu:has(button[aria-expanded='true']) {
-  opacity: 1;
-}
-
-/* Row chevron hover state */
-.nav-rows .rowline:hover .row .tail .go,
-.nav-rows .rowline:has(.rowmenu:focus-within) .row .tail .go,
-.nav-rows .rowline:has(.rowmenu button[aria-expanded='true']) .row .tail .go {
-  visibility: hidden;
 }
 
 .callout {
@@ -394,15 +306,6 @@
 /* Top block margin */
 .settings-main.account-main > :first-child {
   margin-top: 10px;
-}
-
-/* Attention band spacing */
-.account-main > .people-attention > .band {
-  margin: 0;
-}
-
-.account-main > .people-attention > .band + .band {
-  margin-top: 6px;
 }
 
 .inset.danger {
@@ -1340,21 +1243,6 @@
   font-size: 13.5px;
 }
 
-.check .bx {
-  display: grid;
-  place-items: center;
-  width: 17px;
-  height: 17px;
-  border: 1px solid var(--line-field);
-  border-radius: 4px;
-}
-
-.check.on .bx {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--main-surface);
-}
-
 .first-run-main .checklist .fr {
   align-items: center;
 }
@@ -1815,13 +1703,6 @@
   font-size: 13px;
 }
 
-/* List section top divider */
-.nav-rows .virtual-rows > .row:first-child,
-.nav-rows .virtual-rows > .rowline:first-child,
-.nav-rows .sec + .row,
-.nav-rows .sec + .rowline {
-  border-top: 1px solid var(--line-soft);
-}
 .radios[aria-label='What to add'] .radio {
   align-items: center;
 }

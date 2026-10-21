@@ -34,7 +34,6 @@
   --ink-2: #2a2c31;
   --ink-3: #3b3e45;
   --muted: #62666e; /* 5.8:1 on white, 5.3:1 on the ground */
-  --muted-2: #676b73;
   --faint: #6c7078; /* 4.6:1 on the ground */
   /* Muted ink on the window ground, under the sidebar: 5.6:1, 5.0:1 on a
      selected row. */
@@ -58,7 +57,6 @@
   --accent-wash-2: color-mix(in srgb, var(--accent-hue) 16%, transparent);
   --accent-border: color-mix(in srgb, var(--accent-hue) 32%, transparent);
   --accent-hover: color-mix(in srgb, var(--accent-fill) 88%, #000);
-  --accent-hover-border: transparent;
   --on-accent: #fff;
   --ink-inverse: #fff;
 
@@ -92,11 +90,9 @@
   --btn-hover: #f3f4f6;
   --hover: rgba(16, 20, 32, 0.045);
   --hover-2: rgba(16, 20, 32, 0.065);
-  --press: rgba(16, 20, 32, 0.08);
   --chip-bg: rgba(16, 20, 32, 0.055);
   --chip-ink: #4a4d55;
   --wash: rgba(16, 20, 32, 0.02);
-  --wash-2: rgba(16, 20, 32, 0.035);
   --seg-bg: rgba(16, 20, 32, 0.055);
   --seg-on: #fff;
   --backdrop: rgba(16, 20, 32, 0.12);
@@ -113,20 +109,16 @@
   --line: rgba(16, 20, 32, 0.075);
   --line-soft: rgba(16, 20, 32, 0.06);
   --line-mid: rgba(16, 20, 32, 0.09);
-  --line-strong: rgba(16, 20, 32, 0.11);
   --line-field: rgba(16, 20, 32, 0.15);
   /* Bars take the stronger hairline, list rows the fainter one. */
   --bar-rule: rgba(16, 20, 32, 0.09);
   --row-rule: rgba(16, 20, 32, 0.05);
-  --search-border: var(--line-mid);
   --window-border: rgba(16, 20, 32, 0.1);
   --scrollbar-thumb: rgba(60, 60, 67, 0.36);
 
   /* item kinds */
   --c-password: #9a6210;
   --c-file: #4c6be1;
-  --c-resource: #9a6210;
-  --c-link: #7066b8;
   --c-team: #62666e;
   --c-none: #a3a6ad;
   --c-password-wash: rgba(217, 164, 40, 0.12);
@@ -153,10 +145,8 @@
   --btn-border: var(--line-mid);
   /* Store mark initials (< 12px type floor exemption) */
   --mark-type: 10px;
-  --store-mark-bg: #62666e;
 
   /* Item glyphs */
-  --key-gold: #9a6210;
   --folder-amber: #9a6210;
 
   /* radius scale */
@@ -192,12 +182,8 @@
     0 18px 40px rgba(16, 20, 32, 0.18), 0 0 0 1px rgba(16, 20, 32, 0.08);
   --shadow-window:
     0 0 0 1px rgba(16, 20, 32, 0.1), 0 20px 50px rgba(16, 20, 32, 0.14);
-  --shadow-panel: -10px 0 22px -16px rgba(16, 20, 32, 0.14);
-  --knob: #fff;
-  --knob-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 
   /* Shell surfaces and controls. */
-  --radio-border: rgba(16, 20, 32, 0.25);
   --backdrop-strong: rgba(16, 20, 32, 0.45);
   --backdrop-exit: rgba(16, 20, 32, 0.32);
 
@@ -229,7 +215,6 @@
   --ink-2: #d3d5da;
   --ink-3: #c0c3c9;
   --muted: #8f939c; /* 5.6:1 on the panel */
-  --muted-2: #8a8e97;
   --faint: #868a93; /* 4.9:1 on a raised card */
   --side-muted: #8f939c;
 
@@ -266,11 +251,9 @@
   --btn-hover: #27282c;
   --hover: rgba(255, 255, 255, 0.045);
   --hover-2: rgba(255, 255, 255, 0.07);
-  --press: rgba(255, 255, 255, 0.08);
   --chip-bg: rgba(255, 255, 255, 0.06);
   --chip-ink: #c0c3c9;
   --wash: rgba(255, 255, 255, 0.02);
-  --wash-2: rgba(255, 255, 255, 0.035);
   --seg-bg: rgba(255, 255, 255, 0.055);
   --seg-on: #2a2b30;
   --backdrop: rgba(0, 0, 0, 0.32);
@@ -280,7 +263,6 @@
   --line: rgba(255, 255, 255, 0.07);
   --line-soft: rgba(255, 255, 255, 0.055);
   --line-mid: rgba(255, 255, 255, 0.085);
-  --line-strong: rgba(255, 255, 255, 0.11);
   --line-field: rgba(255, 255, 255, 0.12);
   --bar-rule: rgba(255, 255, 255, 0.06);
   --row-rule: rgba(255, 255, 255, 0.035);
@@ -289,8 +271,6 @@
 
   --c-password: #e0b35c;
   --c-file: #9aacff;
-  --c-resource: #e0b35c;
-  --c-link: #9a91e0;
   --c-team: #8f939c;
   --c-password-wash: rgba(224, 179, 92, 0.1);
   --c-folder-wash: rgba(224, 179, 92, 0.1);
@@ -306,8 +286,6 @@
   --mark-brown: #b8977a;
   --mark-tint: 18%;
   --mark-ink-mix: 100%;
-  --store-mark-bg: #555965;
-  --key-gold: #e0b35c;
   --folder-amber: #e0b35c;
 
   --shadow-btn: none;
@@ -319,10 +297,7 @@
     0 18px 44px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.08);
   --shadow-window:
     0 0 0 1px rgba(255, 255, 255, 0.1), 0 20px 50px rgba(0, 0, 0, 0.6);
-  --shadow-panel: -10px 0 22px -16px rgba(0, 0, 0, 0.7);
-  --knob-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 
-  --radio-border: rgba(255, 255, 255, 0.36);
   --backdrop-strong: rgba(0, 0, 0, 0.62);
   --backdrop-exit: rgba(0, 0, 0, 0.5);
   --light-edge: rgba(0, 0, 0, 0.3);
@@ -335,12 +310,10 @@
     --line: rgba(16, 20, 32, 0.2);
     --line-soft: rgba(16, 20, 32, 0.18);
     --line-mid: rgba(16, 20, 32, 0.24);
-    --line-strong: rgba(16, 20, 32, 0.28);
     --line-field: rgba(16, 20, 32, 0.4);
     --bar-rule: rgba(16, 20, 32, 0.24);
     --row-rule: rgba(16, 20, 32, 0.16);
     --muted: #4d5058;
-    --muted-2: #4d5058;
     --faint: #52555c;
     --side-muted: #46494f;
     /* Control boundaries of at least 3:1: bezels, field borders, and mark
@@ -349,22 +322,25 @@
     --line-field: rgba(16, 20, 32, 0.55);
     --mark-ink-mix: 70%;
     --mark-ink-base: var(--ink);
+    /* The quiet selection stays grey, but distinct from the surface. */
+    --row-sel: #dadde3;
+    --side-sel: rgba(16, 20, 32, 0.13);
   }
   :root[data-theme='dark'] {
     --line: rgba(255, 255, 255, 0.2);
     --line-soft: rgba(255, 255, 255, 0.18);
     --line-mid: rgba(255, 255, 255, 0.24);
-    --line-strong: rgba(255, 255, 255, 0.28);
     --line-field: rgba(255, 255, 255, 0.36);
     --bar-rule: rgba(255, 255, 255, 0.22);
     --row-rule: rgba(255, 255, 255, 0.14);
     --muted: #a9adb5;
-    --muted-2: #a9adb5;
     --faint: #a3a7af;
     --side-muted: #a9adb5;
     --btn-border: rgba(255, 255, 255, 0.45);
     --line-field: rgba(255, 255, 255, 0.5);
     --mark-ink-mix: 80%;
+    --row-sel: #2c2e33;
+    --side-sel: rgba(255, 255, 255, 0.12);
   }
 }
 

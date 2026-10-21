@@ -637,7 +637,7 @@ export function ChatTeamColumn({
                 {(
                   [
                     ['add', 'user', 'Add FOKS User…', 'roster'],
-                    ['add-team', 'users', 'Add FOKS team…', 'federation'],
+                    ['add-team', 'users', 'Add FOKS Team…', 'federation'],
                     ['invite', 'door', 'Invite New User…', 'roster'],
                   ] as const
                 ).map(([intent, icon, label, source]) => (

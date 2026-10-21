@@ -161,8 +161,13 @@ test('rapid checks dispatch one identity probe and do not automatically reconcil
   assert.equal(writes, 1);
   assert.deepEqual(
     events.map((event) => (event as unknown[])[0]),
-    ['busy', 'checked', 'toast', 'status', 'refresh', 'busy'],
+    ['busy', 'checked', 'status', 'refresh', 'busy'],
   );
+  // One check, one message: the refresh reports what the check found.
+  const refresh = events.find(
+    (event) => (event as unknown[])[0] === 'refresh',
+  ) as unknown[];
+  assert.match(String(refresh[1]), /^Checked .+, Server /);
 });
 
 for (const binding of ['profile', 'address', 'host'] as const) {

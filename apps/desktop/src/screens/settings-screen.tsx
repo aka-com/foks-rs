@@ -41,6 +41,7 @@ import {
   Tabs,
   tabId,
   tabPanelId,
+  useRadioGroupKeys,
 } from '../components';
 import {
   SETTINGS_SECTIONS,
@@ -221,7 +222,8 @@ export function SettingsScreen({
           />
         ) : (
           // The bar names Settings and the sub-navigation names the section,
-          // so the page opens on its first group rather than a third title.
+          // so the page opens on its first group rather than a third title;
+          // the heading is there for VoiceOver's heading navigation only.
           // Fixed IDs associate each tab button with its tabpanel.
           <div
             className="body"
@@ -229,6 +231,9 @@ export function SettingsScreen({
             id={tabPanelId(SETTINGS_TABS, section)}
             aria-labelledby={tabId(SETTINGS_TABS, section)}
           >
+            <h1 className="offscreen" tabIndex={-1}>
+              {SETTINGS_SECTION_LABEL[section]}
+            </h1>
             <div className="settings-main">{page}</div>
           </div>
         )}
@@ -285,6 +290,7 @@ function PreferencesSection(): ReactNode {
 function RailColorPicker(): ReactNode {
   const appearance = useAppearance();
   const [color, setColor] = useState(storedRailColor);
+  const swatchKeys = useRadioGroupKeys<HTMLDivElement>();
   const choose = (id: string): void => {
     setColor(id);
     applyRailColor(id);
@@ -316,7 +322,13 @@ function RailColorPicker(): ReactNode {
         </div>
       </InsetRow>
       <InsetRow label="Accent color">
-        <div className="swatches" role="radiogroup" aria-label="Accent color">
+        <div
+          ref={swatchKeys.ref}
+          onKeyDown={swatchKeys.onKeyDown}
+          className="swatches"
+          role="radiogroup"
+          aria-label="Accent color"
+        >
           {RAIL_COLORS.map((entry) => (
             <button
               key={entry.id}
@@ -328,10 +340,7 @@ function RailColorPicker(): ReactNode {
               title={entry.label}
               onClick={() => choose(entry.id)}
             >
-              <i
-                style={{ background: entry.fill }}
-                aria-hidden="true"
-              />
+              <i style={{ background: entry.fill }} aria-hidden="true" />
               <span>{entry.label}</span>
             </button>
           ))}

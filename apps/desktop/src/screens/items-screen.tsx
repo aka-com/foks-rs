@@ -38,7 +38,6 @@ import {
 } from '../components';
 import type { ListboxOptionProps } from '../components';
 import type { FoksIconName } from '../icons';
-import { PageHeader } from '../shell/page-header';
 import {
   KINDS,
   catalog,
@@ -248,8 +247,12 @@ function Row({
           <b className="nm" title={name}>
             {name}
           </b>
+          {/* VoiceOver reads the option's text as one run; the hidden commas
+              keep "github.com, Personal › logins, 142 B" apart. */}
+          <span className="offscreen">, </span>
           <small>{where}</small>
         </span>
+        <span className="offscreen">, </span>
         <span className="r">{fmtSize(item.size)}</span>
         {/* Pointer shortcuts only: the context menu (Shift+F10) carries the
             same actions for the keyboard and VoiceOver. */}
@@ -394,8 +397,10 @@ function FolderRow({
         <b className="nm" title={name}>
           {name}
         </b>
+        <span className="offscreen">, </span>
         <small>Folder</small>
       </span>
+      <span className="offscreen">, </span>
       <span className="r">{itemCount(count)}</span>
     </div>
   );
@@ -853,14 +858,13 @@ export function ItemsScreen({
   // a store that is no longer present.
   if (location.kind === 'store' && !store) {
     return (
-      <>
-        <PageHeader title="Vault unavailable" subtitle="" />
-        <div className="body">
-          <Notice severity="crit" title="Vault no longer available">
-            <p>Refresh, or choose another vault from the sidebar.</p>
-          </Notice>
-        </div>
-      </>
+      <div className="body">
+        <EmptyState
+          icon="lock"
+          title="Vault Unavailable"
+          body="This vault is no longer on this device. Refresh, or choose another vault from the sidebar."
+        />
+      </div>
     );
   }
 

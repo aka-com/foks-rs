@@ -356,7 +356,7 @@ test('a team’s unfinished changes are listed from the cached journal, never re
   assert.ok(
     ui
       .within(dialog)
-      .getByRole('heading', { name: 'Unfinished activity · Engineering' }),
+      .getByRole('heading', { name: 'Unfinished Activity · Engineering' }),
   );
   assert.ok(ui.within(dialog).getByText('Adding jules.park'));
 });

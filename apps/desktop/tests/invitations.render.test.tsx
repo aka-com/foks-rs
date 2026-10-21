@@ -382,7 +382,7 @@ test('Invite new user prepares and submits in one press, then shares the token',
   ui.fireEvent.change(r.getByLabelText('For'), {
     target: { value: 'Sam, new contractor' },
   });
-  ui.fireEvent.click(r.getByText('Create invitation'));
+  ui.fireEvent.click(r.getByText('Create Invitation'));
   await ui.waitFor(() => assert.ok(r.getByLabelText('Shareable invitation')));
   assert.deepEqual(actions, ['list', 'create', 'attempt']);
   assert.ok(r.getByText('Step 2 of 2'));
@@ -441,7 +441,7 @@ test('Invite new user asks for the security key PIN only when the key requires i
     ),
   );
   assert.equal(r.queryByLabelText('Security key PIN'), null);
-  ui.fireEvent.click(r.getByText('Create invitation'));
+  ui.fireEvent.click(r.getByText('Create Invitation'));
   await ui.waitFor(() => assert.ok(r.getByLabelText('Security key PIN')));
   assert.deepEqual(received, [
     ['create', null],
@@ -493,7 +493,7 @@ test('a resumed hardware-key request can receive its PIN on step one', async () 
       }),
     ),
   );
-  ui.fireEvent.click(r.getByText('Resume a pending request'));
+  ui.fireEvent.click(r.getByText('Resume a Pending Request'));
   await ui.waitFor(() => assert.ok(r.getByText('Submit')));
   ui.fireEvent.click(r.getByText('Submit'));
   await ui.waitFor(() => assert.equal(received.length, 1));
@@ -776,7 +776,7 @@ test('a failed invitation submission retries the original operation', async () =
       }),
     ),
   );
-  ui.fireEvent.click(r.getByText('Create invitation'));
+  ui.fireEvent.click(r.getByText('Create Invitation'));
   await ui.waitFor(() => assert.ok(r.getByText('Connection lost')));
   ui.fireEvent.click(r.getByText('Finish Creating'));
   await ui.waitFor(() =>
@@ -896,7 +896,7 @@ test('an acknowledged invitation is finalized and refresh failure preserves succ
       }),
     ),
   );
-  ui.fireEvent.click(r.getByText('Create invitation'));
+  ui.fireEvent.click(r.getByText('Create Invitation'));
   await ui.waitFor(() =>
     assert.match(
       r.getByRole('alert').textContent ?? '',
@@ -944,7 +944,7 @@ test('delivered requests remain reachable pending membership approval', async ()
       }),
     ),
   );
-  ui.fireEvent.click(r.getByText('Resume a pending request'));
+  ui.fireEvent.click(r.getByText('Resume a Pending Request'));
   await ui.waitFor(() => assert.ok(r.queryByText('Check Status')));
 });
 
@@ -994,7 +994,7 @@ for (const remoteRequest of [false, true]) {
         r.getByPlaceholderText('For teams on another server'),
         { target: { value: 'unrelated-server' } },
       );
-      ui.fireEvent.click(r.getByText('Resume a pending request'));
+      ui.fireEvent.click(r.getByText('Resume a Pending Request'));
       await ui.waitFor(() =>
         assert.ok(
           r.queryByText(state === 'prepared' ? 'Submit' : 'Check Status'),

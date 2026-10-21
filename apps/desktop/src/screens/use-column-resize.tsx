@@ -4,7 +4,7 @@ import type { CSSProperties, ReactNode, RefObject } from 'react';
 const clamp = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(max, value));
 
-interface SidebarResizeOptions {
+interface ColumnResizeOptions {
   storageKey: string;
   cssVariable: `--${string}`;
   className: string;
@@ -17,15 +17,20 @@ interface SidebarResizeOptions {
   reservedWidth?: number;
 }
 
-export interface SidebarResize<T extends HTMLElement> {
+export interface ColumnResize<T extends HTMLElement> {
   ref: RefObject<T | null>;
   id: string;
   style: CSSProperties;
   handle: ReactNode;
 }
 
-/** Shared pointer, keyboard, and persistence behavior for two-column panes. */
-export function useSidebarResize<T extends HTMLElement = HTMLElement>({
+/**
+ * Pointer, keyboard and persistence for a resizable column inside the panel
+ * (Chat's channel column), measured against its own frame and returned as a
+ * style. The window's sidebar has its own hook (`shell/use-sidebar-resize`):
+ * it is measured against the window and its divider is portaled into `.app`.
+ */
+export function useColumnResize<T extends HTMLElement = HTMLElement>({
   storageKey,
   cssVariable,
   className,
@@ -36,7 +41,7 @@ export function useSidebarResize<T extends HTMLElement = HTMLElement>({
   minWidth = 180,
   maxWidth = 420,
   reservedWidth = 320,
-}: SidebarResizeOptions): SidebarResize<T> {
+}: ColumnResizeOptions): ColumnResize<T> {
   const readWidth = (): number | null => {
     try {
       const value = Number(window.localStorage.getItem(storageKey));

@@ -108,6 +108,13 @@ export function inPopup(target: Element): boolean {
  * goes back to the menu's trigger once every overlay has closed.
  */
 let menuOpener: HTMLElement | null = null;
+/**
+ * The opener of a dialog that closed in the same commit as another opened,
+ * as when a chooser sheet's Continue replaces it with the sheet it chose. The
+ * new dialog inherits it, so closing the second sheet returns to the control
+ * that opened the first (Add a device), not to the window's landing target.
+ */
+let replacedOpener: HTMLElement | null = null;
 
 const OverlayContext = createContext<OverlayEnvironment | null>(null);
 const OverlayBlockingContext = createContext(false);
@@ -232,6 +239,8 @@ export function Dialog({
       openerRef.current = document.activeElement;
     else if (!openerRef.current && menuOpener?.isConnected)
       openerRef.current = menuOpener;
+    else if (!openerRef.current && replacedOpener?.isConnected)
+      openerRef.current = replacedOpener;
     const opener = openerRef.current;
     const releases = [
       ...(environment.backgroundRef.current
@@ -252,6 +261,12 @@ export function Dialog({
       dialogs.delete(dialog);
       mountedDialogs.delete(dialog);
       for (const release of releases.reverse()) release();
+      if (opener) {
+        replacedOpener = opener;
+        queueMicrotask(() => {
+          if (replacedOpener === opener) replacedOpener = null;
+        });
+      }
       queueMicrotask(() => {
         if (dialog.isConnected) return;
         if (opener && canRestoreFocus(opener, dialogs)) opener.focus();

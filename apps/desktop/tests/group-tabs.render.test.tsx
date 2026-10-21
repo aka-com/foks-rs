@@ -742,7 +742,7 @@ test('Finish setup resumes the existing incomplete group', async () => {
 
 test('an unavailable group displays its status and retains parent navigation', async () => {
   const rendered = await group('team:removed', 'people');
-  assert.ok(rendered.getByRole('heading', { name: 'Team unavailable' }));
+  assert.ok(rendered.getByRole('heading', { name: 'Team Unavailable' }));
   // The topbar derives parent navigation from the location.
   const { parentLocation } = await import('../src/location');
   assert.deepEqual(

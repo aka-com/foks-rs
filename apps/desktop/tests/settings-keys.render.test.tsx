@@ -297,7 +297,7 @@ test('the chooser offers each way to add, and leads into pairing', async () => {
   const pairing = await ui.waitFor(() => rendered.getByRole('dialog'));
   assert.equal(
     ui.within(pairing).getByRole('heading', { level: 2 }).textContent,
-    'Pair another device',
+    'Pair Another Device',
   );
   assert.ok(ui.within(pairing).getByText('On the other device'));
   // Finish belongs to a started offer, so it waits for one.
@@ -491,7 +491,7 @@ test('the hardware-key scene still opens its sheet on Devices', async () => {
   const dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
   assert.equal(
     ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
-    'Create an account on a hardware key',
+    'Create an Account on a Hardware Key',
   );
   assert.ok(
     document.activeElement && dialog.contains(document.activeElement),
@@ -523,7 +523,7 @@ test('the recovery-phrase scene opens the one-time reveal', async () => {
   const dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
   assert.equal(
     ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
-    'Save recovery phrase',
+    'Save Recovery Phrase',
   );
   // The `section=` anchor must not pull focus out of the open sheet.
   await ui.waitFor(() => {
@@ -598,7 +598,7 @@ test('the chooser leads into the recovery-phrase and provisioning sheets too', a
   const paper = await choose(rendered, 'Create a new recovery phrase');
   assert.equal(
     ui.within(paper).getByRole('heading', { level: 2 }).textContent,
-    'Create recovery phrase',
+    'Create Recovery Phrase',
   );
   assert.ok(ui.within(paper).getByLabelText('Recovery phrase name'));
   await ui.act(async () => {
@@ -610,7 +610,7 @@ test('the chooser leads into the recovery-phrase and provisioning sheets too', a
   const provision = await choose(rendered, 'Connect a hardware key');
   assert.equal(
     ui.within(provision).getByRole('heading', { level: 2 }).textContent,
-    'Connect a hardware key',
+    'Connect a Hardware Key',
   );
   assert.ok(ui.within(provision).getByText('Hardware key 20993145'));
 });
@@ -626,7 +626,7 @@ test('the chooser offers both pairing directions, so a phrase can be entered', a
   );
   assert.equal(
     ui.within(accepting).getByRole('heading', { level: 2 }).textContent,
-    'Pair another device',
+    'Pair Another Device',
   );
   // The sheet opens on the accepting side: the phrase is typed, not revealed.
   assert.ok(ui.within(accepting).getByLabelText('Pairing phrase'));
@@ -1426,7 +1426,7 @@ test('an account with no recovery phrase gets its own band without publishing sh
     );
   });
   assert.ok(document.querySelector('.sheet'));
-  assert.ok(page.getByRole('heading', { name: 'Create recovery phrase' }));
+  assert.ok(page.getByRole('heading', { name: 'Create Recovery Phrase' }));
 });
 
 test('an account with a recovery phrase draws no band without publishing shell alerts', async () => {

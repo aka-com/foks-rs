@@ -268,3 +268,75 @@ test('Return in a sheet field presses its enabled default button, and only then'
   ui.fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
   assert.equal(presses, 1);
 });
+
+test('Escape belongs to the page: not from the sidebar, and from blank space it lands on the row', async () => {
+  const { store } = await mount(
+    {},
+    {
+      selection: { store: 'acct:personal', path: '/logins/github.com' },
+      details: true,
+    },
+  );
+  await ui.waitFor(() => assert.ok(document.querySelector('.details')));
+  const allItems = document.querySelector<HTMLButtonElement>(
+    '.side .nav[data-place="files"]',
+  )!;
+  allItems.focus();
+  key(allItems, { key: 'Escape' });
+  assert.equal(store.getSnapshot().selection?.path, '/logins/github.com');
+
+  // A click on blank space leaves the focus on <body>; Escape there clears
+  // the selection and puts the focus on the row that was selected.
+  allItems.blur();
+  key(document.body, { key: 'Escape' });
+  assert.equal(store.getSnapshot().selection, null);
+  await ui.waitFor(() =>
+    assert.equal(
+      (document.activeElement as HTMLElement | null)?.dataset.rowKey,
+      'acct:personal|/logins/github.com',
+    ),
+  );
+});
+
+test('VoiceOver text: rows keep their parts apart, a concealed value reads Hidden', async () => {
+  await mount(
+    {},
+    {
+      selection: { store: 'acct:personal', path: '/logins/github.com' },
+      details: true,
+    },
+  );
+  const row = document.querySelector<HTMLElement>(
+    '.lpane [data-row-key="acct:personal|/logins/github.com"]',
+  )!;
+  assert.match(row.textContent ?? '', /^github\.com, .+, \d/);
+  await ui.waitFor(() => assert.ok(document.querySelector('.details .masked')));
+  const masked = document.querySelector('.details .masked')!;
+  assert.equal(
+    masked.querySelector('[aria-hidden="true"]')?.textContent?.[0],
+    '•',
+  );
+  assert.equal(masked.querySelector('.offscreen')?.textContent, 'Hidden');
+  // The connection state has a status region of its own.
+  assert.ok(
+    [...document.querySelectorAll('.side [role="status"]')].some(
+      (region) => region.textContent === 'Connected',
+    ),
+  );
+});
+
+test('⌘N in a store that cannot take items says why instead of doing nothing', async () => {
+  const { store } = await mount();
+  ui.act(() => store.navigate({ kind: 'store', ref: 'team:homelab' }));
+  await ui.waitFor(() =>
+    assert.equal(store.getSnapshot().location.kind, 'store'),
+  );
+  key(document.body, { key: 'n', ctrlKey: true });
+  await ui.waitFor(() =>
+    assert.match(
+      document.querySelector('.toast')?.textContent ?? '',
+      /Team setup is incomplete/,
+    ),
+  );
+  assert.equal(document.querySelector('.sheet'), null);
+});
