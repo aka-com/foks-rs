@@ -591,6 +591,46 @@
   outline: 0;
 }
 
+/* Team Info: the details column's parts for a team. A titled group's label
+   is a heading with the group's action at the trailing edge. */
+.details .bar-title {
+  font-size: 13px;
+  font-weight: var(--weight-label);
+}
+.details .bar > .btn.icon:last-child {
+  margin-right: -6px;
+}
+.details .prop-group.titled > .prop-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.details .prop-label h3 {
+  margin: 0;
+  font: inherit;
+  color: inherit;
+}
+.details .prop-group > .note {
+  margin: 4px 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.details .prop-row .link {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent-ink);
+  font-size: 12.5px;
+  text-align: left;
+}
+.details .prop-row .link:hover {
+  text-decoration: underline;
+}
+
 /* Sharing: one muted note and the readers. */
 .details .sharing .note {
   max-width: 560px;
