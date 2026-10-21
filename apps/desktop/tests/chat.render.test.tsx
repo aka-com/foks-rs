@@ -2035,3 +2035,15 @@ test('over the conversation, Tab stays inside channel info', async () => {
   ui.fireEvent.keyDown(stops[0], { key: 'Tab', shiftKey: true });
   assert.equal(document.activeElement, stops.at(-1));
 });
+
+test('the thread names its channel at the top, and marks carry two initials for a two-word name', async () => {
+  await setup();
+  assert.ok(await ui.screen.findByText(/^Beginning of #/));
+  assert.equal(ui.screen.queryByText('Beginning of the channel'), null);
+  const { markInitials } = (await vite.ssrLoadModule(
+    '/src/screens/account-switcher.tsx',
+  )) as typeof import('../src/screens/account-switcher');
+  assert.equal(markInitials('Team member'), 'TM');
+  assert.equal(markInitials('satoshi'), 'S');
+  assert.equal(markInitials('  dana  okafor smith '), 'DO');
+});
