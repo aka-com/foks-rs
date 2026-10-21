@@ -561,12 +561,12 @@ async function recoveryPhrase(): Promise<{
   return { rendered, dialog, committed };
 }
 
-test('Cancel discards a revealed recovery phrase rather than committing it', async () => {
+test('Not Now discards a revealed recovery phrase rather than committing it', async () => {
   const { rendered, dialog, committed } = await recoveryPhrase();
 
   await ui.act(async () => {
     ui.fireEvent.click(
-      ui.within(dialog).getByRole('button', { name: 'Cancel' }),
+      ui.within(dialog).getByRole('button', { name: 'Not Now' }),
     );
   });
 
@@ -577,10 +577,10 @@ test('Cancel discards a revealed recovery phrase rather than committing it', asy
   assert.deepEqual(committed, []);
 });
 
-test('Esc leaves the revealed recovery phrase the same way Cancel does', async () => {
+test('Esc leaves the revealed recovery phrase the same way Not Now does', async () => {
   const { rendered, dialog, committed } = await recoveryPhrase();
 
-  // Escape discards a revealed phrase, matching Cancel.
+  // Escape discards a revealed phrase, matching Not Now.
   await ui.act(async () => {
     ui.fireEvent.keyDown(dialog, { key: 'Escape' });
   });
@@ -848,6 +848,42 @@ test('the device rows are one listbox the keyboard moves through', async () => {
   assert.equal(
     (moves.at(-1)?.location as { device?: string }).device,
     deviceId(snapshot, 0),
+  );
+});
+
+test('a device row has a context menu with the actions its page offers', async () => {
+  const snapshot = await fixture();
+  const page = await renderDevices(snapshot, { store: 'acct:personal' });
+  const travel = page.getByRole('option', { name: 'Travel Mac' });
+  travel.focus();
+  ui.fireEvent.keyDown(travel, { key: 'F10', shiftKey: true });
+  const menu = await page.findByRole('menu', {
+    name: 'Actions for Travel Mac',
+  });
+  assert.deepEqual(
+    ui
+      .within(menu)
+      .getAllByRole('menuitem')
+      .map((item) => item.textContent),
+    ['Show Details', 'Copy Device Key', 'Remove This Device…'],
+  );
+  ui.fireEvent.click(
+    ui.within(menu).getByRole('menuitem', { name: 'Remove This Device…' }),
+  );
+  // The same confirmation the page's Danger zone opens.
+  await page.findByRole('alertdialog');
+  // This Mac has no destructive action, in its menu as on its page.
+  ui.fireEvent.keyDown(document.activeElement ?? document.body, {
+    key: 'Escape',
+  });
+  const self = page.getByRole('option', { name: 'MacBook Pro' });
+  ui.fireEvent.contextMenu(self);
+  const own = await page.findByRole('menu', {
+    name: 'Actions for MacBook Pro',
+  });
+  assert.equal(
+    ui.within(own).queryByRole('menuitem', { name: /Remove/ }),
+    null,
   );
 });
 

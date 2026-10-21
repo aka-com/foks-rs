@@ -669,7 +669,7 @@ test('ambiguous channel preparation keeps its submission after the sheet closes'
   ui.fireEvent.click(
     await ui.screen.findByRole('button', { name: 'Retry channel creation' }),
   );
-  await ui.screen.findByRole('button', { name: /#recoverable/ });
+  await ui.screen.findByRole('option', { name: /#recoverable/ });
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
   assert.equal(new Set(submissions).size, 1);
   assert.equal(submissions.length, 2);
@@ -746,7 +746,7 @@ test('channel creation opens in a sheet, selects the new channel, and needs no m
   );
   ui.fireEvent.change(name, { target: { value: 'design' } });
   ui.fireEvent.submit(name.closest('form')!);
-  await ui.screen.findByRole('button', { name: /#design/ });
+  await ui.screen.findByRole('option', { name: /#design/ });
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
   assert.equal(
     ui.screen.queryByRole('button', { name: 'Finish cleanup' }),
@@ -1699,10 +1699,10 @@ for (const fault of ['history', 'preview', 'scope'] as const) {
     await ui.screen.findByRole('heading', { name: 'Channel stopped' });
     assert.equal(ui.screen.queryByRole('textbox', { name: 'Message' }), null);
     const reads = badReads;
-    ui.fireEvent.click(ui.screen.getByRole('button', { name: /#healthy/ }));
+    ui.fireEvent.click(ui.screen.getByRole('option', { name: /#healthy/ }));
     await ui.screen.findByText('Healthy channel content');
     assert.ok(ui.screen.getByRole('textbox', { name: 'Message' }));
-    ui.fireEvent.click(ui.screen.getByRole('button', { name: /#general/ }));
+    ui.fireEvent.click(ui.screen.getByRole('option', { name: /#general/ }));
     await ui.screen.findByRole('heading', { name: 'Channel stopped' });
     assert.equal(
       badReads,

@@ -321,7 +321,7 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .search .ic{position:absolute;left:10px;top:8px;font-size:16px;color:var(--muted)}
 .search.no-shortcut input{padding-right:12px}
 .search kbd{position:absolute;right:8px;top:7px;font:12px var(--sans);color:var(--faint);border:1px solid var(--line);border-radius:5px;padding:1px 5px;background:var(--main-surface)}
-.empty .btn.primary{height:30px}
+.empty .btn.primary,.empty .empty-acts .btn{height:30px}
 .scope{font-size:13px;color:var(--muted)}.path .loc>.scope{flex:1;min-width:0;margin-left:auto;overflow:hidden;text-align:right;text-overflow:ellipsis;white-space:nowrap}
 /* Buttons: flat, 26px, a hairline and a 1px shadow, 6px radius, title-case
    labels at 500. The primary fill is --accent-fill (4.5:1 with white in

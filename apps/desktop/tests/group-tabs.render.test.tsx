@@ -660,9 +660,10 @@ test('a group whose setup never finished has no tabs, and two ways out', async (
   // Homelab was created but its key setup never finished on this device.
   const rendered = await group('team:homelab', 'people');
   assert.equal(document.querySelector('[role="tablist"]'), null);
-  const band = document.querySelector('.band');
+  // The store page's notice: title line, sentence, action.
+  const band = document.querySelector('.notice');
   assert.ok(band);
-  assert.equal(band.querySelector('b')?.textContent, 'Setup incomplete');
+  assert.equal(band.querySelector('h2')?.textContent, 'Setup incomplete');
   // One sentence for the condition, the store page's own: the page and the
   // takeover cannot describe it differently.
   assert.match(
@@ -768,7 +769,7 @@ test('incomplete group recovery describes durable creation evidence', async () =
       ),
     };
     const rendered = await group('team:homelab', 'people', { snapshot });
-    const band = document.querySelector('.band');
+    const band = document.querySelector('.notice');
     assert.ok(band);
     assert.ok(band.textContent?.includes(detail), phase);
     assert.ok(band.contains(rendered.getByRole('button', { name: button })));

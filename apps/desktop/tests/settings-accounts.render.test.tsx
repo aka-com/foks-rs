@@ -541,9 +541,10 @@ test('the header names the account and carries no switcher of its own', async ()
   const serverState = rendered.getByRole('img', { name: 'Verified' });
   assert.ok(serverState.closest('.settings-inset .fr'));
   assert.equal(rendered.queryByText(/·\s*verified/i), null);
-  // A connected server this Mac has not paired with reads the same way.
+  // A server this Mac has not paired with reads the same way, its state in
+  // the Servers list's words: the fixture's partner server is not verified.
   assert.ok(
-    rendered.getByText('Connected, not paired').classList.contains('dim'),
+    rendered.getByText('Not verified, not paired').classList.contains('dim'),
   );
   // The body is the panel the sub-navigation's Account tab controls.
   const panel = rendered.getByRole('tabpanel');
@@ -575,7 +576,7 @@ test('an unpaired server is hidden until its account inventory loads successfull
   const { rendered } = await renderPeople(failed);
 
   assert.ok(rendered.getByText('Could not load profile overview on partner'));
-  assert.equal(rendered.queryByText('Connected, not paired'), null);
+  assert.equal(rendered.queryByText(/not paired/), null);
 });
 
 test('a notice this page can route elsewhere is not repeated here', async () => {
@@ -667,7 +668,7 @@ test('a team note with the same alias on two profiles routes to neither', async 
   const rows = [...list.querySelectorAll('.settings-inset .fr')];
   assert.ok(rows[0]?.classList.contains('attention-note'));
   const unpaired = rows.at(-1);
-  assert.match(unpaired?.textContent ?? '', /Connected, not paired/);
+  assert.match(unpaired?.textContent ?? '', /Not verified, not paired/);
   const page = [...document.querySelectorAll('.account-main > *')];
   const facts = page.findIndex((node) => node.textContent === 'Account');
   const servers = page.findIndex((node) =>

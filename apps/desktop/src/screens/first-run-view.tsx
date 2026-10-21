@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
-import type { ReactNode } from 'react';
+import type { KeyboardEvent, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Button, Icon } from '../components';
 import type { AgentSnapshot } from '../model';
@@ -31,6 +31,96 @@ export function StepIntro({ children }: { children: ReactNode }): ReactNode {
   const slot = useContext(FirstRunIntroSlot);
   if (slot === undefined) return children;
   return slot ? createPortal(children, slot) : null;
+}
+
+/**
+ * Return in a setup step presses the step's default button, as in a macOS
+ * setup assistant: the last primary button in the step's foot, else the last
+ * one in the step's own action row, when it is enabled. A control that uses
+ * Return itself keeps it (a text area, a select, a button or link, a
+ * checkbox); a radio is a choice, so Return on one presses the default too.
+ */
+export function pressStepDefault(event: KeyboardEvent<HTMLElement>): void {
+  if (
+    event.key !== 'Enter' ||
+    event.defaultPrevented ||
+    event.nativeEvent.isComposing ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.altKey ||
+    event.shiftKey
+  )
+    return;
+  const target = event.target instanceof Element ? event.target : null;
+  if (
+    !target ||
+    target.closest('[role="dialog"], [role="alertdialog"], [role="menu"]') ||
+    (!target.closest('[role="radio"]') &&
+      target.closest(
+        'textarea, select, button, a[href], summary, [contenteditable="true"], ' +
+          '[role="combobox"][aria-expanded="true"], [role="option"], ' +
+          '[role="button"], input[type="checkbox"], input[type="file"]',
+      ))
+  )
+    return;
+  const column = event.currentTarget;
+  const inFoot = column.querySelectorAll<HTMLButtonElement>(
+    '.pfoot .btn.primary',
+  );
+  const inStep = column.querySelectorAll<HTMLButtonElement>(
+    '.pane > .setup-actions .btn.primary',
+  );
+  const button = inFoot[inFoot.length - 1] ?? inStep[inStep.length - 1];
+  if (!button) return;
+  event.preventDefault();
+  if (button.disabled || button.getAttribute('aria-disabled') === 'true')
+    return;
+  button.click();
+}
+
+const STEP_FIELD =
+  'input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]), textarea';
+
+/**
+ * Moves the focus to where a setup step starts: a field in error, the step's
+ * marked initial control (`data-dialog-autofocus`), its first empty field,
+ * its first field, its chosen radio, then the step's heading. Controls in a
+ * closed disclosure, disabled or inert ones do not qualify.
+ */
+export function focusStepStart(
+  column: HTMLElement,
+  intro: HTMLElement | null,
+): void {
+  const usable = (element: HTMLElement): boolean =>
+    !element.matches(':disabled') &&
+    !(element as HTMLInputElement).readOnly &&
+    !element.closest('[inert], [hidden]') &&
+    !element.closest('details:not([open]) > :not(summary)');
+  const first = (
+    selector: string,
+    accept: (element: HTMLElement) => boolean = () => true,
+  ): HTMLElement | undefined =>
+    Array.from(column.querySelectorAll<HTMLElement>(selector)).find(
+      (element) => usable(element) && accept(element),
+    );
+  const heading =
+    intro?.querySelector<HTMLElement>('h1') ??
+    column.querySelector<HTMLElement>('h1');
+  const target =
+    first('[aria-invalid="true"]') ??
+    first('[data-dialog-autofocus="true"]') ??
+    first(STEP_FIELD, (element) => !(element as HTMLInputElement).value) ??
+    first(STEP_FIELD) ??
+    first('[role="radio"][aria-checked="true"], input[type="radio"]:checked') ??
+    first('[role="radio"][tabindex="0"]');
+  if (target) {
+    target.focus();
+    return;
+  }
+  if (heading) {
+    heading.tabIndex = -1;
+    heading.focus();
+  }
 }
 
 export const stepOf = (state: FirstRunStateName): number => {

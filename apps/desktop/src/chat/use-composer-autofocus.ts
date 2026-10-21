@@ -1,9 +1,21 @@
 import { useLayoutEffect, useMemo } from 'react';
 
+/**
+ * Until when a channel visit leaves the focus where it is: a channel opened
+ * from the keyboard in the channel list keeps the focus on its row, so the
+ * arrows go on moving through the list.
+ */
+let keepFocusUntil = 0;
+
+/** The next channel visit (within half a second) does not focus the composer. */
+export function keepFocusOnNextChannelVisit(): void {
+  keepFocusUntil = Date.now() + 500;
+}
+
 /** One focus opportunity per visit, including time spent discovering the channel. */
 export function useComposerAutofocus(channel: string | undefined) {
   const visit = useMemo(
-    () => ({ channel, pending: true, active: false }),
+    () => ({ channel, pending: Date.now() > keepFocusUntil, active: false }),
     [channel],
   );
   useLayoutEffect(() => {

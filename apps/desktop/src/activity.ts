@@ -23,6 +23,7 @@
 import {
   federatedTeamName,
   plural,
+  SERVER_NOT_VERIFIED,
   serverAvailability,
   serverDisplayLabel,
   serverDisplayLabelForStore,
@@ -139,7 +140,7 @@ export function activityNoticeText(
           }
         : {
             title: `${serverDisplayLabel(notice.server)} is not verified`,
-            detail: 'Verify this server before use',
+            detail: SERVER_NOT_VERIFIED.hint,
           };
   }
 }

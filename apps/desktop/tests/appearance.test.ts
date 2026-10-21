@@ -52,3 +52,20 @@ test('appearance persists, follows system changes only in System mode, and syncs
     window.localStorage.removeItem('appearance');
   }
 });
+
+test('accent colors are distinct hues and retired choices map to their nearest one', async () => {
+  const { RAIL_COLORS, resolveRailColor } = await import('../src/rail-theme');
+  assert.deepEqual(
+    RAIL_COLORS.map((color) => color.label),
+    ['Blue', 'Purple', 'Pink', 'Green', 'Graphite'],
+  );
+  assert.equal(new Set(RAIL_COLORS.map((color) => color.fill)).size, 5);
+  // A value stored by an earlier build keeps a sensible accent.
+  assert.equal(resolveRailColor('iris'), 'purple');
+  assert.equal(resolveRailColor('lavender'), 'purple');
+  assert.equal(resolveRailColor('sky'), 'default');
+  assert.equal(resolveRailColor('slate'), 'graphite');
+  assert.equal(resolveRailColor('pink'), 'pink');
+  assert.equal(resolveRailColor('nonsense'), 'default');
+  assert.equal(resolveRailColor(null), 'default');
+});

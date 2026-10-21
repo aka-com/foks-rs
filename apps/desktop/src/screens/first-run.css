@@ -46,6 +46,9 @@
   max-height: 100%;
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
+  /* One row no taller than the card: when a step is taller than the window
+     allows, the step's body scrolls and its foot stays in view. */
+  grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius-panel);
@@ -146,6 +149,7 @@
 
 /* --------------------------------------------------------------- right */
 .fr-card > .main.first-run-main {
+  min-height: 0;
   margin: 0;
   padding-top: 0;
   border-radius: 0;
@@ -377,7 +381,10 @@ button.check {
   line-height: 1.4;
 }
 
-.first-run-main .inset .fr input:not([type='checkbox']):not([type='radio']):focus,
+.first-run-main
+  .inset
+  .fr
+  input:not([type='checkbox']):not([type='radio']):focus,
 .first-run-main .inset .fr select:focus,
 .first-run-main .inset .fr textarea:focus {
   border-color: var(--accent);
@@ -389,4 +396,39 @@ button.check {
 .first-run-main .official-server {
   align-self: flex-start;
   width: auto;
+}
+
+/* Waiting for a team: two columns of cards need more than the card's step
+   column has at the default window size. In one column the check comes
+   right after the message to send, then the Personal vault, then the notes. */
+@container (max-width: 639px) {
+  .fr-card .waiting-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .fr-card .waiting-grid > .col {
+    display: contents;
+  }
+  .fr-card .waiting-grid > .col > .pcard,
+  .fr-card .waiting-grid > .col > .checklist {
+    margin-top: 0;
+  }
+  .fr-card .waiting-grid > .col:first-child > .checklist {
+    order: 1;
+  }
+}
+
+/* A disclosure's chevron is its marker: no second triangle beside it. */
+.first-run-main details.dd > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  list-style: none;
+}
+
+.first-run-main details.dd > summary::-webkit-details-marker {
+  display: none;
+}
+
+.first-run-main details.dd:not([open]) > summary svg {
+  transform: rotate(-90deg);
 }

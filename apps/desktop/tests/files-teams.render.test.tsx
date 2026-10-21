@@ -322,6 +322,35 @@ test('a Teams row displays the server, member count, and user role', async () =>
   assert.equal(document.body.textContent?.includes('items readable'), false);
 });
 
+test('the Teams rows are one listbox with a context menu for the keyboard', async () => {
+  await teams();
+  const list = ui.screen.getByRole('listbox', { name: 'Teams' });
+  const options = ui.within(list).getAllByRole('option');
+  // One Tab stop: the first row; the row menus are reached otherwise.
+  assert.deepEqual(
+    options.map((option) => option.tabIndex),
+    options.map((_, index) => (index === 0 ? 0 : -1)),
+  );
+  for (const trigger of list.querySelectorAll<HTMLElement>(
+    'button[aria-label^="Actions for"]',
+  ))
+    assert.equal(trigger.tabIndex, -1);
+  options[0].focus();
+  await ui.act(async () => {
+    ui.fireEvent.keyDown(options[0], { key: 'End' });
+  });
+  assert.equal(document.activeElement, options.at(-1));
+  await ui.act(async () => {
+    ui.fireEvent.keyDown(options.at(-1)!, { key: 'Home' });
+  });
+  assert.equal(document.activeElement, options[0]);
+  const name = options[0].querySelector('.t > b')?.textContent;
+  await ui.act(async () => {
+    ui.fireEvent.keyDown(options[0], { key: 'F10', shiftKey: true });
+  });
+  assert.ok(document.querySelector(`.menu[aria-label="Actions for ${name}"]`));
+});
+
 test('Find teams lists accounts under their servers', async () => {
   const rendered = await teams();
   assert.equal(rendered.queryByRole('menu', { name: 'Find Teams' }), null);

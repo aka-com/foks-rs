@@ -729,6 +729,16 @@ export function notesNow(snapshot: AgentSnapshot): Notification[] {
   });
 }
 
+/**
+ * The words for a server whose identity this device has never verified, the
+ * same on Settings (Needs attention, the Servers list, the server page) and
+ * in Activity: one noun for the state, and Check, the button that fixes it.
+ */
+export const SERVER_NOT_VERIFIED = {
+  state: 'Not verified',
+  hint: 'Check this server before use',
+} as const;
+
 /** A server whose check-in has lapsed or whose trust has never been verified: the two reasons the Settings tab's orange dot answers for. */
 function serverFlaggedForSettings(availability: Availability): boolean {
   return (

@@ -253,6 +253,27 @@ test('a server notice opens that server, and the list follows the arrow keys', a
     'Homelab cannot access Engineering',
   );
   assert.equal(document.activeElement, now);
+  // Home, End and type-select move as they do in Files and Devices.
+  const selectedTitle = (): string | null | undefined =>
+    document.querySelector('[role="option"][aria-selected="true"] .name b')
+      ?.textContent;
+  await ui.act(async () => {
+    ui.fireEvent.keyDown(document.activeElement!, { key: 'End' });
+  });
+  assert.equal(selectedTitle(), rowTitles().at(-1));
+  await ui.act(async () => {
+    ui.fireEvent.keyDown(document.activeElement!, { key: 'Home' });
+  });
+  assert.equal(selectedTitle(), rowTitles()[0]);
+  await ui.act(async () => {
+    ui.fireEvent.keyDown(document.activeElement!, { key: 'h' });
+  });
+  assert.match(selectedTitle() ?? '', /^Homelab/);
+  // One Tab stop.
+  assert.equal(
+    document.querySelectorAll('[role="option"][tabindex="0"]').length,
+    1,
+  );
 });
 
 test('the Activity count adds requests to the snapshot notices', async () => {
