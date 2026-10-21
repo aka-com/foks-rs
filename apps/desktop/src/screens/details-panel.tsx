@@ -1239,8 +1239,8 @@ export function DetailsPanel({
             <div className="notice info">
               <Icon name="info" />
               <span className="t">
-                Saves a new version if no one else has changed this item since
-                version {item.version}.
+                Saves version {item.version + 1} if no one else has changed this
+                item since version {item.version}.
               </span>
             </div>
           ) : null}

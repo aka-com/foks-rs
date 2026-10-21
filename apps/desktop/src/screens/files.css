@@ -83,7 +83,7 @@
   align-items: flex-start;
   justify-content: flex-start;
   gap: 6px;
-  height: 96px;
+  height: 112px;
   min-height: 0;
   padding: 10px;
   border: 1px solid var(--line);
@@ -91,7 +91,7 @@
   background: var(--card);
 }
 .folder-body .files-grid.with-location .row {
-  height: 112px;
+  height: 128px;
 }
 .folder-body .files-grid .row::after {
   content: none;
@@ -106,6 +106,17 @@
 .folder-body .files-grid .row .name {
   width: 100%;
   margin-top: auto;
+}
+/* A card is as narrow as 112px in the list column: its name wraps to a
+   second line (breaking inside a long word if it must) rather than
+   truncating after a few characters. */
+.folder-body .files-grid .row .name .nm {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.3;
 }
 .folder-body .files-grid .row .name small {
   display: -webkit-box;
@@ -462,6 +473,23 @@
 .details .hero-acts .btn .ic {
   font-size: 14px;
 }
+/* A file's two hero actions (Download, Replace…) move under the name when
+   the column is narrow, so the name and "Document · server" keep their
+   width instead of truncating. */
+@container (max-width: 460px) {
+  .details .hero:has(.hero-acts .btn + .btn) {
+    flex-wrap: wrap;
+    row-gap: 10px;
+  }
+  .details .hero:has(.hero-acts .btn + .btn) .t {
+    flex-basis: calc(100% - 62px);
+  }
+  .details .hero .hero-acts:has(.btn + .btn) {
+    flex-basis: 100%;
+    justify-content: flex-start;
+    padding-left: 62px;
+  }
+}
 .details .notice {
   margin: 4px 0 10px;
 }
@@ -698,8 +726,7 @@
 }
 .folder-body .files-grid .gsec.folder-sec {
   grid-column: 1 / -1;
-  padding-left: 0;
-  padding-right: 0;
+  padding: 8px 4px 0;
 }
 
 /* The kind filter on a store or folder, named in the list head with a

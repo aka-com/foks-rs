@@ -6,8 +6,8 @@ import type {
 
 /** Keep these dimensions aligned with the card rules in files.css. */
 export const FILES_CARD_WIDTH = 112;
-export const FILES_CARD_HEIGHT = 96;
-export const FILES_CARD_HEIGHT_WITH_LOCATION = 112;
+export const FILES_CARD_HEIGHT = 112;
+export const FILES_CARD_HEIGHT_WITH_LOCATION = 128;
 export const FILES_CARD_GAP = 8;
 
 export interface FilesGridWindow extends VirtualListWindow {
