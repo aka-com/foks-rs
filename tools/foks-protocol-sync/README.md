@@ -10,6 +10,14 @@ slice. Its `diff` command
 classifies a second artifact as wire-breaking, behavior-review-required,
 additive, outside the local slice, or source-only drift.
 
+A supported route in `policy-v1.toml` may list
+`accepted_upstream_results`: result types that a newer upstream release
+returns for that method and that the Rust client and server already handle.
+`diff` reports a change to one of those types as `method_result_accepted`
+(additive) instead of `method_result_changed` (wire-breaking). The pinned
+artifact is not changed; regenerate it when a release carrying the new type is
+tagged.
+
 Pinned regeneration is checksum-locked through `tools/foks-v019-oracle/go.mod`
 and `go.sum`. Although the extractor itself targets Go 1.19, resolving the
 pinned upstream module requires Go 1.25 or newer because that is the version
