@@ -25,7 +25,9 @@ import {
   MenuButton,
   MenuItem,
   StoreMark,
+  useListbox,
 } from '../components';
+import type { ListboxOptionProps } from '../components';
 import { InvitationPanel } from '../components/invitation-panel';
 import { InviteNewUserSheet } from '../components/invite-new-user-sheet';
 import { useTeamRequestCounts } from '../operation-queries';
@@ -211,6 +213,7 @@ function TeamRow({
   store,
   requests = 0,
   menu,
+  option,
   onOpen,
   onContextMenu,
 }: {
@@ -219,6 +222,8 @@ function TeamRow({
   /** Membership requests waiting on this team, drawn as a chip on the row. */
   requests?: import('../operation-queries').TeamRequestCount;
   menu: ReactNode;
+  /** The row's place in the Teams listbox (role, roving tabindex). */
+  option: ListboxOptionProps;
   onOpen: () => void;
   onContextMenu: (point: { x: number; y: number }) => void;
 }): ReactNode {
@@ -264,8 +269,19 @@ function TeamRow({
     >
       <button
         type="button"
+        {...option}
         className={state === 'normal' ? 'set-row' : 'set-row off'}
         onClick={onOpen}
+        onKeyDown={(event) => {
+          if (
+            event.key !== 'ContextMenu' &&
+            !(event.key === 'F10' && event.shiftKey)
+          )
+            return;
+          event.preventDefault();
+          const bounds = event.currentTarget.getBoundingClientRect();
+          onContextMenu({ x: bounds.left, y: bounds.bottom });
+        }}
       >
         <StoreMark snapshot={snapshot} store={store} size="md" />
         <span className="t">
@@ -624,6 +640,16 @@ export function TeamsScreen({
     );
   };
 
+  // The team rows are one listbox, as Files, Devices and Activity are: one
+  // Tab stop, the arrows, Home, End and type-select move the focus, and
+  // Return opens the team. Nothing is selected on this page.
+  const teamList = useListbox<HTMLDivElement>({
+    keys: teams.map((store) => store.id),
+    selectedKey: null,
+    onMove: () => undefined,
+    labelOf: (key) => teams.find((store) => store.id === key)?.name ?? '',
+  });
+
   const rowMenu = (store: TeamStore): ReactNode => (
     <span className="rowmenu">
       <MenuButton
@@ -633,6 +659,9 @@ export function TeamsScreen({
         label=""
         menuLabel={`Actions for ${store.name}`}
         aria-label={`Actions for ${store.name}`}
+        // The row's context menu (Shift-F10) carries the same actions for
+        // the keyboard; the list is one Tab stop.
+        tabIndex={-1}
       >
         {(close) => rowMenuItems(store, close)}
       </MenuButton>
@@ -649,6 +678,7 @@ export function TeamsScreen({
           store.team_kind === 'named' ? (requestCounts.get(store.id) ?? 0) : 0
         }
         menu={rowMenu(store)}
+        option={teamList.optionProps(store.id)}
         onContextMenu={(point) => setContext({ ...point, store })}
         onOpen={() =>
           onNavigate({
@@ -751,7 +781,13 @@ export function TeamsScreen({
             </div>
           ) : teams.length ? (
             <>
-              <div className="group-card team-list">{teamRows(teams)}</div>
+              <div
+                {...teamList.listProps}
+                className="group-card team-list"
+                aria-label="Teams"
+              >
+                {teamRows(teams)}
+              </div>
               <p className="fn">
                 {plural(teams.length, 'team')} on{' '}
                 {plural(teamServers, 'server')}. Find Teams checks each
