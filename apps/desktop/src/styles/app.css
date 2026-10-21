@@ -504,9 +504,10 @@
 
 /* Onboarding flow layout overrides */
 
-/* First run traffic strip offset */
+/* The screens after setup open on the panel's 44px bar, which clears the
+   traffic lights; the setup card draws its own title bar. */
 .first-run-main {
-  padding-top: 32px;
+  padding-top: 0;
 }
 
 .first-run-main .body.pb {

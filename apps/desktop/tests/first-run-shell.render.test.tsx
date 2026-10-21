@@ -170,3 +170,41 @@ test('first-run retry reconnects the agent transport after a connection loss', a
   );
   rendered.unmount();
 });
+
+test('the Added step is a page in the panel, not a list column beside empty details', async () => {
+  const { App } = (await vite.ssrLoadModule(
+    '/src/app-root.tsx',
+  )) as typeof import('../src/app-root');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { FIRST_RUN_CHECKPOINT_KEY } = (await vite.ssrLoadModule(
+    '/src/first-run-state.ts',
+  )) as typeof import('../src/first-run-state');
+  window.localStorage.removeItem(FIRST_RUN_CHECKPOINT_KEY);
+  window.history.replaceState(null, '', '/?state=added');
+  const rendered = ui.render(
+    createElement(App, { bridge: mockBridge(FIXTURE) }),
+  );
+  const open = await rendered.findByRole('button', { name: 'Open team' });
+
+  // The step used to be laid out in the Files list column (`with-details`),
+  // which clipped its notice's actions at every window size.
+  const app = document.querySelector('.app');
+  assert.ok(app);
+  assert.equal(app.classList.contains('with-details'), false);
+  assert.equal(document.querySelector('.app > .details'), null);
+  const main = open.closest('main.first-run-main');
+  assert.ok(main, 'Open team is in the step’s own panel');
+  // The panel opens on its bar, which names the team; the page does not
+  // repeat it as a heading.
+  const bar = main.querySelector(':scope > .topbar.bar');
+  assert.ok(bar);
+  assert.equal(bar.querySelector('.crumbs .cur')?.textContent, 'Engineering');
+  assert.equal(main.querySelector('.path'), null);
+  rendered.unmount();
+  resetLocation();
+});

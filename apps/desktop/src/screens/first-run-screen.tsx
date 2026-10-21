@@ -7,7 +7,6 @@ import { RecoveryStep } from './first-run-recovery-step';
 import {
   SetupSidebar,
   FirstRunAppSidebar,
-  AddedDetails,
   Foot,
   Pane,
   StepIntro,
@@ -1981,9 +1980,13 @@ function FirstRunSession({
         }
       />
     );
-  else
+  else {
+    const addedItems = snapshot.items
+      .filter((item) => item.store === addedStore)
+      .slice(0, 4);
     content = (
-      <Pane title={group} subtitle={`Team on ${profile?.canonicalName}`} wide>
+      // The panel's bar names the team, so the page opens on the notice.
+      <Pane title={group} header={false} wide>
         <Notice
           // The pane's title already names the team, so the notice states the
           // condition alone, in the same words the store access takeover uses.
@@ -2029,30 +2032,30 @@ function FirstRunSession({
           </p>
           {message ? <p role="status">{message}</p> : null}
         </Notice>
-        <div className="hdr">
-          <span />
-          <span>Name</span>
-          <span>Access</span>
-          <span>Version</span>
-        </div>
-        {snapshot.items
-          .filter((item) => item.store === addedStore)
-          .slice(0, 4)
-          .map((item) => (
-            <div className="row" key={`${item.store}|${item.path}`}>
-              <KindIcon kind={kindOf(item) as FilterKind} />
-              <span className="name">
-                {nameOf(item.path)}
-                <small>{displayPath(item.path)}</small>
-              </span>
-              <span>
-                <Chip>{readableBy(snapshot, item).label}</Chip>
-              </span>
-              <span className="n">v{item.version}</span>
-            </div>
-          ))}
+        {addedItems.length ? (
+          <div className="hdr">
+            <span />
+            <span>Name</span>
+            <span>Access</span>
+            <span>Version</span>
+          </div>
+        ) : null}
+        {addedItems.map((item) => (
+          <div className="row" key={`${item.store}|${item.path}`}>
+            <KindIcon kind={kindOf(item) as FilterKind} />
+            <span className="name">
+              {nameOf(item.path)}
+              <small>{displayPath(item.path)}</small>
+            </span>
+            <span>
+              <Chip>{readableBy(snapshot, item).label}</Chip>
+            </span>
+            <span className="n">v{item.version}</span>
+          </div>
+        ))}
       </Pane>
     );
+  }
 
   const appMode = ['added', 'checklist-invited', 'checklist-own'].includes(
     state,
@@ -2092,8 +2095,49 @@ function FirstRunSession({
         </div>
       </Pane>
     ) : null;
+  // The screens after setup (the Added team and the checklist) are pages in
+  // the app's own shell: the panel opens on a 44px bar naming the page, as
+  // every other place does. The setup steps draw their own title bar.
+  const appBar = appMode ? (
+    <div className="topbar bar" data-tauri-drag-region="">
+      {/* With the sidebar hidden the bar carries the lights and the way to
+          show it again, as the shell's own bar does. */}
+      {collapsed && onToggleCollapsed ? (
+        <>
+          {bridge.native ? (
+            <span className="lights-space" aria-hidden="true" />
+          ) : (
+            <span className="lights" aria-hidden="true">
+              <span className="light" />
+              <span className="light" />
+              <span className="light" />
+            </span>
+          )}
+          <button
+            type="button"
+            className="tbtn side-expand"
+            aria-expanded="false"
+            aria-label="Expand sidebar"
+            title="Expand sidebar"
+            disabled={blocked}
+            onClick={onToggleCollapsed}
+          >
+            <Icon name="panelLeft" />
+          </button>
+        </>
+      ) : null}
+      <nav className="crumbs" aria-label="Breadcrumb">
+        <button type="button" className="cur" aria-current="page" disabled>
+          <span className="t">
+            {state === 'added' ? group : 'Finish setting up'}
+          </span>
+        </button>
+      </nav>
+    </div>
+  ) : null;
   const mainColumn = (
     <main className="main first-run-main" aria-busy={agentReady && busy}>
+      {appBar}
       {restartError ? (
         <p role="alert" className="crit">
           {restartError}
@@ -2218,9 +2262,6 @@ function FirstRunSession({
           </div>
         </div>
       )}
-      {state === 'added' ? (
-        <AddedDetails snapshot={snapshot} storeId={addedStore} />
-      ) : null}
       {confirmingRestart ? (
         <NavigationPrompt
           verdict={{

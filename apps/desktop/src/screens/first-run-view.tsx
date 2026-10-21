@@ -1,18 +1,8 @@
 import { createContext, useContext } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import {
-  Button,
-  Chip,
-  Icon,
-  KindIcon,
-  SectionLabel,
-  Inset,
-  InsetRow,
-} from '../components';
-import type { AgentSnapshot, RoleWire } from '../model';
-import { displayPath, fmtSize, kindOf, parseRole, formatRole } from '../model';
-import type { FilterKind } from '../components';
+import { Button, Icon } from '../components';
+import type { AgentSnapshot } from '../model';
 import type { Location } from '../location';
 import { NavRow, Sidebar } from '../shell/sidebar';
 import type { RailAgentState } from '../shell/sidebar';
@@ -360,91 +350,6 @@ export function FirstRunAppSidebar({
   );
 }
 
-export function AddedDetails({
-  snapshot,
-  storeId,
-}: {
-  snapshot: AgentSnapshot;
-  storeId?: string;
-}): ReactNode {
-  const store = snapshot.stores.find((candidate) => candidate.id === storeId);
-  const item = snapshot.items.find(
-    (candidate) =>
-      candidate.store === storeId && candidate.path.includes('staging-token'),
-  );
-  if (!item)
-    return (
-      <aside className="details">
-        <div className="dh">
-          <span className="t">
-            <h2>Details</h2>
-            <small>Select an item to view details</small>
-          </span>
-        </div>
-      </aside>
-    );
-  const name = item.path.split('/').at(-1);
-  const kind = kindOf(item) as FilterKind;
-  return (
-    <aside className="details">
-      <div className="dh">
-        <KindIcon kind={kind} />
-        <span className="t">
-          <h2>{name}</h2>
-          <small>
-            {kind.charAt(0).toUpperCase() + kind.slice(1)} in{' '}
-            {store?.name ?? 'this team'}
-          </small>
-        </span>
-      </div>
-      <div className="scroll">
-        <SectionLabel>Value</SectionLabel>
-        <Inset variant="preview">
-          <InsetRow
-            label="Value"
-            valueClass="mask"
-            action={
-              <Button size="sm" disabled>
-                Show
-              </Button>
-            }
-          >
-            Locked
-          </InsetRow>
-        </Inset>
-        <p className="pfn">
-          Access to this item depends on your role in the team.
-        </p>
-        <SectionLabel>Info</SectionLabel>
-        <div className="meta">
-          <b>Location</b>
-          <code>{displayPath(item.path)}</code>
-          <b>Kind</b>
-          <span>{kind}</span>
-          <b>Version</b>
-          <span>{item.version}</span>
-          <b>Size</b>
-          <span>{fmtSize(item.size)}</span>
-          <b>Read permission</b>
-          <Chip>{roleText(item.read)}</Chip>
-          <b>Write permission</b>
-          <Chip>{roleText(item.write)}</Chip>
-        </div>
-        <SectionLabel>Sharing</SectionLabel>
-        <p>
-          Members of {store?.name ?? 'this team'} with the required role or
-          higher can view this item based on the current member list.
-        </p>
-      </div>
-    </aside>
-  );
-}
-
-function roleText(role: RoleWire): string {
-  const parsed = parseRole(role);
-  if (parsed) return formatRole(parsed);
-  return typeof role === 'string' ? role : role.role;
-}
 
 export function Foot({
   children,

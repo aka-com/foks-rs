@@ -702,8 +702,7 @@ export function VaultShell({
           detailsShown ||
           splitEmpty ||
           here.kind === 'activity' ||
-          here.kind === 'devices' ||
-          (here.kind === 'first-run' && here.step === 'added')
+          here.kind === 'devices'
             ? 'with-details'
             : '',
           // The setup steps replace the sidebar with one that has no toggle;
