@@ -472,7 +472,19 @@ the page as `Bridge.onMenuCommand` and run the page's own command. Delete…
 has no menu-bar item: a native ⌘⌫ would take delete-to-line-start from text
 fields. Menus and listboxes type-select. Return in a sheet presses its
 enabled default button (the footer's last primary button) unless a text
-area, select, button or open popup has the focus.
+area, select, button or open popup has the focus. First run's steps work the
+same way (`pressStepDefault` in `first-run-view.tsx`): Return in a field or on
+a radio presses the step's primary button, and each step lands the focus on a
+field in error, its marked control, its first empty field, its chosen radio
+or its heading (`focusStepStart`).
+
+The list columns share one keyboard model (`useListbox`,
+`components/listbox.ts`): Files, Devices, Activity, each Chat team's channels
+and the All Teams rows are listboxes with one Tab stop, Up/Down/Home/End and
+type-select, and actions inside a row are `tabIndex=-1`, reached with the
+pointer or the row's context menu (right click, the ContextMenu key or
+Shift-F10; Files, Devices and Teams rows have one). A channel opened from the
+keyboard keeps the focus on its row; a pointer open focuses the composer.
 
 The focus never rests on `<body>`. `kit/focus-keeper.ts`, mounted by the
 shell, moves it when the focused control unmounts or is disabled: to a
@@ -996,6 +1008,9 @@ The accent is the reader's Accent color preference (`data-rail`,
 `src/rail-theme.ts`): `--accent` is its hue for rings, links and washes, and
 `--accent-fill` the solid behind white text, which keeps 4.5:1 with white in
 both appearances (the default fill is #4c6be1 in dark as well as light).
+The choices are Blue, Purple, Pink, Green and Graphite, hues far enough apart
+to tell at swatch size; none is the danger red or the warning amber. Values
+stored by earlier builds (iris, lavender, sky, slate) map to the nearest one.
 
 The interface face is Inter v4.1, bundled as `kit/fonts/InterVariable.woff2`
 (SIL OFL 1.1, `kit/fonts/Inter-OFL.txt`) because the webview is offline and
