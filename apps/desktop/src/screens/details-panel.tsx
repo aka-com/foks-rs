@@ -760,9 +760,12 @@ export function DetailsPanel({
       onCommandError(error, item);
     }
   };
+  // Hide also drops the fields a save left on screen: they follow a shown
+  // value's lifetime.
   const hide = (): void => {
     concealEpoch.current += 1;
     setRead(null);
+    setSaved(null);
   };
 
   const beginEdit = async (): Promise<void> => {
@@ -852,6 +855,10 @@ export function DetailsPanel({
       version: target.version,
       direntId: target.direntId,
     };
+    // A save that lands after the window was concealed or the selection
+    // moved does not leave its fields behind (as `show` drops its read).
+    const epoch = concealEpoch.current;
+    const savedFrom = `${target.store}|${target.path}|${target.version}`;
     setSaving(true);
     try {
       if (fileMode) {
@@ -866,13 +873,17 @@ export function DetailsPanel({
         await bridge.editTextItem({ ...editRequest, value: editValue });
         const masked = maskedSaved(editValue);
         setSaved(
-          masked === null
+          masked === null ||
+            epoch !== concealEpoch.current ||
+            keyRef.current !== savedFrom
             ? null
             : {
                 key: `${target.store}|${target.path}|${target.version + 1}`,
                 value: masked,
               },
         );
+        // The written plaintext is not kept once it is stored.
+        setEditValue('');
       }
       editBaseline.current = null;
       editTarget.current = null;

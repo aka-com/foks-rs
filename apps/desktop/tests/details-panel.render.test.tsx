@@ -1113,3 +1113,148 @@ test('after a save the panel draws the saved fields, masked, for the new version
     assert.equal(rendered.queryByText('satoshi-next'), null),
   );
 });
+
+/* ---------------- the saved fields follow a shown value's lifetime (I2-02) -- */
+
+type Setup = Awaited<ReturnType<typeof setup>>;
+type Rendered = ReturnType<typeof ui.render>;
+
+/** Opens the editor on github.com, changes the user name and password and
+ * presses Save Changes. The caller resolves the write. */
+async function editLogin(rendered: Rendered): Promise<void> {
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
+  const username = await rendered.findByLabelText('User name');
+  ui.fireEvent.change(username, { target: { value: 'satoshi-next' } });
+  ui.fireEvent.change(rendered.getByLabelText('Password'), {
+    target: { value: 'correct horse' },
+  });
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Save Changes' }));
+}
+
+/** The refresh after a save: the item at its next version, with no fields
+ * in its catalog entry, as the native catalog never carries any. */
+function nextVersion(p: Setup, rendered: Rendered) {
+  const next = {
+    ...p.subject,
+    version: p.subject.version + 1,
+    value: undefined,
+  };
+  p.props.snapshot = {
+    ...p.props.snapshot,
+    items: p.props.snapshot.items.map((item) =>
+      item.store === p.subject.store && item.path === p.subject.path
+        ? next
+        : item,
+    ),
+  };
+  rendered.rerender(p.draw());
+  return next;
+}
+
+async function savedLogin(): Promise<{ p: Setup; rendered: Rendered }> {
+  const p = await setup(
+    async (request) => ({
+      store: request.storeId,
+      path: request.path,
+      version: request.version,
+      value:
+        'username: satoshi-next\npassword: correct horse\nurl: https://github.com/login',
+    }),
+    (item) => item.path === '/logins/github.com',
+  );
+  p.bridge.editTextItem = async () => ({ applied: true });
+  const rendered = ui.render(p.draw());
+  await editLogin(rendered);
+  await rendered.findByRole('button', { name: 'Edit' });
+  nextVersion(p, rendered);
+  await ui.waitFor(() => assert.ok(rendered.getByText('satoshi-next')));
+  return { p, rendered };
+}
+
+const savedGone = (rendered: Rendered) =>
+  ui.waitFor(() => assert.ok(rendered.queryByText('satoshi-next') === null));
+
+test('Hide drops the saved fields with the shown value', async () => {
+  const { rendered } = await savedLogin();
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Show' }));
+  await rendered.findByText('correct horse');
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Hide' }));
+  assert.ok(rendered.queryByText('correct horse') === null);
+  await savedGone(rendered);
+});
+
+test('a selection change drops the saved fields; coming back does not restore them', async () => {
+  const { p, rendered } = await savedLogin();
+  const other = p.props.snapshot.items.find(
+    (item) => item.path === '/env/prod/DATABASE_URL',
+  )!;
+  p.props.selection = { store: other.store, path: other.path };
+  rendered.rerender(p.draw());
+  await savedGone(rendered);
+  p.props.selection = { store: p.subject.store, path: p.subject.path };
+  rendered.rerender(p.draw());
+  await rendered.findByRole('button', { name: 'Show' });
+  assert.ok(rendered.queryByText('satoshi-next') === null);
+});
+
+test('window blur drops the saved fields; focus does not restore them', async () => {
+  const { rendered } = await savedLogin();
+  ui.fireEvent(window, new Event('blur'));
+  await savedGone(rendered);
+  ui.fireEvent(window, new Event('focus'));
+  assert.ok(rendered.queryByText('satoshi-next') === null);
+});
+
+test('the conceal signal drops the saved fields', async () => {
+  const { p, rendered } = await savedLogin();
+  p.props.concealSignal = 1;
+  rendered.rerender(p.draw());
+  await savedGone(rendered);
+});
+
+test('a save that completes after the window was concealed leaves no fields', async () => {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+  );
+  let finish!: () => void;
+  p.bridge.editTextItem = () =>
+    new Promise((resolve) => {
+      finish = () => resolve({ applied: true });
+    });
+  const rendered = ui.render(p.draw());
+  await editLogin(rendered);
+  ui.fireEvent(window, new Event('blur'));
+  await ui.act(async () => finish());
+  await rendered.findByRole('button', { name: 'Edit' });
+  nextVersion(p, rendered);
+  ui.fireEvent(window, new Event('focus'));
+  await rendered.findByRole('button', { name: 'Show' });
+  assert.ok(rendered.queryByText('satoshi-next') === null);
+  assert.equal(document.body.textContent?.includes('correct horse'), false);
+});
+
+test('a save that completes after the selection moved leaves no fields to come back to', async () => {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+  );
+  let finish!: () => void;
+  p.bridge.editTextItem = () =>
+    new Promise((resolve) => {
+      finish = () => resolve({ applied: true });
+    });
+  const rendered = ui.render(p.draw());
+  await editLogin(rendered);
+  const other = p.props.snapshot.items.find(
+    (item) => item.path === '/env/prod/DATABASE_URL',
+  )!;
+  p.props.selection = { store: other.store, path: other.path };
+  rendered.rerender(p.draw());
+  await ui.act(async () => finish());
+  nextVersion(p, rendered);
+  p.props.selection = { store: p.subject.store, path: p.subject.path };
+  rendered.rerender(p.draw());
+  await rendered.findByRole('button', { name: 'Show' });
+  assert.ok(rendered.queryByText('satoshi-next') === null);
+});
