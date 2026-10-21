@@ -637,7 +637,9 @@ rt_struct!(RtListChannelsArgument {
     last: u64
 } tolerant);
 
-rt_struct!(RtSendArgument { send: RtSend } tolerant);
+// Exact, like `RtSend`: the server compares the send envelope for replay, and
+// a tail would have to take part in that comparison before it is accepted.
+rt_struct!(RtSendArgument { send: RtSend });
 
 rt_struct!(RtGetThreadArgument {
     query: RtThreadQuery

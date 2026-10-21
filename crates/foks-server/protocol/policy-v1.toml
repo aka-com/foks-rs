@@ -168,11 +168,6 @@ rust = "RtListChannelsArgument"
 decoding = "read_only"
 
 [[tolerant_struct]]
-upstream = "rem.RtSendArg"
-rust = "RtSendArgument"
-decoding = "read_only"
-
-[[tolerant_struct]]
 upstream = "rem.RtGetThreadArg"
 rust = "RtGetThreadArgument"
 decoding = "read_only"
