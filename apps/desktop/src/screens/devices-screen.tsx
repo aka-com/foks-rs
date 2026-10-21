@@ -33,7 +33,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
-import type { KeyboardEvent, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
 import type {
   AccountDevice,
@@ -53,6 +53,7 @@ import {
   MenuItem,
   Notice,
   SectionLabel,
+  useListbox,
 } from '../components';
 import { BarActions, DetailsColumn } from '../shell/page-slots';
 import type {
@@ -194,23 +195,6 @@ function deviceCaption(entry: DeviceEntry): string {
   return [kindLabel(entry.kind), entry.role, serial ? String(serial) : '']
     .filter(Boolean)
     .join(' · ');
-}
-
-/** Up and Down move between the list's rows. */
-function moveRowFocus(event: KeyboardEvent<HTMLButtonElement>): void {
-  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-  const rows = [
-    ...(event.currentTarget
-      .closest('.devices-list')
-      ?.querySelectorAll<HTMLButtonElement>('.row.devrow') ?? []),
-  ];
-  const next =
-    rows[
-      rows.indexOf(event.currentTarget) + (event.key === 'ArrowDown' ? 1 : -1)
-    ];
-  if (!next) return;
-  event.preventDefault();
-  next.focus();
 }
 
 export interface DevicesScreenProps {
@@ -451,9 +435,32 @@ export function DevicesScreen({
   };
   // The list narrows to the names the bar's search field matches.
   const needle = query.trim().toLowerCase();
-  const shownEntries = needle
+  const matching = needle
     ? entries.filter((entry) => entry.name.toLowerCase().includes(needle))
     : entries;
+  // In the order the list draws them: by group, then as `deviceEntries` reads
+  // each group.
+  const shownEntries = DEVICE_GROUPS.flatMap(([, sources]) =>
+    matching.filter((entry) => sources.includes(entry.source.kind)),
+  );
+  // The rows are one listbox: one Tab stop, Up/Down/Home/End and
+  // type-select. Selection follows the keyboard; once a key is open, moving
+  // to the next one replaces its address rather than stacking a history entry
+  // per row, so Back still leaves Devices in one step.
+  const rows = useListbox({
+    keys: shownEntries.map((entry) => entry.address),
+    selectedKey: location.device ?? null,
+    labelOf: (address) =>
+      shownEntries.find((entry) => entry.address === address)?.name ?? '',
+    onMove: (address) =>
+      onNavigate(
+        { ...location, device: address },
+        location.device ? { replace: true } : undefined,
+      ),
+  });
+  const firstSecurityKey = shownEntries.find(
+    (entry) => entry.source.kind === 'yubi',
+  )?.address;
   // The key a `device=` address names, once the four lists have answered.
   const detail = location.device
     ? deviceAt({ devices, backups, yubi, cards }, location.device)
@@ -728,50 +735,55 @@ export function DevicesScreen({
             /* Account devices (computers, and keys on cards authenticated as
                devices), then security key enrollments, then recovery phrases,
                each group in the order `deviceEntries` reads it. */
-            <div className={`device-groups${staleClass}`}>
-              {DEVICE_GROUPS.map(([group, sources]) => {
-                const rows = shownEntries.filter((entry) =>
-                  sources.includes(entry.source.kind),
-                );
-                if (!rows.length) return null;
-                return (
-                  <div key={group} role="group" aria-label={group}>
-                    <div className="gsec" aria-hidden="true">
-                      {group}
+            <>
+              <div
+                {...rows.listProps}
+                className={`device-groups${staleClass}`}
+                aria-labelledby="devices-all-label"
+              >
+                {DEVICE_GROUPS.map(([group, sources]) => {
+                  const groupRows = shownEntries.filter((entry) =>
+                    sources.includes(entry.source.kind),
+                  );
+                  if (!groupRows.length) return null;
+                  return (
+                    <div key={group} role="group" aria-label={group}>
+                      <div className="gsec" aria-hidden="true">
+                        {group}
+                      </div>
+                      {groupRows.map((entry) => {
+                        const on = entry.address === location.device;
+                        return (
+                          <button
+                            type="button"
+                            key={entry.address}
+                            {...rows.optionProps(entry.address)}
+                            className={on ? 'row devrow sel' : 'row devrow'}
+                            aria-label={entry.name}
+                            onClick={() => openDevice(entry.address)}
+                          >
+                            <span className="tile" aria-hidden="true">
+                              <Icon name={entry.icon} />
+                            </span>
+                            <span className="name">
+                              <b>{entry.name}</b>
+                              <small>{deviceCaption(entry)}</small>
+                            </span>
+                            <span className="r">{deviceRowChip(entry)}</span>
+                          </button>
+                        );
+                      })}
                     </div>
-                    {rows.map((entry) => {
-                      const on = entry.address === location.device;
-                      return (
-                        <button
-                          type="button"
-                          key={entry.address}
-                          className={on ? 'row devrow sel' : 'row devrow'}
-                          aria-current={on ? 'true' : undefined}
-                          aria-label={`Open ${entry.name}`}
-                          onClick={() => openDevice(entry.address)}
-                          onKeyDown={moveRowFocus}
-                        >
-                          <span className="tile" aria-hidden="true">
-                            <Icon name={entry.icon} />
-                          </span>
-                          <span className="name">
-                            <b>{entry.name}</b>
-                            <small>{deviceCaption(entry)}</small>
-                          </span>
-                          <span className="r">{deviceRowChip(entry)}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
               {query && !shownEntries.length ? (
                 <p className="list-note">
                   No device, recovery phrase or security key matches “
                   {query.trim()}”.
                 </p>
               ) : null}
-            </div>
+            </>
           ) : (
             <p className="list-note">
               {stopped.stopped
@@ -822,6 +834,11 @@ export function DevicesScreen({
             }}
             onProvision={() => setSheet('provision')}
             onYubiAction={openYubi}
+            onShowSecurityKeys={
+              firstSecurityKey
+                ? () => rows.focusKey(firstSecurityKey)
+                : undefined
+            }
           />
         ) : (
           <div className="empty">
@@ -992,6 +1009,7 @@ function DeviceDetail({
   onRevokeKey,
   onProvision,
   onYubiAction,
+  onShowSecurityKeys,
 }: {
   snapshot: AgentSnapshot;
   store: AccountStore;
@@ -1015,6 +1033,8 @@ function DeviceDetail({
   onRevokeKey: (entry: YubiEnrollment) => void;
   onProvision: () => void;
   onYubiAction: (action: SimpleYubiAction, entry: YubiEnrollment) => void;
+  /** Moves focus to the list's first security key; absent when it has none. */
+  onShowSecurityKeys?: () => void;
 }): ReactNode {
   const access = useWorkflowAccess(snapshot);
   const target = { profile: store.server, account: store.account };
@@ -1116,27 +1136,29 @@ function DeviceDetail({
             severity="info"
             title="Revoked under its enrollment"
             actions={
-              <Button
-                onClick={() =>
-                  onNavigate({
-                    kind: 'devices',
-                    section: 'keys',
-                    store: store.id,
-                    ...(deviceEnrollment
-                      ? { device: `yubi:${deviceEnrollment.alias}` }
-                      : {}),
-                  })
-                }
-              >
-                {deviceEnrollment
-                  ? `Open ${deviceEnrollment.alias}`
-                  : 'Go to Devices'}
-              </Button>
+              // The enrollment is a row in this same list: open the one that
+              // matches, or else take focus to the Security keys rows.
+              deviceEnrollment ? (
+                <Button
+                  onClick={() =>
+                    onNavigate({
+                      kind: 'devices',
+                      section: 'keys',
+                      store: store.id,
+                      device: `yubi:${deviceEnrollment.alias}`,
+                    })
+                  }
+                >
+                  {`Open ${deviceEnrollment.alias}`}
+                </Button>
+              ) : onShowSecurityKeys ? (
+                <Button onClick={onShowSecurityKeys}>Show Security Keys</Button>
+              ) : undefined
             }
           >
             <p>
-              A key on a card is revoked under its enrollment, listed on
-              Devices.
+              A key on a card is revoked under its enrollment, listed under
+              Security keys.
             </p>
           </Notice>
         ) : entry.current ? (

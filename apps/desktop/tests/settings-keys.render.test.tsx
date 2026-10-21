@@ -11,7 +11,7 @@ import { createElement } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge } from '../src/bridge';
-import type { Location } from '../src/location';
+import type { Location, NavigateOptions } from '../src/location';
 import type { StoreRef, AgentSnapshot } from '../src/model';
 import { installDom } from './lib/dom-harness';
 
@@ -53,7 +53,7 @@ interface DevicesOptions {
   section?: 'macs' | 'keys';
   /** One key's own page: the id of a Mac or recovery phrase, or `yubi:<alias>`. */
   device?: string;
-  onNavigate?: (location: Location) => void;
+  onNavigate?: (location: Location, options?: NavigateOptions) => void;
   /** Wraps the mock bridge, for a test that watches one command. */
   decorate?: (bridge: Bridge) => Bridge;
   /** Where a failed read lands; by default a failure fails the test. */
@@ -189,16 +189,18 @@ test('one list groups the devices, security keys and recovery phrases', async ()
   assert.ok(ui.within(phrases).getByText('paper-backup'));
   assert.ok(ui.within(phrases).getByText('Recovery phrase'));
   assert.equal(document.querySelector('.devrow .kid') === null, true);
-  // Every row opens its key, in group order.
-  const names = rendered
-    .getAllByRole('button', { name: /^Open / })
-    .map((button) => button.getAttribute('aria-label'));
+  // Every row is an option of one listbox, in group order.
+  const listbox = ui.within(list).getByRole('listbox', { name: 'Devices' });
+  const names = ui
+    .within(listbox)
+    .getAllByRole('option')
+    .map((option) => option.getAttribute('aria-label'));
   assert.deepEqual(names, [
-    'Open MacBook Pro',
-    'Open Travel Mac',
-    'Open Pocket YubiKey',
-    'Open primary key',
-    'Open paper-backup',
+    'MacBook Pro',
+    'Travel Mac',
+    'Pocket YubiKey',
+    'primary key',
+    'paper-backup',
   ]);
   // With no key chosen the details say so.
   assert.ok(rendered.getByText('No Selection'));
@@ -238,9 +240,9 @@ test('the search field narrows the list to the names it matches', async () => {
     query: 'mac',
   });
   const names = rendered
-    .getAllByRole('button', { name: /^Open / })
-    .map((button) => button.getAttribute('aria-label'));
-  assert.deepEqual(names, ['Open MacBook Pro', 'Open Travel Mac']);
+    .getAllByRole('option')
+    .map((option) => option.getAttribute('aria-label'));
+  assert.deepEqual(names, ['MacBook Pro', 'Travel Mac']);
 });
 
 /** Open the chooser and continue on the card with this title. */
@@ -788,15 +790,65 @@ test('a key on a card is revoked under its enrollment, not removed here', async 
     page.queryByRole('button', { name: 'Remove this device…' }),
     null,
   );
-  // The note is not a dead end: it leads to the list that revokes the key.
+  // The note is not a dead end, and it does not navigate to the page it is
+  // already on: with no enrollment matching the card, it takes focus to the
+  // Security keys rows of this list, leaving the selection alone.
+  assert.equal(page.queryByRole('button', { name: 'Go to Devices' }), null);
+  assert.ok(page.getByText(/listed under Security keys\./));
+  const before = chosen.length;
   await ui.act(async () => {
-    ui.fireEvent.click(page.getByRole('button', { name: 'Go to Devices' }));
+    ui.fireEvent.click(
+      page.getByRole('button', { name: 'Show Security Keys' }),
+    );
   });
-  assert.deepEqual(chosen.at(-1), {
-    kind: 'devices',
-    section: 'keys',
+  assert.equal(chosen.length, before);
+  assert.equal(
+    document.activeElement,
+    page.getByRole('option', { name: 'primary key' }),
+  );
+});
+
+test('the device rows are one listbox the keyboard moves through', async () => {
+  const snapshot = await fixture();
+  const travel = deviceId(snapshot, 1);
+  const moves: { location: Location; replace?: boolean }[] = [];
+  const page = await renderDevices(snapshot, {
     store: 'acct:personal',
+    device: travel,
+    onNavigate: (location, options) =>
+      moves.push({ location, replace: options?.replace }),
   });
+
+  const listbox = page.getByRole('listbox', { name: 'Devices' });
+  const options = ui.within(listbox).getAllByRole('option');
+  // One Tab stop, on the selected row; nothing inside a row is tabbable.
+  assert.deepEqual(
+    options.map((option) => option.tabIndex),
+    [-1, 0, -1, -1, -1],
+  );
+  const selected = page.getByRole('option', { name: 'Travel Mac' });
+  assert.equal(selected.getAttribute('aria-selected'), 'true');
+  selected.focus();
+
+  // Selection follows the keyboard. A key is already open, so each move
+  // replaces its address instead of adding a history entry per row.
+  ui.fireEvent.keyDown(selected, { key: 'ArrowDown' });
+  assert.equal(
+    (moves.at(-1)?.location as { device?: string }).device,
+    `08${'5'.repeat(64)}`,
+  );
+  assert.equal(moves.at(-1)?.replace, true);
+  ui.fireEvent.keyDown(selected, { key: 'End' });
+  assert.equal(
+    (moves.at(-1)?.location as { device?: string }).device,
+    options.at(-1)?.dataset.optionKey,
+  );
+  assert.equal(moves.length, 2);
+  ui.fireEvent.keyDown(selected, { key: 'Home' });
+  assert.equal(
+    (moves.at(-1)?.location as { device?: string }).device,
+    deviceId(snapshot, 0),
+  );
 });
 
 test('the card this Mac is authenticated with is not told to remove itself', async () => {
@@ -842,7 +894,7 @@ test('a key’s row opens its own page, with the full id and a way to copy it', 
   ui.fireEvent.click(list.getByText('Travel Mac'));
   assert.equal(chosen.length, 1);
   await ui.act(async () => {
-    ui.fireEvent.click(list.getByRole('button', { name: 'Open Travel Mac' }));
+    ui.fireEvent.click(list.getByRole('option', { name: 'Travel Mac' }));
   });
   assert.equal(chosen.length, 2);
   assert.deepEqual(chosen.at(-1), {
@@ -1294,7 +1346,7 @@ test('Devices reads only the current account and follows sidebar account changes
   );
   // Exactly one row: no empty-category filler for the recovery phrases and
   // enrollments that came back empty.
-  assert.equal(rendered.getAllByRole('button', { name: /^Open / }).length, 1);
+  assert.equal(rendered.getAllByRole('option').length, 1);
   assert.equal(
     rendered.queryByRole('button', {
       name: 'Connect an existing account with a recovery phrase',
