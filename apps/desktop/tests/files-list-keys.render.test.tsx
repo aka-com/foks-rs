@@ -241,9 +241,10 @@ test('unsaved edits ask before a click on another row discards them', async () =
   await ui.waitFor(() =>
     assert.equal(ui.screen.queryByRole('alertdialog'), null),
   );
+  // The draft is still there.
   assert.equal(
-    ui.screen.getByRole('textbox', { name: 'User name' }).value,
-    'someone-else',
+    ui.screen.getByRole('textbox', { name: 'User name' }),
+    ui.screen.getByDisplayValue('someone-else'),
   );
 });
 

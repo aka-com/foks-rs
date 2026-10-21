@@ -5,8 +5,8 @@
  * the accessible dialog wrapper and supports standard, mid, and wide sizes.
  */
 
-import { useId } from 'react';
-import type { ReactNode } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import { Dialog, DismissibleDialog } from '/kit/overlay-primitives';
 
 /** `.sheet`, `.sheet.mid`, `.sheet.wide` — the three the stylesheet draws. */
@@ -51,6 +51,7 @@ export function Sheet({
   children,
 }: SheetProps): ReactNode {
   const classes = ['sheet', WIDTH_CLASS[width]].filter(Boolean).join(' ');
+  const more = useMoreBelow<HTMLDivElement>();
   return (
     <div className={classes}>
       <div className="hd">
@@ -63,10 +64,46 @@ export function Sheet({
           {step === undefined ? null : <span className="step">{step}</span>}
         </span>
       </div>
-      <div className="sb">{children}</div>
-      {footer === undefined ? null : <div className="ft">{footer}</div>}
+      <div className="sb" ref={more.ref}>
+        {children}
+      </div>
+      {footer === undefined ? null : (
+        <div className={more.below ? 'ft more' : 'ft'}>{footer}</div>
+      )}
     </div>
   );
+}
+
+/**
+ * Whether a scrolling element has content below its fold, so the foot can
+ * draw a hairline saying the body scrolls (a sheet at the 640px minimum
+ * window height may not show all of its rows).
+ */
+function useMoreBelow<E extends HTMLElement>(): {
+  ref: RefObject<E | null>;
+  below: boolean;
+} {
+  const ref = useRef<E | null>(null);
+  const [below, setBelow] = useState(false);
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    const measure = (): void =>
+      setBelow(node.scrollTop + node.clientHeight < node.scrollHeight - 1);
+    measure();
+    node.addEventListener('scroll', measure, { passive: true });
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(measure);
+    observer?.observe(node);
+    for (const child of node.children) observer?.observe(child);
+    return () => {
+      node.removeEventListener('scroll', measure);
+      observer?.disconnect();
+    };
+  }, []);
+  return { ref, below };
 }
 
 export interface SheetDialogProps extends Omit<SheetProps, 'titleId'> {
