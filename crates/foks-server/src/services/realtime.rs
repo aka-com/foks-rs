@@ -230,6 +230,11 @@ impl RealtimeService {
                         snapshot.rt_check_actor(&actor, now).map_err(db_error)?;
                         // Discovery is implemented. Extended channel behavior is
                         // enabled only as its end-to-end stages are completed.
+                        // `content_actions` stays false although format-1
+                        // channels accept go-foks main's pegged Reply,
+                        // Reaction and Edit sends: it advertises the format-2
+                        // content actions, and those pegged kinds need no
+                        // capability on either implementation.
                         foks_proto::RtChatCapabilities::basic_only(arg.host).encoded()
                     }
                     RealtimeRequest::SelectVhost(arg) => {

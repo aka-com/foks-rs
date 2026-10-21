@@ -14,7 +14,8 @@ import (
 // Realtime values as go-foks main (35dc037) puts them on the wire: the grown
 // RTSendRes (b41b354) and RTChannelMetadata (c334c97), the payload-free
 // RT_MSG_REPLAY_MISMATCH status, and pegged Reply/Reactji/Edit bodies sealed
-// the way client/librt sealMessage seals them (bf9ace5). Identifiers and keys
+// the way client/librt sealMessage seals them (bf9ace5), with the rtSend
+// requests that deliver them. Identifiers and keys
 // match the v0.1.9 realtime fixtures so the Rust side can open the messages.
 //
 // Set FOKS_MAIN_FIXTURE_OUT to write the files (under realtime/, with
@@ -178,6 +179,11 @@ func TestRealtimeMainFixtures(t *testing.T) {
 		mw := p.NewRTMsgWrapperWithEncrypted(p.RTMsgBox{Ctext: p.NewRTMsgCiphertextWithNacl(ct), Rg: rg})
 		msg := r.RTMsg{Md: meta, Mw: mw, Seq: seq, Sender: &user, InsertTime: p.Time(1700000000200 + i)}
 		emit(fmt.Sprintf("pegged-%s", c.name), &msg)
+		// The rtSend that delivers it, as client/librt attemptSend builds
+		// the argument (expectedPrevSeq unset) and RealTimeClient frames it.
+		send := r.RTSendArg{Md: meta, Chid: chid.Short(), Mw: mw}
+		emit(fmt.Sprintf("send-pegged-%s", c.name), &send)
+		request(fmt.Sprintf("request-3-pegged-%s.frame", c.name), 3, (&r.RtSendArg{Rtarg: send}).Export())
 		prev = mid
 	}
 	d.finish()

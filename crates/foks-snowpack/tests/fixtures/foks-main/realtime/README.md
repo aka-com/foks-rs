@@ -28,5 +28,7 @@ frame uses sequence number 7.
 | `pegged-{reply,reactji,edit,delete}.snowp` | `RTMsg` with a sealed pegged Reply, Reactji, Edit, and Edit with an empty body (a deletion) |
 | `pegged-mismatch.snowp` | Metadata type Reactji with an Edit body arm, which `openMessage` refuses |
 | `pegged-*-body.snowp` | The plaintext `RTMsgBody` sealed in each message |
+| `send-pegged-*.snowp` | The `RTSendArg` that delivers each pegged message, as `client/librt` `attemptSend` builds it (`expectedPrevSeq` 0) |
+| `request-3-pegged-*.frame` | The `rtSend` request carrying it, as `RealTimeClient` frames it |
 
 `SHA256SUMS` lists each file's SHA-256 in `sha256sum` format.

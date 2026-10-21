@@ -1,75 +1,18 @@
 //! Pegged Reply, Reaction and Edit messages as go-foks main clients send them
-//! (bf9ace5). The Rust server accepts only Basic sends, so the transport
-//! rewrites stored Basic messages into pegged ones on the way to the reader,
-//! sealed exactly as Go's sealMessage seals them.
+//! (bf9ace5), delivered through the Rust server and read back by the Rust
+//! client. The Rust client does not compose pegged messages, so the test
+//! sends them on the raw connection, sealed exactly as Go's sealMessage seals
+//! them.
 use foks_client::{
-    ChatContent, ChatPeggedAction, ChatPreviewContent, ChatTransport, EncryptedFileMutationStore,
-    NamedTeamSecrets, RealtimeConnection,
+    ChatContent, ChatPeggedAction, ChatPreviewContent, EncryptedFileMutationStore, NamedTeamSecrets,
 };
 use foks_client_db::{ChatOperationState as State, SoftStateStore};
-use foks_crypto::RealtimeKeys;
 use foks_proto::*;
 use foks_rpc::{RealtimeRequest as Request, RealtimeResponse as Response};
 use foks_server_testkit::{TestAccountSpec, TestClient, TestEnvironment};
-use std::collections::BTreeMap;
-
-struct PeggedRewrite {
-    connection: RealtimeConnection,
-    keys: RealtimeKeys,
-    sender: FqParty,
-    team: FqParty,
-    channel: RtChannelId,
-    /// Sequence -> (type, body, target) to present instead of the stored message.
-    pegged: BTreeMap<u64, (RtMessageType, Vec<u8>, RtMessageId)>,
-}
-impl PeggedRewrite {
-    fn rewrite(&self, message: &mut RtMessage) {
-        let Some((kind, body, target)) = self.pegged.get(&message.sequence) else {
-            return;
-        };
-        message.metadata.kind = *kind;
-        let noncer = RtMessageNoncer {
-            metadata: message.metadata.clone(),
-            sender: Some(self.sender.clone()),
-            app: RtAppId::Chat,
-            team: self.team.clone(),
-            channel: self.channel,
-        };
-        let RtMessageWrapper::Encrypted(boxed) = &mut message.wrapper else {
-            panic!("encrypted message")
-        };
-        boxed.ciphertext = self
-            .keys
-            .seal_message(
-                &noncer,
-                &RtMessageBody::Pegged {
-                    kind: *kind,
-                    body: body.clone(),
-                    reply_to: *target,
-                },
-            )
-            .unwrap();
-    }
-}
-impl ChatTransport for PeggedRewrite {
-    fn request(&mut self, request: &Request) -> foks_client::Result<Response> {
-        let mut response = self.connection.call(request)?;
-        match &mut response {
-            Response::Thread(page) => {
-                for list in &mut page.ranges {
-                    list.messages.iter_mut().for_each(|m| self.rewrite(m));
-                }
-                page.sequences.iter_mut().for_each(|m| self.rewrite(m));
-            }
-            Response::Messages(list) => list.messages.iter_mut().for_each(|m| self.rewrite(m)),
-            _ => {}
-        }
-        Ok(response)
-    }
-}
 
 #[test]
-fn pegged_messages_render_as_placeholders_without_breaking_continuity() {
+fn pegged_sends_are_stored_and_render_as_placeholders_without_breaking_continuity() {
     let environment = TestEnvironment::new().unwrap();
     let _server = environment.start_server().unwrap();
     let client = TestClient::new(&environment, "pegged-reader").unwrap();
@@ -130,17 +73,18 @@ fn pegged_messages_render_as_placeholders_without_breaking_continuity() {
     let sender =
         FqParty::new(owner.credential.uid.clone(), probe.pinned.host_id().clone()).unwrap();
     let team_party = FqParty::new(team.team.clone(), probe.pinned.host_id().clone()).unwrap();
-    // Four more stored messages, each naming its predecessor.
-    let mut previous = (1, root_id);
-    for tag in 2..=5u8 {
-        let metadata = RtMessageMetadata {
-            id: RtMessageId([0x50 + tag; 16]),
-            previous_id: previous.1,
-            previous_sequence: previous.0,
-            send_time: 1_700_000_000_000 + tag as u64,
-            kind: RtMessageType::Basic,
-            further_user_attribution: None,
-        };
+    // Four pegged messages, each naming its predecessor.
+    let pegged = [
+        (RtMessageType::Reply, b"a reply".to_vec()),
+        (
+            RtMessageType::Reaction,
+            "{\"emoji\":\"👍\"}".as_bytes().to_vec(),
+        ),
+        (RtMessageType::Edit, b"root (edited)".to_vec()),
+        // A deletion is an Edit with an empty body.
+        (RtMessageType::Edit, Vec::new()),
+    ];
+    let seal = |metadata: &RtMessageMetadata, body: &RtMessageBody| {
         let noncer = RtMessageNoncer {
             metadata: metadata.clone(),
             sender: Some(sender.clone()),
@@ -148,50 +92,92 @@ fn pegged_messages_render_as_placeholders_without_breaking_continuity() {
             team: team_party.clone(),
             channel,
         };
-        let Response::Sent(receipt) = connection
-            .call(&Request::Send(RtSendArgument {
-                send: RtSend {
-                    metadata: metadata.clone(),
-                    channel: channel.short(),
-                    wrapper: RtMessageWrapper::Encrypted(RtMessageBox {
-                        key: RoleAndGeneration {
-                            role: md.roles.read,
-                            generation: 1,
-                        },
-                        ciphertext: keys.seal_basic_message(&noncer, b"stored").unwrap(),
-                    }),
-                    expected_previous_sequence: 0,
-                },
-            }))
-            .unwrap()
-        else {
+        Request::Send(RtSendArgument {
+            send: RtSend {
+                metadata: metadata.clone(),
+                channel: channel.short(),
+                wrapper: RtMessageWrapper::Encrypted(RtMessageBox {
+                    key: RoleAndGeneration {
+                        role: md.roles.read,
+                        generation: 1,
+                    },
+                    ciphertext: keys.seal_message(&noncer, body).unwrap(),
+                }),
+                expected_previous_sequence: 0,
+            },
+        })
+    };
+    let mut previous = (1, root_id);
+    let mut sends = Vec::new();
+    for (tag, (kind, body)) in (2..=5u8).zip(pegged) {
+        let metadata = RtMessageMetadata {
+            id: RtMessageId([0x50 + tag; 16]),
+            previous_id: previous.1,
+            previous_sequence: previous.0,
+            send_time: 1_700_000_000_000 + tag as u64,
+            kind,
+            further_user_attribution: None,
+        };
+        let send = seal(
+            &metadata,
+            &RtMessageBody::Pegged {
+                kind,
+                body,
+                reply_to: root_id,
+            },
+        );
+        let Response::Sent(receipt) = connection.call(&send).unwrap() else {
             panic!("send receipt")
         };
         assert_eq!(receipt.sequence, tag as u64);
+        assert!(!receipt.was_replay);
         previous = (receipt.sequence, metadata.id);
+        sends.push(send);
     }
-    let mut rpc = PeggedRewrite {
-        connection,
-        keys,
-        sender,
-        team: team_party,
-        channel,
-        pegged: BTreeMap::from([
-            (2, (RtMessageType::Reply, b"a reply".to_vec(), root_id)),
-            (
-                3,
-                (
-                    RtMessageType::Reaction,
-                    "{\"emoji\":\"👍\"}".as_bytes().to_vec(),
-                    root_id,
-                ),
-            ),
-            (4, (RtMessageType::Edit, b"root (edited)".to_vec(), root_id)),
-            (5, (RtMessageType::Edit, Vec::new(), root_id)),
-        ]),
+    // A lost-ack retry of a pegged send is a replay; another envelope under
+    // the same ID is RT_MSG_REPLAY_MISMATCH.
+    let Response::Sent(replay) = connection.call(&sends[1]).unwrap() else {
+        panic!("send receipt")
     };
+    assert!(replay.was_replay);
+    assert_eq!(replay.sequence, 3);
+    let mut changed = sends[1].clone();
+    let Request::Send(arg) = &mut changed else {
+        panic!("send")
+    };
+    arg.send.metadata.kind = RtMessageType::Edit;
+    assert!(matches!(
+        connection.call(&changed),
+        Err(foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
+            code: 12007,
+            ..
+        }))
+    ));
+    // Kinds without a body arm are refused with BAD_ARGS. The server does
+    // not open the box, so a pegged ciphertext under another kind suffices.
+    for kind in [RtMessageType::Delete, RtMessageType::Join] {
+        let mut refused = sends[0].clone();
+        let Request::Send(arg) = &mut refused else {
+            panic!("send")
+        };
+        arg.send.metadata = RtMessageMetadata {
+            id: RtMessageId([0x5f; 16]),
+            previous_id: previous.1,
+            previous_sequence: previous.0,
+            send_time: 1_700_000_000_009,
+            kind,
+            further_user_attribution: None,
+        };
+        assert!(matches!(
+            connection.call(&refused),
+            Err(foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
+                code: 1030,
+                ..
+            }))
+        ));
+    }
 
-    let history = chat.read_recent(&mut rpc, channel, 10).unwrap();
+    let history = chat.read_recent(&mut connection, channel, 10).unwrap();
     assert!(history.missing_predecessors.is_empty());
     let shown: Vec<_> = history
         .messages
@@ -226,13 +212,24 @@ fn pegged_messages_render_as_placeholders_without_breaking_continuity() {
         .all(|m| m.content.is_authenticated()));
 
     let mut soft = SoftStateStore::open(client.soft_state_path()).unwrap();
-    let synced = chat.sync_inbox(&mut rpc, &mut soft).unwrap();
+    let synced = chat.sync_inbox(&mut connection, &mut soft).unwrap();
     let conversation = synced
         .inbox
         .conversations
         .iter()
         .find(|c| c.channel.metadata.id == channel)
         .unwrap();
+    // The server records the latest message's kind from its metadata.
+    assert_eq!(
+        conversation
+            .channel
+            .metadata
+            .last_message
+            .as_ref()
+            .unwrap()
+            .kind,
+        RtMessageType::Edit
+    );
     assert_eq!(
         conversation.preview.as_ref().unwrap().content,
         ChatPreviewContent::Pegged {
@@ -243,13 +240,13 @@ fn pegged_messages_render_as_placeholders_without_breaking_continuity() {
 
     // A pegged latest message is a verified predecessor for a new send.
     let next = chat
-        .prepare_send(&mut rpc, &mut protected, channel, "after pegged")
+        .prepare_send(&mut connection, &mut protected, channel, "after pegged")
         .unwrap();
     let confirmed = chat
-        .attempt_operation(&mut rpc, &mut protected, &next.id)
+        .attempt_operation(&mut connection, &mut protected, &next.id)
         .unwrap();
     assert_eq!(confirmed.state, State::Confirmed);
-    let latest = chat.read_recent(&mut rpc, channel, 1).unwrap();
+    let latest = chat.read_recent(&mut connection, channel, 1).unwrap();
     assert_eq!(latest.messages[0].message.sequence, 6);
     assert_eq!(latest.messages[0].message.metadata.previous_sequence, 5);
     assert_eq!(

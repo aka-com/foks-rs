@@ -252,9 +252,30 @@ Behaviour adopted from main so far:
 - **Pegged messages (`bf9ace5`).** Replies, reactions and edits from go-foks
   main clients are authenticated and count toward history continuity, and
   the desktop shows them as placeholders naming the action; an edit with an
-  empty body is shown as a deletion. The Rust server still accepts only
-  Basic sends, so a go-foks main client's pegged send to a Rust host is
-  refused with `BAD_ARGS`.
+  empty body is shown as a deletion. The Rust server accepts pegged sends
+  into Basic (format 1) channels and stores them as opaque sealed messages,
+  as go-foks main does (`insertMessage` in `server/realtime/messages.go`).
+  Neither server can open the body, so neither checks that its arm or
+  target agrees with the metadata type; readers refuse a mismatch. Writer
+  role, encryption role and current key, idempotent replay on the message
+  ID, `expectedPrevSeq` and the size limits apply as for Basic, and the
+  channel's last-message record takes its type from the metadata. The Rust
+  server keeps its stricter Basic metadata checks for pegged sends (non-zero
+  message ID, a predecessor sequence and ID that are both zero or both name
+  the stored message, no `furtherUserAttribution`), which go-foks main
+  clients satisfy. It accepts only Basic, Reply, Reactji and Edit: go-foks
+  main stores any type from Basic to Leave, but the other types have no
+  body arm, so no client can open them, and System, Join and Leave are
+  meant for server-authored messages; the Rust server refuses them with
+  `BAD_ARGS`. For type `None` go-foks main returns `PROTO_DATA_ERROR`
+  (1035) and the Rust server `BAD_ARGS` (1030); a type past Leave fails
+  argument decoding (`BAD_ARGS`). Both are definite rejections to a go-foks
+  main client, and no client sends them. Accepting pegged kinds is not
+  gated by a capability on either side; the Rust `content_actions` chat
+  capability describes content actions in extended (format 2) channels,
+  stays false, and is unaffected. The Rust client still does not compose
+  pegged messages. v0.1.9 clients cannot open pegged messages, on a
+  go-foks main host or a Rust host alike.
 - **Unknown team view tokens (7016).** A go-foks main server answers a
   view-only team bearer token it holds no row for with
   `TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR` (void payload), and its client then

@@ -194,11 +194,12 @@ identify them accurately:
   opens the same team keys. After a role change, which rotates or adds keys,
   the write returns `TEAM_BEARER_TOKEN_STALE_ERROR` and the caller must reload
   the team.
-- The Rust realtime server accepts only Basic sends. A go-foks main client's
-  reply, reaction or edit (pegged message) sent to a Rust host is refused with
-  `BAD_ARGS` (1030), from the metadata check in `Database::rt_send`
-  (`crates/foks-server-db/src/realtime/messages.rs`); pegged messages received from a go-foks host are shown as
-  placeholders, and only text messages raise notifications.
+- The Rust realtime server stores go-foks main clients' replies, reactions and
+  edits (pegged messages) in Basic channels, but the Rust client only shows
+  them as placeholders and cannot compose them, and only text messages raise
+  notifications. The server refuses the other non-Basic message types, which
+  go-foks main stores (`Database::rt_send` in
+  `crates/foks-server-db/src/realtime/messages.rs`); no client sends them.
 - The pinned v0.1.9 Go client cannot open rotated invitation certificates
   because its stacked-signature verifier uses the reverse order. go-foks fixed
   the verifier in `e07f30b` (#350, after v0.1.9), so Go clients built from main

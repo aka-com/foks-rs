@@ -89,6 +89,13 @@ server's single writer ([Chapter 18](18-server-storage.qmd)):
    pollers only after the commit; a test asserts that retries and failures
    never notify.
 
+The server never opens a message body. It accepts the metadata types Basic,
+Reply, Reaction and Edit (the last three are go-foks main's pegged messages,
+which name a target message inside the sealed body; a deletion is an Edit
+with an empty body) and records the type in the channel's last-message
+summary. Whether the body's arm matches the claimed type is checked by
+readers, which refuse a mismatch.
+
 The stored row keeps the submitted envelope and the exact returned message,
 each bounded to 1 MiB, with a uniqueness constraint on `(channel, sequence)`.
 

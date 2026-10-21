@@ -14,13 +14,26 @@ impl Database {
         let RtMessageWrapper::Encrypted(boxed) = &send.wrapper else {
             return Err(Error::Invalid("encrypted realtime message required"));
         };
-        if send.metadata.kind != RtMessageType::Basic
-            || send.metadata.id.0 == [0; 16]
+        // Basic, and the pegged Reply, Reaction and Edit kinds that go-foks
+        // main clients send into format-1 channels (a deletion is an Edit
+        // with an empty body). The body is sealed, so the server cannot
+        // check that its arm or target agrees with the metadata; readers do.
+        // go-foks main (server/realtime/messages.go insertMessage) stores
+        // any kind from Basic to Leave; the others have no body arm, so no
+        // client can open them, and System, Join and Leave are reserved for
+        // server-authored messages.
+        if !matches!(
+            send.metadata.kind,
+            RtMessageType::Basic
+                | RtMessageType::Reply
+                | RtMessageType::Reaction
+                | RtMessageType::Edit
+        ) || send.metadata.id.0 == [0; 16]
             || boxed.ciphertext.0.len() < 16
             || send.metadata.further_user_attribution.is_some()
             || (send.metadata.previous_sequence == 0) != (send.metadata.previous_id.0 == [0; 16])
         {
-            return Err(Error::Invalid("Basic realtime message metadata"));
+            return Err(Error::Invalid("realtime message metadata"));
         }
         let tx = self
             .connection

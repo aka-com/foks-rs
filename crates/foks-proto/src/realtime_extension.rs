@@ -29,6 +29,9 @@ pub struct RtChatCapabilities {
     pub extended_channels: bool,
     pub channel_management: bool,
     pub preferences: bool,
+    /// Content actions in extended (format 2) channels. Not set for the
+    /// pegged Reply, Reaction and Edit messages of go-foks main, which Basic
+    /// (format 1) channels carry without a capability.
     pub content_actions: bool,
     pub threads: bool,
     pub attachments: bool,

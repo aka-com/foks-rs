@@ -211,3 +211,49 @@ fn hashed_and_signed_realtime_structs_still_decode_exactly() {
     let bytes = arg.send.encoded().unwrap();
     assert!(RtSend::decode(&with_fields(&bytes, &[Value::Unsigned(0)])).is_err());
 }
+
+#[test]
+fn go_main_pegged_send_frames_decode_and_reencode_exactly() {
+    for (name, kind) in [
+        ("reply", RtMessageType::Reply),
+        ("reactji", RtMessageType::Reaction),
+        ("edit", RtMessageType::Edit),
+        ("delete", RtMessageType::Edit),
+        ("mismatch", RtMessageType::Reaction),
+    ] {
+        let wire = fixture(&format!("request-3-pegged-{name}.frame"));
+        let call = read_call(&mut Cursor::new(&wire), DEFAULT_MAX_FRAME_LENGTH).unwrap();
+        assert_eq!(call.protocol_id(), REAL_TIME_PROTOCOL_ID);
+        let request = RealtimeRequest::decode_argument(3, call.argument()).unwrap();
+        let RealtimeRequest::Send(arg) = &request else {
+            panic!("rtSend")
+        };
+        assert_eq!(arg.send.metadata.kind, kind);
+        assert_eq!(arg.send.expected_previous_sequence, 0);
+        assert_eq!(
+            arg.send.encoded().unwrap(),
+            fixture(&format!("send-pegged-{name}.snowp"))
+        );
+        assert_eq!(request.encode_at(7).unwrap(), wire);
+        // The send carries exactly the metadata and box of the stored message.
+        let message = RtMessage::decode(&fixture(&format!("pegged-{name}.snowp"))).unwrap();
+        assert_eq!(arg.send.metadata, message.metadata);
+        assert_eq!(arg.send.wrapper, message.wrapper);
+        assert_eq!(
+            arg.send.channel,
+            RtChannelId([0x81, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x22]).short()
+        );
+    }
+    // A message type beyond Leave, which go-foks decodes and then refuses
+    // with PROTO_DATA_ERROR, does not decode here.
+    let Value::Array(mut fields) =
+        foks_snowpack::decode(&fixture("send-pegged-reply.snowp")).unwrap()
+    else {
+        panic!("positional struct")
+    };
+    let Value::Array(metadata) = &mut fields[0] else {
+        panic!("metadata")
+    };
+    metadata[4] = Value::Unsigned(10);
+    assert!(RtSend::from_value(&Value::Array(fields)).is_err());
+}
