@@ -166,16 +166,60 @@
   border-radius: var(--radius-lg);
 }
 
+/* A danger row: what it does in ink with its consequence under it, the
+   button at the trailing edge. */
 .devices-details .danger-box .fr {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'k a'
+    'v a';
+  align-items: center;
+  gap: 2px 16px;
   min-height: 44px;
-  padding: 8px 16px;
+  padding: 10px 16px;
 }
 
 .devices-details .danger-box .fr .k {
+  grid-area: k;
   width: auto;
-  flex: 1;
   font-size: 13px;
+  font-weight: var(--weight-label);
   color: var(--ink);
+}
+
+.devices-details .danger-box .fr .v {
+  grid-area: v;
+}
+
+.devices-details .danger-box .fr .a {
+  grid-area: a;
+}
+
+/* A row with actions (Card operations, PIN): the description beside the
+   label, the buttons in one wrapping row under it, never under the label. */
+.devices-details .settings-inset:not(.danger-box) .fr:has(> .a) {
+  grid-template-areas:
+    'k v v'
+    '. a a';
+  align-items: start;
+  padding: 7px 0;
+}
+
+.devices-details .settings-inset:not(.danger-box) .fr:has(> .a) .k {
+  grid-area: k;
+  align-self: start;
+}
+
+.devices-details .settings-inset:not(.danger-box) .fr:has(> .a) .v {
+  grid-area: v;
+  align-self: start;
+}
+
+.devices-details .settings-inset:not(.danger-box) .fr:has(> .a) .a {
+  grid-area: a;
+  justify-content: flex-start;
+  margin: 4px 0 0;
 }
 
 @container (max-width: 520px) {
@@ -191,4 +235,22 @@
   .devices-details .settings-inset:not(.danger-box) .fr .v {
     grid-column: 1;
   }
+  .devices-details .settings-inset:not(.danger-box) .fr:has(> .a) {
+    grid-template-areas: 'k' 'v' 'a';
+  }
+  .devices-details .danger-box .fr {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'k' 'v' 'a';
+  }
+  .devices-details .danger-box .fr .a {
+    justify-content: flex-start;
+    margin: 6px 0 0;
+  }
+}
+
+/* A `section=` address lands the focus on the list region (tabindex -1) so
+   the next Tab starts there; the region is a landing, not a control, and
+   draws no ring around the whole column. */
+.lpane.devices-list:focus {
+  outline: none;
 }

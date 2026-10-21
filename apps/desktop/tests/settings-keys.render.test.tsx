@@ -851,6 +851,42 @@ test('the device rows are one listbox the keyboard moves through', async () => {
   );
 });
 
+test('a device row has a context menu with the actions its page offers', async () => {
+  const snapshot = await fixture();
+  const page = await renderDevices(snapshot, { store: 'acct:personal' });
+  const travel = page.getByRole('option', { name: 'Travel Mac' });
+  travel.focus();
+  ui.fireEvent.keyDown(travel, { key: 'F10', shiftKey: true });
+  const menu = await page.findByRole('menu', {
+    name: 'Actions for Travel Mac',
+  });
+  assert.deepEqual(
+    ui
+      .within(menu)
+      .getAllByRole('menuitem')
+      .map((item) => item.textContent),
+    ['Show Details', 'Copy Device Key', 'Remove This Device…'],
+  );
+  ui.fireEvent.click(
+    ui.within(menu).getByRole('menuitem', { name: 'Remove This Device…' }),
+  );
+  // The same confirmation the page's Danger zone opens.
+  await page.findByRole('alertdialog');
+  // This Mac has no destructive action, in its menu as on its page.
+  ui.fireEvent.keyDown(document.activeElement ?? document.body, {
+    key: 'Escape',
+  });
+  const self = page.getByRole('option', { name: 'MacBook Pro' });
+  ui.fireEvent.contextMenu(self);
+  const own = await page.findByRole('menu', {
+    name: 'Actions for MacBook Pro',
+  });
+  assert.equal(
+    ui.within(own).queryByRole('menuitem', { name: /Remove/ }),
+    null,
+  );
+});
+
 test('the card this Mac is authenticated with is not told to remove itself', async () => {
   const card = `08${'5'.repeat(64)}`;
   const page = await renderDevices(await fixture(), {

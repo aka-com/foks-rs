@@ -35,6 +35,7 @@ import {
 } from 'react';
 import type { ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
+import { ContextMenu, Menu } from '/kit/overlay-primitives';
 import type {
   AccountDevice,
   BackupEnrollment,
@@ -285,6 +286,13 @@ export function DevicesScreen({
   // Which enrollment a per-row key action acts on. The row is the only thing
   // that says which one; there may be more than one.
   const [actingKey, setActingKey] = useState<YubiEnrollment | null>(null);
+  // A device row's context menu (right click, the ContextMenu key or
+  // Shift-F10): the row's copy and destructive actions, as its page has them.
+  const [rowMenu, setRowMenu] = useState<{
+    x: number;
+    y: number;
+    entry: DeviceEntry;
+  } | null>(null);
 
   const sheetOpen = useRef(sheet);
   sheetOpen.current = sheet;
@@ -397,6 +405,93 @@ export function DevicesScreen({
       .catch(onError);
   };
   const copy = (text: string): void => copyText(text, 'Pairing phrase copied');
+  /**
+   * A row's context menu: Show Details, Copy for the key's id, and the
+   * destructive action its page offers, with the same reasons. A key on a
+   * card and this Mac have none here, as on their pages.
+   */
+  const deviceRowMenuItems = (
+    entry: DeviceEntry,
+    close: () => void,
+  ): ReactNode => {
+    const source = entry.source;
+    const cardKey = source.kind === 'device' && entry.kind === 'Key on a card';
+    const removable = !cardKey && !entry.current;
+    const revokeReason =
+      access.props('yubi-revoke', target).title ??
+      (source.kind === 'yubi' && source.entry.state !== 'complete'
+        ? 'This enrollment is not complete'
+        : undefined);
+    return (
+      <>
+        <MenuItem
+          icon="chevronRight"
+          onClick={() => {
+            close();
+            openDevice(entry.address);
+          }}
+        >
+          Show Details
+        </MenuItem>
+        {entry.keyId ? (
+          <MenuItem
+            icon="copy"
+            onClick={() => {
+              close();
+              if (entry.keyId) copyText(entry.keyId, 'Key id copied');
+            }}
+          >
+            {entry.source.kind === 'backup'
+              ? 'Copy Backup ID'
+              : 'Copy Device Key'}
+          </MenuItem>
+        ) : null}
+        {removable ? <div className="menu-separator" role="separator" /> : null}
+        {removable && source.kind === 'device' ? (
+          <MenuItem
+            icon="trash"
+            danger
+            reason={access.props('device-remove', target).title}
+            onClick={() => {
+              close();
+              setRemoving(source.device);
+              setSheet('remove-device');
+            }}
+          >
+            Remove This Device…
+          </MenuItem>
+        ) : null}
+        {removable && source.kind === 'backup' ? (
+          <MenuItem
+            icon="trash"
+            danger
+            reason={access.props('backup-revoke', target).title}
+            onClick={() => {
+              close();
+              setRevoking(source.backup);
+              setSheet('revoke-backup');
+            }}
+          >
+            Revoke Recovery Phrase…
+          </MenuItem>
+        ) : null}
+        {removable && source.kind === 'yubi' ? (
+          <MenuItem
+            icon="trash"
+            danger
+            reason={revokeReason}
+            onClick={() => {
+              close();
+              setActingKey(source.entry);
+              setSheet('revoke');
+            }}
+          >
+            Revoke Enrollment…
+          </MenuItem>
+        ) : null}
+      </>
+    );
+  };
   /** One key's own page, addressed by the key it is about. */
   const openDevice = (address: string): void =>
     onNavigate({ ...location, device: address });
@@ -761,6 +856,30 @@ export function DevicesScreen({
                             className={on ? 'row devrow sel' : 'row devrow'}
                             aria-label={entry.name}
                             onClick={() => openDevice(entry.address)}
+                            onContextMenu={(event) => {
+                              event.preventDefault();
+                              event.currentTarget.focus();
+                              setRowMenu({
+                                x: event.clientX,
+                                y: event.clientY,
+                                entry,
+                              });
+                            }}
+                            onKeyDown={(event) => {
+                              if (
+                                event.key !== 'ContextMenu' &&
+                                !(event.key === 'F10' && event.shiftKey)
+                              )
+                                return;
+                              event.preventDefault();
+                              const bounds =
+                                event.currentTarget.getBoundingClientRect();
+                              setRowMenu({
+                                x: bounds.left,
+                                y: bounds.bottom,
+                                entry,
+                              });
+                            }}
                           >
                             <span className="tile" aria-hidden="true">
                               <Icon name={entry.icon} />
@@ -796,6 +915,22 @@ export function DevicesScreen({
           <div className="device-list-actions">{metadataStatus}</div>
         </div>
       </section>
+      {rowMenu ? (
+        <ContextMenu
+          point={rowMenu}
+          className="menu-portal"
+          onClose={() => setRowMenu(null)}
+        >
+          <Menu
+            className="menu"
+            aria-label={`Actions for ${rowMenu.entry.name}`}
+            initialFocus="first"
+            onClose={() => setRowMenu(null)}
+          >
+            {deviceRowMenuItems(rowMenu.entry, () => setRowMenu(null))}
+          </Menu>
+        </ContextMenu>
+      ) : null}
       {/* One key's details beside the list: the full id, and the one
           destructive action for that kind. It reads the page's own lists, so
           a sheet opened from it is the sheet the row would have opened. */}
