@@ -719,6 +719,19 @@ export function VaultShell({
       return !pageStore || storeDescriptionState(shown, pageStore) !== 'normal';
     })();
   const splitEmpty = filesHere && !herePage && !detailsShown && !teamInfoShown;
+  // What the hidden sidebar's badges would say, for the bar's expand
+  // control. Chat's unread count lives in the inbox, below this component;
+  // the Chat column itself shows it.
+  const sidebarAttention = [
+    activityBadge(shown, teamRequestCounts)?.description,
+    devicesAlertSummary(shown, deviceAlerts)?.description,
+    settingsAlertSummary(shown)?.description,
+    unroutedNotices(shown).length
+      ? `${unroutedNotices(shown).length} ${unroutedNotices(shown).length === 1 ? 'notice needs' : 'notices need'} attention`
+      : undefined,
+  ]
+    .filter((reason): reason is string => Boolean(reason))
+    .join('; ');
   // Chat draws this bar over its own resizable channel column, with the
   // column's add control passed in, so the conversation beside it can carry
   // a bar of its own; every other place draws it across the top of the panel.
@@ -769,6 +782,7 @@ export function VaultShell({
         : {})}
       collapsed={sideCollapsed}
       onToggleCollapsed={toggleSidebar}
+      sidebarAttention={sideCollapsed ? sidebarAttention : undefined}
       nativeChrome={bridge.native}
       {...extra}
     />

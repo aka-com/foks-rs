@@ -10,7 +10,7 @@
  * also carries the control that shows it again, after the traffic lights.
  */
 
-import { Fragment } from 'react';
+import { Fragment, useId } from 'react';
 import type { ReactNode } from 'react';
 
 import { Icon, SearchField, StoreMark } from '../components';
@@ -186,6 +186,12 @@ export function placeTitle(
 }
 
 export interface TopbarProps {
+  /**
+   * With the sidebar hidden, what its badges would say (requests waiting,
+   * unread chat, a device or setting to look at): the expand control carries
+   * a dot and says it.
+   */
+  sidebarAttention?: string;
   /** Absent while the agent is starting; the crumbs then name the tab alone. */
   snapshot?: AgentSnapshot;
   deviceLabel?: DeviceLabel | null;
@@ -314,7 +320,9 @@ export function Topbar({
   chatTeamCount,
   blocked = false,
   nativeChrome = false,
+  sidebarAttention,
 }: TopbarProps): ReactNode {
+  const attentionId = useId();
   const inbox = useSidebarInbox();
   // The channel's own name, where the shell already knows it: the inbox is
   // loaded for the sidebar's badge, and the crumb reads it rather than
@@ -385,11 +393,24 @@ export function Topbar({
           aria-keyshortcuts={ariaShortcut('⌃⌘S')}
           aria-expanded="false"
           aria-label="Expand sidebar"
-          title="Expand sidebar"
+          aria-describedby={sidebarAttention ? attentionId : undefined}
+          title={
+            sidebarAttention
+              ? `Expand sidebar: ${sidebarAttention}`
+              : 'Expand sidebar'
+          }
           disabled={blocked}
           onClick={onToggleCollapsed}
         >
           <Icon name="panelLeft" />
+          {sidebarAttention ? (
+            <>
+              <span className="dot warn" aria-hidden="true" />
+              <span id={attentionId} className="offscreen">
+                {sidebarAttention}
+              </span>
+            </>
+          ) : null}
         </button>
       ) : null}
       {parent ? (

@@ -279,7 +279,9 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 /* A page's own commands, portalled from the screen (`shell/page-slots.tsx`). */
 .topbar .bar-acts{display:flex;flex:none;align-items:center;gap:6px;min-width:0}
 .topbar .bar-acts:empty{display:none}
-.topbar .side-expand{margin-right:4px}
+.topbar .side-expand{position:relative;margin-right:4px}
+/* The hidden sidebar's badges, folded into one dot on the control that shows it */
+.topbar .side-expand .dot{position:absolute;top:3px;right:2px;width:6px;height:6px;border-radius:50%;background:var(--warning-dot);box-shadow:0 0 0 1.5px var(--main-surface)}
 /* With the sidebar hidden the bar leads with the traffic lights (drawn by
    macOS over the native window, by the bar in the web mock). */
 .topbar>.lights{margin:0 8px 0 2px}
