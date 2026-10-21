@@ -8,6 +8,7 @@
  */
 
 import { restoreFocusIfLost, rowByKey } from '/kit/focus-keeper';
+import { commandKey } from '/kit/keys';
 import {
   Fragment,
   useCallback,
@@ -184,6 +185,24 @@ function passwordFields(
   }));
 }
 
+/**
+ * The masked form of a login value just saved: its fields as written, the
+ * password replaced by bullets, as the panel draws an unread item. `null`
+ * for a value with no password field, which has nothing but its secret.
+ */
+function maskedSaved(value: string): string | null {
+  const fields = parseFields(value);
+  if (!fields.some(([field]) => field?.toLowerCase() === 'password'))
+    return null;
+  return fields
+    .map(([field, current]) =>
+      field === null
+        ? current
+        : `${field}: ${field.toLowerCase() === 'password' ? '••••••••••' : current}`,
+    )
+    .join('\n');
+}
+
 /** The sanctioned wording for a server whose check-in has lapsed. */
 const LEASE_LAPSED =
   'This server is locked because its connection expired. Items on this server cannot be viewed or edited until the connection is renewed. Other servers remain available.';
@@ -302,6 +321,13 @@ export function DetailsPanel({
   const [dropHover, setDropHover] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [binaryFile, setBinaryFile] = useState(false);
+  // The fields of the version this panel just saved, masked (`maskedSaved`),
+  // for `key`: the catalog does not describe a value's fields, so without
+  // this the panel would show the previous version's fields, or none, until
+  // Show. It never holds the secret, and is dropped with a revealed value.
+  const [saved, setSaved] = useState<{ key: string; value: string } | null>(
+    null,
+  );
   const focusEditorOnOpen = useRef(false);
   const focusActionsOnClose = useRef(false);
   const editorRef = useRef<HTMLDivElement>(null);
@@ -365,6 +391,7 @@ export function DetailsPanel({
   useEffect(() => {
     if (!readProblem) return;
     setRead(null);
+    setSaved(null);
     setEditPasswordShown(false);
   }, [readProblem]);
 
@@ -441,6 +468,7 @@ export function DetailsPanel({
   useEffect(() => {
     concealEpoch.current += 1;
     setRead(null);
+    setSaved((current) => (current?.key === key ? current : null));
     setEditPasswordShown(false);
     if (
       editTarget.current &&
@@ -480,6 +508,7 @@ export function DetailsPanel({
     () => {
       concealEpoch.current += 1;
       setRead(null);
+      setSaved(null);
       setEditPasswordShown(false);
       if (
         editing &&
@@ -490,7 +519,7 @@ export function DetailsPanel({
       )
         setEditContentConcealed(true);
     },
-    Boolean(read) || editing || saving,
+    Boolean(read) || Boolean(saved) || editing || saving,
   );
 
   // A read in flight when access changes generation is dropped when it lands,
@@ -503,6 +532,7 @@ export function DetailsPanel({
     if (!concealSignal) return;
     concealEpoch.current += 1;
     setRead(null);
+    setSaved(null);
     setEditValue('');
     editBaseline.current = null;
     editTarget.current = null;
@@ -660,6 +690,9 @@ export function DetailsPanel({
   const shownValue =
     !readProblem && activeRead?.state === 'shown' ? activeRead.value : null;
   const readError = activeRead?.state === 'error' ? activeRead.message : null;
+  // The masked fields drawn before Show: the version just saved here, else
+  // what the catalog carries.
+  const maskedValue = saved?.key === key ? saved.value : item.value;
   const reading = activeRead?.state === 'loading';
   const serverLabel = store ? serverDisplayLabelForStore(snapshot, store) : '';
   const now = accessNow();
@@ -753,7 +786,10 @@ export function DetailsPanel({
       );
       assertExactRead(request, response);
       if (!current()) return;
-      const opened = editableValue(item, response.value);
+      const opened = editableValue(
+        { ...item, value: maskedValue },
+        response.value,
+      );
       setEditValue(opened);
       setEditContentConcealed(false);
       editBaseline.current = opened;
@@ -818,6 +854,15 @@ export function DetailsPanel({
         if (!response.applied) return;
       } else {
         await bridge.editTextItem({ ...editRequest, value: editValue });
+        const masked = maskedSaved(editValue);
+        setSaved(
+          masked === null
+            ? null
+            : {
+                key: `${target.store}|${target.path}|${target.version + 1}`,
+                value: masked,
+              },
+        );
       }
       editBaseline.current = null;
       editTarget.current = null;
@@ -941,6 +986,7 @@ export function DetailsPanel({
             <input
               className="inp"
               aria-label={label}
+              spellCheck={false}
               type={secret && !editPasswordShown ? 'password' : 'text'}
               placeholder={secret ? 'password' : undefined}
               value={value}
@@ -965,13 +1011,14 @@ export function DetailsPanel({
         <textarea
           className="inp mono"
           aria-label="Value"
+          spellCheck={false}
           rows={4}
           value={editValue}
           onChange={(event) => setEditValue(event.target.value)}
         />
       </PropertyRow>
     ) : kind === 'Password' && !fileMode ? (
-      passwordFields(item.value, shownValue).map(
+      passwordFields(maskedValue, shownValue).map(
         ({ field, value, secret }, index) => {
           const label = FIELD_LABELS[field ?? ''] ?? field ?? 'Value';
           return secret ? (
@@ -1028,7 +1075,9 @@ export function DetailsPanel({
   const tile = itemTile(item);
   const folderTrail = prefixOf(item.path).split('/').filter(Boolean);
   const pathStep = (label: ReactNode, path: string): ReactNode =>
-    store && onOpenFolder ? (
+    // While editing, the steps are not links: the Tab order goes from the
+    // fields to Cancel and Save Changes.
+    store && onOpenFolder && !inlineEditing ? (
       <button type="button" onClick={() => onOpenFolder(store.id, path)}>
         {label}
       </button>
@@ -1037,6 +1086,133 @@ export function DetailsPanel({
     );
   const description = blockingReason && !replacing && !lockedCopy;
 
+  // While the inline editor is open the bar, which holds Cancel and Save
+  // Changes, follows the fields in the document (CSS puts it back on top),
+  // so Tab goes from the last field to Cancel and Save Changes.
+  const bar = (
+    <div
+      className={inlineEditing ? 'bar after' : 'bar'}
+      data-tauri-drag-region=""
+    >
+      <nav className="pathbar" aria-label="Location">
+        {pathStep(
+          <>
+            {store ? <StoreMark snapshot={snapshot} store={store} /> : null}
+            <span className="t">{store?.name ?? item.store}</span>
+          </>,
+          '/',
+        )}
+        {folderTrail.map((part, index) => (
+          <Fragment key={index}>
+            <Icon name="chevronRight" className="sep" />
+            {pathStep(
+              <span className="t">{displayPathComponent(part)}</span>,
+              `/${folderTrail.slice(0, index + 1).join('/')}`,
+            )}
+          </Fragment>
+        ))}
+      </nav>
+      <span className="sp" />
+      {inlineEditing ? (
+        <span className="eact">
+          <Button
+            disabled={saving}
+            onClick={() => {
+              focusActionsOnClose.current = true;
+              clearEdit();
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            disabled={saving || Boolean(saveProblem)}
+            title={saveProblem}
+            aria-describedby={describedBy(saveProblem)}
+            onClick={() => void saveEdit()}
+          >
+            {saving ? 'Saving…' : 'Save Changes'}
+          </Button>
+        </span>
+      ) : (
+        <MenuButton
+          label=""
+          aria-label="More actions"
+          title="More actions"
+          menuLabel={`${name} actions`}
+          variant="quiet"
+          icon="ellipsis"
+          trailingIcon={null}
+          align="end"
+        >
+          {() => (
+            <>
+              {fileMode ? (
+                <MenuItem
+                  icon="download"
+                  reason={readProblem}
+                  onClick={downloadFile}
+                >
+                  Download
+                </MenuItem>
+              ) : (
+                <>
+                  <MenuItem
+                    icon={shownValue === null ? 'eye' : 'eyeOff'}
+                    reason={shownValue === null ? readProblem : undefined}
+                    onClick={() => {
+                      if (shownValue === null) void show();
+                      else hide();
+                    }}
+                  >
+                    {shownValue === null ? 'Show Value' : 'Hide Value'}
+                  </MenuItem>
+                  <MenuItem
+                    icon="copy"
+                    reason={readProblem}
+                    onClick={() => void copyValue()}
+                  >
+                    {kind === 'Password' ? 'Copy Password' : 'Copy Value'}
+                  </MenuItem>
+                </>
+              )}
+              <MenuItem
+                icon="folder"
+                reason={readProblem}
+                onClick={() => void copyPath()}
+              >
+                Copy Path
+              </MenuItem>
+              <div className="menu-separator" role="separator" />
+              {onMove ? (
+                <MenuItem
+                  icon="pencil"
+                  reason={writeProblem}
+                  onClick={() => {
+                    if (requireAccess(true)) onMove(item);
+                  }}
+                >
+                  Rename or Move…
+                </MenuItem>
+              ) : null}
+              <MenuItem
+                icon="trash"
+                danger
+                shortcut="⌘⌫"
+                reason={writeProblem}
+                onClick={() => {
+                  if (requireAccess(true)) onDelete(item);
+                }}
+              >
+                Delete…
+              </MenuItem>
+            </>
+          )}
+        </MenuButton>
+      )}
+    </div>
+  );
+
   return (
     <>
       <aside
@@ -1044,7 +1220,31 @@ export function DetailsPanel({
         className="details"
         aria-label={`Details for ${name}`}
         onKeyDown={(event) => {
-          if (event.key !== 'Escape' || event.defaultPrevented) return;
+          if (event.defaultPrevented) return;
+          // Return in a field of the inline editor (not the multi-line
+          // value), ⌘Return or ⌘S anywhere in it saves, as Save Changes would.
+          if (inlineEditing && event.key !== 'Escape') {
+            const command = commandKey(event) && !event.altKey;
+            const field =
+              event.target instanceof HTMLInputElement &&
+              event.target.classList.contains('inp');
+            if (
+              (event.key === 'Enter' &&
+                !event.nativeEvent.isComposing &&
+                (command ||
+                  (field &&
+                    !event.shiftKey &&
+                    !event.altKey &&
+                    !event.metaKey &&
+                    !event.ctrlKey))) ||
+              (command && !event.shiftKey && event.key.toLowerCase() === 's')
+            ) {
+              event.preventDefault();
+              if (!saving && !saveProblem) void saveEdit();
+            }
+            return;
+          }
+          if (event.key !== 'Escape') return;
           // Escape in the inline editor is its Cancel: the editor closes and
           // the focus returns to Edit.
           if (inlineEditing && !saving) {
@@ -1067,124 +1267,7 @@ export function DetailsPanel({
           onClose();
         }}
       >
-        <div className="bar" data-tauri-drag-region="">
-          <nav className="pathbar" aria-label="Location">
-            {pathStep(
-              <>
-                {store ? <StoreMark snapshot={snapshot} store={store} /> : null}
-                <span className="t">{store?.name ?? item.store}</span>
-              </>,
-              '/',
-            )}
-            {folderTrail.map((part, index) => (
-              <Fragment key={index}>
-                <Icon name="chevronRight" className="sep" />
-                {pathStep(
-                  <span className="t">{displayPathComponent(part)}</span>,
-                  `/${folderTrail.slice(0, index + 1).join('/')}`,
-                )}
-              </Fragment>
-            ))}
-          </nav>
-          <span className="sp" />
-          {inlineEditing ? (
-            <span className="eact">
-              <Button
-                disabled={saving}
-                onClick={() => {
-                  focusActionsOnClose.current = true;
-                  clearEdit();
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="primary"
-                disabled={saving || Boolean(saveProblem)}
-                title={saveProblem}
-                aria-describedby={describedBy(saveProblem)}
-                onClick={() => void saveEdit()}
-              >
-                {saving ? 'Saving…' : 'Save Changes'}
-              </Button>
-            </span>
-          ) : (
-            <MenuButton
-              label=""
-              aria-label="More actions"
-              title="More actions"
-              menuLabel={`${name} actions`}
-              variant="quiet"
-              icon="ellipsis"
-              trailingIcon={null}
-              align="end"
-            >
-              {() => (
-                <>
-                  {fileMode ? (
-                    <MenuItem
-                      icon="download"
-                      reason={readProblem}
-                      onClick={downloadFile}
-                    >
-                      Download
-                    </MenuItem>
-                  ) : (
-                    <>
-                      <MenuItem
-                        icon={shownValue === null ? 'eye' : 'eyeOff'}
-                        reason={shownValue === null ? readProblem : undefined}
-                        onClick={() => {
-                          if (shownValue === null) void show();
-                          else hide();
-                        }}
-                      >
-                        {shownValue === null ? 'Show Value' : 'Hide Value'}
-                      </MenuItem>
-                      <MenuItem
-                        icon="copy"
-                        reason={readProblem}
-                        onClick={() => void copyValue()}
-                      >
-                        {kind === 'Password' ? 'Copy Password' : 'Copy Value'}
-                      </MenuItem>
-                    </>
-                  )}
-                  <MenuItem
-                    icon="folder"
-                    reason={readProblem}
-                    onClick={() => void copyPath()}
-                  >
-                    Copy Path
-                  </MenuItem>
-                  <div className="menu-separator" role="separator" />
-                  {onMove ? (
-                    <MenuItem
-                      icon="pencil"
-                      reason={writeProblem}
-                      onClick={() => {
-                        if (requireAccess(true)) onMove(item);
-                      }}
-                    >
-                      Rename or Move…
-                    </MenuItem>
-                  ) : null}
-                  <MenuItem
-                    icon="trash"
-                    danger
-                    shortcut="⌘⌫"
-                    reason={writeProblem}
-                    onClick={() => {
-                      if (requireAccess(true)) onDelete(item);
-                    }}
-                  >
-                    Delete…
-                  </MenuItem>
-                </>
-              )}
-            </MenuButton>
-          )}
-        </div>
+        {inlineEditing ? null : bar}
         <div className="scroll" ref={editorRef}>
           <div className="hero">
             <BigTile face={tile} />
@@ -1209,13 +1292,18 @@ export function DetailsPanel({
                   </Button>
                 ) : null}
                 <Button
-                  disabled={Boolean(writeProblem) || saving}
+                  // Busy rather than disabled while a read or a save runs,
+                  // so it keeps (or takes back) the focus.
+                  disabled={Boolean(writeProblem)}
+                  aria-disabled={saving || undefined}
+                  aria-busy={saving || undefined}
                   title={
                     writeProblem ??
                     (fileMode ? 'Replace this file' : 'Edit this item')
                   }
                   aria-describedby={describedBy(writeProblem)}
                   onClick={() => {
+                    if (saving) return;
                     focusEditorOnOpen.current = true;
                     void beginEdit();
                   }}
@@ -1326,6 +1414,7 @@ export function DetailsPanel({
 
           {/* Raw metadata is available only in developer diagnostics. */}
         </div>
+        {inlineEditing ? bar : null}
       </aside>
       {replacing ? (
         <SheetDialog
