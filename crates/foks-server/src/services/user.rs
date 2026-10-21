@@ -395,10 +395,15 @@ fn authorize_user_chain_load(
             }
         }
         Authorization::LocalTeam(token) => {
+            let token_hash = crate::auth::team::token_hash(token);
             let authority = database
-                .resolve_team_view_token(&crate::auth::team::token_hash(token), now)
+                .resolve_team_view_token(&token_hash, now)
                 .map_err(|_| RpcStatus::TransactionRetry)?
-                .ok_or(RpcStatus::Expired)?;
+                .ok_or_else(|| {
+                    crate::auth::team::view_token_refusal(
+                        database.team_view_token_recorded(&token_hash),
+                    )
+                })?;
             if authority.member_id != principal.uid() || authority.member_host_id != host.as_bytes()
             {
                 return Err(permission_denied());

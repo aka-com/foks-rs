@@ -359,6 +359,13 @@ impl ReadDatabase {
         resolve_team_view_token(&self.connection, token_hash, now)
     }
 
+    /// Whether this host holds any row for the token, current or not. Only a
+    /// refusal consults it, to tell a token that was never issued or has been
+    /// reclaimed apart from one that expired or whose authority was superseded.
+    pub fn team_view_token_recorded(&self, token_hash: &[u8; 32]) -> Result<bool> {
+        team_view_token_recorded(&self.connection, token_hash)
+    }
+
     pub fn team_admin_authority(
         &self,
         team_id: &[u8],
@@ -391,6 +398,11 @@ impl ReadSnapshot<'_> {
         now: u64,
     ) -> Result<Option<TeamViewAuthoritySnapshot>> {
         resolve_team_view_token(self.connection(), token_hash, now)
+    }
+
+    /// See [`ReadDatabase::team_view_token_recorded`].
+    pub fn team_view_token_recorded(&self, token_hash: &[u8; 32]) -> Result<bool> {
+        team_view_token_recorded(self.connection(), token_hash)
     }
 
     pub fn resolve_team_admin_token(
@@ -632,6 +644,16 @@ fn ensure_current_authority(
         return Err(Error::Invalid("stale team-view authority"));
     }
     Ok(())
+}
+
+fn team_view_token_recorded(connection: &rusqlite::Connection, token_hash: &[u8]) -> Result<bool> {
+    connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM team_view_tokens WHERE token_hash = ?1)",
+            [token_hash],
+            |row| row.budgeted_get(0),
+        )
+        .map_err(Into::into)
 }
 
 fn team_view_token_active(

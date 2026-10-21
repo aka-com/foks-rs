@@ -400,15 +400,24 @@ pub(crate) fn public_client_creates_and_loads_named_and_adhoc_teams() {
         foks_proto::TeamRemovalAndKeyBox::decode(&public_response).unwrap(),
         returned
     );
-    assert!(target_client
-        .foks()
-        .sync_team_kv(
-            &target_host.pinned,
-            &target.credential,
-            &target_view,
-            target_client.soft_state_path(),
-        )
-        .is_err());
+    // The removed member's view token is still recorded, but its authority
+    // was superseded: the stale status, which v0.1.9 and newer Go clients
+    // both recover from by activating a new view.
+    let stale = target_client.foks().sync_team_kv(
+        &target_host.pinned,
+        &target.credential,
+        &target_view,
+        target_client.soft_state_path(),
+    );
+    assert!(
+        matches!(
+            stale,
+            Err(foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code, .. }))
+                if code == foks_rpc::STATUS_TEAM_BEARER_TOKEN_STALE_ERROR
+        ),
+        "unexpected stale-view result: {:?}",
+        stale.err()
+    );
     let mut rotated_protected = fixture.client.open_protected_store().unwrap();
     let mut rotated_kv = fixture
         .client

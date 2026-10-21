@@ -43,6 +43,7 @@ trait KvContextRead {
         token_hash: &[u8; 32],
         now: u64,
     ) -> foks_server_db::Result<Option<foks_server_db::TeamViewAuthoritySnapshot>>;
+    fn team_view_token_recorded(&self, token_hash: &[u8; 32]) -> foks_server_db::Result<bool>;
     fn team(&self, team_id: &[u8]) -> foks_server_db::Result<Option<foks_server_db::TeamSnapshot>>;
 }
 
@@ -70,6 +71,13 @@ macro_rules! impl_kv_read {
                 now: u64,
             ) -> foks_server_db::Result<Option<foks_server_db::TeamViewAuthoritySnapshot>> {
                 self.resolve_team_view_token(token_hash, now)
+            }
+
+            fn team_view_token_recorded(
+                &self,
+                token_hash: &[u8; 32],
+            ) -> foks_server_db::Result<bool> {
+                self.team_view_token_recorded(token_hash)
             }
 
             fn team(
@@ -1116,7 +1124,11 @@ fn resolve_authority(
             let authority = reader
                 .resolve_team_view_token(&token_hash, now)
                 .map_err(|_| RpcStatus::TransactionRetry)?
-                .ok_or(RpcStatus::Expired)?;
+                .ok_or_else(|| {
+                    crate::auth::team::view_token_refusal(
+                        reader.team_view_token_recorded(&token_hash),
+                    )
+                })?;
             if authority.member_id.as_slice() != principal.uid() {
                 return Err(permission_denied());
             }

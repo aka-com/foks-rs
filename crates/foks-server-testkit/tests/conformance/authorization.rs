@@ -676,16 +676,45 @@ pub(crate) fn bearer_token_introspection() {
         Err(foks_rpc::Error::RemoteStatus { code: 1013, .. })
     ));
 
-    // An unknown view token for this host is the same typed stale status.
+    // A view token this host holds no row for is
+    // TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR (void), as go-foks returns since
+    // 5a9ff13, so a Go client re-mints instead of failing. A recorded token
+    // whose authority lapsed stays TEAM_BEARER_TOKEN_STALE_ERROR; see
+    // `team_create`.
     let argument = foks_snowpack::encode(&Value::Array(vec![
         Value::Binary(host.as_bytes().to_vec()),
         Value::Binary(unknown.to_vec()),
     ]))
     .unwrap();
-    assert!(matches!(
-        call(loader.protocol_id, loader.position, &argument),
-        Err(foks_rpc::Error::RemoteStatus { code: 7003, .. })
-    ));
+    let result = call(loader.protocol_id, loader.position, &argument);
+    assert!(
+        matches!(
+            &result,
+            Err(foks_rpc::Error::RemoteStatus { code, detail })
+                if *code == foks_rpc::STATUS_TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR
+                    && *detail == Default::default()
+        ),
+        "unexpected view-token result: {result:?}"
+    );
+
+    // The KV store authorizes team requests through the same lookup.
+    let mut kv = authenticated_stream(&fixture, &created.credential);
+    kv.write_all(&foks_rpc::encode_kv_select_vhost_request(host).unwrap())
+        .unwrap();
+    foks_rpc::read_void_response(&mut kv, MAX_RESPONSE, 0).unwrap();
+    kv.write_all(
+        &foks_rpc::encode_kv_usage_request_at(foks_rpc::KvAuth::Team(&unknown), 1).unwrap(),
+    )
+    .unwrap();
+    let result = foks_rpc::read_response(&mut kv, MAX_RESPONSE, 1);
+    assert!(
+        matches!(
+            result,
+            Err(foks_rpc::Error::RemoteStatus { code, .. })
+                if code == foks_rpc::STATUS_TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR
+        ),
+        "unexpected KV result: {result:?}"
+    );
 }
 
 #[test]
