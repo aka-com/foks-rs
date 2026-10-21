@@ -1,1 +1,342 @@
-/* Settings: design A v3 "settings" and "server". */
+/*
+ * Settings: design A v3 "settings" and "server". A source-list sub-navigation
+ * beside one page; the page's groups are cards of 44px rows with inset rules.
+ * The markup is the settings screens' own (`Inset`/`InsetRow`, `SectionLabel`);
+ * this sheet gives it the design's geometry.
+ */
+
+/* ------------------------------------------------------- sub-navigation */
+.settingslayout {
+  grid-template-columns: 188px minmax(0, 1fr);
+}
+
+.settingslayout > .subnav-side {
+  padding: 14px 10px;
+  border-right: 1px solid var(--line-soft);
+  background: transparent;
+  overflow-y: auto;
+}
+
+.subnav-side .tabs {
+  gap: 1px;
+  padding: 0;
+}
+
+.subnav-side .tab {
+  gap: 8px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--ink);
+}
+
+.subnav-side .tab .ic {
+  flex: none;
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.subnav-side .tab:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.subnav-side .tab.on {
+  background: var(--side-sel);
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.subnav-side .tab.on::after {
+  content: none;
+}
+
+.subnav-side .tab.on .ic {
+  color: var(--ink-2);
+}
+
+/* ------------------------------------------------------------- the page */
+.subnav-page > .body {
+  padding: 22px 28px 48px;
+}
+
+.subnav-page .settings-main {
+  max-width: 760px;
+}
+
+.subnav-page .settings-main.account-main > :first-child {
+  margin-top: 0;
+}
+
+/* A page's hero: the account, or the server a page is about. */
+.subnav-page .hero h1 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 18px;
+  font-weight: var(--weight-title);
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subnav-page .account-hero .av {
+  width: 40px;
+  height: 40px;
+  font-size: 16px;
+}
+
+.subnav-page .server-hero .smark {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-lg);
+  font-size: 22px;
+}
+
+.subnav-page .server-hero .smark:not(.ok):not(.bad) {
+  background: color-mix(
+    in srgb,
+    var(--mark-teal) var(--mark-tint),
+    transparent
+  );
+  color: color-mix(in srgb, var(--mark-teal) var(--mark-ink-mix), var(--ink));
+}
+
+.subnav-page .hero .hero-acts .chip {
+  align-self: center;
+}
+
+/* The way back from a server page to Account. */
+.subnav-page .pathbar {
+  display: flex;
+  margin: -6px 0 8px -6px;
+}
+
+.subnav-page .pathbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: 12.5px;
+  font-weight: var(--weight-label);
+  color: var(--ink-2);
+}
+
+.subnav-page .pathbar button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.subnav-page .pathbar .ic {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Section headings: 15px on the three pages, the quieter 12px label on a
+   server page, whose groups are facts about one subject. */
+.subnav-page .settings-main:not(.server-main) > .sec,
+.subnav-page .settings-main > .settings-heading {
+  min-height: 26px;
+  margin: 26px 0 10px;
+  font-size: 15px;
+  font-weight: var(--weight-label);
+  color: var(--ink);
+}
+
+.subnav-page .settings-main:not(.server-main) > .sec:first-child {
+  margin-top: 4px;
+}
+
+.subnav-page .settings-main:not(.server-main) > .sec.danger-title {
+  color: var(--danger-ink);
+}
+
+.subnav-page .settings-main.account-main > .settings-heading,
+.subnav-page .settings-main.account-main > .server-list-label {
+  margin-top: 26px;
+}
+
+.subnav-page .settings-main.account-main > .server-list-label + .settings-inset,
+.subnav-page .settings-main.account-main > .settings-heading + .settings-inset {
+  margin-top: 0;
+}
+
+.subnav-page .server-main > .sec {
+  min-height: 26px;
+  margin: 18px 0 6px;
+}
+
+/* ----------------------------------------------------------------- cards */
+.subnav-page .settings-inset,
+.subnav-page .inset.settings-checkboxes {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+
+.subnav-page .settings-inset.danger-box {
+  border-color: var(--danger-border);
+}
+
+.subnav-page .settings-inset .fr {
+  position: relative;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  min-height: 44px;
+  padding: 8px 16px;
+  border-top: 0;
+}
+
+.subnav-page .settings-inset .fr + .fr::before,
+.subnav-page .inset.settings-checkboxes > label + label::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 16px;
+  left: 16px;
+  height: 1px;
+  background: var(--line-soft);
+}
+
+.subnav-page .settings-inset .fr .k,
+.subnav-page .settings-inset.wide .fr .k {
+  width: 140px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.subnav-page .settings-inset .fr .v {
+  min-width: 96px;
+}
+
+.subnav-page .settings-inset .fr .v b {
+  font-weight: var(--weight-label);
+}
+
+.subnav-page .settings-inset .fr.dangerrow .k {
+  color: var(--ink);
+  font-weight: var(--weight-label);
+}
+
+.subnav-page .inset.settings-checkboxes > label {
+  position: relative;
+  padding: 8px 16px;
+}
+
+.subnav-page .inset.settings-checkboxes > label + label {
+  border-top: 0;
+}
+
+/* Account facts that open another page end in a chevron. */
+.subnav-page .settings-main .account-fact-link {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  color: var(--faint);
+}
+
+.subnav-page .settings-main .account-fact-link:not([disabled]):hover {
+  background: var(--hover);
+  color: var(--ink-2);
+  text-decoration: none;
+}
+
+.subnav-page .verified-mark {
+  gap: 3px;
+  margin-left: 6px;
+  vertical-align: 0;
+}
+
+.subnav-page .verified-mark .ic {
+  width: 12px;
+  height: 12px;
+  transform: none;
+}
+
+/* Server rows: the server's tile, its name and endpoint, then its state. */
+.subnav-page .settings-inset .fr.srow {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.subnav-page .settings-inset .fr.srow .smark {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-md);
+}
+
+.subnav-page .settings-inset .fr.srow .account-fact-link {
+  width: auto;
+  height: var(--control-h);
+  padding: 0 10px;
+  border: 1px solid var(--line-mid);
+  border-radius: var(--radius-md);
+  background: var(--btn-bg);
+  box-shadow: var(--shadow-btn);
+  font-size: 12.5px;
+  font-weight: var(--weight-label);
+  color: var(--ink);
+}
+
+.subnav-page .settings-inset .fr.srow .account-fact-link:not([disabled]):hover {
+  background: var(--btn-hover);
+  color: var(--ink);
+}
+
+.subnav-page .settings-main .account-more {
+  margin-top: 26px;
+}
+
+/* Theme and sidebar color: the segmented control and round swatches. */
+.subnav-page .swatches {
+  gap: 8px;
+}
+
+.subnav-page .swatch {
+  position: relative;
+}
+
+.subnav-page .swatch i {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+}
+
+.subnav-page .swatch span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.subnav-page .swatch.on i {
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--accent);
+}
+
+@media (max-width: 1099px) {
+  .settingslayout {
+    grid-template-columns: 160px minmax(0, 1fr);
+  }
+  .subnav-page .settings-inset .fr .k,
+  .subnav-page .settings-inset.wide .fr .k {
+    width: 104px;
+  }
+}
+
+@media (max-width: 900px) {
+  .subnav-page > .body {
+    padding: 18px 22px 40px;
+  }
+}

@@ -180,7 +180,7 @@ test('an ungranted device capability does not invent a missing backup key', asyn
     false,
   );
   assert.equal(
-    (rendered.getByRole('button', { name: 'Devices ›' }) as HTMLButtonElement)
+    (rendered.getByRole('button', { name: 'Devices' }) as HTMLButtonElement)
       .disabled,
     true,
   );
@@ -194,9 +194,9 @@ test('the account panel keeps every workflow row from the accounts pane', async 
   // six quieter links below the device-wide server inventory.
   for (const name of [
     'Change…',
-    'Server details ›',
-    'Devices ›',
-    'Teams ›',
+    'Server details',
+    'Devices',
+    'Teams',
     'Passphrase…',
     'Bot accounts',
     'Web admin panel',
@@ -210,7 +210,7 @@ test('the account panel keeps every workflow row from the accounts pane', async 
       1,
       `expected one "${name}" button`,
     );
-  for (const name of ['Server details ›', 'Devices ›', 'Teams ›'])
+  for (const name of ['Server details', 'Devices', 'Teams'])
     assert.ok(
       rendered
         .getByRole('button', { name })
@@ -294,7 +294,7 @@ test('the profile’s Teams and Devices facts summarize the account and link to 
   );
 
   // Teams: a count rather than a list — each team's own state is Teams' to show.
-  const teamsButton = rendered.getByRole('button', { name: 'Teams ›' });
+  const teamsButton = rendered.getByRole('button', { name: 'Teams' });
   const teamsRow = teamsButton.closest('.fr');
   assert.ok(teamsRow);
   assert.ok(ui.within(teamsRow as HTMLElement).getByText('2 teams'));
@@ -305,7 +305,7 @@ test('the profile’s Teams and Devices facts summarize the account and link to 
   assert.deepEqual(chosen.at(-1), { kind: 'teams', store: 'acct:personal' });
 
   // Devices: a count, not the list — Devices already lists every key.
-  const devicesButton = rendered.getByRole('button', { name: 'Devices ›' });
+  const devicesButton = rendered.getByRole('button', { name: 'Devices' });
   const devicesRow = devicesButton.closest('.fr');
   assert.ok(devicesRow);
   assert.ok(
@@ -342,7 +342,7 @@ test('a team whose roster could not be read remains in the Teams count', async (
   });
 
   // The Teams fact remains a count when one team's roster cannot be read.
-  const teamsButton = rendered.getByRole('button', { name: 'Teams ›' });
+  const teamsButton = rendered.getByRole('button', { name: 'Teams' });
   assert.match(teamsButton.closest('.fr')?.textContent ?? '', /2 teams/);
 });
 
@@ -381,7 +381,7 @@ test('a failed key read says so on the Devices fact rather than reporting no key
     },
   );
 
-  const devicesButton = rendered.getByRole('button', { name: 'Devices ›' });
+  const devicesButton = rendered.getByRole('button', { name: 'Devices' });
   const devicesRow = devicesButton.closest('.fr') as HTMLElement;
   assert.ok(
     ui.within(devicesRow).getByText('Devices and keys could not be read.'),
@@ -424,7 +424,7 @@ test('a catalog replaced mid-read is recovered, and the keys arrive', async () =
   // The shell's own refresh is what recovers it, and the read is tried again.
   assert.ok(refreshed.includes('snapshot'));
   assert.equal(attempts, 2);
-  const devicesButton = rendered.getByRole('button', { name: 'Devices ›' });
+  const devicesButton = rendered.getByRole('button', { name: 'Devices' });
   assert.ok(
     ui
       .within(devicesButton.closest('.fr') as HTMLElement)
@@ -455,7 +455,7 @@ test('a read answering after the account changed is dropped', async () => {
   await showAccount('acct:work');
   const devicesRow = (): HTMLElement =>
     rendered
-      .getByRole('button', { name: 'Devices ›' })
+      .getByRole('button', { name: 'Devices' })
       .closest('.fr') as HTMLElement;
   // Wait for acct:work's own read to settle before taking the baseline, so
   // the comparison below is not measuring its own loading state.
@@ -483,7 +483,7 @@ test('a stopped account displays an unavailable notice on the Devices field and 
     'acct:work',
   );
 
-  const devicesButton = rendered.getByRole('button', { name: 'Devices ›' });
+  const devicesButton = rendered.getByRole('button', { name: 'Devices' });
   assert.ok(
     ui
       .within(devicesButton.closest('.fr') as HTMLElement)
@@ -535,7 +535,7 @@ test('the header names the account and carries no switcher of its own', async ()
   );
   // The header's right-hand slot carries the account's access state when
   // there is one to state, and never a control: nothing in it is a button.
-  assert.equal(document.querySelector('.path .header-action button'), null);
+  assert.equal(document.querySelector('.account-hero button'), null);
   assert.ok(rendered.getByRole('heading', { level: 1, name: 'satoshi' }));
   // Keep the accessible verified mark brought in by the earlier UI changes.
   const serverState = rendered.getByRole('img', { name: 'Verified' });
@@ -549,7 +549,7 @@ test('the header names the account and carries no switcher of its own', async ()
   const panel = rendered.getByRole('tabpanel');
   assert.equal(panel.id, 'settings-sections-panel-account');
   assert.ok(ui.within(panel).getByText('Username'));
-  assert.ok(rendered.getByRole('button', { name: 'Server details ›' }));
+  assert.ok(rendered.getByRole('button', { name: 'Server details' }));
 });
 
 test('an unpaired server is hidden until its account inventory loads successfully', async () => {
@@ -663,8 +663,11 @@ test('a team note with the same alias on two profiles routes to neither', async 
   if (!unpaired) throw new Error('the unpaired server row is missing');
   assert.ok(unpaired.classList.contains('inset'));
   assert.match(unpaired.textContent ?? '', /Connected, not paired/);
+  // The facts follow under their own heading.
+  const heading = unpaired.nextElementSibling;
+  assert.equal(heading?.textContent, 'Account');
   assert.ok(
-    unpaired.nextElementSibling?.classList.contains('settings-inset'),
+    heading?.nextElementSibling?.classList.contains('settings-inset'),
     'the server row precedes the account facts',
   );
 });
@@ -811,12 +814,12 @@ test('a trust block stops remote workflows while local recovery controls remain 
     ),
   );
   assert.ok(rendered.getByRole('button', { name: 'Open server' }));
-  // Access state is a fact about the header's subject, so it is the header's
+  // Access state is a fact about the hero's subject, so it is the hero's
   // own right-hand mark rather than a chip trailing the server line.
-  const state = document.querySelector('.path .header-action .chip');
-  assert.ok(state, 'the header states the account’s access at its right');
+  const state = document.querySelector('.account-hero .hero-acts .chip');
+  assert.ok(state, 'the hero states the account’s access at its right');
   assert.equal(state.textContent, 'Verification failed');
-  assert.equal(document.querySelector('.path .sub .chip'), null);
+  assert.equal(document.querySelector('.account-hero p .chip'), null);
   // The Server row states the same thing in the quieter second phrase.
   assert.equal(
     document.querySelector('.settings-inset .fr .dim')?.textContent,

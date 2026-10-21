@@ -48,6 +48,7 @@ import {
   Button,
   Chip,
   Icon,
+  SectionLabel,
   Inset,
   InsetRow,
   Notice,
@@ -73,7 +74,6 @@ import type {
 import type { Server } from '../model';
 import type { Location, NavigateOptions } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
-import { PageHeader } from '../shell/page-header';
 import { AccountMark } from './account-switcher';
 import { deviceEntries } from './device-model';
 import type { DeviceLists } from './device-model';
@@ -463,7 +463,12 @@ export function AccountSection({
         mark: (
           <AccountMark name={headerUsername ?? selected.account} size="round" />
         ),
-        sub: <span>{serverDisplayLabelForStore(snapshot, selected)}</span>,
+        sub: (
+          <span>
+            {localAliasOf(snapshot, selected)} ·{' '}
+            {serverDisplayLabelForStore(snapshot, selected)}
+          </span>
+        ),
         state: stopped.stopped ? (
           <Chip tone="warn">{storeDescription(snapshot, selected)}</Chip>
         ) : undefined,
@@ -520,13 +525,6 @@ export function AccountSection({
 
   return (
     <WorkflowProvider snapshot={snapshot}>
-      <PageHeader
-        ruled
-        title={identity?.title ?? 'Account'}
-        mark={identity?.mark}
-        sub={identity?.sub}
-        action={identity?.state}
-      />
       <div
         className="body"
         role="tabpanel"
@@ -534,6 +532,21 @@ export function AccountSection({
         aria-labelledby={panel.labelledBy}
       >
         <div className="settings-main account-main">
+          {/* The account's own hero: the bar names Settings and the
+              sub-navigation names the section, so a page with no account to
+              name opens on its contents instead. */}
+          {identity ? (
+            <div className="hero account-hero">
+              {identity.mark}
+              <div className="t">
+                <h1>{identity.title}</h1>
+                <p>{identity.sub}</p>
+              </div>
+              {identity.state ? (
+                <div className="hero-acts">{identity.state}</div>
+              ) : null}
+            </div>
+          ) : null}
           {!selected && inventoryReadiness(snapshot, 'accounts') !== 'ready' ? (
             <>
               <CollectionStatus
@@ -846,6 +859,7 @@ function AccountPanel({
         onUnlock={onRenameUnlock}
         onComplete={onRenameComplete}
       />
+      <SectionLabel className="settings-heading">Account</SectionLabel>
       <Inset
         className={`settings-inset middle wide${freshness.stale ? ' stale' : ''}`}
       >
@@ -909,7 +923,8 @@ function AccountPanel({
                 })
               }
             >
-              Server details ›
+              <span className="offscreen">Server details</span>
+              <Icon name="chevronRight" />
             </Button>
           }
         >
@@ -925,8 +940,13 @@ function AccountPanel({
                 <span className="dim">{storeDescription(snapshot, store)}</span>
               </>
             ) : server?.trust.status === 'verified' ? (
-              <span className="verified-mark" role="img" aria-label="Verified">
-                <Icon name="circleCheck" />
+              <span
+                className="chip ok verified-mark"
+                role="img"
+                aria-label="Verified"
+              >
+                <Icon name="check" />
+                <span aria-hidden="true">Verified</span>
               </span>
             ) : null}
           </span>
@@ -941,7 +961,8 @@ function AccountPanel({
               title={devicesStopped.stopped ? devicesStopped.reason : undefined}
               onClick={() => onNavigate({ kind: 'devices', store: store.id })}
             >
-              Devices ›
+              <span className="offscreen">Devices</span>
+              <Icon name="chevronRight" />
             </Button>
           }
         >
@@ -961,7 +982,8 @@ function AccountPanel({
               className="account-fact-link"
               onClick={() => onNavigate({ kind: 'teams', store: store.id })}
             >
-              Teams ›
+              <span className="offscreen">Teams</span>
+              <Icon name="chevronRight" />
             </Button>
           }
         >
