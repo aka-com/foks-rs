@@ -17,7 +17,7 @@ import {
 } from 'react';
 import type { Dispatch, ReactNode, SetStateAction } from 'react';
 
-import { Button, Icon, SheetDialog } from './components';
+import { AlertDialog } from './components';
 import type { GuardVerdict, LocationStore, NavigationGuard } from './location';
 
 /** Prompt verdict displayed by `NavigationPrompt`. */
@@ -115,9 +115,10 @@ export function useSheetGuard(
 }
 
 /**
- * Displays the confirmation dialog for a `prompt` verdict. The confirm action
- * uses the verdict's label; Cancel, Escape, and backdrop dismissal preserve
- * the current location. Initial focus is placed on Cancel.
+ * Displays the confirmation alert for a `prompt` verdict. The confirm action
+ * uses the verdict's label; Cancel and Escape preserve the current location,
+ * and a click outside the alert does nothing. Cancel is the default button:
+ * it takes the initial focus and answers Return.
  */
 export function NavigationPrompt({
   verdict,
@@ -129,28 +130,15 @@ export function NavigationPrompt({
   onCancel: () => void;
 }): ReactNode {
   return (
-    <SheetDialog
-      danger
-      glyph={
-        <span className="kico md danger">
-          <Icon name="alert" />
-        </span>
-      }
+    <AlertDialog
+      destructive
+      icon="alert"
       title={verdict.title}
-      onClose={onCancel}
-      footer={
-        <>
-          <Button data-dialog-autofocus="true" onClick={onCancel}>
-            Cancel
-          </Button>
-          <Button variant="primary" danger onClick={onConfirm}>
-            {verdict.confirm}
-          </Button>
-        </>
-      }
-    >
-      <p>{verdict.body}</p>
-    </SheetDialog>
+      message={verdict.body}
+      confirmLabel={verdict.confirm}
+      onConfirm={onConfirm}
+      onCancel={onCancel}
+    />
   );
 }
 

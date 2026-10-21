@@ -92,7 +92,9 @@ function confirmation(): HTMLElement | null {
 function dialogButton(label: string): HTMLButtonElement {
   const panel = confirmation();
   assert.ok(panel, 'the confirmation is up');
-  const found = [...panel.querySelectorAll<HTMLButtonElement>('.ft .btn')];
+  const found = [
+    ...panel.querySelectorAll<HTMLButtonElement>('.alert .btns .btn'),
+  ];
   const target = found.find((node) => node.textContent === label);
   assert.ok(target, `the confirmation offers ${label}`);
   return target;
@@ -217,9 +219,12 @@ test('a sheet with something in it asks before the navigation', async () => {
   await leave(store);
   const panel = confirmation();
   assert.ok(panel, 'the confirmation is up');
-  assert.equal(panel.querySelector('.hd h2')?.textContent, 'Discard new item?');
   assert.equal(
-    panel.querySelector('.sb p')?.textContent,
+    panel.querySelector('.alert h2')?.textContent,
+    'Discard new item?',
+  );
+  assert.equal(
+    panel.querySelector('.alert > p')?.textContent,
     'Your new password has not been saved.',
   );
   // Nothing moves, and the draft is still on screen, while the question is open.
@@ -307,9 +312,12 @@ test('Escape on a sheet with something in it asks the same question', async () =
   });
   const panel = confirmation();
   assert.ok(panel, 'the confirmation is up');
-  assert.equal(panel.querySelector('.hd h2')?.textContent, 'Discard new item?');
   assert.equal(
-    panel.querySelector('.sb p')?.textContent,
+    panel.querySelector('.alert h2')?.textContent,
+    'Discard new item?',
+  );
+  assert.equal(
+    panel.querySelector('.alert > p')?.textContent,
     'Your new document has not been saved.',
   );
   // The draft survives the question until it is answered.

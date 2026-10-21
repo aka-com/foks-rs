@@ -1037,7 +1037,8 @@ test('agent loss preserves a new password draft through retry', async () => {
   assert.equal(document.activeElement, site);
   assert.equal(writes, 0);
 
-  ui.fireEvent.mouseDown(sheet);
+  // Sheets ignore a click on the scrim; Escape is the dismissal that asks.
+  ui.fireEvent.keyDown(sheet, { key: 'Escape' });
   const discard = await rendered.findByRole('button', { name: 'Discard' });
   await ui.act(async () => {
     discard.click();

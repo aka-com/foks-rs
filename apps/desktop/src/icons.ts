@@ -7,10 +7,12 @@
  */
 
 import type { IconNode } from 'lucide';
+import Activity from 'lucide/dist/esm/icons/activity.mjs';
 import Bell from 'lucide/dist/esm/icons/bell.mjs';
 import Check from 'lucide/dist/esm/icons/check.mjs';
 import ChevronDown from 'lucide/dist/esm/icons/chevron-down.mjs';
 import ChevronRight from 'lucide/dist/esm/icons/chevron-right.mjs';
+import ChevronsUpDown from 'lucide/dist/esm/icons/chevrons-up-down.mjs';
 import CircleAlert from 'lucide/dist/esm/icons/circle-alert.mjs';
 import CircleCheck from 'lucide/dist/esm/icons/circle-check.mjs';
 import Copy from 'lucide/dist/esm/icons/copy.mjs';
@@ -21,6 +23,7 @@ import ExternalLink from 'lucide/dist/esm/icons/external-link.mjs';
 import Eye from 'lucide/dist/esm/icons/eye.mjs';
 import EyeOff from 'lucide/dist/esm/icons/eye-off.mjs';
 import File from 'lucide/dist/esm/icons/file.mjs';
+import FileText from 'lucide/dist/esm/icons/file-text.mjs';
 import Flag from 'lucide/dist/esm/icons/flag.mjs';
 import Folder from 'lucide/dist/esm/icons/folder.mjs';
 import Globe from 'lucide/dist/esm/icons/globe.mjs';
@@ -30,7 +33,9 @@ import KeyRound from 'lucide/dist/esm/icons/key-round.mjs';
 import Laptop from 'lucide/dist/esm/icons/laptop.mjs';
 import LayoutGrid from 'lucide/dist/esm/icons/layout-grid.mjs';
 import List from 'lucide/dist/esm/icons/list.mjs';
+import Lock from 'lucide/dist/esm/icons/lock.mjs';
 import MessageSquare from 'lucide/dist/esm/icons/message-square.mjs';
+import PanelLeft from 'lucide/dist/esm/icons/panel-left.mjs';
 import PanelLeftClose from 'lucide/dist/esm/icons/panel-left-close.mjs';
 import PanelLeftOpen from 'lucide/dist/esm/icons/panel-left-open.mjs';
 import PawPrint from 'lucide/dist/esm/icons/paw-print.mjs';
@@ -96,6 +101,11 @@ export const FOKS_ICONS = {
   panelLeftOpen: PanelLeftOpen,
   pawPrint: PawPrint,
   plug: Plug,
+  activity: Activity,
+  chevronsUpDown: ChevronsUpDown,
+  fileText: FileText,
+  lock: Lock,
+  panelLeft: PanelLeft,
 } as const satisfies Record<FoksIconName, IconNode>;
 
 export type { FoksIconName } from './icon-name';

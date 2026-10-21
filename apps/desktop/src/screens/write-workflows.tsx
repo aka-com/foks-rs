@@ -4,6 +4,7 @@ import { useCallback, useId, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { Dialog, DismissibleDialog } from '/kit/overlay-primitives';
 import {
+  AlertDialog,
   Band,
   Button,
   CardSelect,
@@ -18,7 +19,6 @@ import {
   RadioGroup,
   SectionLabel,
   Sheet,
-  SheetDialog,
 } from '../components';
 import type { CardOption, DocumentSourceKind, FilterKind } from '../components';
 import { useConcealOnInactive } from '../use-conceal-on-inactive';
@@ -1407,78 +1407,62 @@ function DeleteSheet({
       : null,
     !deleting,
   );
+  const confirm = () => {
+    if (deleting || uncertain) return;
+    if (itemActionProblem(snapshot, workflow.item, true, accessNow())) {
+      recheckAccess((revision) => revision + 1);
+      return;
+    }
+    setDeleting(true);
+    setFailureMessage(null);
+    void (async () => {
+      try {
+        await bridge.removeItem({
+          direntId: workflow.item.direntId,
+          storeId: workflow.item.store,
+          path: workflow.item.path,
+          version: workflow.item.version,
+        });
+        setWorkflow(null);
+        // Keep refresh failure separate from the acknowledged deletion.
+        try {
+          await onApplied(
+            `Deleted ${nameOf(workflow.item.path)}`,
+            storeOf(snapshot, workflow.item.store)?.server,
+          );
+        } catch (failure) {
+          await onMutationError(failure, { report: false });
+        }
+      } catch (error) {
+        const typed = normalizeCommandError(error);
+        setUncertain(typed.ambiguous);
+        setFailureMessage(typed.message);
+        if (typed.code === 'conflict') {
+          // Changed or already gone: the shell's refresh finds out
+          // which and says so, rather than this sheet assuming.
+          setWorkflow(null);
+          await onDeleteConflict(workflow.item);
+        } else {
+          await onMutationError(error, { item: workflow.item });
+        }
+      } finally {
+        setDeleting(false);
+      }
+    })();
+  };
   return (
-    <SheetDialog
-      danger
-      onClose={() => setWorkflow(null)}
-      glyph={
-        <span className="kico md danger">
-          <Icon name="trash" />
-        </span>
-      }
-      dismissible={!deleting}
+    <AlertDialog
+      destructive
+      icon="trash"
       title={`Delete ${nameOf(workflow.item.path)}?`}
-      footer={
-        <>
-          <Button disabled={deleting} onClick={() => setWorkflow(null)}>
-            Cancel
-          </Button>
-          <Button
-            variant="primary"
-            danger
-            disabled={deleting || uncertain || Boolean(problem)}
-            title={problem}
-            aria-describedby={problem ? accessDescriptionId : undefined}
-            onClick={() => {
-              if (deleting || uncertain) return;
-              if (
-                itemActionProblem(snapshot, workflow.item, true, accessNow())
-              ) {
-                recheckAccess((revision) => revision + 1);
-                return;
-              }
-              setDeleting(true);
-              setFailureMessage(null);
-              void (async () => {
-                try {
-                  await bridge.removeItem({
-                    direntId: workflow.item.direntId,
-                    storeId: workflow.item.store,
-                    path: workflow.item.path,
-                    version: workflow.item.version,
-                  });
-                  setWorkflow(null);
-                  // Keep refresh failure separate from the acknowledged deletion.
-                  try {
-                    await onApplied(
-                      `Deleted ${nameOf(workflow.item.path)}`,
-                      storeOf(snapshot, workflow.item.store)?.server,
-                    );
-                  } catch (failure) {
-                    await onMutationError(failure, { report: false });
-                  }
-                } catch (error) {
-                  const typed = normalizeCommandError(error);
-                  setUncertain(typed.ambiguous);
-                  setFailureMessage(typed.message);
-                  if (typed.code === 'conflict') {
-                    // Changed or already gone: the shell's refresh finds out
-                    // which and says so, rather than this sheet assuming.
-                    setWorkflow(null);
-                    await onDeleteConflict(workflow.item);
-                  } else {
-                    await onMutationError(error, { item: workflow.item });
-                  }
-                } finally {
-                  setDeleting(false);
-                }
-              })();
-            }}
-          >
-            {deleting ? 'Deleting…' : 'Delete'}
-          </Button>
-        </>
-      }
+      message="This cannot be undone."
+      confirmLabel={deleting ? 'Deleting…' : 'Delete'}
+      busy={deleting}
+      confirmDisabled={uncertain || Boolean(problem)}
+      confirmTitle={problem}
+      confirmDescribedBy={problem ? accessDescriptionId : undefined}
+      onConfirm={confirm}
+      onCancel={() => setWorkflow(null)}
     >
       {failureMessage ? <p role="alert">{failureMessage}</p> : null}
       {problem ? (
@@ -1486,7 +1470,6 @@ function DeleteSheet({
           {problem}
         </p>
       ) : null}
-      <p>This cannot be undone.</p>
-    </SheetDialog>
+    </AlertDialog>
   );
 }

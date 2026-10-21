@@ -252,15 +252,22 @@ export function Dialog({
   );
 }
 
+/**
+ * A portaled dialog that Escape dismisses. Sheets and alerts are modal to the
+ * window, so a click on the scrim does nothing unless `dismissOnBackdrop` is
+ * set; only a transient surface such as the search palette sets it.
+ */
 export function DismissibleDialog({
   onDismiss,
   dismissible = true,
+  dismissOnBackdrop = false,
   onMouseDown,
   onKeyDown,
   ...props
 }: DialogProps & {
   onDismiss: () => void;
   dismissible?: boolean;
+  dismissOnBackdrop?: boolean;
 }): ReactNode {
   const { portalRoot } = useOverlayEnvironment();
   return createPortal(
@@ -270,6 +277,7 @@ export function DismissibleDialog({
         onMouseDown?.(event);
         if (
           !dismissible ||
+          !dismissOnBackdrop ||
           event.defaultPrevented ||
           event.target !== event.currentTarget
         )

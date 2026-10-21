@@ -130,7 +130,9 @@ function dialog(): HTMLElement | null {
 }
 
 function button(label: string): HTMLButtonElement {
-  const found = [...document.querySelectorAll<HTMLButtonElement>('.ft .btn')];
+  const found = [
+    ...document.querySelectorAll<HTMLButtonElement>('.alert .btns .btn'),
+  ];
   const target = found.find((node) => node.textContent === label);
   assert.ok(target, `the dialog offers ${label}`);
   return target;
@@ -144,25 +146,41 @@ async function leave(store: LocationStore): Promise<void> {
   });
 }
 
-test('a prompt verdict draws its own words and opens on Cancel', async () => {
+test('a prompt verdict draws its own words, opens on Cancel, and Return never confirms', async () => {
   const store = new location.LocationStore();
   mount(store, DISCARD);
   await leave(store);
 
   const panel = dialog();
   assert.ok(panel, 'the confirmation is up');
-  assert.equal(panel.querySelector('.hd h2')?.textContent, DISCARD.title);
+  assert.equal(panel.querySelector('.alert h2')?.textContent, DISCARD.title);
   assert.equal(
-    panel.querySelector('.sb p')?.textContent,
+    panel.querySelector('.alert p')?.textContent,
     'Your draft has not been saved.',
   );
-  // The move is the danger button; staying is the plain one, and it has focus,
-  // so the confirmation takes a deliberate second keystroke.
+  // The move is the danger button; staying is the default one, and it has
+  // focus, so the confirmation takes a deliberate second keystroke.
   const confirm = button('Discard changes');
   assert.ok(confirm.classList.contains('danger'));
   assert.equal(document.activeElement, button('Cancel'));
   // Nothing has moved while the question is open.
   assert.deepEqual(store.getSnapshot().location, { kind: 'all' });
+  // Return answers the default button wherever the focus is, so it never
+  // confirms the discard; ⌘⌫ is the discard's own key.
+  confirm.focus();
+  await ui.act(async () => {
+    ui.fireEvent.keyDown(confirm, { key: 'Enter' });
+    await Promise.resolve();
+  });
+  assert.equal(dialog(), null);
+  assert.deepEqual(store.getSnapshot().location, { kind: 'all' });
+  await leave(store);
+  await ui.act(async () => {
+    ui.fireEvent.keyDown(dialog()!, { key: 'Backspace', metaKey: true });
+    await Promise.resolve();
+  });
+  assert.equal(dialog(), null);
+  assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
 });
 
 test('confirming the prompt makes the navigation it asked about', async () => {
@@ -178,7 +196,7 @@ test('confirming the prompt makes the navigation it asked about', async () => {
   assert.deepEqual(store.getSnapshot().location, { kind: 'files' });
 });
 
-test('Cancel, Escape and the backdrop keep the reader where they are', async () => {
+test('Cancel, Escape and a click outside keep the reader where they are', async () => {
   const store = new location.LocationStore();
   mount(store, DISCARD);
 
@@ -200,7 +218,8 @@ test('Cancel, Escape and the backdrop keep the reader where they are', async () 
   assert.equal(dialog(), null);
   assert.deepEqual(store.getSnapshot().location, { kind: 'all' });
 
-  // The backdrop is the dialog element itself, outside the panel it draws.
+  // The backdrop is the dialog element itself, outside the alert it draws.
+  // The alert is modal: a click there leaves the question open.
   await leave(store);
   const backdrop = dialog();
   assert.ok(backdrop);
@@ -208,8 +227,13 @@ test('Cancel, Escape and the backdrop keep the reader where they are', async () 
     ui.fireEvent.mouseDown(backdrop);
     await Promise.resolve();
   });
-  assert.equal(dialog(), null);
+  assert.equal(dialog(), backdrop);
   assert.deepEqual(store.getSnapshot().location, { kind: 'all' });
+  await ui.act(async () => {
+    ui.fireEvent.click(button('Cancel'));
+    await Promise.resolve();
+  });
+  assert.equal(dialog(), null);
 });
 
 test('a refusal raises no dialog and moves nothing', async () => {

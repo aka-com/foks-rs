@@ -577,6 +577,8 @@ function SearchSheet({
       className="backdrop pal-back"
       aria-label="Search"
       onDismiss={onClose}
+      // The palette is a transient search field, not a window-modal sheet.
+      dismissOnBackdrop
     >
       <div className="pal" onKeyDown={onKeyDown}>
         <div className="pal-q">
