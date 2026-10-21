@@ -897,6 +897,10 @@ export function VaultShell({
                 locations.setDetails(false);
               }}
               onMove={(item) => setWorkflow({ kind: 'move', item })}
+              onOpenFolder={(storeId, path) =>
+                locations.openFiles(`${storeId}|${path}`, 'All')
+              }
+              onOpenServer={openServer}
               onDelete={(item) => setWorkflow({ kind: 'delete', item })}
               onConflict={(item, draft, operation) =>
                 setWorkflow({ kind: 'conflict', item, draft, operation })
