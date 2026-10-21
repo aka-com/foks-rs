@@ -317,7 +317,7 @@ export function FirstRunAppSidebar({
       {checkpoint.path === 'invited' && !checkpoint.added ? (
         <p className="side-note">
           {groupName} will appear under Teams once your access is approved. FOKS
-          checks for team access at launch. You can also click Check now.
+          checks for team access at launch. You can also click Check Now.
         </p>
       ) : null}
     </>
@@ -349,7 +349,6 @@ export function FirstRunAppSidebar({
     />
   );
 }
-
 
 export function Foot({
   children,

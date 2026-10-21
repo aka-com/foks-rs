@@ -372,3 +372,36 @@ button.check.on .bx {
   background: var(--accent-fill);
   color: var(--on-accent);
 }
+
+/* Fields in the setup steps are bordered with the accent focus ring, as in
+   a sheet: the base `.inset .fr input` reset draws them as plain text. */
+.first-run-main .inset .fr input:not([type='checkbox']):not([type='radio']),
+.first-run-main .inset .fr select,
+.first-run-main .inset .fr textarea {
+  height: var(--control-h);
+  padding: 0 8px;
+  border: 1px solid var(--line-field);
+  border-radius: var(--radius-md);
+  background: var(--field-bg);
+  color: var(--ink);
+}
+
+.first-run-main .inset .fr textarea {
+  height: auto;
+  padding: 5px 8px;
+  line-height: 1.4;
+}
+
+.first-run-main .inset .fr input:not([type='checkbox']):not([type='radio']):focus,
+.first-run-main .inset .fr select:focus,
+.first-run-main .inset .fr textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash-2);
+  outline: 0;
+}
+
+/* A command, not a field: its own width, under the address row. */
+.first-run-main .official-server {
+  align-self: flex-start;
+  width: auto;
+}

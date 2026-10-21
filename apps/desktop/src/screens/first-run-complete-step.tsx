@@ -47,7 +47,7 @@ export function LocalCompleteStep({
                     })
                   }
                 >
-                  Review server settings
+                  Review Server Settings
                 </Button>
               ) : null}
               <Button
@@ -56,8 +56,8 @@ export function LocalCompleteStep({
                 onClick={retryPersonal}
               >
                 {personalRefreshing
-                  ? 'Loading Personal vault…'
-                  : 'Retry loading Personal vault'}
+                  ? 'Loading Personal Vault…'
+                  : 'Retry Loading Personal Vault'}
               </Button>
             </>
           ) : (
@@ -69,7 +69,7 @@ export function LocalCompleteStep({
                   onNavigate({ kind: 'store', ref: accountStore });
               }}
             >
-              Continue to my vault
+              Continue to My Vault
             </Button>
           )}
         </Foot>

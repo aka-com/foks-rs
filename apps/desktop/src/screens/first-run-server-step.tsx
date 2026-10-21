@@ -52,7 +52,7 @@ export function ServerVerificationStep({
           label="Address"
           action={
             <Button disabled={busy} onClick={onCheck}>
-              Check again
+              Check Again
             </Button>
           }
         >

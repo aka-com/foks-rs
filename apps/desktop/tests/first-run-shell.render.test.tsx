@@ -104,7 +104,7 @@ test('first-run resume reports an unreachable managed local server', async () =>
   const resumed = ui.render(createElement(App, { bridge }));
   await resumed.findByRole('heading', { name: 'Set up FOKS' });
   await resumed.findByText('Local server unavailable');
-  await resumed.findByRole('button', { name: 'Check again' });
+  await resumed.findByRole('button', { name: 'Check Again' });
   assert.deepEqual(describedProfiles, ['personal']);
   resumed.unmount();
   window.localStorage.removeItem(FIRST_RUN_CHECKPOINT_KEY);
@@ -153,7 +153,7 @@ test('first-run retry reconnects the agent transport after a connection loss', a
     }),
   );
   const retry = await rendered.findByRole('button', {
-    name: 'Retry setup',
+    name: 'Retry Setup',
     hidden: true,
   });
   const statusCallsBeforeRetry = statusCalls;
@@ -189,7 +189,7 @@ test('the Added step is a page in the panel, not a list column beside empty deta
   const rendered = ui.render(
     createElement(App, { bridge: mockBridge(FIXTURE) }),
   );
-  const open = await rendered.findByRole('button', { name: 'Open team' });
+  const open = await rendered.findByRole('button', { name: 'Open Team' });
 
   // The step used to be laid out in the Files list column (`with-details`),
   // which clipped its notice's actions at every window size.

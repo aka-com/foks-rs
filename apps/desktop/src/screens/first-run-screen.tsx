@@ -1095,7 +1095,7 @@ function FirstRunSession({
         })
       }
     >
-      Review server settings
+      Review Server Settings
     </Button>
   );
   /* The account alias and this device’s name identify the same account
@@ -1244,7 +1244,7 @@ function FirstRunSession({
               variant="primary"
               onClick={() => void adoptExistingAccount()}
             >
-              Continue with existing account
+              Continue with Existing Account
             </Button>
           ) : operationResumable ? (
             <Button
@@ -1254,7 +1254,7 @@ function FirstRunSession({
               }
               onClick={() => void resumeAccountOperation()}
             >
-              Resume account setup
+              Resume Account Setup
             </Button>
           ) : null}
           <Button
@@ -1266,11 +1266,11 @@ function FirstRunSession({
             {busy
               ? runningLabel
               : identityLoading
-                ? 'Checking status…'
-                : 'Check status'}
+                ? 'Checking Status…'
+                : 'Check Status'}
           </Button>
           {abortable ? (
-            <Button onClick={discardProvisioning}>Go back</Button>
+            <Button onClick={discardProvisioning}>Go Back</Button>
           ) : null}
         </div>
         {intent?.kind === 'sso' && intent.ssoOperationId && profile && !busy ? (
@@ -1303,7 +1303,7 @@ function FirstRunSession({
           <MissingServerWarning
             action={
               <Button onClick={discardProvisionedAccount}>
-                Set up a different account
+                Set Up a Different Account
               </Button>
             }
           />
@@ -1324,8 +1324,8 @@ function FirstRunSession({
             onClick={() => void refreshAccountIdentity()}
           >
             {identityLoading
-              ? 'Loading account details…'
-              : 'Retry loading account'}
+              ? 'Loading Account Details…'
+              : 'Retry Loading Account'}
           </Button>
           {reviewServerSettings}
         </div>
@@ -1340,7 +1340,7 @@ function FirstRunSession({
               </span>
             </div>
             <Button onClick={discardProvisionedAccount}>
-              Set up a different account
+              Set Up a Different Account
             </Button>
           </div>
         ) : null}
@@ -1405,7 +1405,7 @@ function FirstRunSession({
               <Button
                 onClick={() => setManagedStatusAttempt((value) => value + 1)}
               >
-                Check again
+                Check Again
               </Button>
             </div>
           </div>
@@ -1414,13 +1414,13 @@ function FirstRunSession({
           <SectionLabel>Other options</SectionLabel>
           <div className="btns">
             <Button onClick={() => send({ type: 'choose', path: 'own' })}>
-              Connect to another server…
+              Connect to Another Server…
             </Button>
             <Button
               disabled={!managedReport}
               onClick={() => selectManagedProfile(true)}
             >
-              Recover an existing account…
+              Recover an Existing Account…
             </Button>
           </div>
         </div>
@@ -1448,7 +1448,7 @@ function FirstRunSession({
             Checking…
           </Button>
           <Button onClick={() => setGoChooserDismissed(true)}>
-            Skip for now
+            Skip for Now
           </Button>
         </div>
       </Pane>
@@ -1546,7 +1546,7 @@ function FirstRunSession({
                 setGoScanAttempt((value) => value + 1);
               }}
             >
-              Check again
+              Check Again
             </Button>
           </div>
         ) : null}
@@ -1559,7 +1559,7 @@ function FirstRunSession({
                 setMessage(null);
               }}
             >
-              Try again
+              Try Again
             </Button>
           </div>
         ) : null}
@@ -1573,7 +1573,7 @@ function FirstRunSession({
                 send({ type: 'choose', path: pendingPath });
             }}
           >
-            {!agentReady ? 'Preparing service…' : 'Continue'}
+            {!agentReady ? 'Preparing Service…' : 'Continue'}
           </Button>
           {goChooserDismissed && goCandidates.length > 0 ? (
             <Button onClick={() => setGoChooserDismissed(false)}>Back</Button>
@@ -1648,8 +1648,8 @@ function FirstRunSession({
                         row.kind === 'account-signup' &&
                         row.alias === accountAlias,
                     )
-                  ? 'Resume account setup'
-                  : 'Create my account'}
+                  ? 'Resume Account Setup'
+                  : 'Create My Account'}
             </Button>
           </Foot>
         }
@@ -1723,7 +1723,7 @@ function FirstRunSession({
                 variant="primary"
                 onClick={() => void adoptDuplicateAccount()}
               >
-                Use existing account
+                Use Existing Account
               </Button>
             </span>
           </div>
@@ -1874,7 +1874,7 @@ function FirstRunSession({
                     go('account');
                   }}
                 >
-                  Create a new account
+                  Create a New Account
                 </Button>
                 {signinPrimary}
               </>
@@ -2009,7 +2009,7 @@ function FirstRunSession({
                       .finally(() => setPersonalRefreshing(false));
                   }}
                 >
-                  Retry loading team
+                  Retry Loading Team
                 </Button>
               ) : null}
               <Button
@@ -2020,7 +2020,7 @@ function FirstRunSession({
                     onNavigate({ kind: 'store', ref: addedStore });
                 }}
               >
-                Open team
+                Open Team
               </Button>
             </>
           }
@@ -2090,7 +2090,7 @@ function FirstRunSession({
                 .finally(() => setAgentRetrying(false));
             }}
           >
-            {agentRetrying ? 'Preparing service…' : 'Retry setup'}
+            {agentRetrying ? 'Preparing Service…' : 'Retry Setup'}
           </Button>
         </div>
       </Pane>
@@ -2163,7 +2163,7 @@ function FirstRunSession({
                     go('protect');
                   }}
                 >
-                  Back to recovery options
+                  Back to Recovery Options
                 </Button>
               </span>
             ) : null}

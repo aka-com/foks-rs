@@ -31,7 +31,7 @@ test.after(async () => {
   await vite.close();
 });
 
-const OFFER = 'Use existing account';
+const OFFER = 'Use Existing Account';
 
 async function harness() {
   const { FirstRunExperience } = (await vite.ssrLoadModule(
@@ -195,7 +195,7 @@ async function refuse(
   });
   await ui.act(async () => {
     ui.fireEvent.click(
-      rendered.view.getByRole('button', { name: 'Create my account' }),
+      rendered.view.getByRole('button', { name: 'Create My Account' }),
     );
   });
   return { rendered, calls };

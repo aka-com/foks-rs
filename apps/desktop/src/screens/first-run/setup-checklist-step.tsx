@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Band, Button, Inset, InsetRow } from '../../components';
+import { Band, Button, Inset, InsetRow, Notice } from '../../components';
 import {
   completedFirstRunSteps,
   firstRunStepCount,
@@ -105,10 +105,10 @@ export function SetupChecklistStep({
                     )
                   }
                 >
-                  Copy message
+                  Copy Message
                 </Button>
                 <Button size="sm" onClick={() => go('waiting')}>
-                  Check now
+                  Check Now
                 </Button>
               </span>
             }
@@ -118,34 +118,36 @@ export function SetupChecklistStep({
               Check again after {adminShort} adds you to {group}.
             </span>
             <Band label="Team discovery">
-              Check now looks up teams for this signed-in account.
+              Check Now looks up teams for this signed-in account.
             </Band>
           </InsetRow>
         ) : null}
       </Inset>
       {recoverySet ? null : (
         <div className="checklist-notice">
-          <Band
-            // Every other band's label is the short lead-in the sentence
-            // after it completes, not a sentence of its own.
-            label="Recovery not set up"
-            action={
-              <Button size="sm" variant="primary" onClick={() => go('protect')}>
-                Set up recovery
+          {/* A notice, not a band: its title is a statement of its own
+              and the sentence under it explains it. */}
+          <Notice
+            title="Recovery not set up"
+            actions={
+              <Button variant="primary" onClick={() => go('protect')}>
+                Set Up Recovery
               </Button>
             }
           >
-            The keys for {checkpoint.account?.username} are saved only on this
-            device, so this account cannot be recovered if the device is lost.
-          </Band>
+            <p>
+              The keys for {checkpoint.account?.username} are saved only on this
+              device, so this account cannot be recovered if the device is lost.
+            </p>
+          </Notice>
         </div>
       )}
       <div className="checklist-cta">
         {!accountStore ? (
           <Button disabled={personalRefreshing} onClick={retryPersonal}>
             {personalRefreshing
-              ? 'Loading Personal vault…'
-              : 'Retry loading Personal vault'}
+              ? 'Loading Personal Vault…'
+              : 'Retry Loading Personal Vault'}
           </Button>
         ) : null}
         <Button
@@ -155,7 +157,7 @@ export function SetupChecklistStep({
             if (accountStore) onNavigate({ kind: 'store', ref: accountStore });
           }}
         >
-          Continue to my vault
+          Continue to My Vault
         </Button>
       </div>
     </Pane>

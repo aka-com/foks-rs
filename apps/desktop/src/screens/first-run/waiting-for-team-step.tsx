@@ -56,7 +56,7 @@ export function WaitingForTeamStep({
         foot={
           <Foot>
             <Button onClick={() => go('checklist-invited')}>
-              Finish later
+              Finish Later
             </Button>
           </Foot>
         }
@@ -78,14 +78,14 @@ export function WaitingForTeamStep({
             busy={busy}
             onClick={() => void discover()}
           >
-            {busy ? 'Retrying…' : 'Retry loading team'}
+            {busy ? 'Retrying…' : 'Retry Loading Team'}
           </Button>
           <Button
             onClick={() => {
               onChooseAnotherTeam();
             }}
           >
-            Choose another team
+            Choose Another Team
           </Button>
         </div>
       </Pane>
@@ -97,7 +97,7 @@ export function WaitingForTeamStep({
       wide
       foot={
         <Foot>
-          <Button onClick={() => go('checklist-invited')}>Finish later</Button>
+          <Button onClick={() => go('checklist-invited')}>Finish Later</Button>
         </Foot>
       }
     >
@@ -108,7 +108,7 @@ export function WaitingForTeamStep({
         <p className="lead">
           Your account ({checkpoint.account?.username}) on{' '}
           {profile?.canonicalName} is ready. {adminShort} must add you to{' '}
-          <b>{group}</b>. Once they have added you, select Check now to finish
+          <b>{group}</b>. Once they have added you, select Check Now to finish
           joining.
         </p>
       </StepIntro>
@@ -179,7 +179,7 @@ export function WaitingForTeamStep({
                 disabled={busy}
                 onClick={() => void discover()}
               >
-                Check now
+                Check Now
               </Button>
               <span className="status">
                 {/* Only a check that completed and found nothing says the
@@ -198,11 +198,11 @@ export function WaitingForTeamStep({
               </span>
             </div>
             <p>
-              Select <b>Check now</b> to look for pending team invitations. FOKS
+              Select <b>Check Now</b> to look for pending team invitations. FOKS
               will also check automatically each time you open the app.
             </p>
             <Band label="Team updates">
-              <b>Check now</b> checks the server for team memberships linked to
+              <b>Check Now</b> checks the server for team memberships linked to
               your account. FOKS also checks when it opens.
             </Band>
             {message ? <div className="res">{message}</div> : null}
@@ -229,7 +229,7 @@ export function WaitingForTeamStep({
               right away; items in Personal are never shared with {group}.
             </p>
             <Button onClick={() => go('checklist-invited')}>
-              Continue to my vault
+              Continue to My Vault
             </Button>
           </div>
         </div>
