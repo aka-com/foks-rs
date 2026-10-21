@@ -753,11 +753,14 @@
   background: var(--accent-wash-2);
 }
 
-/* The row a context menu acts on, outlined while the menu is open. */
+/* The row a context menu acts on, while the menu is open: a 1px accent
+   outline over an accent wash, as Finder draws a right-clicked item, so it
+   is not mistaken for the 2px keyboard focus ring. */
 .folder-body .row.menu-target,
 .folder-body .folder-sec.menu-target,
 .side-tree .fselect.menu-target {
-  box-shadow: inset 0 0 0 2px var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  background: var(--accent-wash);
 }
 
 /* New Password / New Document: a Member role's visibility sits in the role
