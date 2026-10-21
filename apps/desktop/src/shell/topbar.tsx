@@ -1,10 +1,11 @@
 /**
  * The panel's first bar: 44px, on the traffic lights' centreline.
  *
- * On Files and Chat it is the list column's bar: the search field and the
- * column's add control. On every other page it names the page with the
- * crumbs, led by Back on a page inside an area (a team, a device). Its empty
- * parts are the window's drag region. While the sidebar is hidden the bar
+ * On Files, Chat and Activity it is the list column's bar: the search field
+ * and the column's add control. On every other page it names the page with
+ * the crumbs, led by Back on a page inside an area (a team, a device), and
+ * ends with the page's own commands (`BarActions`). Its empty parts are the
+ * window's drag region. While the sidebar is hidden the bar
  * also carries the control that shows it again, after the traffic lights.
  */
 
@@ -176,6 +177,11 @@ export interface TopbarProps {
   onNewFolder?: () => void;
   /** Controls drawn before the add control: the Files view menu. */
   actions?: ReactNode;
+  /**
+   * Receives the element a page's `BarActions` portal into, drawn after
+   * `actions`. The shell passes its state setter.
+   */
+  actionsSlot?: (element: HTMLElement | null) => void;
   /** Why New cannot act here, as its tooltip; null when it can. */
   newBlocked?: string | null;
   /** Chat: opens the New chat sheet. */
@@ -279,6 +285,7 @@ export function Topbar({
   onNew,
   onNewFolder,
   actions,
+  actionsSlot,
   newBlocked = null,
   onNewChat,
   chatTeamCount,
@@ -318,10 +325,10 @@ export function Topbar({
   // Only the views that filter accept a query; the rest draw no field.
   const noChatTeams = tab === 'chat' && chatTeamCount === 0;
   const searchable = Boolean(onQuery) && !blocked && !noChatTeams;
-  // Files and Chat are list columns: their bar is the search field and the
-  // column's add control. Every other page names itself with the crumbs, and
-  // a page inside an area (a team, a device) leads with Back.
-  const listBar = tab === 'files' || tab === 'chat';
+  // Files, Chat and Activity are list columns: their bar is the search field
+  // and the column's add control. Every other page names itself with the
+  // crumbs, and a page inside an area (a team, a device) leads with Back.
+  const listBar = tab === 'files' || tab === 'chat' || tab === 'activity';
   const parent =
     !listBar && tab !== 'settings' ? parentLocation(location) : null;
   return (
@@ -414,6 +421,7 @@ export function Topbar({
         <span className="grow" data-tauri-drag-region="" />
       )}
       {actions}
+      {actionsSlot ? <span className="bar-acts" ref={actionsSlot} /> : null}
       {tab === 'files' && onNew ? (
         <NewItemButton
           onNew={onNew}
