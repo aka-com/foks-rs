@@ -65,6 +65,14 @@ const REQUEST_MS = 4000;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let context = '';
 let contextChanged = false;
+/**
+ * Whether the user has pressed a key or the pointer, or the focus has been
+ * placed, since the keeper started. Until then a change of place is the
+ * window settling on its first location (a location the shell completes once
+ * the snapshot arrives), not a navigation, and the focus stays where the
+ * platform put it.
+ */
+let engaged = false;
 const remembered = new Map<string, string[]>();
 
 function quoted(value: string): string {
@@ -215,6 +223,7 @@ export function restoreFocusIfLost(...candidates: Candidate[]): void {
 export function setFocusContext(key: string): void {
   if (key === context) return;
   context = key;
+  if (!engaged) return;
   contextChanged = true;
   schedule();
 }
@@ -226,9 +235,11 @@ export function mountFocusKeeper(
   // The window opening is not a navigation: the focus starts where the
   // platform puts it.
   contextChanged = false;
+  engaged = false;
   const onFocusIn = (event: FocusEvent): void => {
     const target = event.target;
     if (!(target instanceof HTMLElement) || target === document.body) return;
+    engaged = true;
     // A pointer press is the user choosing where the focus goes; earlier
     // requests no longer apply.
     if (pressing) requested = [];
@@ -239,7 +250,11 @@ export function mountFocusKeeper(
     if (target.closest('.main, .details')) remembered.set(context, identity);
   };
   let pressing = false;
+  const onKeyDown = (): void => {
+    engaged = true;
+  };
   const onPointerDown = (): void => {
+    engaged = true;
     pressing = true;
     setTimeout(() => (pressing = false), 0);
   };
@@ -261,11 +276,13 @@ export function mountFocusKeeper(
   document.addEventListener('focusin', onFocusIn);
   document.addEventListener('focusout', onFocusOut);
   document.addEventListener('pointerdown', onPointerDown, true);
+  document.addEventListener('keydown', onKeyDown, true);
   return () => {
     observer?.disconnect();
     document.removeEventListener('focusin', onFocusIn);
     document.removeEventListener('focusout', onFocusOut);
     document.removeEventListener('pointerdown', onPointerDown, true);
+    document.removeEventListener('keydown', onKeyDown, true);
     if (timer !== null) clearTimeout(timer);
     timer = null;
     last = null;
@@ -273,6 +290,7 @@ export function mountFocusKeeper(
     remembered.clear();
     context = '';
     contextChanged = false;
+    engaged = false;
   };
 }
 

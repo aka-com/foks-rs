@@ -129,3 +129,24 @@ test('a window whose focus was never placed is left alone as its list renders', 
     stop();
   }
 });
+
+test('a place the window settles on before any input is not a navigation', async () => {
+  page('<div class="rows"></div>');
+  setFocusContext('opening');
+  const stop = mountFocusKeeper();
+  try {
+    // The shell completes its first location once the snapshot arrives.
+    setFocusContext('opening, completed');
+    document.querySelector('.rows')!.innerHTML =
+      '<div tabindex="0" data-row-key="one">one</div>';
+    await tick();
+    assert.equal(document.activeElement, document.body);
+    // After a key press a change of place is a navigation again.
+    document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Tab' }));
+    setFocusContext('next');
+    await tick();
+    assert.equal(document.activeElement?.getAttribute('data-row-key'), 'one');
+  } finally {
+    stop();
+  }
+});
