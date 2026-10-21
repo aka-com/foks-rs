@@ -512,7 +512,8 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 @media (prefers-reduced-motion:reduce){.booting .spin{animation:none}}
 .stopveil{background:color-mix(in srgb,var(--main-surface) 84%,transparent);backdrop-filter:blur(2px)}
 /* First run takeover offset */
-.window:has(>.app>.first-run-main)>.takeover{top:0}
+.window:has(>.app .first-run-main)>.takeover{top:0}
+.window:has(>.app>.fr-setup)>.takeover{left:0}
 /* Apply modal card styling to stop, lock, and boot overlays. */
 .tcard.stopcard{max-height:100%;overflow:auto}
 .tcard p+p{margin-top:8px}
