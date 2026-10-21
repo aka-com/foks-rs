@@ -1052,7 +1052,11 @@ export function ItemsScreen({
             ) : null}
             {view === 'grid' ? (
               <div
-                className="files-grid"
+                className={
+                  selected.store === ALL_ITEMS
+                    ? 'files-grid with-location'
+                    : 'files-grid'
+                }
                 style={{
                   gridTemplateColumns: `repeat(${gridWindow.columns}, minmax(0, 1fr))`,
                   paddingBottom: gridWindow.trailingGap,

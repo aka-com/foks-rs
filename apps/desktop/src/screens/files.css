@@ -69,25 +69,35 @@
   background: var(--main-surface);
 }
 
-/* Cards reuse the list's rows: a tile over the name, in a grid the list
-   windows by viewport. */
+/* Cards reuse the list's rows: the kind tile and the size over the name and
+   its second line, in a grid the list windows by viewport. Heights and the
+   minimum width match FILES_CARD_* in files-grid.ts. */
 .files-grid {
   display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
   gap: 8px;
   padding: 8px 14px;
 }
 .folder-body .files-grid .row {
   flex-direction: column;
   align-items: flex-start;
-  gap: 8px;
-  height: 112px;
-  padding: 12px;
+  justify-content: flex-start;
+  gap: 6px;
+  height: 96px;
+  min-height: 0;
+  padding: 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--card);
 }
+.folder-body .files-grid.with-location .row {
+  height: 112px;
+}
 .folder-body .files-grid .row::after {
   content: none;
+}
+.folder-body .files-grid .row:hover {
+  background: var(--hover);
 }
 .folder-body .files-grid .row.sel {
   background: var(--row-sel);
@@ -95,15 +105,26 @@
 }
 .folder-body .files-grid .row .name {
   width: 100%;
+  margin-top: auto;
+}
+.folder-body .files-grid .row .name small {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  white-space: normal;
+}
+.folder-body .files-grid.with-location .row .name small {
+  -webkit-line-clamp: 2;
 }
 .folder-body .files-grid .row .r {
   position: absolute;
-  right: 12px;
-  top: 14px;
+  right: 10px;
+  top: 12px;
+  font-size: 12px;
 }
 .folder-body .files-grid .row .acts {
-  top: auto;
-  bottom: 8px;
+  top: 6px;
+  right: 6px;
   transform: none;
 }
 
