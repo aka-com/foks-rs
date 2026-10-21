@@ -63,6 +63,16 @@ import { itemActionProblem } from './store-access';
 
 export type NewKind = Exclude<ItemKind, 'Folder'>;
 
+/**
+ * Where a completed write leaves the user: on the item it created or moved
+ * (selected, its row focused), or in the folder it created (opened). `kind`
+ * is the item's kind as the Files list files it, so the shell can tell
+ * whether the current view lists it.
+ */
+export type Landing =
+  | { type: 'item'; store: StoreRef; path: string; kind: NewKind }
+  | { type: 'folder'; store: StoreRef; path: string };
+
 /** Default item kind used when opening the new-item sheet without one. */
 export const DEFAULT_NEW_KIND: NewKind = 'Password';
 
@@ -267,6 +277,7 @@ interface NewSheetProps {
   workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'new' }>;
   setWorkflow: (workflow: WriteWorkflow) => void;
   onApplied: (message: string, profile?: string) => Promise<void>;
+  onLanded?: (landing: Landing) => void;
   onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
   accessNow: () => number;
@@ -446,6 +457,7 @@ function NewSheet({
   workflow,
   setWorkflow,
   onApplied,
+  onLanded,
   onError,
   onMutationError,
   accessNow,
@@ -684,6 +696,7 @@ function NewSheet({
         `${kindLabel(itemKind)} created in ${store.name}`,
         store.server,
       );
+      onLanded?.({ type: 'item', store: store.id, path, kind: itemKind });
     } catch (error) {
       onError(error);
     }
@@ -886,6 +899,7 @@ function NewFolderSheet({
   workflow,
   setWorkflow,
   onApplied,
+  onLanded,
   onMutationError,
   accessNow,
 }: {
@@ -894,6 +908,7 @@ function NewFolderSheet({
   workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'new-folder' }>;
   setWorkflow: (workflow: WriteWorkflow) => void;
   onApplied: (message: string, profile?: string) => Promise<void>;
+  onLanded?: (landing: Landing) => void;
   onMutationError: MutationFailureHandler;
   accessNow: () => number;
 }): ReactNode {
@@ -939,16 +954,18 @@ function NewFolderSheet({
     if (!store || !canWrite || !validName || saving) return;
     setSaving(true);
     setError(null);
+    const path = namedPath(name.trim(), '/', workflow.initialFolder);
     try {
       await bridge.createFolder({
         storeId: store.id,
-        path: namedPath(name.trim(), '/', workflow.initialFolder),
+        path,
         ...(store.kind === 'team'
           ? { readRole: DEFAULT_READ_ROLE, writeRole: DEFAULT_WRITE_ROLE }
           : {}),
       });
-      await onApplied(`Folder created in ${store.name}`, store.server);
+      await onApplied(`Created ${name.trim()} in ${store.name}`, store.server);
       close();
+      onLanded?.({ type: 'folder', store: store.id, path });
     } catch (failure) {
       setError(normalizeCommandError(failure).message);
       await onMutationError(failure, { report: false });
@@ -1126,6 +1143,7 @@ export function WriteOverlay({
   workflow,
   setWorkflow,
   onApplied,
+  onLanded,
   onError,
   onMutationError,
   onRefreshConflict,
@@ -1140,6 +1158,8 @@ export function WriteOverlay({
   workflow: WriteWorkflow;
   setWorkflow: (workflow: WriteWorkflow) => void;
   onApplied: (message: string, profile?: string) => Promise<void>;
+  /** A create or move finished: the shell lands on its result. */
+  onLanded?: (landing: Landing) => void;
   onError: (error: unknown, item?: Item) => void;
   onMutationError: MutationFailureHandler;
   /**
@@ -1176,6 +1196,7 @@ export function WriteOverlay({
         workflow={workflow}
         setWorkflow={setWorkflow}
         onApplied={onApplied}
+        onLanded={onLanded}
         onError={(error) => onError(error)}
         onMutationError={onMutationError}
         accessNow={accessNow}
@@ -1189,6 +1210,7 @@ export function WriteOverlay({
         workflow={workflow}
         setWorkflow={setWorkflow}
         onApplied={onApplied}
+        onLanded={onLanded}
         onMutationError={onMutationError}
         accessNow={accessNow}
       />
@@ -1214,6 +1236,7 @@ export function WriteOverlay({
         item={workflow.item}
         setWorkflow={setWorkflow}
         onApplied={onApplied}
+        onLanded={onLanded}
         onMutationError={onMutationError}
         accessNow={accessNow}
       />

@@ -18,6 +18,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { Icon, StoreMark } from '../components';
 import {
   catalog,
+  catalogFolders,
   displayPathComponent,
   storeAvailability,
   storeDescription,
@@ -238,9 +239,13 @@ export function FilesTree({
       return next;
     });
   const items = catalog(snapshot);
+  const folderEntries = catalogFolders(snapshot);
   const trees: StoreTree[] = storeDisplayOrder(snapshot).map((store) => ({
     store,
-    root: folderTree(items.filter((item) => item.store === store.id)),
+    root: folderTree(
+      items.filter((item) => item.store === store.id),
+      folderEntries.filter((item) => item.store === store.id),
+    ),
   }));
   const vaultTrees = trees.filter((tree) => tree.store.kind === 'account');
   const teamTrees = trees.filter((tree) => tree.store.kind === 'team');

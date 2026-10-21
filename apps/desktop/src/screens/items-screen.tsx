@@ -42,6 +42,7 @@ import { PageHeader } from '../shell/page-header';
 import {
   KINDS,
   catalog,
+  catalogFolders,
   defaultCreateStore,
   displayPathComponent,
   fmtSize,
@@ -674,6 +675,12 @@ export function ItemsScreen({
           query: '',
           location: { kind: 'all' },
         }).filter((item) => item.store === selectedStore.id),
+        // Empty folders hold nothing of a narrowed kind.
+        state.kind === 'All'
+          ? catalogFolders(snapshot).filter(
+              (item) => item.store === selectedStore.id,
+            )
+          : [],
       )
     : undefined;
   const selectedNode = selectedRoot

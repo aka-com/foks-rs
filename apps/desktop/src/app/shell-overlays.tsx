@@ -6,20 +6,31 @@ import {
   type ReactNode,
   type SetStateAction,
 } from 'react';
-import { restoreFocusIfLost, rowByKey } from '/kit/focus-keeper';
+import {
+  focusWhenRendered,
+  restoreFocusIfLost,
+  rowByKey,
+} from '/kit/focus-keeper';
 import type { ToastController } from '/kit/toasts';
 import { normalizeCommandError, type Bridge } from '../bridge';
 import type { LocationStore, Selection } from '../location';
-import { nameOf, storeOf, type AgentSnapshot } from '../model';
+import {
+  displayPathComponent,
+  nameOf,
+  storeOf,
+  type AgentSnapshot,
+} from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { NavigationPrompt } from '../navigation-guard';
 import type { DropUpload } from '../screens/items-screen';
+import { filesListShows, parentPath } from '../screens/scope';
 import {
   DEFAULT_READ_ROLE,
   DEFAULT_WRITE_ROLE,
   conflictDraftWorkflow,
   droppedFileDraft,
   WriteOverlay,
+  type Landing,
   type WriteWorkflow,
 } from '../screens/write-workflows';
 import {
@@ -139,6 +150,51 @@ export function ShellOverlays({
     handOff.current = null;
     locations.select(next);
   }, [locations, workflow]);
+  // A created or moved item becomes the selection with its row focused, as
+  // Finder leaves a renamed file; when the current view does not list it
+  // (another folder, another kind, a search it does not match) its folder
+  // opens. A created folder opens, so the next New saves into it.
+  const land = useCallback(
+    (landing: Landing) => {
+      const key = `${landing.store}|${landing.path}`;
+      if (landing.type === 'folder') {
+        locations.openFiles(key, 'All');
+        // Once the list shows the new folder: its first control (New
+        // Password in an empty folder).
+        const name = displayPathComponent(nameOf(landing.path));
+        focusWhenRendered(() =>
+          document.querySelector('.main .list-head h2')?.textContent?.trim() ===
+          name
+            ? (document.querySelector<HTMLElement>(
+                '.main .lpane .empty .btn, .main .lpane [data-row-key]',
+              ) ?? undefined)
+            : undefined,
+        );
+        return;
+      }
+      const selection = { store: landing.store, path: landing.path };
+      const state = locations.getSnapshot();
+      if (
+        filesListShows(state, {
+          ...landing,
+          storeName: storeOf(shown, landing.store)?.name,
+        })
+      )
+        locations.select(selection, { force: true });
+      else {
+        if (state.query) locations.search('');
+        locations.openFiles(
+          `${landing.store}|${parentPath(landing.path)}`,
+          'All',
+          selection,
+          // The write is acknowledged; nothing on screen has a say in this.
+          { force: true },
+        );
+      }
+      focusWhenRendered(rowByKey(key));
+    },
+    [locations, shown],
+  );
   return (
     <>
       <WriteOverlay
@@ -148,6 +204,7 @@ export function ShellOverlays({
         workflow={workflow}
         setWorkflow={setWorkflow}
         onApplied={refresh}
+        onLanded={land}
         onError={commandError}
         onMutationError={mutationError}
         onRefreshConflict={async (item, draft, operation) => {

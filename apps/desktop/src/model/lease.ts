@@ -669,6 +669,31 @@ export function catalog(snapshot: AgentSnapshot): readonly Item[] {
   return items;
 }
 
+const folderCache = new WeakMap<AgentSnapshot, readonly Item[]>();
+
+/**
+ * Returns the directory entries of readable stores: folders the catalog
+ * holds as nodes of their own, including empty ones that no item path
+ * implies. Cached and shared like `catalog`.
+ */
+export function catalogFolders(snapshot: AgentSnapshot): readonly Item[] {
+  const cache = folderCache.get(snapshot);
+  if (cache) return cache;
+  // The first record for a repeated store id decides, as in `catalog`.
+  const readable = new Set<string>();
+  const decided = new Set<string>();
+  for (const store of snapshot.stores) {
+    if (decided.has(store.id)) continue;
+    decided.add(store.id);
+    if (storeAvailability(snapshot, store).available) readable.add(store.id);
+  }
+  const folders = snapshot.items.filter(
+    (item) => item.kind === 'Folder' && readable.has(item.store),
+  );
+  folderCache.set(snapshot, folders);
+  return folders;
+}
+
 /** Returns all readable stores in navigation display order. */
 export function listableStores(snapshot: AgentSnapshot): Store[] {
   return snapshot.stores.filter((store) => storeReadable(snapshot, store.id));
