@@ -546,6 +546,7 @@ fn only_refusals_of_the_credential_or_the_view_are_server_side_retries() {
         foks_rpc::STATUS_EXPIRED_ERROR,
         foks_rpc::STATUS_WRONG_USER_ERROR,
         foks_rpc::STATUS_TEAM_BEARER_TOKEN_STALE_ERROR,
+        foks_rpc::STATUS_TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR,
         foks_rpc::STATUS_TEAM_KEY_ERROR,
         foks_rpc::STATUS_TEAM_NO_SRC_ROLE_ERROR,
     ] {

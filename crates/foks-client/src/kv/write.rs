@@ -26,7 +26,7 @@ use crate::{now_microseconds, random_bytes, Error, MutationCoordinator, Mutation
 const KV_NAMESPACE_REQUEST_HASH_TYPE_ID: u64 = 0x4303_44d4_219a_8b1e;
 const KV_ROOT_REQUEST_HASH_TYPE_ID: u64 = 0x1dca_75c8_c2dd_b868;
 
-impl KvWriteSession<'_> {
+impl<'a> KvWriteSession<'a> {
     const MAX_NAMESPACE_ATTEMPTS: usize = 3;
     pub(crate) const MAX_UPLOAD_CHUNK: usize = super::MAX_KV_UPLOAD_CHUNK;
     const MAX_UPLOAD_BYTES: u64 = super::MAX_KV_FILE_BYTES;
@@ -95,17 +95,38 @@ impl KvWriteSession<'_> {
         self.resume_namespace_mutation(operation_id)
     }
 
+    /// Allows this team session to activate one replacement view when the
+    /// server refuses its view token, replaying the refused request once.
+    /// Without it, a refusal is returned to the caller as before.
+    pub fn set_team_view_remint(&mut self, remint: super::TeamViewRemint<'a>) {
+        self.team_view_remint = Some(remint);
+    }
+
     pub fn sync(&mut self) -> Result<Vec<KvDirectoryProjection>> {
         self.scope = None;
-        let auth = self.auth.borrowed();
-        let connection = &mut self.connection;
+        // The traversal passes this value back to the fetch closure, which
+        // instead presents the session's current token, so a re-mint during
+        // the walk applies to every later request.
+        let initial = self.auth.clone();
+        let (connection, auth, remint) = (
+            &mut self.connection,
+            &mut self.auth,
+            &mut self.team_view_remint,
+        );
         self.client.list_kv_metadata_with_fetch(
             &self.host,
             self.party.clone(),
-            auth,
+            initial.borrowed(),
             &self.private_keys,
             &self.soft_database_path,
-            |auth, request| connection.call(auth, request),
+            |_, request| {
+                super::call_with_remint(
+                    |auth, request| connection.call(auth, request),
+                    auth,
+                    remint,
+                    request,
+                )
+            },
         )
     }
 
@@ -116,16 +137,27 @@ impl KvWriteSession<'_> {
     /// they read a complete traversal.
     pub fn resolve_path(&mut self, components: &[Vec<u8>]) -> Result<Vec<KvDirectoryProjection>> {
         let directories = {
-            let auth = self.auth.borrowed();
-            let connection = &mut self.connection;
+            let initial = self.auth.clone();
+            let (connection, auth, remint) = (
+                &mut self.connection,
+                &mut self.auth,
+                &mut self.team_view_remint,
+            );
             self.client.resolve_kv_path_with_fetch(
                 &self.host,
                 self.party.clone(),
-                auth,
+                initial.borrowed(),
                 &self.private_keys,
                 &self.soft_database_path,
                 components,
-                |auth, request| connection.call(auth, request),
+                |_, request| {
+                    super::call_with_remint(
+                        |auth, request| connection.call(auth, request),
+                        auth,
+                        remint,
+                        request,
+                    )
+                },
             )?
         };
         self.scope = Some(KvPathScope {
@@ -1097,7 +1129,13 @@ impl KvWriteSession<'_> {
     }
 
     pub(super) fn call(&mut self, request: KvRequest) -> Result<Vec<u8>> {
-        self.connection.call(self.auth.borrowed(), &request)
+        let connection = &mut self.connection;
+        super::call_with_remint(
+            |auth, request| connection.call(auth, request),
+            &mut self.auth,
+            &mut self.team_view_remint,
+            &request,
+        )
     }
 
     pub(super) fn current_content_key(

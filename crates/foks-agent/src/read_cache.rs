@@ -636,12 +636,15 @@ pub(crate) fn error_rejects_retained_material(error: &(dyn std::error::Error + '
 }
 
 /// The server refusals a superseded credential, PUK generation or view token
-/// produces. Every other status is the read's own answer.
+/// produces. Every other status is the read's own answer. A view token the
+/// server no longer holds is `TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR` from go-foks
+/// after v0.1.9 and from this repository's server; earlier servers answered
+/// `EXPIRED_ERROR` or `TEAM_BEARER_TOKEN_STALE_ERROR`.
 fn status_rejects_material(code: u64) -> bool {
     use foks_rpc::{
         STATUS_EXPIRED_ERROR, STATUS_KEY_NOT_FOUND_ERROR, STATUS_PERMISSION_ERROR,
         STATUS_TEAM_BEARER_TOKEN_STALE_ERROR, STATUS_TEAM_KEY_ERROR, STATUS_TEAM_NO_SRC_ROLE_ERROR,
-        STATUS_WRONG_USER_ERROR,
+        STATUS_TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR, STATUS_WRONG_USER_ERROR,
     };
     matches!(
         code,
@@ -650,6 +653,7 @@ fn status_rejects_material(code: u64) -> bool {
             | STATUS_EXPIRED_ERROR
             | STATUS_WRONG_USER_ERROR
             | STATUS_TEAM_BEARER_TOKEN_STALE_ERROR
+            | STATUS_TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR
             | STATUS_TEAM_KEY_ERROR
             | STATUS_TEAM_NO_SRC_ROLE_ERROR
     )
