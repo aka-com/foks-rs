@@ -140,17 +140,21 @@ interface CrumbSegment {
   onClick?: () => void;
 }
 
-/** Computes the scope badge label for the search input based on the active location (e.g. current folder in Files, active channel in Chat, or tab name). */
+/**
+ * What the list bar's search field filters, for its accessible name: the
+ * folder in Files, the tab's name elsewhere. In Chat the field filters the
+ * column's teams and channels, never the open channel, so it is "channels",
+ * as its placeholder says.
+ */
 export function scopeLabel(
   location: Location,
   snapshot?: AgentSnapshot,
   folder = '',
-  channelName?: string,
 ): string {
   const tab = railTabOf(location);
   if (!tab) return '';
   if (tab !== 'files') {
-    if (tab === 'chat' && channelName) return `#${channelName}`;
+    if (tab === 'chat') return 'channels';
     return TAB_LABEL[tab];
   }
   const labels = filesFolderCrumb(snapshot, location, folder).labels;
@@ -352,7 +356,7 @@ export function Topbar({
     onNavigate,
     onSetFolder,
   );
-  const scope = scopeLabel(location, snapshot, folder, channelName);
+  const scope = scopeLabel(location, snapshot, folder);
   // Only the views that filter accept a query; the rest draw no field.
   const noChatTeams = tab === 'chat' && chatTeamCount === 0;
   const searchable = Boolean(onQuery) && !blocked && !noChatTeams;

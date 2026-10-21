@@ -18,9 +18,10 @@ import { CollectionStatus } from '../components/collection-status';
 
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Icon, MenuItem, SectionLabel } from '../components';
+import { Icon, MenuItem, SectionLabel, useListbox } from '../components';
 import { ContextMenu, Menu } from '/kit/overlay-primitives';
 import { useChannelCreation } from '../chat/channel-creation-provider';
+import { keepFocusOnNextChannelVisit } from '../chat/use-composer-autofocus';
 import {
   chatAvailable,
   partiesOf,
@@ -750,6 +751,33 @@ function TeamHeading({
   // the reason: loading, locked, or unavailable.
   const foldable = channels.length > 0 || empty || row.failed;
   const open = activeChannel !== undefined || row.store.id === selected;
+  // The team's channels are one listbox: one Tab stop, the arrows, Home, End
+  // and type-select move through them and open the channel reached. The
+  // "No channels" row of an empty team is its one option.
+  const NO_CHANNELS = '';
+  const optionKeys = empty
+    ? [NO_CHANNELS]
+    : channels.map(({ channel }) => channel.id);
+  const channelList = useListbox<HTMLDivElement>({
+    keys: optionKeys,
+    selectedKey: empty
+      ? open
+        ? NO_CHANNELS
+        : null
+      : activeChannel !== undefined && optionKeys.includes(activeChannel)
+        ? activeChannel
+        : null,
+    onMove: (key) => {
+      if (key === (activeChannel ?? (open ? NO_CHANNELS : undefined))) return;
+      keepFocusOnNextChannelVisit();
+      if (key === NO_CHANNELS) onOpen(row.store.id);
+      else onOpen(row.store.id, key);
+    },
+    labelOf: (key) => {
+      const found = channels.find(({ channel }) => channel.id === key);
+      return found ? channelLabel(found.channel) : 'No channels';
+    },
+  });
   return (
     <div
       className={collapsed ? 'chat-team collapsed' : 'chat-team'}
@@ -878,97 +906,112 @@ function TeamHeading({
               )}
             </div>
           )}
-          {empty && (
-            <button
-              type="button"
-              className={
-                open
-                  ? 'chat-channel no-channels on'
-                  : 'chat-channel no-channels'
-              }
-              aria-label={`No channels in ${row.store.name}`}
-              aria-current={open ? 'page' : undefined}
-              onClick={() => onOpen(row.store.id)}
+          {optionKeys.length > 0 && (
+            <div
+              {...channelList.listProps}
+              className="chat-channel-options"
+              aria-label={`${row.store.name} channels`}
             >
-              <span className="t">
-                <span className="n">No channels</span>
-              </span>
-            </button>
-          )}
-          {channels.map((listedChannel) => {
-            const { channel, conversation } = listedChannel;
-            const active = channel.id === activeChannel;
-            const count = channelCount(listedChannel);
-            const meta = channelMeta(listedChannel, row.entry?.blockedChannels);
-            // A channel row is its name. The one thing it adds is why it is
-            // quiet — restricted, hidden, muted, stopped — or, for the lone
-            // general channel of a team that has never been used, that nothing
-            // has been said in it yet.
-            const preview = conversation?.preview;
-            const caption =
-              meta ||
-              (listedChannel === lone && !preview ? 'No messages yet' : '');
-            return (
-              <button
-                type="button"
-                key={channel.id}
-                data-chat-channel={channel.id}
-                className={[
-                  'chat-channel',
-                  active ? 'on' : '',
-                  count ? 'unread' : '',
-                  conversation?.hidden ? 'hidden' : '',
-                  // Muted is drawn the way hidden is: the caption beside the
-                  // name already says so, and the row reads at that volume.
-                  conversation?.muted ? 'muted' : '',
-                  row.reachable ? '' : 'off',
-                ]
-                  .filter(Boolean)
-                  .join(' ')}
-                aria-current={active ? 'page' : undefined}
-                // The "#" is drawn as its own faint glyph, so the row states
-                // its own name rather than leaving a reader to assemble
-                // "#" and "general" out of two elements.
-                aria-label={
-                  caption
-                    ? `${channelTitle(channel)} · ${caption}`
-                    : channelTitle(channel)
-                }
-                // A channel of an unreachable team opens the locked pane, which
-                // states the reason. Disabling it would be the one row in the
-                // column that answers nothing: the team's own row is clickable
-                // and lands in the same place.
-                onClick={() => onOpen(row.store.id, channel.id)}
-              >
-                <span className="hash" aria-hidden="true">
-                  #
-                </span>
-                <span className="t">
-                  <span className="n">{channelLabel(channel)}</span>
-                  {caption && <small> · {caption}</small>}
-                </span>
-                {channel.admin && (
-                  <span
-                    className="lock"
-                    title="Admins and owners only"
-                    aria-label="Admins and owners only"
-                  >
-                    <Icon name="key" size={13} />
+              {empty && (
+                <button
+                  type="button"
+                  {...channelList.optionProps(NO_CHANNELS)}
+                  className={
+                    open
+                      ? 'chat-channel no-channels on'
+                      : 'chat-channel no-channels'
+                  }
+                  aria-label={`No channels in ${row.store.name}`}
+                  aria-current={open ? 'page' : undefined}
+                  onClick={() => onOpen(row.store.id)}
+                >
+                  <span className="t">
+                    <span className="n">No channels</span>
                   </span>
-                )}
-                {count && row.reachable && (
-                  <span
-                    className={
-                      conversation?.muted ? 'chat-unread muted' : 'chat-unread'
+                </button>
+              )}
+              {channels.map((listedChannel) => {
+                const { channel, conversation } = listedChannel;
+                const active = channel.id === activeChannel;
+                const count = channelCount(listedChannel);
+                const meta = channelMeta(
+                  listedChannel,
+                  row.entry?.blockedChannels,
+                );
+                // A channel row is its name. The one thing it adds is why it is
+                // quiet — restricted, hidden, muted, stopped — or, for the lone
+                // general channel of a team that has never been used, that nothing
+                // has been said in it yet.
+                const preview = conversation?.preview;
+                const caption =
+                  meta ||
+                  (listedChannel === lone && !preview ? 'No messages yet' : '');
+                return (
+                  <button
+                    type="button"
+                    key={channel.id}
+                    {...channelList.optionProps(channel.id)}
+                    data-chat-channel={channel.id}
+                    className={[
+                      'chat-channel',
+                      active ? 'on' : '',
+                      count ? 'unread' : '',
+                      conversation?.hidden ? 'hidden' : '',
+                      // Muted is drawn the way hidden is: the caption beside the
+                      // name already says so, and the row reads at that volume.
+                      conversation?.muted ? 'muted' : '',
+                      row.reachable ? '' : 'off',
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
+                    aria-current={active ? 'page' : undefined}
+                    // The "#" is drawn as its own faint glyph, so the row states
+                    // its own name rather than leaving a reader to assemble
+                    // "#" and "general" out of two elements.
+                    aria-label={
+                      caption
+                        ? `${channelTitle(channel)} · ${caption}`
+                        : channelTitle(channel)
                     }
-                    aria-label={`${count} unread`}
+                    // A channel of an unreachable team opens the locked pane, which
+                    // states the reason. Disabling it would be the one row in the
+                    // column that answers nothing: the team's own row is clickable
+                    // and lands in the same place.
+                    onClick={() => onOpen(row.store.id, channel.id)}
                   >
-                    {count}
-                  </span>
-                )}
-              </button>
-            );
-          })}
+                    <span className="hash" aria-hidden="true">
+                      #
+                    </span>
+                    <span className="t">
+                      <span className="n">{channelLabel(channel)}</span>
+                      {caption && <small> · {caption}</small>}
+                    </span>
+                    {channel.admin && (
+                      <span
+                        className="lock"
+                        title="Admins and owners only"
+                        aria-label="Admins and owners only"
+                      >
+                        <Icon name="key" size={13} />
+                      </span>
+                    )}
+                    {count && row.reachable && (
+                      <span
+                        className={
+                          conversation?.muted
+                            ? 'chat-unread muted'
+                            : 'chat-unread'
+                        }
+                        aria-label={`${count} unread`}
+                      >
+                        {count}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>

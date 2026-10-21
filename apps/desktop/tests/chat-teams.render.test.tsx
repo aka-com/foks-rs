@@ -940,7 +940,7 @@ test('New chat creates a channel, refusing a name the agent would refuse', async
   await ui.waitFor(() => assert.equal(name.classList.contains('over'), false));
   assert.equal(ui.screen.queryByText('Created as #design.'), null);
   ui.fireEvent.click(create());
-  await ui.screen.findByRole('button', { name: /#design/ });
+  await ui.screen.findByRole('option', { name: /#design/ });
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
   assert.deepEqual(journal.at(-1), {
     kind: 'chat',
@@ -1100,6 +1100,59 @@ test('muted and hidden conversations stay listed and say what they are', async (
   assert.ok(badge?.classList.contains('muted'));
 });
 
+test('a team channel list is one listbox the arrows move through, opening each channel', async () => {
+  const snapshot = await snapshotWithChat(['personal', 'acme']);
+  const incidents = '22'.repeat(16);
+  const journal = await mount(
+    snapshot,
+    { kind: 'chat', ref: 'team:household', channel: incidents },
+    (base) =>
+      withChannels(base, 'team:household', [
+        { id: '11'.repeat(16), name: 'chores' },
+        { id: incidents, name: 'incidents' },
+      ]),
+  );
+  const listbox = await ui.screen.findByRole('listbox', {
+    name: 'Household channels',
+  });
+  await ui.waitFor(() =>
+    assert.equal(
+      channelRow('#incidents').getAttribute('aria-selected'),
+      'true',
+    ),
+  );
+  const options = ui.within(listbox).getAllByRole('option');
+  // One Tab stop, on the open channel.
+  assert.deepEqual(
+    options.map((option) => option.tabIndex),
+    options.map((option) => (option === channelRow('#incidents') ? 0 : -1)),
+  );
+  channelRow('#incidents').focus();
+  ui.fireEvent.keyDown(channelRow('#incidents'), { key: 'Home' });
+  const first = options[0];
+  const firstChannel = first.getAttribute('data-chat-channel');
+  assert.ok(firstChannel);
+  assert.deepEqual(journal.at(-1), {
+    kind: 'chat',
+    ref: 'team:household',
+    channel: firstChannel,
+  });
+  ui.fireEvent.keyDown(first, { key: 'End' });
+  assert.deepEqual(journal.at(-1), {
+    kind: 'chat',
+    ref: 'team:household',
+    channel: incidents,
+  }); // The column's field filters teams and channels, whichever is open, and
+  // is named for that rather than for the open channel.
+  const { scopeLabel } = (await vite.ssrLoadModule(
+    '/src/shell/topbar.tsx',
+  )) as typeof import('../src/shell/topbar');
+  assert.equal(
+    scopeLabel({ kind: 'chat', ref: 'team:household', channel: incidents }),
+    'channels',
+  );
+});
+
 test('a conversation opened into a heading team marks the channel row it mounts', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   const incidents = '22'.repeat(16);
@@ -1231,7 +1284,7 @@ test('an interrupted attempt recovers the same preparation rather than a second'
   await ui.screen.findByText('The reply was lost.');
   await ui.screen.findByText(/check the saved creation later/);
   ui.fireEvent.click(recover);
-  await ui.screen.findByRole('button', { name: /#design/ });
+  await ui.screen.findByRole('option', { name: /#design/ });
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
   // One submission, one operation, attempted twice: the channel the reader
   // gets is the one that was prepared, not a second one beside it.
@@ -1858,7 +1911,7 @@ test('a channel created before its synchronization lands reads as loading', asyn
     null,
   );
   release();
-  await ui.screen.findByRole('button', { name: /#design/ });
+  await ui.screen.findByRole('option', { name: /#design/ });
 });
 
 test('a team inbox stays channel-less until a conversation is selected', async () => {
@@ -1966,13 +2019,13 @@ test('an empty team folds normally and exposes No channels inside its expanded l
   assert.ok(list);
   const empty = ui
     .within(list)
-    .getByRole('button', { name: 'No channels in Household' });
+    .getByRole('option', { name: 'No channels in Household' });
   assert.ok(empty.classList.contains('chat-channel'));
   assert.equal(empty.textContent, 'No channels');
   const navigations = journal.length;
   ui.fireEvent.click(toggle);
   assert.equal(
-    ui.screen.queryByRole('button', { name: 'No channels in Household' }),
+    ui.screen.queryByRole('option', { name: 'No channels in Household' }),
     null,
   );
   const expand = ui.screen.getByRole('button', { name: 'Expand Household' });
@@ -1980,14 +2033,14 @@ test('an empty team folds normally and exposes No channels inside its expanded l
   assert.equal(journal.length, navigations);
   ui.fireEvent.click(expand);
   ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'No channels in Household' }),
+    ui.screen.getByRole('option', { name: 'No channels in Household' }),
   );
   await ui.screen.findByRole('heading', { name: 'No conversations yet' });
   assert.deepEqual(journal.at(-1), { kind: 'chat', ref: 'team:household' });
   assert.equal(head('Household').getAttribute('aria-current'), null);
   assert.equal(
     ui.screen
-      .getByRole('button', { name: 'No channels in Household' })
+      .getByRole('option', { name: 'No channels in Household' })
       .getAttribute('aria-current'),
     'page',
   );

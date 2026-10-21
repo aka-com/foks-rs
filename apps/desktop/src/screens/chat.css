@@ -192,9 +192,13 @@
   font-size: 12px;
   color: var(--muted);
 }
-.chat-channel-list {
+.chat-channel-list,
+.chat-channel-options {
   display: flex;
   flex-direction: column;
+}
+
+.chat-channel-list {
   margin-top: 1px;
   padding: 0 0 2px;
 }
