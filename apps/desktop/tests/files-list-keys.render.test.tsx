@@ -286,3 +286,21 @@ test('⌘⌫ on an item the account may not delete shows the reason instead of t
   await ui.waitFor(() => assert.ok(document.querySelector('.toast')));
   assert.equal(ui.screen.queryByRole('alertdialog'), null);
 });
+
+test('Team Info opens in the details column beside the list', async () => {
+  await mount({ kind: 'store', ref: 'team:household' });
+  const section = listbox().querySelector<HTMLElement>('.folder-sec');
+  assert.ok(section);
+  ui.fireEvent.contextMenu(section);
+  ui.fireEvent.click(
+    await ui.screen.findByRole('menuitem', { name: 'Team Info' }),
+  );
+  const panel = await ui.screen.findByRole('complementary', {
+    name: 'Team info',
+  });
+  // It takes the details column: the list keeps its width and no empty
+  // details column is drawn beside it.
+  assert.ok(panel.classList.contains('details'));
+  assert.ok(document.querySelector('.app.with-details'));
+  assert.equal(document.querySelector('.details-empty'), null);
+});

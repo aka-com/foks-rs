@@ -698,6 +698,7 @@ export function VaultShell({
           'app',
           detailsShown ||
           splitEmpty ||
+          teamInfoShown ||
           here.kind === 'activity' ||
           here.kind === 'devices' ||
           (here.kind === 'first-run' && here.step === 'added')
