@@ -95,7 +95,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side .fn>.twist:hover:not(:disabled){background:var(--hover-2);color:var(--ink)}
 .side .fn>.twist .ic{font-size:12px;transition:transform .12s ease}
 .side .fn>.twist.open .ic{transform:rotate(90deg)}
-.side .fn>.nav:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.side .nav:focus-visible,.side .who:focus-visible,.tbtn:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 /* Row indicators: counts are plain muted numbers; state lives in dots. */
 .nav-tail.count{font-size:12px;font-weight:var(--weight-label);color:var(--side-muted);font-variant-numeric:tabular-nums}
 .nav-tail.count.warn{color:var(--amber-strong)}

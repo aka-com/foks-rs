@@ -349,6 +349,9 @@
     --line-field: rgba(16, 20, 32, 0.55);
     --mark-ink-mix: 70%;
     --mark-ink-base: var(--ink);
+    /* The quiet selection stays grey, but distinct from the surface. */
+    --row-sel: #dadde3;
+    --side-sel: rgba(16, 20, 32, 0.13);
   }
   :root[data-theme='dark'] {
     --line: rgba(255, 255, 255, 0.2);
@@ -365,6 +368,8 @@
     --btn-border: rgba(255, 255, 255, 0.45);
     --line-field: rgba(255, 255, 255, 0.5);
     --mark-ink-mix: 80%;
+    --row-sel: #2c2e33;
+    --side-sel: rgba(255, 255, 255, 0.12);
   }
 }
 
