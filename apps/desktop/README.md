@@ -515,10 +515,22 @@ every team with chat, beside the open conversation; the tab with no
 conversation chosen opens the most recent one, and says how chat gets turned on
 when no team has any. Files opens on All Items: every item across all stores as two-line rows (the
 name over the store and folder, the size at the trailing edge), sorted from the
-list bar's view menu. Selecting a store or folder in the sidebar lists its
-subfolders and then its own items under a head naming it, with the folders
-above it as a crumb and, for a team, Manage…; the second line then gives the
-kind and version. Search runs over the sidebar's selection. Teams lists the groups and
+list bar's view menu, whose Show group also narrows whatever store or folder
+is open to Passwords or Documents (the list head names an active filter and
+clears it). Selecting a folder in the sidebar lists its subfolders and then
+its own items under a head naming it, with the folders above it as a crumb;
+a store's root lists its own items, then a section per first-level folder
+(its label opens the folder) holding that folder's subfolders and items, and,
+for a team, Manage…. The second line then gives the kind and version. The
+list is a listbox: one Tab stop, Up/Down/Home/End and typing a name move the
+selection, Return or ⌘↓ opens a folder row, ⌘↑ goes up, and the rows' hover
+actions are pointer shortcuts that the context menu repeats. Clicking the
+list's empty space or pressing Escape in the details clears the selection
+(guarded, so unsaved edits ask first); the bars, menus and sidebar leave it
+alone. A store that cannot be opened keeps this layout: its head with a lock
+for a lapsed check-in, the access notice where the rows would be, and No
+Selection beside it. Team Info opens in the details column. Search runs over
+the sidebar's selection. Teams lists the groups and
 shares — the group mark, name, server, the roster summary the per-group
 `list_group_details` call loaded on the last refresh, the role this Mac's
 account holds and a chip for an abnormal state — and the row itself is the
