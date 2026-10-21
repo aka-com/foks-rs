@@ -41,6 +41,7 @@ import {
   Tabs,
   tabId,
   tabPanelId,
+  useRadioGroupKeys,
 } from '../components';
 import {
   SETTINGS_SECTIONS,
@@ -285,6 +286,7 @@ function PreferencesSection(): ReactNode {
 function RailColorPicker(): ReactNode {
   const appearance = useAppearance();
   const [color, setColor] = useState(storedRailColor);
+  const swatchKeys = useRadioGroupKeys<HTMLDivElement>();
   const choose = (id: string): void => {
     setColor(id);
     applyRailColor(id);
@@ -316,7 +318,13 @@ function RailColorPicker(): ReactNode {
         </div>
       </InsetRow>
       <InsetRow label="Accent color">
-        <div className="swatches" role="radiogroup" aria-label="Accent color">
+        <div
+          ref={swatchKeys.ref}
+          onKeyDown={swatchKeys.onKeyDown}
+          className="swatches"
+          role="radiogroup"
+          aria-label="Accent color"
+        >
           {RAIL_COLORS.map((entry) => (
             <button
               key={entry.id}
@@ -328,10 +336,7 @@ function RailColorPicker(): ReactNode {
               title={entry.label}
               onClick={() => choose(entry.id)}
             >
-              <i
-                style={{ background: entry.fill }}
-                aria-hidden="true"
-              />
+              <i style={{ background: entry.fill }} aria-hidden="true" />
               <span>{entry.label}</span>
             </button>
           ))}
