@@ -27,6 +27,8 @@ export interface SheetProps {
    * It names the position only — "Step 1 of 2" — and never restates the step.
    */
   step?: ReactNode;
+  /** One muted line under the title: where the sheet saves, what it acts on. */
+  subtitle?: ReactNode;
   width?: SheetWidth;
   /** The controls along the bottom. Primary action last, as the design sets. */
   footer?: ReactNode;
@@ -42,6 +44,7 @@ export function Sheet({
   glyph,
   title,
   step,
+  subtitle,
   width = 'base',
   footer,
   titleId,
@@ -54,6 +57,9 @@ export function Sheet({
         {glyph}
         <span className="t">
           <h2 id={titleId}>{title}</h2>
+          {subtitle === undefined ? null : (
+            <span className="sub">{subtitle}</span>
+          )}
           {step === undefined ? null : <span className="step">{step}</span>}
         </span>
       </div>

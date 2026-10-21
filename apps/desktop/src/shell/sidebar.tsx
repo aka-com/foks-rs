@@ -435,96 +435,103 @@ export function AccountHeader({
             onClose={close}
             aria-label="Accounts on this device"
           >
-            {servers.map((serverId) => (
-              <div key={serverId}>
-                {accounts
-                  .filter((store) => store.server === serverId)
-                  .map((store) => {
-                    const state = storeDescriptionState(snapshot, store);
-                    const stopped = !storeAvailability(snapshot, store)
-                      .available;
-                    const checkIn =
-                      state === 'check-in-expired' ||
-                      state === 'check-in-unavailable';
-                    return (
-                      <div key={store.id}>
-                        <button
-                          type="button"
-                          className={[
-                            'acct',
-                            store.id === active?.id ? 'on' : '',
-                            stopped ? 'off' : '',
-                          ]
-                            .filter(Boolean)
-                            .join(' ')}
-                          title={
-                            stopped
-                              ? storeDescription(snapshot, store)
-                              : usernameOf(store)
-                          }
-                          onClick={() => {
-                            close();
-                            selectAccount(store);
-                          }}
-                        >
-                          <AccountMark name={usernameOf(store)} />
-                          <span className="t">
-                            {usernameOf(store)}
-                            <small>
-                              {localAliasOf(snapshot, store)} ·{' '}
-                              {serverDisplayLabelOrLoading(
-                                snapshot.servers.find(
-                                  (entry) => entry.profileName === serverId,
-                                ),
-                              )}
-                            </small>
-                          </span>
-                          <span
-                            className={
-                              store.id === active?.id ? 'tick' : 'tick off'
+            {servers.map((serverId) => {
+              const serverLabel = serverDisplayLabelOrLoading(
+                snapshot.servers.find(
+                  (entry) => entry.profileName === serverId,
+                ),
+              );
+              return (
+                <div key={serverId} role="group" aria-label={serverLabel}>
+                  {/* The server the accounts below live on, as a group header. */}
+                  <div className="mh" aria-hidden="true">
+                    <Icon name="server" />
+                    {serverLabel}
+                  </div>
+                  {accounts
+                    .filter((store) => store.server === serverId)
+                    .map((store) => {
+                      const state = storeDescriptionState(snapshot, store);
+                      const stopped = !storeAvailability(snapshot, store)
+                        .available;
+                      const checkIn =
+                        state === 'check-in-expired' ||
+                        state === 'check-in-unavailable';
+                      return (
+                        <div key={store.id}>
+                          <button
+                            type="button"
+                            className={[
+                              'acct',
+                              store.id === active?.id ? 'on' : '',
+                              stopped ? 'off' : '',
+                            ]
+                              .filter(Boolean)
+                              .join(' ')}
+                            title={
+                              stopped
+                                ? storeDescription(snapshot, store)
+                                : usernameOf(store)
                             }
-                            aria-label={
-                              store.id === active?.id
-                                ? 'Current account'
-                                : undefined
-                            }
+                            onClick={() => {
+                              close();
+                              selectAccount(store);
+                            }}
                           >
-                            <Icon name="check" />
-                          </span>
-                        </button>
-                        {stopped ? (
-                          <div className="warnline">
-                            <Icon name="alert" />
-                            {/* Place the recovery action after the explanation.
+                            {/* The current account's tick leads its row. */}
+                            <span
+                              className={
+                                store.id === active?.id ? 'tick' : 'tick off'
+                              }
+                              aria-label={
+                                store.id === active?.id
+                                  ? 'Current account'
+                                  : undefined
+                              }
+                            >
+                              <Icon name="check" />
+                            </span>
+                            <span className="t">
+                              {usernameOf(store)}
+                              <small>
+                                {localAliasOf(snapshot, store)} · {serverLabel}
+                              </small>
+                            </span>
+                          </button>
+                          {stopped ? (
+                            <div className="warnline">
+                              <Icon name="alert" />
+                              {/* Place the recovery action after the explanation.
                                 A separate flex column leaves insufficient room
                                 for the reason at this width. */}
-                            <span className="t">
-                              {checkIn
-                                ? 'Stores are locked until you check this server.'
-                                : storeDescription(snapshot, store)}{' '}
-                              <button
-                                type="button"
-                                className="lnk"
-                                onClick={() => {
-                                  close();
-                                  onNavigate({
-                                    kind: 'settings',
-                                    section: 'account',
-                                    profile: store.server,
-                                    store: store.id,
-                                  });
-                                }}
-                              >
-                                {checkIn ? 'Check in' : 'Settings'}
-                              </button>
-                            </span>
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-              </div>
-            ))}
+                              <span className="t">
+                                {checkIn
+                                  ? 'Stores are locked until you check this server.'
+                                  : storeDescription(snapshot, store)}{' '}
+                                <button
+                                  type="button"
+                                  className="lnk"
+                                  onClick={() => {
+                                    close();
+                                    onNavigate({
+                                      kind: 'settings',
+                                      section: 'account',
+                                      profile: store.server,
+                                      store: store.id,
+                                    });
+                                  }}
+                                >
+                                  {checkIn ? 'Check in' : 'Settings'}
+                                </button>
+                              </span>
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                </div>
+              );
+            })}
             <div className="menu-separator" role="separator" />
             <button
               type="button"
@@ -535,7 +542,7 @@ export function AccountHeader({
               }}
             >
               <Icon name="plus" />
-              Add account or server…
+              Add Account or Server…
             </button>
             {onLock ? (
               <button
@@ -545,7 +552,7 @@ export function AccountHeader({
                   onLock();
                 }}
               >
-                <Icon name="shield" />
+                <Icon name="lock" />
                 Lock
               </button>
             ) : null}

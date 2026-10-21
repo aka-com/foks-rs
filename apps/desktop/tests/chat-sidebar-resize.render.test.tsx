@@ -94,21 +94,21 @@ function pointer(handle: HTMLElement, type: string, x: number, id = 1) {
 test('keyboard resizing persists independently of the main sidebar and restores on remount', () => {
   window.localStorage.setItem('sidebarWidth', '200');
   const { view, handle } = mount();
-  assert.equal(width(handle), 264);
+  assert.equal(width(handle), 300);
   assert.ok(document.getElementById(handle.getAttribute('aria-controls')!));
   ui.fireEvent.keyDown(handle, { key: 'ArrowRight' });
-  assert.equal(width(handle), 272);
+  assert.equal(width(handle), 308);
   assert.equal(
     document
       .querySelector<HTMLElement>('.chat-screen')
       ?.style.getPropertyValue('--chat-inbox-w'),
-    '272px',
+    '308px',
   );
-  assert.equal(window.localStorage.getItem('chatSidebarWidth'), '272');
+  assert.equal(window.localStorage.getItem('chatSidebarWidth'), '308');
   assert.equal(window.localStorage.getItem('sidebarWidth'), '200');
   view.unmount();
   const next = mount();
-  assert.equal(width(next.handle), 272);
+  assert.equal(width(next.handle), 308);
   ui.fireEvent.keyDown(next.handle, { key: 'Home' });
   assert.equal(width(next.handle), 180);
   ui.fireEvent.keyDown(next.handle, { key: 'End' });
@@ -119,9 +119,9 @@ test('keyboard resizing persists independently of the main sidebar and restores 
 
 test('drag commits only on release and cancelled drags restore the previous width', () => {
   const { handle } = mount();
-  pointer(handle, 'pointerdown', 264);
+  pointer(handle, 'pointerdown', 300);
   pointer(handle, 'pointermove', 320, 2);
-  assert.equal(width(handle), 264, 'another pointer cannot move the sidebar');
+  assert.equal(width(handle), 300, 'another pointer cannot move the sidebar');
   pointer(handle, 'pointermove', 320);
   assert.equal(width(handle), 320);
   assert.equal(window.localStorage.getItem('chatSidebarWidth'), null);
@@ -166,20 +166,20 @@ test('narrowing the window preserves the saved preference and reset restores res
   });
   assert.equal(width(handle), 400);
   ui.fireEvent.doubleClick(handle);
-  assert.equal(width(handle), 264);
+  assert.equal(width(handle), 300);
   assert.equal(window.localStorage.getItem('chatSidebarWidth'), null);
   ui.act(() => {
     frameWidth = 700;
     resized?.();
   });
-  assert.equal(width(handle), 220);
+  assert.equal(width(handle), 260);
 });
 
 test('invalid saved preferences fall back and out-of-range values are bounded', () => {
   for (const [stored, expected] of [
-    ['garbage', 264],
-    ['Infinity', 264],
-    ['-10', 264],
+    ['garbage', 300],
+    ['Infinity', 300],
+    ['-10', 300],
     ['9999', 420],
     ['1', 180],
   ] as const) {
@@ -192,8 +192,8 @@ test('invalid saved preferences fall back and out-of-range values are bounded', 
 
 test('unmounting during a drag restores body styles and disconnects observation', () => {
   const { view, handle } = mount();
-  pointer(handle, 'pointerdown', 264);
-  pointer(handle, 'pointermove', 300);
+  pointer(handle, 'pointerdown', 300);
+  pointer(handle, 'pointermove', 336);
   view.unmount();
   assert.equal(document.body.style.cursor, '');
   assert.equal(document.body.style.userSelect, '');
@@ -212,11 +212,11 @@ test('storage failure leaves resizing usable', () => {
           throw new Error('unavailable');
         };
     const { handle } = mount();
-    assert.equal(width(handle), 264);
+    assert.equal(width(handle), 300);
     ui.fireEvent.keyDown(handle, { key: 'ArrowLeft' });
-    assert.equal(width(handle), 256);
+    assert.equal(width(handle), 292);
     ui.fireEvent.doubleClick(handle);
-    assert.equal(width(handle), 264);
+    assert.equal(width(handle), 300);
   } finally {
     Object.defineProperties(storage, descriptors);
   }

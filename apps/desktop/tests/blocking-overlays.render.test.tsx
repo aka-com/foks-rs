@@ -969,11 +969,10 @@ test('agent loss preserves a new password draft through retry', async () => {
   ui.fireEvent.change(username, { target: { value: 'draft-user' } });
   ui.fireEvent.change(password, { target: { value: 'draft-password' } });
   ui.fireEvent.change(website, { target: { value: 'https://draft.example' } });
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Path' }));
   const path = rendered.getByLabelText('Path') as HTMLInputElement;
   ui.fireEvent.change(path, { target: { value: '/logins/preserved' } });
   site.focus();
-  const sheet = document.querySelector('[aria-label="New password"]');
+  const sheet = document.querySelector('[aria-label="New Password"]');
   const app = document.querySelector<HTMLElement>('.app');
   assert.ok(sheet);
   assert.ok(app);
@@ -985,7 +984,7 @@ test('agent loss preserves a new password draft through retry', async () => {
   const blocker = await rendered.findByRole('alertdialog', {
     name: 'Connection to background service lost',
   });
-  assert.equal(document.querySelector('[aria-label="New password"]'), sheet);
+  assert.equal(document.querySelector('[aria-label="New Password"]'), sheet);
   assert.equal(rendered.getByLabelText('Site'), site);
   assert.deepEqual(
     [site.value, username.value, password.value, website.value, path.value],
@@ -1017,7 +1016,7 @@ test('agent loss preserves a new password draft through retry', async () => {
     await Promise.resolve();
   });
   assert.equal(document.querySelector('.stopwrap'), null);
-  assert.equal(document.querySelector('[aria-label="New password"]'), sheet);
+  assert.equal(document.querySelector('[aria-label="New Password"]'), sheet);
   assert.equal(rendered.getByLabelText('Site'), site);
   assert.deepEqual(
     [site.value, username.value, password.value, website.value, path.value],
@@ -1046,7 +1045,7 @@ test('agent loss preserves a new password draft through retry', async () => {
     await Promise.resolve();
   });
   await ui.waitFor(() =>
-    assert.equal(document.querySelector('[aria-label="New password"]'), null),
+    assert.equal(document.querySelector('[aria-label="New Password"]'), null),
   );
   assert.equal(document.querySelector('.app'), app);
   assert.equal(app.inert, false);
@@ -1253,7 +1252,7 @@ test('takeover transitions restore focus without releasing retained isolation', 
   };
   const rendered = ui.render(createElement(App, { bridge }));
   const input = await rendered.findByLabelText('Site');
-  const sheet = input.closest<HTMLElement>('[aria-label="New password"]');
+  const sheet = input.closest<HTMLElement>('[aria-label="New Password"]');
   assert.ok(sheet);
   await ui.act(async () => {
     connectionLoss.resolve('The agent socket closed.');
@@ -1339,10 +1338,10 @@ test('command-only agent loss preserves the active write workflow', async () => 
   const rendered = ui.render(createElement(App, { bridge }));
   const site = (await rendered.findByLabelText('Site')) as HTMLInputElement;
   ui.fireEvent.change(site, { target: { value: 'command.example' } });
-  const sheet = document.querySelector('[aria-label="New password"]');
+  const sheet = document.querySelector('[aria-label="New Password"]');
   assert.ok(sheet);
   await ui.act(async () => {
-    rendered.getByRole('button', { name: 'Create item' }).click();
+    rendered.getByRole('button', { name: 'Create' }).click();
     await Promise.resolve();
   });
   await rendered.findByRole('alertdialog', {
@@ -1353,7 +1352,7 @@ test('command-only agent loss preserves the active write workflow', async () => 
     /create command/,
   );
   assert.equal(Boolean(document.querySelector('.side .status')), false);
-  assert.equal(document.querySelector('[aria-label="New password"]'), sheet);
+  assert.equal(document.querySelector('[aria-label="New Password"]'), sheet);
   assert.equal(rendered.getByLabelText('Site'), site);
   assert.equal(site.value, 'command.example');
   rendered.unmount();
@@ -1435,7 +1434,7 @@ test('agent loss closes the new-item store popover without replacing its draft',
   const rendered = ui.render(createElement(App, { bridge }));
   const input = (await rendered.findByLabelText('Site')) as HTMLInputElement;
   ui.fireEvent.change(input, { target: { value: 'retained.example' } });
-  const sheet = input.closest('[aria-label="New password"]');
+  const sheet = input.closest('[aria-label="New Password"]');
   const trigger = rendered.getByRole('button', { name: 'Save in vault' });
   const selected = trigger.textContent;
   assert.ok(sheet);
@@ -1449,7 +1448,7 @@ test('agent loss closes the new-item store popover without replacing its draft',
     assert.equal(document.querySelector('[role="listbox"]'), null),
   );
   const retry = await rendered.findByRole('button', { name: 'Retry' });
-  assert.equal(document.querySelector('[aria-label="New password"]'), sheet);
+  assert.equal(document.querySelector('[aria-label="New Password"]'), sheet);
   assert.equal(rendered.getByLabelText('Site'), input);
   assert.equal(input.value, 'retained.example');
   assert.equal(retry.closest('[inert]'), null);

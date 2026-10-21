@@ -40,21 +40,6 @@ import {
   openingConversation,
 } from './chat-teams';
 
-/**
- * Wires the window header's "New chat" button to the active Chat tab.
- *
- * Because the header renders outside the Chat tab, it delegates channel creation
- * to the active tab. When ChatTab is mounted, this opens the channel creation
- * sheet for the currently open conversation. If ChatTab is unmounted, calling
- * this function is a no-op.
- */
-let newChatRequest: (() => void) | null = null;
-
-/** Opens the Chat tab's channel-creation sheet. The header's button calls this. */
-export function requestNewChat(): void {
-  newChatRequest?.();
-}
-
 export interface ChatTabProps {
   snapshot: AgentSnapshot;
   bridge: Bridge;
@@ -76,6 +61,12 @@ export interface ChatTabProps {
    * the conversation and the New chat sheet.
    */
   accessGenerations?: ReadonlyMap<string, number>;
+  /**
+   * The panel's bar, placed over the column with the column's add control.
+   * Without it (the tab hosted on its own) the column draws a bar holding
+   * only that control.
+   */
+  renderBar?: (extra: { add: ReactNode }) => ReactNode;
 }
 
 const NO_GENERATIONS: ReadonlyMap<string, number> = new Map();
@@ -90,6 +81,7 @@ export function ChatTab({
   onNavigate,
   accessNow = systemAccessNow,
   accessGenerations = NO_GENERATIONS,
+  renderBar,
 }: ChatTabProps): ReactNode {
   const sidebar = useChatSidebarResize();
   const inbox = useSidebarInbox();
@@ -128,14 +120,35 @@ export function ChatTab({
   // to the column rather than to any one team's row.
   const openNewChat = () =>
     setNewChat({ originRef: ref, originChannel: location.channel });
-  // The header's "New chat" button reaches the mounted tab through this, and
-  // reaches nothing once the tab unmounts.
-  useEffect(() => {
-    newChatRequest = openNewChat;
-    return () => {
-      if (newChatRequest === openNewChat) newChatRequest = null;
-    };
-  });
+  // Chat starts in a team: with none, the bar's add control is the team,
+  // created on the Teams page where that sheet lives.
+  const add = teams.length ? (
+    <Button
+      variant="quiet"
+      icon="plus"
+      className="new-chat"
+      aria-label="New channel"
+      title="New channel"
+      onClick={openNewChat}
+    />
+  ) : (
+    <Button
+      variant="quiet"
+      icon="plus"
+      className="new-chat"
+      aria-label="New team"
+      title="Create a team on the Teams page"
+      onClick={() => onNavigate({ kind: 'teams', open: 'create' })}
+    />
+  );
+  const bar = renderBar ? (
+    renderBar({ add })
+  ) : (
+    <div className="bar list-bar">
+      <span className="grow" />
+      {add}
+    </div>
+  );
   // The ⓘ toggle takes focus back when the panel it opened closes.
   const infoToggle = useRef<HTMLButtonElement | null>(null);
   const conversation = useRef<HTMLElement | null>(null);
@@ -245,6 +258,7 @@ export function ChatTab({
         // it belongs to the column rather than to any one team's row.
         onNewChat={openNewChat}
         onTeams={(next) => onNavigate({ kind: 'teams', ref: next })}
+        bar={bar}
         onAddPeople={(next, intent) =>
           onNavigate({ kind: 'teams', ref: next, open: intent })
         }

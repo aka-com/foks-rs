@@ -118,7 +118,11 @@ controller; a server notice opens that server's page. Synchronization jobs
 stay in the sidebar's status line. The sidebar's Activity count is the
 requests plus those notices.
 Native clipboard hygiene uses `copy_text`. First run is a location
-inside the same main window, with the sidebar replaced by the setup-step list.
+inside the same main window: a 52px title bar on the window ground above a
+centred card, whose left panel carries the step's title and lead (each step's
+`StepIntro`, portaled there), the step list and the restart and leave
+commands, and whose right column carries the step with its actions in a foot
+band.
 Its versioned local checkpoint contains only nonsecret progress and display facts;
 invite, passphrase, entered recovery phrase and prepared recovery phrase values are held
 only in their live form or one-time sheet and are never encoded. Reopening
@@ -185,7 +189,7 @@ cancelled, concealed or unmounted.
   `?store=` parameter the location codec has always encoded.
 
 Items and folders can be renamed or moved within their current vault from their
-context menu; items also expose Rename or move in the details panel. The destination
+context menu; items also expose Rename or Move… in the details panel's More menu. The destination
 is an exact absolute path in an existing folder, never an overwrite. The source
 dirent identity and version remain fixed through concurrent-write retries.
 Deleting and recreating the same path cannot redirect a stale selection to the
@@ -307,7 +311,7 @@ authenticated in the catalog.
 | `src/app-root.tsx`         | App shell: window, sidebar, screen, details panel, deep links.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `src/components/`          | Components: Button, Chip, Tag, Badge, KindIcon, Inset, SectionLabel, Notice, Band, SegmentedControl, SplitButton, MenuButton, SearchField.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `src/shell/`               | Window chrome: `sidebar.tsx` (the source list), `files-tree.tsx` (its store tree), `topbar.tsx` (the panel's first bar: search, view menu and add control, or crumbs and Back), `files-view-menu.tsx`, `sync-status.tsx` (the status line and its popover), `page-header.tsx`, `search-palette.tsx` (⌘K), `toolbar.tsx` (the New menu).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `src/screens/`             | Screens: `items-screen.tsx` (list, cards, notices, empties), `groups-screen.tsx` (the group page, its Members and Settings tabs and the add/role/remove/create sheets), `group-tabs.tsx` (the Channels and Files tabs and the unfinished-group page), `group-model.ts` (the permission rules and reasons the Teams list and the group page share), `group-mark.tsx` (the one mark a group carries everywhere), `invite-sheet.tsx` (the per-account invitation), `store-access.tsx` (the shared unavailable-store takeover and All items summaries), `first-run-screen.tsx`, `servers-screen.tsx` (`ServersSection`, the server list Settings draws, and one server's page), `settings-screen.tsx` (the Settings tab and its sub-navigation), `devices-screen.tsx` (one account's Macs and device keys, recovery phrases and security key enrollments, and one key's own page), `device-sheets.tsx` (the sheets Devices and Settings share), `device-model.ts` (the four per-account key calls and the one row model Accounts and Devices share), `account-switcher.tsx` (the switcher Accounts, Devices and Settings share), `details-panel.tsx`, `write-workflows.tsx`, `edit-value.ts`, `account-section.tsx` (Settings › Account: the attention list and the account profile: teams, devices, keys and the account rows), `files-screen.tsx` (the roots page), `teams-screen.tsx`, `chat-tab.tsx` (the Chat tab: the inbox column, the open conversation and the info panel), `chat-teams.tsx` (the cross-team inbox column), `chat-new.tsx` (the two-step New chat sheet), `chat-screen.tsx` (one team's conversation), `chat-info.tsx` (the channel info panel), `scope.ts` (what is listed, in what order). |
+| `src/screens/`             | Screens: `items-screen.tsx` (list, cards, notices, empties), `groups-screen.tsx` (the group page, its Members and Settings tabs and the add/role/remove/create sheets), `group-tabs.tsx` (the Channels and Files tabs and the unfinished-group page), `group-model.ts` (the permission rules and reasons the Teams list and the group page share), `group-mark.tsx` (the one mark a group carries everywhere), `invite-sheet.tsx` (the per-account invitation), `store-access.tsx` (the shared unavailable-store takeover and All items summaries), `first-run-screen.tsx`, `servers-screen.tsx` (`ServersSection`, the server list Settings draws, and one server's page), `settings-screen.tsx` (the Settings tab and its sub-navigation), `devices-screen.tsx` (one account's devices, security key enrollments and recovery phrases as a grouped list, and one key's details beside it), `device-sheets.tsx` (the sheets Devices and Settings share), `device-model.ts` (the four per-account key calls and the one row model Accounts and Devices share), `account-switcher.tsx` (the switcher Accounts, Devices and Settings share), `details-panel.tsx`, `write-workflows.tsx`, `edit-value.ts`, `account-section.tsx` (Settings › Account: the attention list and the account profile: teams, devices, keys and the account rows), `files-screen.tsx` (the roots page), `teams-screen.tsx`, `chat-tab.tsx` (the Chat tab: the inbox column, the open conversation and the info panel), `chat-teams.tsx` (the cross-team inbox column), `chat-new.tsx` (the two-step New chat sheet), `chat-screen.tsx` (one team's conversation), `chat-info.tsx` (the channel info panel), `scope.ts` (what is listed, in what order). |
 | `src/bridge.ts`            | The typed `Bridge` interface and the Tauri implementation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `src/mock-bridge.ts`       | The same interface, using the fixture.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `src/fixture.ts`           | The stable desktop fixture, as typed data.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -333,7 +337,7 @@ Chat and Activity. The foot holds the Finish setting up card, Devices and
 Settings, the account switcher and the sync status line. The native build
 leaves the strip's left end empty for the controls macOS draws at
 `trafficLightPosition {x: 14, y: 24}`; the web mock draws three circles there.
-First run's step list carries the same strip.
+First run's title bar keeps the same place for them.
 
 Rows are quiet: icons and counts in the muted sidebar ink, the selected row a
 low-contrast fill. Counts are plain numbers (items, Chat's unread total, All
@@ -350,8 +354,9 @@ account-scoped page (Teams, Devices, Settings) and opens Settings › Account
 otherwise (`selectAccount`), and `accountAtLocation` decides whose account a
 page acts through.
 
-The switcher's menu lists the accounts on this Mac grouped by server, then
-"Add account or server…" and "Lock". The acting account carries a check; an
+The switcher's menu lists the accounts on this Mac under a header per server,
+then "Add Account or Server…" and "Lock". The acting account's row leads with a
+check; an
 account whose access has stopped is dimmed with the one link that would
 restore it. An amber dot on the avatar advertises a notice no row's own badge
 can resolve, and opens Settings › Account. Under the switcher, the sync status
@@ -372,17 +377,39 @@ The list and the details sit on one raised panel inset 8px from the window
 ground, drawn by the columns' own margins and outline (`.app > .main`,
 `.app > .details`) rather than a wrapper. On Files the list column is 300px
 (260px under 1100px of window width) and the details column takes the rest;
-with nothing selected it says No Selection. Every other place is one page
-filling the panel.
+with nothing selected it says No Selection. Devices and Activity share that
+layout: a page fills the list column and portals its details into the shell's
+details column (`src/shell/page-slots.tsx`). Chat draws its own columns
+inside the panel: the channel column (300px, 260px in a narrow window,
+resizable), the conversation with its own 44px bar, and, in a window 1100px or
+wider, Channel info as a third column. Every other place is one page filling
+the panel.
+
+The details column's first bar is the item's location — the store mark and
+name, then each folder, each one opening that folder — and the More menu
+(Show or Hide Value, Copy Password or Value, Download, Copy Path, Rename or
+Move…, Delete… ⌘⌫). Under it the hero (kind tile, name, kind and server, then
+Edit, or Download and Replace… for a file) and property rows in groups divided
+by hairlines: the value rows with Show/Hide and Copy at the trailing edge;
+Vault, Path, Version and Size; Read and Write access; Sharing. Editing a value
+puts Cancel and Save Changes in the bar. A store that cannot be read draws a
+lock notice with Check Status and leaves every action disabled with its reason.
+The list foot holds the drop hint and the store's Uploads… sheet; the item
+sheets (New Password, New Document, New Folder, Rename or Move) carry the kind
+tile and a subtitle saying where they save.
 
 Every bar is 44px with a hairline under it, centred on the lights' line at
 y=30. The panel's first bar (`src/shell/topbar.tsx`) is the list column's on
-Files and Chat — the search field (⌘K hint), the view menu (List or Cards,
-sort key and direction) and the add control (New Password ⌘N, New Document
-⇧⌘N, New Folder…) on Files, the search and New chat on Chat — and names the
-page with crumbs everywhere else, led by Back on a page inside an area (a
-team, a device). Its empty parts carry `data-tauri-drag-region`. First run
-draws no topbar.
+Files, Chat, Activity and Devices — the search field (⌘K hint), the view menu
+(List or Cards, sort key and direction) and the add control (New Password ⌘N,
+New Document ⇧⌘N, New Folder…) on Files; the search and New channel on Chat,
+which places the bar over its own channel column (`renderBar` from
+`ScreenRouter`, its control passed as `add`); the search, the More menu
+(Refresh Hardware Keys) and Add a device on Devices — and names the page with
+crumbs everywhere else, led by Back on a page inside an area (a team). The
+Settings bar names only Settings: its sub-navigation names the section and a
+server page leads with its own way back to Account. Its empty parts carry
+`data-tauri-drag-region`. First run draws no topbar.
 
 Back and Forward traverse committed app history across tabs and folders. The
 ⌘[/⌘], Alt+Left/Right, browser navigation keys, mouse buttons 3/4, and trackpad

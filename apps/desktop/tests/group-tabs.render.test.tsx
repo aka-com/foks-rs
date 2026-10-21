@@ -189,7 +189,7 @@ test('unavailable files do not appear as an empty vault on the group page', asyn
   };
   const rendered = await group('team:household', 'files', { snapshot });
   assert.ok(rendered.getByText('Vault unavailable'));
-  assert.equal(rendered.queryByText(/No items yet/), null);
+  assert.equal(rendered.queryByText(/No Items/), null);
 });
 
 test('the Channels tab says why a group on a chatless server has none', async () => {

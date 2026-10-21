@@ -1,0 +1,374 @@
+/*
+ * First run: design A v3 "firstrun". A title bar on the window ground, then a
+ * centred card on the panel: the step's title, lead and the step list on the
+ * left, the step on the right with its actions at the foot.
+ */
+
+.app > .fr-setup {
+  grid-column: 1 / -1;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 52px minmax(0, 1fr);
+}
+
+.fr-titlebar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 8px 0 0 14px;
+  background: var(--ground);
+  user-select: none;
+}
+
+.fr-titlebar .fr-ttl {
+  position: absolute;
+  top: 30px;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 13px;
+  font-weight: var(--weight-title);
+  color: var(--ink-2);
+}
+
+.fr-stage {
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px 40px;
+  overflow-y: auto;
+  background: var(--panel);
+}
+
+.fr-card {
+  width: min(880px, 100%);
+  min-height: 420px;
+  max-height: 100%;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  background: var(--panel);
+}
+
+/* ---------------------------------------------------------------- left */
+.fr-card > .side.setup-side {
+  width: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 28px 26px 24px;
+  overflow-y: auto;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+  --muted: var(--side-muted);
+}
+
+.fr-intro:empty {
+  display: none;
+}
+
+.fr-intro h1 {
+  margin: 0 0 10px;
+  font-size: 22px;
+  font-weight: var(--weight-title);
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+}
+
+.fr-intro h1 code {
+  font: inherit;
+}
+
+.fr-intro .lead {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.fr-intro .lead b {
+  font-weight: var(--weight-label);
+  color: var(--ink-2);
+}
+
+/* The step list sits at the panel's foot. */
+.fr-card .setup-steps {
+  margin-top: auto;
+  padding-top: 18px;
+  gap: 6px;
+}
+
+.fr-card .side .setup-step {
+  min-height: 0;
+  height: auto;
+  gap: 10px;
+  padding: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.fr-card .side .setup-step.on,
+.fr-card .side .setup-step.on:hover {
+  background: none;
+  color: var(--ink);
+  font-weight: var(--weight-label);
+}
+
+.fr-card .side .setup-step:not(.on):not(.done) {
+  color: var(--muted);
+}
+
+.fr-card .side-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.fr-card .side-bottom:empty {
+  display: none;
+}
+
+.fr-card .side-bottom .nav {
+  height: 26px;
+  margin: 0 -6px;
+  padding: 0 6px;
+  font-size: 12.5px;
+}
+
+/* --------------------------------------------------------------- right */
+.fr-card > .main.first-run-main {
+  margin: 0;
+  padding-top: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: var(--panel);
+}
+
+.fr-card .first-run-main .body.pb {
+  padding: 26px 32px 24px;
+}
+
+.fr-card .first-run-main .pane,
+.fr-card .first-run-main .pane.wide {
+  max-width: none;
+  padding-top: 0;
+}
+
+.fr-card .first-run-main .bandstrip {
+  padding: 14px 32px 0;
+}
+
+/* The step's actions: its primary action at the trailing end. */
+.fr-card .first-run-main .pane .setup-actions {
+  flex-direction: row-reverse;
+  justify-content: flex-start;
+  gap: 8px;
+  max-width: none;
+  margin-top: 22px;
+}
+
+.fr-card .pfoot {
+  gap: 8px;
+  padding: 14px 32px 18px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--surface);
+}
+
+.fr-card .pfoot .btn.lnk {
+  height: var(--control-h);
+  padding: 0 10px;
+  border: 1px solid var(--line-mid);
+  border-radius: var(--radius-md);
+  background: var(--btn-bg);
+  box-shadow: var(--shadow-btn);
+  color: var(--ink);
+  font-weight: var(--weight-label);
+  text-decoration: none;
+}
+
+/* The step's own actions sit in the card's foot band, primary at the end. */
+.fr-card .first-run-main .body.pb {
+  display: flex;
+  flex-direction: column;
+}
+
+.fr-card .first-run-main .body.pb > .pane {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.fr-card .first-run-main .pane > .setup-actions:last-child {
+  margin: auto -32px -24px;
+  padding: 14px 32px 18px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--surface);
+}
+
+/* How are you joining: rows of one card, as the design's radio list. */
+.fr-card .setup-method-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+
+.fr-card .setup-method-option {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 0;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+}
+
+.fr-card .setup-method-option + .setup-method-option::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 16px;
+  left: 16px;
+  height: 1px;
+  background: var(--line-soft);
+}
+
+.fr-card .setup-method-option:first-child {
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+.fr-card .setup-method-option:last-child {
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
+.fr-card .setup-method-option:hover {
+  background: var(--hover);
+}
+
+.fr-card .setup-method-option.on {
+  background: transparent;
+  box-shadow: none;
+}
+
+.fr-card .setup-method-option .ic {
+  display: none;
+}
+
+.fr-card .setup-method-option .pip {
+  position: static;
+  order: -1;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  border: 1px solid var(--line-field);
+  border-radius: 50%;
+  background: var(--field-bg);
+}
+
+.fr-card .setup-method-option.on .pip {
+  border: 4px solid var(--accent-fill);
+}
+
+.fr-card .setup-method-option.on .pip::after {
+  content: none;
+}
+
+.fr-card .setup-method-option .txt {
+  display: grid;
+  gap: 1px;
+}
+
+.fr-card .setup-method-option .ptitle {
+  font-size: 13px;
+  font-weight: var(--weight-label);
+}
+
+.fr-card .setup-method-option .bd {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+@media (max-width: 899px) {
+  .fr-stage {
+    padding: 20px 24px;
+  }
+  .fr-card {
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+  .fr-card > .side.setup-side {
+    padding: 24px 20px 20px;
+  }
+  .fr-card .first-run-main .body.pb {
+    padding: 22px 24px 20px;
+  }
+  .fr-card .pfoot {
+    padding: 12px 24px 16px;
+  }
+  .fr-card .first-run-main .pane > .setup-actions:last-child {
+    margin: auto -24px -20px;
+    padding: 12px 24px 16px;
+  }
+}
+
+/* A recovery phrase, wherever it is revealed: numbered words in the
+   monospace face, and the confirmation that it was written down. */
+.words {
+  gap: 6px;
+  margin: 4px 0 12px;
+}
+
+.words .word {
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  font: 12.5px var(--mono);
+}
+
+.words .word i {
+  width: 16px;
+  font-size: 12px;
+}
+
+button.check {
+  gap: 8px;
+  margin-left: -4px;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+button.check .bx {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  background: var(--field-bg);
+  font-size: 12px;
+  line-height: 1;
+}
+
+button.check.on .bx {
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
+  color: var(--on-accent);
+}

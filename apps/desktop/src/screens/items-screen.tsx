@@ -67,6 +67,7 @@ import {
   whereOf,
 } from './scope';
 import { useFolderMenu } from './folder-menu';
+import { itemTile } from './item-tile';
 import {
   itemActionProblem,
   StoreAccessTakeover,
@@ -85,13 +86,6 @@ function itemCount(count: number): string {
   return `${count} ${count === 1 ? 'item' : 'items'}`;
 }
 
-/** The tile class and glyph a row draws for its item's kind. */
-function itemTile(item: Item): { className: string; icon: FoksIconName } {
-  if (kindOf(item) === 'Password') return { className: 'pw', icon: 'key' };
-  if (item.kind === 'File') return { className: 'file', icon: 'file' };
-  return { className: 'text', icon: 'fileText' };
-}
-
 interface RowProps {
   snapshot: AgentSnapshot;
   item: Item;
@@ -104,6 +98,7 @@ interface RowProps {
   onCopy: (item: Item) => void;
   onReveal: (item: Item) => void;
   onDownload: (item: Item) => void;
+  onCopyPath: (item: Item) => void;
   onDelete: (item: Item) => void;
   onMove?: (item: Item) => void;
   accessNow: () => number;
@@ -119,6 +114,7 @@ function Row({
   onCopy,
   onReveal,
   onDownload,
+  onCopyPath,
   onDelete,
   onMove,
   accessNow,
@@ -238,7 +234,7 @@ function Row({
             onClose={closeMenu}
           >
             <MenuItem icon="file" onClick={choose(onSelect)}>
-              Show details
+              Show Details
             </MenuItem>
             {item.kind === 'File' ? (
               <MenuItem
@@ -251,27 +247,34 @@ function Row({
             ) : (
               <>
                 <MenuItem
-                  icon="copy"
-                  reason={readProblem}
-                  onClick={choose(() => onCopy(item))}
-                >
-                  Copy
-                </MenuItem>
-                <MenuItem
                   icon="eye"
                   reason={readProblem}
                   onClick={choose(() => onReveal(item))}
                 >
-                  Reveal
+                  Show Value
+                </MenuItem>
+                <MenuItem
+                  icon="copy"
+                  reason={readProblem}
+                  onClick={choose(() => onCopy(item))}
+                >
+                  {kindOf(item) === 'Password' ? 'Copy Password' : 'Copy Value'}
                 </MenuItem>
               </>
             )}
+            <MenuItem
+              reason={readProblem}
+              onClick={choose(() => onCopyPath(item))}
+            >
+              Copy Path
+            </MenuItem>
+            <div className="menu-separator" role="separator" />
             {onMove ? (
               <MenuItem
                 reason={writeProblem}
                 onClick={choose(() => onMove(item))}
               >
-                Rename or move…
+                Rename or Move…
               </MenuItem>
             ) : null}
             <MenuItem
@@ -281,7 +284,7 @@ function Row({
               reason={writeProblem}
               onClick={choose(() => onDelete(item))}
             >
-              Delete
+              Delete…
             </MenuItem>
           </Menu>
         </ContextMenu>
@@ -757,6 +760,13 @@ export function ItemsScreen({
       (error: unknown) => onCommandError(error, item),
     );
   };
+  const copyPath = (item: Item): void => {
+    if (!allowAction(item)) return;
+    void bridge.copyItemPath(request(item)).then(
+      () => toasts.show('Path copied'),
+      (error: unknown) => onCommandError(error, item),
+    );
+  };
   const revealItem = (item: Item): void => {
     if (!allowAction(item)) return;
     // Reveal happens in the details panel, where the value is masked again on
@@ -801,6 +811,7 @@ export function ItemsScreen({
       onCopy={copyItem}
       onReveal={revealItem}
       onDownload={downloadItem}
+      onCopyPath={copyPath}
       onMove={
         onMove
           ? (item) => {
@@ -891,10 +902,10 @@ export function ItemsScreen({
           className="card"
           onClick={() => createNew('Password')}
         >
-          <span className="ci">
+          <span className="ci pw">
             <Icon name="key" />
           </span>
-          <b>New password</b>
+          <b>New Password</b>
           <small>A login, API key or any secret value.</small>
           <kbd>⌘N</kbd>
         </button>
@@ -903,10 +914,10 @@ export function ItemsScreen({
           className="card"
           onClick={() => createNew('Document')}
         >
-          <span className="ci">
+          <span className="ci file">
             <Icon name="upload" />
           </span>
-          <b>Add a document</b>
+          <b>Add Document</b>
           <small>Drop a file anywhere in this window, or pick one.</small>
           <kbd>⇧⌘N</kbd>
         </button>
@@ -936,8 +947,7 @@ export function ItemsScreen({
   const emptyHere = (scope: Store | undefined): ReactNode => (
     <EmptyState
       inList
-      icon={kindMeta?.icon ?? 'key'}
-      title="No items yet"
+      title="No Items"
       body={
         scope && selected.path === '/'
           ? emptyStoreCopy(scope)
@@ -945,16 +955,45 @@ export function ItemsScreen({
             ? 'This folder is empty.'
             : 'Save passwords and documents to get started.'
       }
-    />
+    >
+      {scope && !readOnly && currentStoreAvailable(scope.id) ? (
+        <Button
+          onClick={() =>
+            createNew(state.kind === 'Document' ? 'Document' : 'Password')
+          }
+        >
+          {state.kind === 'Document' ? 'New Document' : 'New Password'}
+        </Button>
+      ) : null}
+    </EmptyState>
   );
 
-  const dropStrip =
-    state.query || readOnly || !dropTarget || dropTarget.blocked ? null : (
-      <div className="dropzone" aria-hidden="true">
-        <Icon name="upload" />
-        Drop files to add to vault
-      </div>
-    );
+  const listShown = flatMode ? items.length > 0 : !showEmptyFolder;
+  // The list foot: where a dropped file goes, and the store's uploads.
+  const dropHint =
+    state.query || readOnly || !dropTarget || dropTarget.blocked
+      ? null
+      : dropTarget.store.name;
+  const listFoot = scopeStore ? (
+    <div className="list-foot">
+      {dropHint && listShown ? (
+        <span
+          className="drop-hint"
+          title={`Drop a file to add it to ${dropHint}`}
+        >
+          <Icon name="upload" />
+          <span className="t">Drop a file to add it here</span>
+        </span>
+      ) : null}
+      <span className="sp" />
+      <FileUploadsPanel
+        key={scopeStore.id}
+        bridge={bridge}
+        storeId={scopeStore.id}
+        storeName={scopeStore.name}
+      />
+    </div>
+  ) : null;
 
   // The suggestion applies once the vault holds something but no password:
   // the agent can sign in from one without the value living in a file.
@@ -1013,7 +1052,11 @@ export function ItemsScreen({
             ) : null}
             {view === 'grid' ? (
               <div
-                className="files-grid"
+                className={
+                  selected.store === ALL_ITEMS
+                    ? 'files-grid with-location'
+                    : 'files-grid'
+                }
                 style={{
                   gridTemplateColumns: `repeat(${gridWindow.columns}, minmax(0, 1fr))`,
                   paddingBottom: gridWindow.trailingGap,
@@ -1047,7 +1090,6 @@ export function ItemsScreen({
         </div>
       </div>
     );
-  const listShown = flatMode ? items.length > 0 : !showEmptyFolder;
 
   // The head names a store or folder (with the folders above it), or the
   // search; All Items and the kind rows are named by the sidebar alone.
@@ -1117,13 +1159,6 @@ export function ItemsScreen({
         onContextMenu={folderMenu.handlers.onContextMenu}
         onKeyDown={folderMenu.handlers.onKeyDown}
       >
-        {scopeStore ? (
-          <FileUploadsPanel
-            key={scopeStore.id}
-            bridge={bridge}
-            storeId={scopeStore.id}
-          />
-        ) : null}
         <div
           className="body folder-body rows"
           ref={bodyRef}
@@ -1158,7 +1193,7 @@ export function ItemsScreen({
           ) : null}
           {listBody}
         </div>
-        {listShown ? dropStrip : null}
+        {listFoot}
       </section>
     </div>
   );

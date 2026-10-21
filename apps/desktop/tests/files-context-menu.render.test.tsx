@@ -161,7 +161,9 @@ test('item menus use the existing read actions and restore keyboard focus', asyn
   assert.equal(mounted.locations.getSnapshot().selection, null);
   assert.equal(mounted.copies.length, 0);
   assert.equal(ui.screen.queryByRole('menuitem', { name: 'Download' }), null);
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Copy' }));
+  ui.fireEvent.click(
+    ui.screen.getByRole('menuitem', { name: 'Copy Password' }),
+  );
   assert.deepEqual(mounted.copies, [
     { storeId: 'acct:personal', path: '/logins/github.com', version: 9 },
   ]);
@@ -169,7 +171,7 @@ test('item menus use the existing read actions and restore keyboard focus', asyn
   await ui.waitFor(() => assert.ok(document.activeElement === password));
 
   ui.fireEvent.keyDown(password, { key: 'F10', shiftKey: true });
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Reveal' }));
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Show Value' }));
   assert.equal(mounted.reveals[0]?.path, '/logins/github.com');
   assert.deepEqual(mounted.locations.getSnapshot().selection, {
     store: 'acct:personal',
@@ -177,7 +179,10 @@ test('item menus use the existing read actions and restore keyboard focus', asyn
   });
 
   ui.fireEvent.contextMenu(row('passport-scan.pdf'));
-  assert.equal(ui.screen.queryByRole('menuitem', { name: 'Copy' }), null);
+  assert.equal(
+    ui.screen.queryByRole('menuitem', { name: /^Copy (Password|Value)$/ }),
+    null,
+  );
   ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Download' }));
   assert.equal(mounted.downloads[0]?.path, '/documents/passport-scan.pdf');
   assert.equal(mounted.failures.length, 0);
@@ -187,7 +192,7 @@ test('details and deletion target the context item, not the current selection', 
   const mounted = await mount();
   ui.fireEvent.click(row('github.com'));
   ui.fireEvent.contextMenu(row('passport-scan.pdf'));
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Delete' }));
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Delete…' }));
   assert.equal(mounted.deletions[0]?.path, '/documents/passport-scan.pdf');
   assert.equal(
     mounted.locations.getSnapshot().selection?.path,
@@ -196,7 +201,7 @@ test('details and deletion target the context item, not the current selection', 
   assert.equal(ui.screen.queryByRole('menu'), null);
 
   ui.fireEvent.contextMenu(row('passport-scan.pdf'));
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Show details' }));
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Show Details' }));
   assert.equal(
     mounted.locations.getSnapshot().selection?.path,
     '/documents/passport-scan.pdf',
@@ -215,7 +220,7 @@ test('an open menu rechecks changed write permission and modal blocking dismisse
     ),
   };
   mounted.update(snapshot);
-  const deletion = ui.screen.getByRole('menuitem', { name: 'Delete' });
+  const deletion = ui.screen.getByRole('menuitem', { name: 'Delete…' });
   assert.equal(deletion.getAttribute('aria-disabled'), 'true');
   assert.ok(deletion.getAttribute('aria-describedby'));
   ui.fireEvent.click(deletion);
@@ -253,7 +258,7 @@ test('read actions recheck a lease that expires while the menu is open', async (
   assert.equal(lease.status, 'required');
   if (lease.status !== 'required') return;
   ui.fireEvent.contextMenu(row('production-token'));
-  const copy = ui.screen.getByRole('menuitem', { name: 'Copy' });
+  const copy = ui.screen.getByRole('menuitem', { name: 'Copy Value' });
   assert.equal(copy.getAttribute('aria-disabled'), null);
   now = lease.expiresAt + 1;
   ui.fireEvent.click(copy);
@@ -353,7 +358,7 @@ test('grid cards keep item selection, quick actions, and keyboard context menus'
   );
   assert.equal(mounted.copies[0]?.path, '/logins/github.com');
   ui.fireEvent.keyDown(password, { key: 'F10', shiftKey: true });
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Reveal' }));
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Show Value' }));
   assert.equal(mounted.reveals[0]?.path, '/logins/github.com');
   await ui.waitFor(() => assert.ok(document.activeElement === password));
   const file = row('passport-scan.pdf');
@@ -365,7 +370,7 @@ test('grid cards keep item selection, quick actions, and keyboard context menus'
     '/logins/github.com',
   );
   ui.fireEvent.contextMenu(file);
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Show details' }));
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Show Details' }));
   assert.equal(
     mounted.locations.getSnapshot().selection?.path,
     '/documents/passport-scan.pdf',

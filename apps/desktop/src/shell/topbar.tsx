@@ -1,18 +1,19 @@
 /**
  * The panel's first bar: 44px, on the traffic lights' centreline.
  *
- * On Files, Chat and Activity it is the list column's bar: the search field
- * and the column's add control. On every other page it names the page with
- * the crumbs, led by Back on a page inside an area (a team, a device), and
- * ends with the page's own commands (`BarActions`). Its empty parts are the
- * window's drag region. While the sidebar is hidden the bar
+ * On Files, Chat, Activity and Devices it is the list column's bar: the search
+ * field and the column's add control (Chat places the bar over its own,
+ * resizable column and passes that control in as `add`). On every other page
+ * it names the page with the crumbs, led by Back on a page inside an area (a
+ * team), and ends with the page's own commands (`BarActions`). Its empty parts
+ * are the window's drag region. While the sidebar is hidden the bar
  * also carries the control that shows it again, after the traffic lights.
  */
 
 import { Fragment } from 'react';
 import type { ReactNode } from 'react';
 
-import { Button, Icon, SearchField, StoreMark } from '../components';
+import { Icon, SearchField, StoreMark } from '../components';
 import { NewItemButton } from './toolbar';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import { channelLabel } from '../chat/presentation';
@@ -184,12 +185,14 @@ export interface TopbarProps {
   actionsSlot?: (element: HTMLElement | null) => void;
   /** Why New cannot act here, as its tooltip; null when it can. */
   newBlocked?: string | null;
-  /** Chat: opens the New chat sheet. */
-  onNewChat?: () => void;
   /**
-   * Chat: how many teams have chat. With none there is no conversation to
-   * create and nothing to search, so the header offers the team the tab needs
-   * first and draws its field inert.
+   * The list column's add control, drawn last, in place of the one the bar
+   * would draw for its tab: Chat's New channel, Devices' Add a Device.
+   */
+  add?: ReactNode;
+  /**
+   * Chat: how many teams have chat. With none there is nothing to search, so
+   * the field is drawn inert.
    */
   chatTeamCount?: number;
   /** A blocking state: the bar is drawn, and nothing on it acts. */
@@ -202,8 +205,7 @@ export interface TopbarProps {
  * The breadcrumb's segments. Files builds its own from the tree's selection,
  * so a folder step navigates the tree rather than the location; the other
  * tabs take `crumbTrail`'s words, of which the tab itself and the one step
- * its address still names — a channel's team, a server detail's section —
- * are links.
+ * its address still names — a channel's team — are links.
  */
 function crumbSegments(
   location: Location,
@@ -223,22 +225,14 @@ function crumbSegments(
     },
   };
   if (tab !== 'files') {
-    // The steps a non-Files tab can go back to are the places its address
-    // still names: the team a channel belongs to, and the Settings section a
-    // server detail was opened from. The last crumb is the page itself, and
+    // The step a non-Files tab can go back to is the place its address still
+    // names: the team a channel belongs to. The last crumb is the page itself, and
     // the renderer draws it as current whether or not it carries a click.
     const inner = trail.slice(1).map((label, index): CrumbSegment => {
       if (tab === 'chat' && index === 0 && location.kind === 'chat') {
         const ref = location.ref;
         if (ref)
           return { label, onClick: () => onNavigate({ kind: 'chat', ref }) };
-      }
-      if (tab === 'settings' && index === 0 && location.kind === 'settings') {
-        const section = settingsSectionOf(location);
-        return {
-          label,
-          onClick: () => onNavigate({ kind: 'settings', section }),
-        };
       }
       return { label };
     });
@@ -287,7 +281,7 @@ export function Topbar({
   actions,
   actionsSlot,
   newBlocked = null,
-  onNewChat,
+  add,
   chatTeamCount,
   blocked = false,
   nativeChrome = false,
@@ -325,12 +319,19 @@ export function Topbar({
   // Only the views that filter accept a query; the rest draw no field.
   const noChatTeams = tab === 'chat' && chatTeamCount === 0;
   const searchable = Boolean(onQuery) && !blocked && !noChatTeams;
-  // Files, Chat and Activity are list columns: their bar is the search field
-  // and the column's add control. Every other page names itself with the
-  // crumbs, and a page inside an area (a team, a device) leads with Back.
-  const listBar = tab === 'files' || tab === 'chat' || tab === 'activity';
+  // Files, Chat, Activity and Devices are list columns: their bar is the
+  // search field and the column's add control. Every other page names itself
+  // with the crumbs, and a page inside an area (a team) leads with Back.
+  const listBar =
+    tab === 'files' ||
+    tab === 'chat' ||
+    tab === 'activity' ||
+    tab === 'devices';
   const parent =
     !listBar && tab !== 'settings' ? parentLocation(location) : null;
+  // Settings names only itself: its sub-navigation names the section, and a
+  // server page leads with its own way back to Account.
+  const shownSegments = tab === 'settings' ? segments.slice(0, 1) : segments;
   return (
     <div
       className={listBar ? 'topbar bar list-bar' : 'topbar bar'}
@@ -378,8 +379,8 @@ export function Topbar({
           aria-label="Breadcrumb"
           data-tauri-drag-region=""
         >
-          {segments.map((segment, index) => {
-            const last = index === segments.length - 1;
+          {shownSegments.map((segment, index) => {
+            const last = index === shownSegments.length - 1;
             return (
               // Keyed by position as well as text: a store named after its
               // own tab ("Files › Files") would otherwise collide.
@@ -422,34 +423,14 @@ export function Topbar({
       )}
       {actions}
       {actionsSlot ? <span className="bar-acts" ref={actionsSlot} /> : null}
-      {tab === 'files' && onNew ? (
+      {add !== undefined ? (
+        add
+      ) : tab === 'files' && onNew ? (
         <NewItemButton
           onNew={onNew}
           onNewFolder={onNewFolder}
           reason={newBlocked}
           disabled={blocked}
-        />
-      ) : noChatTeams ? (
-        // Chat starts in a team: with none, the bar's own action is the team,
-        // created on the Teams page where that sheet lives.
-        <Button
-          variant="quiet"
-          icon="plus"
-          className="new-chat"
-          aria-label="New team"
-          disabled={blocked}
-          title="Create a team on the Teams page"
-          onClick={() => onNavigate({ kind: 'teams', open: 'create' })}
-        />
-      ) : tab === 'chat' && onNewChat ? (
-        <Button
-          variant="quiet"
-          icon="plus"
-          className="new-chat"
-          aria-label="New chat"
-          title="New chat"
-          disabled={blocked}
-          onClick={onNewChat}
         />
       ) : null}
     </div>

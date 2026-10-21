@@ -246,7 +246,7 @@ test('a store with nothing in it is still reachable from the tree', async () => 
   await ui.waitFor(() => assert.equal(currentTitle(), 'Work (Acme)'));
   assert.equal(
     document.querySelector('.lpane .empty h2')?.textContent,
-    'No items yet',
+    'No Items',
   );
   assert.equal(
     document.querySelector('.lpane .empty p')?.textContent,

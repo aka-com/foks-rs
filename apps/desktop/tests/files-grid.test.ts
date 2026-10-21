@@ -17,11 +17,11 @@ test('grid resizing windows complete rows and keeps the final partial row reacha
     [true, FILES_CARD_HEIGHT_WITH_LOCATION],
   ] as const) {
     for (const [width, columns] of [
-      [120, 1],
-      [329, 1],
-      [330, 2],
-      [500, 3],
-      [1000, 5],
+      [111, 1],
+      [231, 1],
+      [232, 2],
+      [500, 4],
+      [1000, 8],
     ]) {
       const count = 103;
       const first = filesGridWindow({ ...viewport, width, count, location });

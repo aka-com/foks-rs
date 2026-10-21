@@ -69,25 +69,35 @@
   background: var(--main-surface);
 }
 
-/* Cards reuse the list's rows: a tile over the name, in a grid the list
-   windows by viewport. */
+/* Cards reuse the list's rows: the kind tile and the size over the name and
+   its second line, in a grid the list windows by viewport. Heights and the
+   minimum width match FILES_CARD_* in files-grid.ts. */
 .files-grid {
   display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
   gap: 8px;
   padding: 8px 14px;
 }
 .folder-body .files-grid .row {
   flex-direction: column;
   align-items: flex-start;
-  gap: 8px;
-  height: 112px;
-  padding: 12px;
+  justify-content: flex-start;
+  gap: 6px;
+  height: 96px;
+  min-height: 0;
+  padding: 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--card);
 }
+.folder-body .files-grid.with-location .row {
+  height: 112px;
+}
 .folder-body .files-grid .row::after {
   content: none;
+}
+.folder-body .files-grid .row:hover {
+  background: var(--hover);
 }
 .folder-body .files-grid .row.sel {
   background: var(--row-sel);
@@ -95,34 +105,73 @@
 }
 .folder-body .files-grid .row .name {
   width: 100%;
+  margin-top: auto;
+}
+.folder-body .files-grid .row .name small {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  white-space: normal;
+}
+.folder-body .files-grid.with-location .row .name small {
+  -webkit-line-clamp: 2;
 }
 .folder-body .files-grid .row .r {
   position: absolute;
-  right: 12px;
-  top: 14px;
+  right: 10px;
+  top: 12px;
+  font-size: 12px;
 }
 .folder-body .files-grid .row .acts {
-  top: auto;
-  bottom: 8px;
+  top: 6px;
+  right: 6px;
   transform: none;
 }
 
-/* Keep the drop affordance at the bottom of the Files pane. */
-.lpane > .dropzone {
+/* The list foot: where a dropped file goes, and the store's uploads. */
+.lpane > .list-foot {
   flex: none;
-  margin: 0 14px 12px;
-  padding: 8px;
-  border: 1px dashed var(--line-mid);
-  border-radius: var(--radius-lg);
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: 8px;
+  height: 32px;
+  padding: 0 14px;
+  border-top: 1px solid var(--line-soft);
   color: var(--faint);
   font-size: 12px;
 }
-.lpane > .dropzone .ic {
-  font-size: 14px;
+.lpane > .list-foot .drop-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lpane > .list-foot .drop-hint .t {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lpane > .list-foot .drop-hint .ic {
+  flex: none;
+  font-size: 13px;
+}
+.lpane > .list-foot .sp {
+  flex: 1;
+}
+.lpane > .list-foot .uploads-open {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 12px;
+  font-weight: var(--weight-label);
+  color: var(--muted);
+}
+.lpane > .list-foot .uploads-open:hover {
+  color: var(--ink);
 }
 
 /* The onboarding tip: the text is the control that opens New Password. */
@@ -214,72 +263,81 @@
   background: var(--btn-hover);
 }
 
-/* ------------------------------------------------- empty and first run */
+/* ------------------------------------------------- empty and first run
+   An empty vault: a short heading and three flat cards — New Password,
+   Add Document and the CLI import command — over the panel. */
 
 .folder-body .starter {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 18px;
-  padding: 24px 24px 32px;
+  gap: 16px;
+  padding: 48px 20px 32px;
   text-align: center;
 }
 .folder-body .starter h2 {
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-size: 15px;
+  font-weight: var(--weight-title);
   color: var(--ink);
 }
 .folder-body .starter p {
   max-width: 44ch;
   margin-top: 4px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12.5px;
   line-height: 1.45;
 }
 .folder-body .cards {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  width: min(620px, 100%);
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+  width: min(560px, 100%);
 }
 .folder-body .card {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 8px;
-  min-height: 118px;
-  padding: 14px;
+  gap: 6px;
+  min-height: 112px;
+  padding: 12px;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--btn-bg);
+  border-radius: var(--radius-lg);
+  background: var(--card);
   text-align: left;
 }
 .folder-body button.card:hover {
-  border-color: var(--accent);
-  background: var(--accent-wash);
+  background: var(--hover);
 }
 .folder-body .card .ci {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 9px;
-  background: var(--accent-wash-2);
+  width: 24px;
+  height: 24px;
+  margin-bottom: 2px;
+  border-radius: var(--radius-md);
+  background: var(--chip-bg);
+  color: var(--ink-3);
+  font-size: 14px;
+}
+.folder-body .card .ci.pw {
+  background: var(--amber-wash);
+  color: var(--amber-strong);
+}
+.folder-body .card .ci.file {
+  background: var(--accent-wash);
   color: var(--accent-ink);
-  font-size: 17px;
 }
 .folder-body .card b {
   display: block;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: var(--weight-label);
   color: var(--ink);
 }
 .folder-body .card small {
   color: var(--muted);
   font-size: 12px;
-  line-height: 1.35;
+  line-height: 1.4;
 }
 .folder-body .card kbd,
 .folder-body .card .cli {
@@ -287,19 +345,19 @@
 }
 .folder-body .card kbd {
   padding: 0 5px;
-  border: 1px solid var(--line);
-  border-radius: 5px;
+  border: 1px solid var(--line-mid);
+  border-radius: var(--radius-sm);
   background: var(--btn-bg);
   font: 12px var(--sans);
   line-height: 1.5;
-  color: var(--faint);
+  color: var(--muted);
 }
 .folder-body .card .cli {
   max-width: 100%;
-  padding: 3px 7px;
-  border-radius: 5px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
   background: var(--chip-bg);
-  font: 12px var(--sans);
+  font: 12px var(--mono);
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -307,184 +365,234 @@
 }
 
 /* ------------------------------------------------------- details panel
-   The details column's first bar sits on the panel's 44px line; under it the
-   item's groups are form-style property rows on the panel (150px label
-   column, 104px in a column under 520px), divided by hairlines rather than
-   boxed. */
+   The details column: its first bar is the item's location (store mark ›
+   folders, each a link) and the More menu; under it the hero and the item's
+   property rows (`PropertyGroup`/`PropertyRow`), divided by hairlines rather
+   than boxed. The column measures itself, so the label column narrows with
+   the column's width. */
 
-.details .dh {
-  align-items: center;
+.details .bar {
+  gap: 8px;
   padding: 0 10px 0 16px;
 }
-.details .dh .kic {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-  border: 0;
-  background: var(--chip-bg);
-  color: var(--muted);
-  font-size: 14px;
-}
-.details .dh .kic .ic {
-  font-size: 14px;
-}
-.details .dh h2 {
-  font-size: 13px;
-}
-.details .scroll {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 18px 24px 32px;
-}
-.details .scroll > .inset,
-.details .scroll > .prev {
-  padding: 2px 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  overflow: visible;
-}
-.details .scroll > :is(.inset, .prev) + :is(.inset, .prev) {
-  padding-top: 8px;
-  border-top: 1px solid var(--line-soft);
-}
-.details .scroll > * {
-  flex-shrink: 0;
-}
-.details .scroll > .sec {
-  margin: 0 0 -6px 2px;
-}
-.details .scroll > .pfn,
-.details .scroll > .action-error {
-  margin: 0 2px;
-}
-.details .scroll > .eact,
-.details .scroll > .detail-actions {
-  margin: 0;
-}
-.details .detail-actions {
-  gap: 6px;
-}
-.details .detail-actions .btn {
-  height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
-}
-.details .detail-actions .btn .ic {
-  font-size: 14px;
-}
-.details .prev .irow .a button.value-action,
-.details .inset.edit .fr .a button.value-action {
-  width: 24px;
-  padding: 0;
-  justify-content: center;
-}
-.details .scroll > .inset .fr {
-  min-height: var(--prop-row-h);
-  padding: 3px 0;
-  border-top: 0;
-}
-.details .scroll > .inset .fr .k {
-  width: 150px;
-  font-size: 12.5px;
-}
-.details .scroll > .inset .fr .v {
-  font-size: 12.5px;
-}
-.details .scroll > .inset .fr .v.mark {
+.details .pathbar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  white-space: nowrap;
+  gap: 2px;
+  min-width: 0;
   overflow: hidden;
+  margin-left: -6px;
+  font-size: 12.5px;
+  color: var(--muted);
 }
-.details .scroll > .inset .fr .v.mark > span {
+.details .pathbar > button,
+.details .pathbar > .step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-weight: var(--weight-label);
+  white-space: nowrap;
+}
+.details .pathbar > button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.details .pathbar > :last-child {
+  flex: none;
+  color: var(--ink-2);
+}
+.details .pathbar .t {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.details .scroll > .inset .fr .v.mark .kico.account,
-.details .scroll > .inset .fr .v.mark .av.team {
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  font-size: var(--mark-type);
-  padding-bottom: 1px;
+.details .pathbar .sep {
   flex: none;
+  font-size: 12px;
+  color: var(--faint);
 }
-.details .prev .irow {
-  min-height: var(--prop-row-h);
-  padding: 3px 0;
-  border-top: 0;
+.details .bar .eact {
+  display: flex;
+  gap: 8px;
+  margin: 0;
 }
-.details .prev .irow .k {
-  width: 150px;
+.details .bar .eact .btn {
+  height: var(--control-h);
   font-size: 12.5px;
 }
-@container (max-width: 519px) {
-  .details .prev .irow .k,
-  .details .scroll > .inset .fr .k {
-    width: 104px;
-  }
+
+.details .scroll {
+  padding: 18px 24px 32px;
 }
-.details .pillrow {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+.details .scroll > * {
+  max-width: 760px;
 }
-.details .pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 22px;
-  padding: 0 8px;
-  border-radius: var(--radius-pill);
-  background: var(--chip-bg);
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink-2);
+.details .hero h2 {
+  font-size: 18px;
+  line-height: 1.3;
 }
-.details .pill.write-access .ic {
-  translate: 0 -1px;
-}
-.details .pill .ic {
-  font-size: 13px;
-}
-.details .filedoc {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px;
-}
-.details .filedoc .big {
-  display: grid;
-  place-items: center;
-  flex: none;
-  width: 40px;
-  height: 48px;
-  border: 1px solid var(--line-mid);
-  border-radius: 5px;
-  background: var(--surface);
-  color: var(--muted);
-  font-size: 20px;
-}
-.details .filedoc .t {
-  min-width: 0;
-}
-.details .filedoc .t b {
+.details .hero p {
   display: block;
+  line-height: 1.4;
+}
+.details .hero .bigtile .ic {
+  font-size: 24px;
+  stroke-width: 1.5;
+}
+.hero .bigtile.pw,
+.sheet .hd .bigtile.pw {
+  background: var(--amber-wash);
+  color: var(--amber-strong);
+}
+.hero .bigtile.file,
+.sheet .hd .bigtile.file {
+  background: var(--accent-wash);
+  color: var(--accent-ink);
+}
+.hero .bigtile.text,
+.sheet .hd .bigtile.text {
+  background: var(--chip-bg);
+  color: var(--ink-3);
+}
+.details .hero-acts .btn .ic {
+  font-size: 14px;
+}
+.details .notice {
+  margin: 4px 0 10px;
+}
+.details .notice .t b {
+  display: block;
+  font-weight: var(--weight-label);
+  color: var(--ink);
+}
+.details .notice > .btn {
+  flex: none;
+  margin-left: auto;
+}
+.details .notice + .prop-group {
+  border-top: 0;
+}
+.details .scroll > .action-error {
+  margin: 4px 0 8px;
+}
+
+.details .prop-row .clip {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.details .prop-row .muted {
+  color: var(--muted);
+}
+.details .prop-row .masked {
   font-size: 13px;
-  font-weight: 600;
+}
+.details .prop-row .value-text {
+  font: 12.5px var(--mono);
+  color: var(--ink);
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.details .filedoc .t small {
-  display: block;
-  color: var(--muted);
-  font-size: 12px;
+.details .prop-row .fname {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
-.details .who {
-  margin: 0;
+.details .prop-row > .a .btn {
+  height: var(--control-h);
+  font-size: 12.5px;
+}
+.details .prop-row.top {
+  align-items: start;
+  padding-block: 8px;
+}
+.details .prop-row.top > .k {
+  padding-top: 5px;
+}
+.details .prop-row .inp {
+  width: 100%;
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 8px;
+  border: 1px solid var(--line-field);
+  border-radius: var(--radius-md);
+  background: var(--field-bg);
+  color: var(--ink);
+  font: 13px var(--sans);
+}
+.details .prop-row textarea.inp {
+  height: auto;
+  min-height: 88px;
+  padding: 5px 8px;
+  resize: vertical;
+  font: 12.5px/1.5 var(--mono);
+}
+.details .prop-row input.inp[type='password'] {
+  letter-spacing: 0.08em;
+}
+.details .prop-row .inp:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash-2);
+  outline: 0;
+}
+
+/* Sharing: one muted note and the readers. */
+.details .sharing .note {
+  max-width: 560px;
+  margin: 4px 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.details .sharing .note b {
+  font-weight: var(--weight-label);
+  color: var(--ink-2);
+}
+.details .roster {
+  display: grid;
+  margin-top: 4px;
+}
+.details .roster .party {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0;
+  border-top: 1px solid var(--line-soft);
+  font-size: 13px;
+}
+.details .roster .party:first-child {
+  border-top: 0;
+}
+.details .roster .party .kico.account {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: var(--mark-type);
+}
+.details .roster .party .store-mark {
+  width: 22px;
+  height: 22px;
+}
+.details .roster .party .nm {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.details .roster .party .nm .t {
+  flex: none;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .inset .appearance-picker {
@@ -493,18 +601,82 @@
   border-top: 0;
 }
 
-.file-uploads {
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--line);
+.sheet .inset.file-uploads .fr .v {
+  display: grid;
+  gap: 1px;
 }
-.file-uploads > div {
-  max-height: 220px;
-  overflow: auto;
-}
-.file-uploads li {
-  margin-block: 8px;
+.sheet .inset.file-uploads code {
+  font: 12px var(--mono);
   overflow-wrap: anywhere;
 }
-.file-uploads button {
-  margin-inline-end: 8px;
+.sheet .inset.file-uploads small {
+  font-size: 12px;
+  color: var(--muted);
+}
+.sheet .inset.file-uploads .fr .a {
+  display: flex;
+  gap: 6px;
+}
+
+/* ---------------------------------------------------------- item sheets
+   New Password / Document / Folder, Rename or Move: a 36px kind tile and a
+   subtitle in the header, grouped bordered fields, the vault as a one-line
+   menu like the other fields. */
+
+.sheet .hd .bigtile {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-lg);
+  background: var(--chip-bg);
+  color: var(--ink-3);
+  font-size: 18px;
+}
+.sheet .sb > .inset.first {
+  margin-top: 8px;
+}
+.sheet .inset .fr select {
+  width: 100%;
+  min-width: 0;
+  font: 13px var(--sans);
+}
+.sheet .inset .fr .card-select.compact .card-select-trigger {
+  height: var(--control-h);
+  gap: 8px;
+  padding: 0 8px;
+  border: 1px solid var(--line-field);
+  border-radius: var(--radius-md);
+  background: var(--field-bg);
+  color: var(--ink);
+}
+.sheet .inset .fr .card-select.compact .card-select-trigger:hover {
+  background: var(--field-bg);
+}
+.sheet .inset .fr .card-select.compact .card-select-trigger:focus-visible,
+.sheet
+  .inset
+  .fr
+  .card-select.compact
+  .card-select-trigger[aria-expanded='true'] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash-2);
+  outline: 0;
+}
+.sheet .inset .fr .card-select.compact .t b {
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sheet .inset .fr .card-select.compact .card-select-trigger .t small {
+  display: none;
+}
+.sheet .inset .fr .card-select.compact .card-select-chevron {
+  font-size: 14px;
+  color: var(--muted);
+}
+.card-select-option .store-mark {
+  flex: none;
 }

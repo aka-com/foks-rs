@@ -14,16 +14,15 @@ import {
   Icon,
   Inset,
   InsetRow,
-  KindIcon,
-  RadioCard,
-  RadioGroup,
   SectionLabel,
   Sheet,
+  StoreMark,
 } from '../components';
-import type { CardOption, DocumentSourceKind, FilterKind } from '../components';
+import type { CardOption, DocumentSourceKind } from '../components';
 import { useConcealOnInactive } from '../use-conceal-on-inactive';
 import {
   displayPath,
+  displayPathComponent,
   isLogin,
   itemKey,
   kindLabel,
@@ -59,6 +58,7 @@ import { useFileDrop } from '../file-drop';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { useToast } from '/kit/toasts';
 import { editableValue } from './edit-value';
+import { BigTile, itemTile, newItemTile } from './item-tile';
 import { itemActionProblem } from './store-access';
 
 export type NewKind = Exclude<ItemKind, 'Folder'>;
@@ -279,6 +279,7 @@ function storeOption(snapshot: AgentSnapshot, store: Store): CardOption {
   const description = storeDescription(snapshot, store);
   return {
     id: store.id,
+    mark: <StoreMark snapshot={snapshot} store={store} />,
     title: store.name,
     detail:
       store.kind === 'account'
@@ -309,6 +310,70 @@ export function writeBlockReason(
   return 'You do not have permission to create items in this vault.';
 }
 
+type RoleLevel = 'Owner' | 'Admin' | 'Member';
+
+function roleLevel(role: KvRoleInput): RoleLevel {
+  return role === 'Owner' || role === 'Admin' ? role : 'Member';
+}
+
+function memberVisibility(role: KvRoleInput): number {
+  return role.startsWith('Member:') ? Number(role.slice('Member:'.length)) : 0;
+}
+
+/**
+ * One access row: the role level as a menu, and for Member the visibility
+ * level it applies at.
+ */
+function RoleRow({
+  label,
+  role,
+  onRole,
+}: {
+  label: string;
+  role: KvRoleInput;
+  onRole: (role: KvRoleInput) => void;
+}): ReactNode {
+  const level = roleLevel(role);
+  const visibility = memberVisibility(role);
+  return (
+    <>
+      <InsetRow label={label}>
+        <select
+          aria-label={label}
+          value={level}
+          onChange={(event) => {
+            const next = event.target.value as RoleLevel;
+            onRole(next === 'Member' ? `Member:${visibility}` : next);
+          }}
+        >
+          <option value="Member">Member (visibility {visibility})</option>
+          <option value="Admin">Admin</option>
+          <option value="Owner">Owner</option>
+        </select>
+      </InsetRow>
+      {level === 'Member' ? (
+        <Field
+          label={`${label} visibility`}
+          type="number"
+          mono
+          min={-32768}
+          max={32767}
+          value={String(visibility)}
+          onChange={(val) => {
+            const next = Number(val);
+            if (Number.isInteger(next) && next >= -32768 && next <= 32767)
+              onRole(`Member:${next}`);
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * Who can read and who can change a new team item. Personal vaults have no
+ * roles; the sheet says the item stays private instead.
+ */
 function AccessBlock({
   snapshot,
   store,
@@ -325,7 +390,12 @@ function AccessBlock({
   onWriteRole: (role: KvRoleInput) => void;
 }): ReactNode {
   if (store.kind !== 'team') {
-    return null;
+    return (
+      <p className="hint">
+        Your {store.name} vault is private and cannot be shared. To share an
+        item, move it to a team vault.
+      </p>
+    );
   }
   const roleWire = (role: KvRoleInput): RoleWire =>
     role === 'Owner' || role === 'Admin'
@@ -346,121 +416,22 @@ function AccessBlock({
   const excluded = roster.filter((party) => !admitted.includes(party));
   const changers =
     readersOf(snapshot, { ...candidate, read: candidate.write }) ?? [];
-  const readVisibility = readRole.startsWith('Member:')
-    ? Number(readRole.slice('Member:'.length))
-    : 0;
-  const choices: readonly [string, KvRoleInput, string][] = [
-    ['Owner', 'Owner', 'Only owners can read.'],
-    ['Admin', 'Admin', 'Admins and owners can read.'],
-    [
-      'Member',
-      `Member:${readVisibility}`,
-      'Members at this visibility level and above can read.',
-    ],
-  ];
-  const roleChoices = (
-    selected: KvRoleInput,
-    choose: (role: KvRoleInput) => void,
-    forWrite: boolean,
-  ) =>
-    choices.map(([label, role, detail]) => {
-      const next =
-        label === 'Member'
-          ? (`Member:${selected.startsWith('Member:') ? Number(selected.slice('Member:'.length)) : 0}` as KvRoleInput)
-          : role;
-      const on =
-        selected === next ||
-        (label === 'Member' && selected.startsWith('Member:'));
-      return (
-        <RadioCard
-          key={label}
-          selected={on}
-          onSelect={() => choose(next)}
-          title={label}
-          detail={
-            forWrite
-              ? 'Members with Admin or Owner roles can modify or delete this item.'
-              : detail
-          }
-        />
-      );
-    });
   return (
     <>
-      <SectionLabel
-        action={
-          <span className="pv">
-            accessible to {admitted.length} of {roster.length}
-          </span>
-        }
-      >
-        Who can read
-      </SectionLabel>
+      <SectionLabel>Access</SectionLabel>
       <Inset>
-        <RadioGroup label="Who can read">
-          {roleChoices(readRole, onReadRole, false)}
-        </RadioGroup>
-        {readRole.startsWith('Member:') ? (
-          <Field
-            label="Member visibility"
-            type="number"
-            mono
-            min={-32768}
-            max={32767}
-            value={String(readVisibility)}
-            onChange={(val) => {
-              const next = Number(val);
-              if (Number.isInteger(next) && next >= -32768 && next <= 32767)
-                onReadRole(`Member:${next}`);
-            }}
-          />
-        ) : null}
+        <RoleRow label="Read" role={readRole} onRole={onReadRole} />
+        <RoleRow label="Write" role={writeRole} onRole={onWriteRole} />
       </Inset>
       <p className="hint">
-        At{' '}
-        <b>
-          {readRole === 'Owner' || readRole === 'Admin'
-            ? readRole
-            : `Member · visibility ${readVisibility}`}
-        </b>{' '}
-        this item will be readable by{' '}
-        <b>
-          {admitted.length} of {roster.length}
-        </b>{' '}
-        members in {store.name}: {admitted.map(partyName).join(', ') || 'none'}.
+        {admitted.length} of {roster.length} in {store.name} can read this item
+        {admitted.length ? ` (${admitted.map(partyName).join(', ')})` : ''}
         {excluded.length
-          ? ` ${excluded.map(partyName).join(', ')} cannot read this item under the selected role.`
+          ? `; ${excluded.map(partyName).join(', ')} cannot`
           : ''}
-      </p>
-      <SectionLabel>
-        Who can change{' '}
-        <span className="pv">
-          changeable by {changers.length} of {roster.length}
-        </span>
-      </SectionLabel>
-      <Inset>
-        <RadioGroup label="Who can change">
-          {roleChoices(writeRole, onWriteRole, true)}
-        </RadioGroup>
-        {writeRole.startsWith('Member:') ? (
-          <Field
-            label="Member visibility"
-            type="number"
-            mono
-            min={-32768}
-            max={32767}
-            value={writeRole.slice('Member:'.length)}
-            onChange={(val) => {
-              const next = Number(val);
-              if (Number.isInteger(next) && next >= -32768 && next <= 32767)
-                onWriteRole(`Member:${next}`);
-            }}
-          />
-        ) : null}
-      </Inset>
-      <p className="hint">
-        Read and write permissions are set separately. A member with write
-        permission can update this item even if they cannot view its contents.
+        . {changers.length} of {roster.length} can change it. Read and write
+        access are set separately: a member who can change an item may not be
+        able to read it.
       </p>
     </>
   );
@@ -497,7 +468,6 @@ function NewSheet({
           )
         : namedPath('', '/', workflow.initialFolder)),
   );
-  const [pathShown, setPathShown] = useState(false);
   const [username, setUsername] = useTabSheetState(
     'item.username',
     workflow.draft?.username ?? '',
@@ -723,6 +693,7 @@ function NewSheet({
     placeholder: string,
     mono = false,
     type: 'text' | 'password' = 'text',
+    autoFocus = false,
   ) => (
     <Field
       label={label}
@@ -731,13 +702,15 @@ function NewSheet({
       type={type}
       placeholder={placeholder}
       mono={mono}
+      autoFocus={autoFocus}
     />
   );
+  const title = `New ${kindLabel(itemKind)}`;
   const sheet = (
     <Sheet
-      width="mid"
-      glyph={<KindIcon kind={itemKind} />}
-      title={`New ${kindLabel(itemKind).toLowerCase()}`}
+      glyph={<BigTile face={newItemTile(itemKind)} />}
+      title={title}
+      subtitle={store ? `Saved to ${store.name}` : undefined}
       footer={
         <>
           <Button onClick={dismiss}>Cancel</Button>
@@ -754,47 +727,35 @@ function NewSheet({
             {saving
               ? 'Creating…'
               : itemKind === 'Document' && source === 'file' && !sourcePath
-                ? 'Choose file and create'
-                : 'Create item'}
+                ? 'Choose File and Create'
+                : 'Create'}
           </Button>
         </>
       }
     >
       <>
-        <SectionLabel
-          action={
-            snapshot.stores.length ? (
-              <button
-                type="button"
-                className="path-toggle"
-                aria-expanded={pathShown}
-                onClick={() => setPathShown((shown) => !shown)}
-              >
-                {pathShown ? 'Hide Path' : 'Path'}
-              </button>
-            ) : undefined
-          }
-        >
-          Save in vault
-        </SectionLabel>
+        <SectionLabel>Save in vault</SectionLabel>
         <Inset>
           {snapshot.stores.length ? (
-            <CardSelect
-              label="Save in vault"
-              options={storeNavigationOrder(snapshot).map((candidate) =>
-                storeOption(snapshot, candidate),
-              )}
-              value={storeId}
-              onChange={setStoreId}
-              placeholder="Choose a destination"
-            />
+            <InsetRow label="Vault" className="vault-row">
+              <CardSelect
+                label="Save in vault"
+                className="compact"
+                options={storeNavigationOrder(snapshot).map((candidate) =>
+                  storeOption(snapshot, candidate),
+                )}
+                value={storeId}
+                onChange={setStoreId}
+                placeholder="Choose a destination"
+              />
+            </InsetRow>
           ) : (
             <InsetRow label="Vault">
               <span className="dim">No vaults available to store items.</span>
             </InsetRow>
           )}
-          {snapshot.stores.length && pathShown
-            ? field('Path', path, setPath, PATH_HINT[itemKind])
+          {snapshot.stores.length
+            ? field('Path', path, setPath, PATH_HINT[itemKind], true)
             : null}
         </Inset>
         {store && blocked ? (
@@ -824,6 +785,9 @@ function NewSheet({
                   setPath(namedPath(next, '/logins', workflow.initialFolder));
                 },
                 'e.g. github.com',
+                false,
+                'text',
+                true,
               )}
               {field('User name', username, setUsername, 'username')}
               {field(
@@ -859,6 +823,9 @@ function NewSheet({
                     );
                 },
                 'e.g. api-key',
+                false,
+                'text',
+                true,
               )}
               <DocumentSourceRow
                 source={source}
@@ -894,7 +861,7 @@ function NewSheet({
     <>
       <DismissibleDialog
         className="backdrop"
-        aria-label={`New ${kindLabel(itemKind).toLowerCase()}`}
+        aria-label={title}
         onDismiss={dismiss}
       >
         {sheet}
@@ -990,17 +957,27 @@ function NewFolderSheet({
     <>
       <DismissibleDialog
         className="backdrop"
-        aria-label="New folder"
+        aria-label="New Folder"
         onDismiss={dismiss}
       >
         <Sheet
-          width="mid"
           glyph={
-            <span className="kic Folder" aria-hidden="true">
+            <span className="bigtile" aria-hidden="true">
               <Icon name="folder" />
             </span>
           }
-          title="New folder"
+          title="New Folder"
+          subtitle={
+            store
+              ? `In ${[
+                  store.name,
+                  ...(workflow.initialFolder ?? '')
+                    .split('/')
+                    .filter(Boolean)
+                    .map(displayPathComponent),
+                ].join(' › ')}`
+              : 'Vault unavailable'
+          }
           footer={
             <>
               <Button onClick={dismiss}>Cancel</Button>
@@ -1009,29 +986,21 @@ function NewFolderSheet({
                 disabled={!canWrite || !validName || saving}
                 onClick={() => void submit()}
               >
-                {saving ? 'Creating…' : 'Create folder'}
+                {saving ? 'Creating…' : 'Create'}
               </Button>
             </>
           }
         >
-          <SectionLabel>Location</SectionLabel>
-          <Inset>
-            <InsetRow label="Vault">
-              <span>{store?.name ?? 'Vault unavailable'}</span>
-            </InsetRow>
-            {workflow.initialFolder && workflow.initialFolder !== '/' ? (
-              <InsetRow label="Folder">
-                <span>{workflow.initialFolder}</span>
-              </InsetRow>
-            ) : null}
+          <Inset className="first">
             <Field
               label="Name"
               value={name}
+              autoFocus
               onChange={(next) => {
                 setName(next);
                 setError(null);
               }}
-              placeholder="Folder name"
+              placeholder="e.g. certificates"
             />
           </Inset>
           {name && !validName ? (
@@ -1092,9 +1061,7 @@ function ExistsSheet({
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const sheet = (
     <Sheet
-      glyph={
-        clash ? <KindIcon kind={kindOf(clash) as FilterKind} /> : undefined
-      }
+      glyph={clash ? <BigTile face={itemTile(clash)} /> : undefined}
       title={`An item already exists at ${displayPath(workflow.path)}`}
       footer={
         <>
@@ -1332,7 +1299,7 @@ function ConflictSheet({
       }}
     >
       <Sheet
-        glyph={<KindIcon kind={kindOf(workflow.item) as FilterKind} />}
+        glyph={<BigTile face={itemTile(workflow.item)} />}
         title="Item changed elsewhere"
         footer={
           <>
@@ -1453,9 +1420,10 @@ function DeleteSheet({
   return (
     <AlertDialog
       destructive
-      icon="trash"
-      title={`Delete ${nameOf(workflow.item.path)}?`}
-      message="This cannot be undone."
+      title={`Delete “${nameOf(workflow.item.path)}”?`}
+      // The removal names the version on screen, so a newer edit elsewhere
+      // turns it into a conflict rather than deleting that edit.
+      message="This item will be deleted if it has not been modified by someone else. Earlier versions will no longer be accessible."
       confirmLabel={deleting ? 'Deleting…' : 'Delete'}
       busy={deleting}
       confirmDisabled={uncertain || Boolean(problem)}

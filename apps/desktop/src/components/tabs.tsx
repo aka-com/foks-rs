@@ -2,12 +2,16 @@
 
 import { useId, useRef } from 'react';
 import type { ReactNode } from 'react';
+import { Icon } from './icon';
+import type { FoksIconName } from '../icons';
 
 export interface TabItem<T extends string> {
   id: T;
   label: string;
   /** Omit the pill when the tab has no count (Settings). */
   count?: number | `${number}+`;
+  /** A glyph before the label, for a vertical strip drawn as a source list. */
+  icon?: FoksIconName;
 }
 
 export interface TabsProps<T extends string> {
@@ -101,6 +105,7 @@ export function Tabs<T extends string>({
               onChange(item.id);
             }}
           >
+            {item.icon ? <Icon name={item.icon} /> : null}
             {item.label}
             {item.count === undefined ? null : (
               <span className={item.count ? 'n' : 'n zero'}>{item.count}</span>

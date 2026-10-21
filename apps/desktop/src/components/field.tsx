@@ -24,6 +24,8 @@ export interface FieldProps {
   action?: ReactNode;
   /** A quiet note after the input. */
   hint?: ReactNode;
+  /** Takes the focus when its dialog opens (`data-dialog-autofocus`). */
+  autoFocus?: boolean;
 }
 
 export function Field({
@@ -38,6 +40,7 @@ export function Field({
   max,
   action,
   hint,
+  autoFocus = false,
 }: FieldProps): ReactNode {
   return (
     <InsetRow
@@ -49,6 +52,7 @@ export function Field({
         type={type}
         disabled={disabled}
         aria-label={label}
+        data-dialog-autofocus={autoFocus ? 'true' : undefined}
         className={mono ? 'mono' : undefined}
         placeholder={placeholder}
         min={min}

@@ -143,7 +143,7 @@ test('the account header names the active account and opens its menu', async () 
     button.textContent?.trim(),
   );
   assert.ok(labels.some((text) => text?.includes('satoshi')));
-  assert.ok(labels.some((text) => text === 'Add account or server…'));
+  assert.ok(labels.some((text) => text === 'Add Account or Server…'));
   assert.ok(labels.some((text) => text === 'Lock'));
   testingLibrary.fireEvent.keyDown(document, { key: 'Escape' });
 });
@@ -314,14 +314,18 @@ test('Accounts, Devices and Settings draw no StoreRef', async () => {
     ].join(' ');
 
   for (const [name, heading, settled] of [
+    // Devices' list names itself in its list head.
     ['Devices', 'Devices', 'paper-backup'],
     // Settings' sub-navigation opens on Account, its landing page, whose
-    // header names the account it is about rather than the section.
+    // hero names the account it is about rather than the section.
     ['Settings', 'satoshi', 'devices and keys'],
   ] as const) {
     testingLibrary.fireEvent.click(place(name.toLowerCase()));
     const main = await testingLibrary.waitFor(() => {
-      assert.equal(document.querySelector('.loc h1')?.textContent, heading);
+      assert.equal(
+        document.querySelector('.list-head h2, .account-hero h1')?.textContent,
+        heading,
+      );
       const node = document.querySelector('main.main');
       assert.ok(node);
       // Wait for the page's own reads: a loading pane draws none of the rows
@@ -332,7 +336,9 @@ test('Accounts, Devices and Settings draw no StoreRef', async () => {
       );
       return node;
     });
-    const drawn = shownText(main);
+    // Devices draws a key's details in the details column beside the list.
+    const details = document.querySelector('.app > .details');
+    const drawn = shownText(main) + (details ? shownText(details) : '');
     for (const ref of refs)
       assert.equal(
         drawn.includes(ref),
