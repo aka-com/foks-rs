@@ -122,6 +122,7 @@
 
 .devices-details .settings-inset:not(.danger-box) .fr .v small {
   display: inline;
+  font-size: 13px;
 }
 
 .devices-details .settings-inset:not(.danger-box) .fr .v > .copybox {

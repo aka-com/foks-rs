@@ -59,7 +59,11 @@
 
 /* ------------------------------------------------------------- the page */
 .subnav-page > .body {
-  padding: 22px 28px 48px;
+  padding: 24px 28px 48px;
+}
+
+.subnav-page .hero {
+  padding-top: 4px;
 }
 
 .subnav-page .settings-main {
@@ -332,11 +336,5 @@
   .subnav-page .settings-inset .fr .k,
   .subnav-page .settings-inset.wide .fr .k {
     width: 104px;
-  }
-}
-
-@media (max-width: 900px) {
-  .subnav-page > .body {
-    padding: 18px 22px 40px;
   }
 }
