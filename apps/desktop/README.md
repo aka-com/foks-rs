@@ -92,7 +92,7 @@ itself; joining is the sheet the Teams header opens, and the Members tab no
 longer repeats it inline. Joining runs in three steps: the invitation and the
 server it is for, the resolved team with who is asking (the account, or a
 named team it administers, picked from a list), then the sent request with
-its state. Request membership prepares and submits in one press; a request
+its state. Request Membership prepares and submits in one press; a request
 that stays prepared, or whose submission went unanswered, is finished from
 the sheet's Resume a pending request list. A security key PIN is asked for
 only when the agent requires one. A group that needs attention says so on its own row,
@@ -280,7 +280,7 @@ ad-hoc groups are read-only for roster and federation management.
 Phase 5 adds `initialize_client_state`, `check_and_add_profile`, authenticated
 pending-operation reads, account create/resume, passphrase protection, one-time
 owner-backup prepare/commit, owner recovery/resume and `discover_groups`.
-Explicit authenticated discovery is wired behind Check now. Waiting retains a
+Explicit authenticated discovery is wired behind Check Now. Waiting retains a
 Proposed band for automatic product support, and makes clear that nothing runs
 while FOKS is closed or silently in the background. First-run profile checks
 return the selected profile and pin as typed facts learned by that check. A
@@ -555,15 +555,15 @@ FOKS has no identity
 proofs to list. Under them the rows are:
 username with Change…, the local alias, the passphrase with a
 link to
-Settings › Preferences, followed by Bot accounts, Web admin panel, Sign in
+Settings › Preferences, followed by Bot Accounts, Web Admin Panel, Sign In
 via SSO, and Import from FOKS CLI, each opening its corresponding panel. Sign
-in via SSO is a two-step sheet: the account and whether its keys are on a
+In via SSO is a two-step sheet: the account and whether its keys are on a
 security key, then the browser sign-in, with one primary action per step
-(open the browser, check the sign-in, finish). Check linkage reads the
+(open the browser, check the sign-in, finish). Check Linkage reads the
 account's linkage and, where the account is not yet linked, the primary
 becomes Link existing account. First run's Sign up with SSO
 shares the flow and the browser step; it opens on where to keep the keys
-(this computer or a security key) and ends with Finish sign-up. If
+(this computer or a security key) and ends with Finish Sign-Up. If
 account access is suspended, username changes are disabled with an explanatory
 reason while the remaining recovery actions stay available. An account's mark is the
 initial of the username, over a color derived from it, on the account band
@@ -584,7 +584,8 @@ a store's root lists its own items, then a section per first-level folder
 for a team, Manage…. The second line then gives the kind and version. The
 list is a listbox: one Tab stop, Up/Down/Home/End and typing a name move the
 selection, Return or ⌘↓ opens a folder row, ⌘↑ goes up, and the rows' hover
-actions are pointer shortcuts that the context menu repeats. Clicking the
+actions are pointer shortcuts that the context menu repeats. An item row
+selects on the mouse press, not the release. Clicking the
 list's empty space or pressing Escape in the details clears the selection
 (guarded, so unsaved edits ask first); the bars, menus and sidebar leave it
 alone. A store that cannot be opened keeps this layout: its head with a lock
@@ -648,7 +649,7 @@ Security key enrollments (each enrollment with its Enrolled or Incomplete
 chip, its own
 Revoke… — off, with the reason, while the enrollment is unfinished — and the
 note that the agent reports no serial for one, the serial of the card connected
-now with Provision… and PIN status — which asks the card in the port, so a
+now with Provision… and PIN Status — which asks the card in the port, so a
 connected card and an enrollment to name are all it needs — and the
 card PIN's link to Settings › Servers). That last section is the one part of
 the page that is not about the account above it: enrollments are listed for
@@ -668,13 +669,13 @@ the direction it names, and into the recovery-phrase and provisioning
 sheets. The pairing sheet is the two numbered steps of one exchange, written
 for the direction the chooser picked, with Back to the chooser instead of a
 control that silently changes what Start would do: getting a phrase is Start
-and Resume offer in step 1 and the phrase with Copy, and step 2 is quiet until
+and Resume Offer in step 1 and the phrase with Copy, and step 2 is quiet until
 there is one; entering a phrase is the other Mac's step 1 and this Mac's
 fields in step 2. A phrase that came from Resume says the agent is still
 holding that offer, and nothing counts down, because `PairingOffer` carries
 only an alias and a phrase. The recovery-phrase sheet reveals the 17 words the
 account's phrase is, one grid, not copyable, behind "I have written down these
-words" and Save recovery phrase. Cancel beside it discards the revealed phrase:
+words" and Save Recovery Phrase. Cancel beside it discards the revealed phrase:
 `prepare_owner_backup` generates it and nothing else — it writes no local
 state and does not contact the server — so there is nothing to clean up, and
 the phrase is gone rather than committed. Esc and a click on the backdrop
@@ -684,7 +685,7 @@ stop, arrows move the selection), and selecting an entry —
 `?state=devices&store=<StoreRef>&device=<key>` — fills the details column with
 the
 kind, the role, the account, the full key id in mono with Copy, and the one
-destructive action that kind has: Remove this device… for another Mac, Revoke…
+destructive action that kind has: Remove This Device… for another Mac, Revoke…
 for a recovery phrase or an enrollment, both with the typed confirmation the row
 used; this Mac's page says it cannot remove itself and points at Settings, and
 a key on a card says it is revoked under its enrollment and carries the action
@@ -720,7 +721,7 @@ and message-preview preferences, which the desktop persists locally; channel
 overrides stay in Chat's info panel, with a link here, and none of these
 preferences sync between devices; its Accent color sets the accent, not the
 sidebar, which stays neutral. Device: Application (version, Lock Now),
-Agent (status with Retry connection while it is not ready, socket with Copy),
+Agent (status with Retry Connection while it is not ready, socket with Copy),
 FOKS data (export, import, Verify Online, Choose Folder… to move the data
 folder) and a danger
 zone whose Reset this device runs the per-server reset once per profile, each
@@ -940,7 +941,7 @@ last of it is accounted for the section says "All caught up" rather than
 disappearing without a word. When the team's server check-in has lapsed the
 column stays and the pane carries the notice, with "Check in" opening that
 server in Settings › Servers; every other unavailable state is stated without
-an action, because no button in Chat resolves it, and "Open another team" is
+an action, because no button in Chat resolves it, and "Open Another Team" is
 offered only when another team can actually be opened. A location naming a team
 that has no chat says so in the pane rather than waiting for an inbox that will
 not arrive. A location naming a channel the team does not list _yet_ is the
@@ -1144,7 +1145,7 @@ kept so deep links defined in the design specification resolve to this location.
 | `new-link`                                                                           | All items                               | Link sheet in Personal                                                                                  |
 | `group-new-text` · `group-new-link` · `group-new-file`                               | Engineering                             | Phase 7 group create acceptance scenes for text, Link/symlink and streamed File writes                  |
 | `exists`                                                                             | All items                               | must-not-exist refusal; Open refreshes the invalidated catalog first                                    |
-| `conflict`                                                                           | All items                               | exact-version refusal with retained draft and Refresh and review                                        |
+| `conflict`                                                                           | All items                               | exact-version refusal with retained draft and Refresh and Review                                        |
 | `grid`                                                                               | All items                               | shows the list: list or cards is the View menu's `localStorage` preference, not an address |
 | `folders`                                                                            | All items                               | shows the list: folders are the sidebar tree and the list's folder sections |
 | `lease`                                                                              | Work (Acme)                             | `lease=lapsed` — the whole snapshot, not a place                                                        |
@@ -1194,9 +1195,9 @@ active filter queries persist across store navigation transitions within a sessi
 Cross-server collections use the same server-name disambiguation and account
 captions. Files roots and Chat team rows show their server visibly; a group
 held through multiple accounts on one server also names its holding account.
-Duplicate server labels include the underlying profile name. Server details and
-setup instructions retain the configured address rather than substituting a
-local display name for it.
+Duplicate server labels include the underlying profile name. Server details
+retain the configured address rather than substituting a local display name
+for it.
 
 ### Device metadata cache
 
