@@ -59,6 +59,14 @@ import Vault from 'lucide/dist/esm/icons/vault.mjs';
 import X from 'lucide/dist/esm/icons/x.mjs';
 import type { FoksIconName } from './icon-name';
 
+/** A hardware security key (USB body with a connector), drawn in Lucide's
+ *  24px grid and stroke so it sits beside the Lucide glyphs. Lucide has no
+ *  USB-key shape; this is the design's `card` glyph. */
+const SecurityKey: IconNode = [
+  ['rect', { x: '7', y: '2.5', width: '10', height: '13', rx: '2' }],
+  ['path', { d: 'M10 15.5v4a2 2 0 0 0 4 0v-4M10.5 6.5h3' }],
+];
+
 export const FOKS_ICONS = {
   key: KeyRound,
   terminal: Terminal,
@@ -110,6 +118,7 @@ export const FOKS_ICONS = {
   panelLeft: PanelLeft,
   userPlus: UserPlus,
   warning: TriangleAlert,
+  securityKey: SecurityKey,
 } as const satisfies Record<FoksIconName, IconNode>;
 
 export type { FoksIconName } from './icon-name';
