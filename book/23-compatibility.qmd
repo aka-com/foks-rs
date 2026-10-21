@@ -223,6 +223,32 @@ tree is not touched.
 
 Behaviour adopted from main so far:
 
+- **KV creation results (`fd03098`, `b3c9177`).** go-foks main returns
+  `KVMkdirRes` and `KVPutSmallFileOrSymlinkRes`, one-field structs whose
+  `wasReplay` reports that an object with the same ID and identical
+  persisted contents already existed, where v0.1.9 returns void. The Rust
+  client decodes both shapes (an omitted result is `wasReplay = false`), and
+  the Rust server returns the struct, which v0.1.9 clients accept because
+  they decode a void result into an untyped value. A replay is not charged
+  against usage; an ID reused with different contents is `KV_RACE_ERROR`
+  with upstream's message. The policy lists the struct results under
+  `accepted_upstream_results`, so the drift report classifies the result
+  change as additive.
+- **Grown realtime structs and send replays (`b41b354`, `c334c97`).**
+  `RTSendRes` gains `wasReplay` and `RTChannelMetadata` gains `noPush`. Both
+  decode as optional trailing fields that default to false, unknown later
+  fields are retained, and the Rust implementation emits a flag only when it
+  is set or was decoded, so bytes sent to v0.1.9 peers do not change. The
+  server stores and re-serves channel metadata including any retained tail.
+  A replayed send returns `wasReplay = true`; a send whose message ID is
+  already held by a different message is `RT_MSG_REPLAY_MISMATCH` (12007,
+  void payload), which the client treats as a definite rejection.
+- **Pegged messages (`bf9ace5`).** Replies, reactions and edits from go-foks
+  main clients are authenticated and count toward history continuity, and
+  the desktop shows them as placeholders naming the action; an edit with an
+  empty body is shown as a deletion. The Rust server still accepts only
+  Basic sends, so a go-foks main client's pegged send to a Rust host is
+  refused with `BAD_ARGS`.
 - **Unknown team view tokens (7016).** A go-foks main server answers a
   view-only team bearer token it holds no row for with
   `TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR` (void payload), and its client then

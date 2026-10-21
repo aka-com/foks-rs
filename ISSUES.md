@@ -190,6 +190,10 @@ identify them accurately:
   `TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR`. Rust servers before this change
   returned `EXPIRED_ERROR` on the KV path, which the write session does not
   treat as a token refusal.
+- The Rust realtime server accepts only Basic sends. A go-foks main client's
+  reply, reaction or edit (pegged message) sent to a Rust host is refused with
+  `BAD_ARGS`; pegged messages received from a go-foks host are shown as
+  placeholders, and only text messages raise notifications.
 - The pinned v0.1.9 Go client cannot open rotated invitation certificates
   because its stacked-signature verifier uses the reverse order. go-foks fixed
   the verifier in `e07f30b` (#350, after v0.1.9), so Go clients built from main
