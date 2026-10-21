@@ -190,9 +190,14 @@ identify them accurately:
   `TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR`. Rust servers before this change
   returned `EXPIRED_ERROR` on the KV path, which the write session does not
   treat as a token refusal.
+- A team KV write session re-mints a refused view only when the reloaded team
+  opens the same team keys. After a role change, which rotates or adds keys,
+  the write returns `TEAM_BEARER_TOKEN_STALE_ERROR` and the caller must reload
+  the team.
 - The Rust realtime server accepts only Basic sends. A go-foks main client's
   reply, reaction or edit (pegged message) sent to a Rust host is refused with
-  `BAD_ARGS`; pegged messages received from a go-foks host are shown as
+  `BAD_ARGS` (1030), from the metadata check in `Database::rt_send`
+  (`crates/foks-server-db/src/realtime/messages.rs`); pegged messages received from a go-foks host are shown as
   placeholders, and only text messages raise notifications.
 - The pinned v0.1.9 Go client cannot open rotated invitation certificates
   because its stacked-signature verifier uses the reverse order. go-foks fixed

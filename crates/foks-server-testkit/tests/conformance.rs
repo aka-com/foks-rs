@@ -46,6 +46,8 @@ mod support;
 mod team_create;
 #[path = "conformance/team_kv.rs"]
 mod team_kv;
+#[path = "conformance/team_view_remint.rs"]
+mod team_view_remint;
 #[path = "conformance/trust_and_registration.rs"]
 mod trust_and_registration;
 #[path = "conformance/yubikey.rs"]
