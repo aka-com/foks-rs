@@ -1,8 +1,14 @@
 /**
  * Details panel displaying item metadata, content preview, sharing roster, and item actions.
+ *
+ * Its first bar is the item's location (store › folders, each a link to that
+ * folder) and the More menu; under it the hero (kind tile, name, kind and
+ * server, the primary actions) and form-style property rows in groups divided
+ * by hairlines.
  */
 
 import {
+  Fragment,
   useCallback,
   useEffect,
   useId,
@@ -15,20 +21,26 @@ import type { ReactNode } from 'react';
 import {
   Button,
   Chip,
-  Field,
+  EmptyState,
   Icon,
   Inset,
   InsetRow,
-  KindIcon,
-  SectionLabel,
+  Mark,
+  MenuButton,
+  MenuItem,
+  PropertyGroup,
+  PropertyRow,
   SheetDialog,
+  StoreMark,
 } from '../components';
 import type { FilterKind } from '../components';
 import {
+  canChangeItem,
   displayPath,
+  displayPathComponent,
   fmtSize,
   formatRole,
-  initials,
+  hue as nameHue,
   isLogin,
   kindLabel,
   kindOf,
@@ -36,15 +48,13 @@ import {
   parseRole,
   partiesOf,
   partyName,
-  peopleLabel,
   prefixOf,
   readersOf,
-  storeHues,
-  storeNavigationOrder,
+  serverDisplayLabelForStore,
+  storeAvailability,
   storeOf,
-  usernameOf,
 } from '../model';
-import type { Item, Party, RoleWire, Store, AgentSnapshot } from '../model';
+import type { Item, Party, RoleWire, AgentSnapshot } from '../model';
 import { AccountMark } from './account-switcher';
 import type { NavigationGuard, Selection } from '../location';
 import { useNavigationGuard } from '../navigation-guard';
@@ -53,7 +63,8 @@ import type { Bridge, ItemRequest, ReadItemResponse } from '../bridge';
 import { useFileDrop } from '../file-drop';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { editableValue } from './edit-value';
-import { itemActionProblem } from './store-access';
+import { BigTile, itemTile } from './item-tile';
+import { accessCopy, itemActionProblem } from './store-access';
 import { useConcealOnInactive } from '../use-conceal-on-inactive';
 
 const FIELD_LABELS: Readonly<Record<string, string>> = {
@@ -169,51 +180,26 @@ function passwordFields(
   }));
 }
 
-/** Renders the store icon or avatar, matching the style used in the browser tree and list rows. */
-function StoreMark({
-  snapshot,
-  store,
-}: {
-  snapshot: AgentSnapshot;
-  store: Store;
-}): ReactNode {
-  return store.kind === 'team' ? (
-    <span
-      className="av team"
-      style={{
-        background: storeHues(storeNavigationOrder(snapshot)).get(store.id),
-      }}
-      aria-hidden="true"
-    >
-      {initials(store.name)}
-    </span>
-  ) : (
-    <AccountMark name={usernameOf(snapshot, store) ?? store.account} />
-  );
-}
+/** The sanctioned wording for a server whose check-in has lapsed. */
+const LEASE_LAPSED =
+  'This server is locked because its connection expired. Items on this server cannot be viewed or edited until the connection is renewed. Other servers remain available.';
 
-function PartyRow({
-  party,
-  canRead,
-}: {
-  party: Party;
-  canRead: boolean;
-}): ReactNode {
-  const details = [
-    party.party_kind !== 'user' ? 'Member team' : '',
-    canRead ? '' : 'No read access',
-  ].filter(Boolean);
+function PartyRow({ party }: { party: Party }): ReactNode {
+  const name = partyName(party);
+  const team = party.party_kind !== 'user';
   return (
     <div className="party">
-      <span className="t">
-        {partyName(party)}
-        {party.label ? (
-          <>
-            {' '}
-            <Chip tone="you">you</Chip>
-          </>
-        ) : null}
-        {details.length ? <small>{details.join(' · ')}</small> : null}
+      {team ? (
+        <Mark hue={nameHue(name)} size="md">
+          {name.slice(0, 1).toUpperCase()}
+        </Mark>
+      ) : (
+        <AccountMark name={name} />
+      )}
+      <span className="nm">
+        <span className="t">{name}</span>
+        {party.label ? <Chip tone="you">you</Chip> : null}
+        {team ? <Chip>Team</Chip> : null}
       </span>
       <Chip>{roleText(party.destination_role)}</Chip>
     </div>
@@ -230,6 +216,10 @@ export interface DetailsPanelProps {
   onClose: () => void;
   onDelete: (item: Item) => void;
   onMove?: (item: Item) => void;
+  /** Opens a folder of the item's store from the location bar (`path` "/" is the root). */
+  onOpenFolder?: (storeId: string, path: string) => void;
+  /** Opens the server page for a store that cannot be read (Check Status). */
+  onOpenServer?: (profile: string) => void;
   onConflict: (
     item: Item,
     draft: string,
@@ -265,6 +255,8 @@ export function DetailsPanel({
   onClose,
   onDelete,
   onMove,
+  onOpenFolder,
+  onOpenServer,
   onConflict,
   onApplied,
   onCommandError,
@@ -547,19 +539,18 @@ export function DetailsPanel({
   useEffect(() => {
     if (!editing || !focusEditorOnOpen.current) return;
     focusEditorOnOpen.current = false;
-    editorRef.current
-      ?.querySelector<HTMLElement>(
-        'input:not([type="hidden"]), textarea, .eact button',
-      )
-      ?.focus();
+    // The first field, or Save in the bar when the contents are concealed.
+    (
+      editorRef.current?.querySelector<HTMLElement>(
+        'input:not([type="hidden"]), textarea',
+      ) ?? panelRef.current?.querySelector<HTMLElement>('.eact button')
+    )?.focus();
   }, [editing]);
 
   useEffect(() => {
     if (editing || !focusActionsOnClose.current) return;
     focusActionsOnClose.current = false;
-    editorRef.current
-      ?.querySelector<HTMLElement>('.detail-actions button')
-      ?.focus();
+    editorRef.current?.querySelector<HTMLElement>('.hero-acts button')?.focus();
   }, [editing]);
 
   const selectedFileMode = item?.kind === 'File' || binaryFile;
@@ -641,27 +632,13 @@ export function DetailsPanel({
 
   if (!item) {
     return (
-      <aside ref={panelRef} className="details" aria-label="Details">
-        <div className="dh">
-          <span className="t" />
-          <button
-            type="button"
-            className="x"
-            aria-label="Close"
-            onClick={onClose}
-          >
-            <Icon name="close" />
-          </button>
-        </div>
-        <div className="scroll">
-          <div className="empty" style={{ paddingTop: '60px' }}>
-            <span className="big">
-              <Icon name="search" />
-            </span>
-            <h2>No selection</h2>
-            <p>Select an item to view its details.</p>
-          </div>
-        </div>
+      <aside
+        ref={panelRef}
+        className="details details-empty"
+        aria-label="Details"
+      >
+        <div className="bar" data-tauri-drag-region="" />
+        <EmptyState title="No Selection" />
       </aside>
     );
   }
@@ -692,6 +669,33 @@ export function DetailsPanel({
     !readProblem && activeRead?.state === 'shown' ? activeRead.value : null;
   const readError = activeRead?.state === 'error' ? activeRead.message : null;
   const reading = activeRead?.state === 'loading';
+  const serverLabel = store ? serverDisplayLabelForStore(snapshot, store) : '';
+  const now = accessNow();
+  const availability = store
+    ? storeAvailability(snapshot, store, { nowSeconds: now })
+    : null;
+  // The store itself cannot be read (a lapsed check-in, a blocked server):
+  // the panel says so in a notice and every action on the item stays
+  // disabled with that reason.
+  const lockedCopy =
+    store && availability && !availability.available
+      ? accessCopy(availability.reason, store, serverLabel)
+      : null;
+  const lockedReason =
+    availability && !availability.available ? availability.reason : null;
+  // A member who may read but not change the item: the disabled Edit says
+  // why in its tooltip, and the description stays out of the layout.
+  const roleOnly = Boolean(
+    !readProblem &&
+    !editing &&
+    writeProblem &&
+    availability?.available &&
+    !(accessTicket && !accessTicket.isCurrent()) &&
+    !canChangeItem(snapshot, item, { nowSeconds: now }),
+  );
+  const describedBy = (problem: string | undefined): string | undefined =>
+    problem ? accessDescriptionId : undefined;
+
   const copyValue = async (): Promise<void> => {
     if (!request || !requireAccess()) return;
     try {
@@ -700,6 +704,30 @@ export function DetailsPanel({
     } catch (error) {
       onCommandError(error, item);
     }
+  };
+  // User names and websites are shown in the clear already; they are copied
+  // as the text the row draws.
+  const copyField = async (label: string, text: string): Promise<void> => {
+    if (!requireAccess()) return;
+    try {
+      await bridge.copyText(text);
+      toasts.show(`${label} copied`);
+    } catch (error) {
+      onCommandError(error, item);
+    }
+  };
+  const copyPath = async (): Promise<void> => {
+    if (!request || !requireAccess()) return;
+    try {
+      await bridge.copyItemPath(request);
+      toasts.show('Path copied');
+    } catch (error) {
+      onCommandError(error, item);
+    }
+  };
+  const hide = (): void => {
+    concealEpoch.current += 1;
+    setRead(null);
   };
 
   const beginEdit = async (): Promise<void> => {
@@ -821,6 +849,17 @@ export function DetailsPanel({
     }
   };
 
+  const downloadFile = (): void => {
+    if (!request || !requireAccess()) return;
+    void bridge.downloadFile(request).then(
+      ({ saved }) =>
+        toasts.show(
+          saved ? `Downloaded ${nameOf(item.path)}` : 'Download cancelled',
+        ),
+      (error) => onCommandError(error, item),
+    );
+  };
+
   const editFields = editing && isLogin(item) ? parseFields(editValue) : [];
   const updateEditField = (index: number, value: string): void => {
     setEditValue(
@@ -833,369 +872,198 @@ export function DetailsPanel({
     );
   };
 
-  const preview =
+  const showButton = (
+    <Button
+      aria-label={reading ? 'Reading…' : 'Show'}
+      disabled={reading || Boolean(readProblem)}
+      title={readProblem ?? (reading ? 'Reading…' : 'Show')}
+      aria-describedby={describedBy(readProblem)}
+      onClick={() => void show()}
+    >
+      Show
+    </Button>
+  );
+  const hideButton = (
+    <Button title="Hide" onClick={hide}>
+      Hide
+    </Button>
+  );
+  const copyButton = (label: string, run: () => Promise<void>): ReactNode => (
+    <Button
+      aria-label={`Copy ${label}`}
+      disabled={Boolean(readProblem)}
+      title={readProblem ?? `Copy ${label}`}
+      aria-describedby={describedBy(readProblem)}
+      onClick={() => void run()}
+    >
+      Copy
+    </Button>
+  );
+  const secretValue = (value: string): ReactNode =>
+    shownValue === null ? (
+      <span className="masked">{MASK}</span>
+    ) : (
+      <span className="value-text">{value}</span>
+    );
+
+  const content: ReactNode =
     inlineEditing && isLogin(item) ? (
-      <Inset className="edit">
-        {editFields.map(([field, value], index) => {
-          const secret = field?.toLowerCase() === 'password';
-          return (
-            <Field
-              key={`${field ?? 'value'}-${index}`}
-              label={FIELD_LABELS[field ?? ''] ?? field ?? 'Value'}
-              value={value}
+      editFields.map(([field, value], index) => {
+        const label = FIELD_LABELS[field ?? ''] ?? field ?? 'Value';
+        const secret = field?.toLowerCase() === 'password';
+        return (
+          <PropertyRow
+            key={`${field ?? 'value'}-${index}`}
+            label={label}
+            className="edit"
+            actions={
+              secret ? (
+                <Button
+                  aria-label={editPasswordShown ? 'Hide' : 'Show'}
+                  disabled={!editPasswordShown && Boolean(readProblem)}
+                  title={
+                    (!editPasswordShown ? readProblem : undefined) ??
+                    (editPasswordShown ? 'Hide' : 'Show')
+                  }
+                  aria-describedby={
+                    !editPasswordShown ? describedBy(readProblem) : undefined
+                  }
+                  onClick={() => {
+                    if (editPasswordShown || requireAccess())
+                      setEditPasswordShown((shown) => !shown);
+                  }}
+                >
+                  {editPasswordShown ? 'Hide' : 'Show'}
+                </Button>
+              ) : undefined
+            }
+          >
+            <input
+              className="inp"
+              aria-label={label}
               type={secret && !editPasswordShown ? 'password' : 'text'}
               placeholder={secret ? 'password' : undefined}
-              onChange={(next) => updateEditField(index, next)}
-              action={
-                secret ? (
-                  <button
-                    className="value-action"
-                    aria-label={editPasswordShown ? 'Hide' : 'Show'}
-                    type="button"
-                    disabled={!editPasswordShown && Boolean(readProblem)}
-                    title={
-                      (!editPasswordShown ? readProblem : undefined) ??
-                      (editPasswordShown ? 'Hide' : 'Show')
-                    }
-                    aria-describedby={
-                      !editPasswordShown && readProblem
-                        ? accessDescriptionId
-                        : undefined
-                    }
-                    onClick={() => {
-                      if (editPasswordShown || requireAccess())
-                        setEditPasswordShown((shown) => !shown);
-                    }}
-                  >
-                    <Icon name={editPasswordShown ? 'eyeOff' : 'eye'} />
-                  </button>
-                ) : undefined
-              }
+              value={value}
+              onChange={(event) => updateEditField(index, event.target.value)}
             />
-          );
-        })}
-      </Inset>
+          </PropertyRow>
+        );
+      })
     ) : inlineEditing && editContentConcealed ? (
-      <Inset variant="preview">
-        <InsetRow
-          label="Contents"
-          valueClass="mask"
-          action={
-            <button
-              title="Show"
-              className="value-action"
-              aria-label="Show"
-              type="button"
-              onClick={() => setEditContentConcealed(false)}
-            >
-              <Icon name="eye" />
-            </button>
-          }
-        >
-          {MASK}
-        </InsetRow>
-      </Inset>
+      <PropertyRow
+        label="Value"
+        actions={
+          <Button title="Show" onClick={() => setEditContentConcealed(false)}>
+            Show
+          </Button>
+        }
+      >
+        <span className="masked">{MASK}</span>
+      </PropertyRow>
     ) : inlineEditing ? (
-      <Inset variant="preview">
+      <PropertyRow label="Value" className="edit top">
         <textarea
-          aria-label="Contents"
+          className="inp mono"
+          aria-label="Value"
+          rows={4}
           value={editValue}
           onChange={(event) => setEditValue(event.target.value)}
         />
-      </Inset>
+      </PropertyRow>
     ) : kind === 'Password' && !fileMode ? (
-      <Inset variant="preview">
-        {passwordFields(item.value, shownValue).map(
-          ({ field, value, secret }, index) =>
-            secret ? (
-              <InsetRow
-                key={index}
-                label={FIELD_LABELS[field ?? ''] ?? field ?? 'Value'}
-                className="rev"
-                valueClass={shownValue === null ? 'mask' : 'value-text'}
-                action={
-                  shownValue === null ? (
-                    <>
-                      <button
-                        className="value-action"
-                        aria-label={reading ? 'Reading…' : 'Show'}
-                        type="button"
-                        disabled={reading || Boolean(readProblem)}
-                        title={readProblem ?? (reading ? 'Reading…' : 'Show')}
-                        aria-describedby={
-                          readProblem ? accessDescriptionId : undefined
-                        }
-                        onClick={() => void show()}
-                      >
-                        <Icon name="eye" />
-                      </button>
-                      <button
-                        className="value-action"
-                        aria-label="Copy"
-                        type="button"
-                        disabled={Boolean(readProblem)}
-                        title={readProblem ?? 'Copy'}
-                        aria-describedby={
-                          readProblem ? accessDescriptionId : undefined
-                        }
-                        onClick={() => void copyValue()}
-                      >
-                        <Icon name="copy" />
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        title="Hide"
-                        className="value-action"
-                        aria-label="Hide"
-                        type="button"
-                        onClick={() => {
-                          concealEpoch.current += 1;
-                          setRead(null);
-                        }}
-                      >
-                        <Icon name="eyeOff" />
-                      </button>
-                      <button
-                        className="value-action"
-                        aria-label="Copy"
-                        type="button"
-                        disabled={Boolean(readProblem)}
-                        title={readProblem ?? 'Copy'}
-                        aria-describedby={
-                          readProblem ? accessDescriptionId : undefined
-                        }
-                        onClick={() => void copyValue()}
-                      >
-                        <Icon name="copy" />
-                      </button>
-                    </>
-                  )
-                }
-              >
-                {shownValue === null ? MASK : value}
-              </InsetRow>
-            ) : (
-              <InsetRow key={index} label={FIELD_LABELS[field ?? ''] ?? field}>
-                {value}
-              </InsetRow>
-            ),
-        )}
-      </Inset>
+      passwordFields(item.value, shownValue).map(
+        ({ field, value, secret }, index) => {
+          const label = FIELD_LABELS[field ?? ''] ?? field ?? 'Value';
+          return secret ? (
+            <PropertyRow
+              key={index}
+              label={label}
+              actions={
+                <>
+                  {shownValue === null ? showButton : hideButton}
+                  {copyButton(label, copyValue)}
+                </>
+              }
+            >
+              {secretValue(value)}
+            </PropertyRow>
+          ) : (
+            <PropertyRow
+              key={index}
+              label={label}
+              actions={
+                value
+                  ? copyButton(label, () => copyField(label, value))
+                  : undefined
+              }
+            >
+              {value}
+            </PropertyRow>
+          );
+        },
+      )
     ) : kind === 'Document' && !fileMode ? (
-      <Inset variant="preview">
-        <InsetRow
-          className="rev"
-          label="Value"
-          valueClass={shownValue === null ? 'mask' : 'value-text'}
-          action={
-            shownValue === null ? (
-              <>
-                <button
-                  className="value-action"
-                  aria-label={reading ? 'Reading…' : 'Show'}
-                  type="button"
-                  disabled={reading || Boolean(readProblem)}
-                  title={readProblem ?? (reading ? 'Reading…' : 'Show')}
-                  aria-describedby={
-                    readProblem ? accessDescriptionId : undefined
-                  }
-                  onClick={() => void show()}
-                >
-                  <Icon name="eye" />
-                </button>
-                <button
-                  className="value-action"
-                  aria-label="Copy"
-                  type="button"
-                  disabled={Boolean(readProblem)}
-                  title={readProblem ?? 'Copy'}
-                  aria-describedby={
-                    readProblem ? accessDescriptionId : undefined
-                  }
-                  onClick={() => void copyValue()}
-                >
-                  <Icon name="copy" />
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  title="Hide"
-                  className="value-action"
-                  aria-label="Hide"
-                  type="button"
-                  onClick={() => {
-                    concealEpoch.current += 1;
-                    setRead(null);
-                  }}
-                >
-                  <Icon name="eyeOff" />
-                </button>
-                <button
-                  className="value-action"
-                  aria-label="Copy"
-                  type="button"
-                  disabled={Boolean(readProblem)}
-                  title={readProblem ?? 'Copy'}
-                  aria-describedby={
-                    readProblem ? accessDescriptionId : undefined
-                  }
-                  onClick={() => void copyValue()}
-                >
-                  <Icon name="copy" />
-                </button>
-              </>
-            )
-          }
-        >
-          {shownValue ?? MASK}
-        </InsetRow>
-      </Inset>
+      <PropertyRow
+        label="Value"
+        actions={
+          <>
+            {shownValue === null ? showButton : hideButton}
+            {copyButton('Value', copyValue)}
+          </>
+        }
+      >
+        {secretValue(shownValue ?? '')}
+      </PropertyRow>
     ) : (
-      // The file card states what the item is; Download sits in the actions
-      // row above with every other action on this item.
-      <Inset variant="preview">
-        <div className="filedoc">
-          <span className="big">
-            <Icon name="file" />
-          </span>
-          <span className="t">
-            <b>{nameOf(item.path)}</b>
-            <small>
-              {item.size === null
-                ? 'Encrypted'
-                : `${fmtSize(item.size)} · encrypted at rest`}
-            </small>
-          </span>
-        </div>
-      </Inset>
+      <PropertyRow label="File">
+        <span className="fname">{nameOf(item.path)}</span>
+        <Chip>{item.size === null ? 'Encrypted' : fmtSize(item.size)}</Chip>
+        {item.size === null ? null : <Chip>Encrypted at rest</Chip>}
+      </PropertyRow>
     );
 
-  const downloadFile = (): void => {
-    if (!request || !requireAccess()) return;
-    void bridge.downloadFile(request).then(
-      ({ saved }) =>
-        toasts.show(
-          saved ? `Downloaded ${nameOf(item.path)}` : 'Download cancelled',
-        ),
-      (error) => onCommandError(error, item),
-    );
-  };
-
+  const name = nameOf(item.path);
+  const tile = itemTile(item);
   const folderTrail = prefixOf(item.path).split('/').filter(Boolean);
-  const where = [store?.name ?? item.store, ...folderTrail].join(' › ');
+  const pathStep = (label: ReactNode, path: string): ReactNode =>
+    store && onOpenFolder ? (
+      <button type="button" onClick={() => onOpenFolder(store.id, path)}>
+        {label}
+      </button>
+    ) : (
+      <span className="step">{label}</span>
+    );
+  const description = blockingReason && !replacing && !lockedCopy;
 
   return (
     <>
       <aside
         ref={panelRef}
         className="details"
-        aria-label={`Details for ${nameOf(item.path)}`}
+        aria-label={`Details for ${name}`}
       >
-        <div className="dh">
-          <KindIcon kind={displayKind} />
-          <span className="t">
-            <h2>{nameOf(item.path)}</h2>
-            <small title={displayPath(item.path)}>{where}</small>
-          </span>
-          <button
-            type="button"
-            className="x"
-            title="Close"
-            aria-label="Close"
-            onClick={onClose}
-          >
-            <Icon name="close" />
-          </button>
-        </div>
-        <div className="scroll" ref={editorRef}>
-          {blockingReason && !replacing ? (
-            <p id={accessDescriptionId} className="action-error" role="status">
-              {blockingReason}
-            </p>
-          ) : null}
-          {/* Item actions; value controls live beside the value. */}
-          {inlineEditing ? null : (
-            <div className="detail-actions">
-              {fileMode ? (
-                <Button
-                  icon="download"
-                  disabled={Boolean(readProblem)}
-                  title={readProblem ?? 'Save a copy to disk'}
-                  aria-describedby={
-                    readProblem ? accessDescriptionId : undefined
-                  }
-                  onClick={downloadFile}
-                >
-                  Download
-                </Button>
-              ) : null}
-              <Button
-                icon={fileMode ? 'refresh' : 'pencil'}
-                disabled={Boolean(writeProblem) || saving}
-                title={
-                  writeProblem ??
-                  (fileMode ? 'Replace this file' : 'Edit this item')
-                }
-                aria-describedby={
-                  writeProblem ? accessDescriptionId : undefined
-                }
-                onClick={() => {
-                  focusEditorOnOpen.current = true;
-                  void beginEdit();
-                }}
-              >
-                {saving && !fileMode
-                  ? 'Reading…'
-                  : fileMode
-                    ? 'Replace'
-                    : 'Edit'}
-              </Button>
-              {onMove ? (
-                <Button
-                  disabled={Boolean(writeProblem)}
-                  title={writeProblem}
-                  onClick={() => {
-                    if (requireAccess(true)) onMove(item);
-                  }}
-                >
-                  Rename or move…
-                </Button>
-              ) : null}
-              <Button
-                variant="danger"
-                icon="trash"
-                disabled={Boolean(writeProblem)}
-                title={writeProblem ?? 'Delete this item'}
-                aria-describedby={
-                  writeProblem ? accessDescriptionId : undefined
-                }
-                onClick={() => {
-                  if (requireAccess(true)) onDelete(item);
-                }}
-              >
-                Delete
-              </Button>
-            </div>
-          )}
-          {inlineEditing || displayKind === 'Password' ? (
-            <SectionLabel>{inlineEditing ? 'Edit' : 'Fields'}</SectionLabel>
-          ) : null}
-          {preview}
-          {readError && readError !== blockingReason ? (
-            <p className="action-error" role="alert">
-              {readError}
-            </p>
-          ) : null}
-          {!replacing && editError && editError !== blockingReason ? (
-            <p className="action-error" role="alert">
-              {editError}
-            </p>
-          ) : null}
+        <div className="bar" data-tauri-drag-region="">
+          <nav className="pathbar" aria-label="Location">
+            {pathStep(
+              <>
+                {store ? <StoreMark snapshot={snapshot} store={store} /> : null}
+                <span className="t">{store?.name ?? item.store}</span>
+              </>,
+              '/',
+            )}
+            {folderTrail.map((part, index) => (
+              <Fragment key={index}>
+                <Icon name="chevronRight" className="sep" />
+                {pathStep(
+                  <span className="t">{displayPathComponent(part)}</span>,
+                  `/${folderTrail.slice(0, index + 1).join('/')}`,
+                )}
+              </Fragment>
+            ))}
+          </nav>
+          <span className="sp" />
           {inlineEditing ? (
-            <div className="eact">
+            <span className="eact">
               <Button
                 disabled={saving}
                 onClick={() => {
@@ -1209,72 +1077,233 @@ export function DetailsPanel({
                 variant="primary"
                 disabled={saving || Boolean(saveProblem)}
                 title={saveProblem}
-                aria-describedby={saveProblem ? accessDescriptionId : undefined}
+                aria-describedby={describedBy(saveProblem)}
                 onClick={() => void saveEdit()}
               >
-                {saving ? 'Saving…' : 'Save changes'}
+                {saving ? 'Saving…' : 'Save Changes'}
               </Button>
+            </span>
+          ) : (
+            <MenuButton
+              label=""
+              aria-label="More actions"
+              title="More actions"
+              menuLabel={`${name} actions`}
+              variant="quiet"
+              icon="ellipsis"
+              trailingIcon={null}
+              align="end"
+            >
+              {() => (
+                <>
+                  {fileMode ? (
+                    <MenuItem
+                      icon="download"
+                      reason={readProblem}
+                      onClick={downloadFile}
+                    >
+                      Download
+                    </MenuItem>
+                  ) : (
+                    <>
+                      <MenuItem
+                        icon={shownValue === null ? 'eye' : 'eyeOff'}
+                        reason={shownValue === null ? readProblem : undefined}
+                        onClick={() => {
+                          if (shownValue === null) void show();
+                          else hide();
+                        }}
+                      >
+                        {shownValue === null ? 'Show Value' : 'Hide Value'}
+                      </MenuItem>
+                      <MenuItem
+                        icon="copy"
+                        reason={readProblem}
+                        onClick={() => void copyValue()}
+                      >
+                        {kind === 'Password' ? 'Copy Password' : 'Copy Value'}
+                      </MenuItem>
+                    </>
+                  )}
+                  <MenuItem
+                    reason={readProblem}
+                    onClick={() => void copyPath()}
+                  >
+                    Copy Path
+                  </MenuItem>
+                  <div className="sep" role="separator" />
+                  {onMove ? (
+                    <MenuItem
+                      reason={writeProblem}
+                      onClick={() => {
+                        if (requireAccess(true)) onMove(item);
+                      }}
+                    >
+                      Rename or Move…
+                    </MenuItem>
+                  ) : null}
+                  <MenuItem
+                    icon="trash"
+                    danger
+                    shortcut="⌘⌫"
+                    reason={writeProblem}
+                    onClick={() => {
+                      if (requireAccess(true)) onDelete(item);
+                    }}
+                  >
+                    Delete…
+                  </MenuItem>
+                </>
+              )}
+            </MenuButton>
+          )}
+        </div>
+        <div className="scroll" ref={editorRef}>
+          <div className="hero">
+            <BigTile face={tile} />
+            <div className="t">
+              <h2 title={name}>{name}</h2>
+              <p>
+                {kindLabel(displayKind)}
+                {serverLabel ? ` · ${serverLabel}` : ''}
+              </p>
+            </div>
+            {inlineEditing ? null : (
+              <div className="hero-acts">
+                {fileMode ? (
+                  <Button
+                    icon="download"
+                    disabled={Boolean(readProblem)}
+                    title={readProblem ?? 'Save a copy to disk'}
+                    aria-describedby={describedBy(readProblem)}
+                    onClick={downloadFile}
+                  >
+                    Download
+                  </Button>
+                ) : null}
+                <Button
+                  disabled={Boolean(writeProblem) || saving}
+                  title={
+                    writeProblem ??
+                    (fileMode ? 'Replace this file' : 'Edit this item')
+                  }
+                  aria-describedby={describedBy(writeProblem)}
+                  onClick={() => {
+                    focusEditorOnOpen.current = true;
+                    void beginEdit();
+                  }}
+                >
+                  {saving && !fileMode
+                    ? 'Reading…'
+                    : fileMode
+                      ? 'Replace…'
+                      : 'Edit'}
+                </Button>
+              </div>
+            )}
+          </div>
+          {lockedCopy && blockingReason && !replacing ? (
+            <div id={accessDescriptionId} className="notice stop" role="status">
+              <Icon name="lock" />
+              <span className="t">
+                <b>
+                  {lockedReason === 'check-in-expired'
+                    ? `${serverLabel} is locked.`
+                    : `${lockedCopy.title}.`}
+                </b>
+                {lockedReason === 'check-in-expired'
+                  ? LEASE_LAPSED
+                  : blockingReason}
+              </span>
+              {store && onOpenServer && lockedCopy.action === 'open-server' ? (
+                <Button onClick={() => onOpenServer(store.server)}>
+                  Check Status
+                </Button>
+              ) : null}
+            </div>
+          ) : description ? (
+            <p
+              id={accessDescriptionId}
+              className={roleOnly ? 'offscreen' : 'action-error'}
+              role="status"
+            >
+              {blockingReason}
+            </p>
+          ) : null}
+          {inlineEditing ? (
+            <div className="notice info">
+              <Icon name="info" />
+              <span className="t">
+                Saves a new version if no one else has changed this item since
+                version {item.version}.
+              </span>
             </div>
           ) : null}
-
-          <Inset>
-            <InsetRow label="Kind">{kindLabel(displayKind)}</InsetRow>
-            <InsetRow label="Location" valueClass="mark">
+          <PropertyGroup className="content">{content}</PropertyGroup>
+          {readError && readError !== blockingReason ? (
+            <p className="action-error" role="alert">
+              {readError}
+            </p>
+          ) : null}
+          {!replacing && editError && editError !== blockingReason ? (
+            <p className="action-error" role="alert">
+              {editError}
+            </p>
+          ) : null}
+          <PropertyGroup>
+            <PropertyRow label="Vault">
               {store ? <StoreMark snapshot={snapshot} store={store} /> : null}
-              <span title={displayPath(item.path)}>{where}</span>
-            </InsetRow>
-            <InsetRow label="Path">{displayPath(item.path)}</InsetRow>
-            <InsetRow label="Version">{item.version}</InsetRow>
-            <InsetRow label="Size">{fmtSize(item.size)}</InsetRow>
-          </Inset>
-
-          <SectionLabel>Access</SectionLabel>
-          <div className="pillrow">
-            <span className="pill">
-              <Icon name="eye" />
-              Read: {roleText(item.read)}
-            </span>
-            <span className="pill write-access">
-              <Icon name="pencil" />
-              Write: {roleText(item.write)}
-            </span>
-            {team ? (
-              <span className="pill">
-                <Icon name="users" />
-                Shared
-              </span>
-            ) : null}
-          </div>
-
-          <div className="who">
-            <SectionLabel>Sharing</SectionLabel>
-            {team && readers ? (
+              <span>{store?.name ?? item.store}</span>
+              {serverLabel ? (
+                <span className="muted">· {serverLabel}</span>
+              ) : null}
+            </PropertyRow>
+            <PropertyRow label="Path" mono>
+              {displayPath(item.path)}
+            </PropertyRow>
+            <PropertyRow label="Version">{item.version}</PropertyRow>
+            <PropertyRow label="Size">{fmtSize(item.size)}</PropertyRow>
+          </PropertyGroup>
+          <PropertyGroup>
+            <PropertyRow label="Read access">{roleText(item.read)}</PropertyRow>
+            <PropertyRow label="Write access">
+              {roleText(item.write)}
+            </PropertyRow>
+          </PropertyGroup>
+          <PropertyGroup label="Sharing" className="sharing">
+            {!team ? (
+              <p className="note">
+                Your {store?.name ?? 'personal'} vault is private and cannot be
+                shared. To share an item, move it to a team vault.
+              </p>
+            ) : readers ? (
               <>
-                <p>
-                  {peopleLabel(readers.length)} in {store?.name} with{' '}
+                <p className="note">
+                  {readers.length} of {parties.length} in {store?.name} with{' '}
                   <b>{roleText(item.read)}</b> access or higher can read this
                   item.
                 </p>
-                {parties.map((party) => (
-                  <PartyRow
-                    key={party.party_id_hex}
-                    party={party}
-                    canRead={readers.includes(party)}
-                  />
-                ))}
+                <div className="roster">
+                  {readers.map((party) => (
+                    <PartyRow key={party.party_id_hex} party={party} />
+                  ))}
+                </div>
               </>
             ) : (
-              <p>No one else has access to this item.</p>
+              <p className="note">
+                Members of {store?.name} with <b>{roleText(item.read)}</b>{' '}
+                access or higher can read this item.
+              </p>
             )}
-          </div>
+          </PropertyGroup>
 
           {/* Raw metadata is available only in developer diagnostics. */}
         </div>
       </aside>
       {replacing ? (
         <SheetDialog
-          title={`Replace ${nameOf(item.path)}`}
-          glyph={<KindIcon kind={displayKind} />}
+          title={`Replace ${name}`}
+          glyph={<BigTile face={tile} />}
           onClose={clearEdit}
           dismissible={!saving}
           footer={
@@ -1286,25 +1315,24 @@ export function DetailsPanel({
                 variant="primary"
                 disabled={saving || Boolean(saveProblem)}
                 title={saveProblem}
-                aria-describedby={saveProblem ? accessDescriptionId : undefined}
+                aria-describedby={describedBy(saveProblem)}
                 onClick={() => void saveEdit()}
               >
                 {saving
                   ? 'Replacing…'
                   : replacementPath
-                    ? 'Replace file'
-                    : 'Choose file…'}
+                    ? 'Replace File'
+                    : 'Choose File…'}
               </Button>
             </>
           }
         >
           <p>
-            Choose a file to replace the contents of <b>{nameOf(item.path)}</b>.
+            Choose a file to replace the contents of <b>{name}</b>. The
+            replacement is saved only if no one else has changed the item since
+            version {item.version}.
           </p>
-          <Inset
-            variant="preview"
-            className={dropHover ? 'drop-hover' : undefined}
-          >
+          <Inset className={dropHover ? 'drop-hover' : undefined}>
             <InsetRow label="File">
               <span className={replacementPath ? 'mono' : 'dim'}>
                 {replacementPath

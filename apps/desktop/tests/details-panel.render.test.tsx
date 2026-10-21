@@ -101,10 +101,12 @@ for (const kind of ['Secret', 'File'] as const) {
       ),
     };
     rendered.rerender(p.draw());
-    const close = rendered.getByRole('button', { name: 'Close' });
+    // The More menu opens; every action in it and in the panel stays in place
+    // but cannot run, and says why.
+    const more = rendered.getByRole('button', { name: 'More actions' });
     const actions = rendered
       .getAllByRole('button')
-      .filter((button) => button !== close) as HTMLButtonElement[];
+      .filter((button) => button !== more) as HTMLButtonElement[];
     assert.ok(actions.length > 0);
     for (const button of actions) {
       assert.equal(button.disabled, true);
@@ -114,7 +116,15 @@ for (const kind of ['Secret', 'File'] as const) {
         description && document.getElementById(description)?.textContent,
       );
     }
-    assert.equal((close as HTMLButtonElement).disabled, false);
+    assert.equal((more as HTMLButtonElement).disabled, false);
+    ui.fireEvent.click(more);
+    const items = await ui.screen.findAllByRole('menuitem');
+    const reads = items.filter((entry) => entry.textContent !== 'Copy Path');
+    assert.ok(reads.length > 0);
+    for (const entry of items) {
+      assert.equal(entry.getAttribute('aria-disabled'), 'true');
+      assert.match(entry.title, /unavailable|could not be loaded/i);
+    }
   });
 }
 
@@ -143,7 +153,7 @@ test('an open edit disables Save after access loss without discarding the draft 
   };
   rendered.rerender(p.draw());
   const save = rendered.getByRole('button', {
-    name: 'Save changes',
+    name: 'Save Changes',
   }) as HTMLButtonElement;
   assert.equal(save.disabled, true);
   assert.match(save.title, /unavailable|could not be loaded/i);
@@ -163,7 +173,7 @@ test('an open edit disables Save after access loss without discarding the draft 
   assert.equal(
     (
       rendered.getByRole('button', {
-        name: 'Save changes',
+        name: 'Save Changes',
       }) as HTMLButtonElement
     ).disabled,
     false,
@@ -177,7 +187,7 @@ test('an open team edit disables Save when its write authorization is revoked', 
   );
   const rendered = ui.render(p.draw());
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
-  await rendered.findByRole('button', { name: 'Save changes' });
+  await rendered.findByRole('button', { name: 'Save Changes' });
   p.props.snapshot = {
     ...p.props.snapshot,
     parties: p.props.snapshot.parties.filter(
@@ -186,7 +196,7 @@ test('an open team edit disables Save when its write authorization is revoked', 
   };
   rendered.rerender(p.draw());
   const save = rendered.getByRole('button', {
-    name: 'Save changes',
+    name: 'Save Changes',
   }) as HTMLButtonElement;
   assert.equal(save.disabled, true);
   assert.match(save.title, /permission to change/);
@@ -376,15 +386,15 @@ test('losing focus covers a plaintext vault edit without discarding it', async (
   );
   const rendered = ui.render(p.draw());
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
-  const contents = await rendered.findByRole('textbox', { name: 'Contents' });
+  const contents = await rendered.findByRole('textbox', { name: 'Value' });
   ui.fireEvent.change(contents, { target: { value: 'retained private edit' } });
 
   ui.fireEvent(window, new Event('blur'));
 
-  assert.equal(rendered.queryByRole('textbox', { name: 'Contents' }), null);
+  assert.equal(rendered.queryByRole('textbox', { name: 'Value' }), null);
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Show' }));
   assert.equal(
-    (rendered.getByRole('textbox', { name: 'Contents' }) as HTMLTextAreaElement)
+    (rendered.getByRole('textbox', { name: 'Value' }) as HTMLTextAreaElement)
       .value,
     'retained private edit',
   );
@@ -414,7 +424,7 @@ test('a plaintext edit response arriving after focus loss stays concealed', asyn
   });
 
   assert.equal(rendered.queryByText('late private edit'), null);
-  assert.equal(rendered.queryByRole('textbox', { name: 'Contents' }), null);
+  assert.equal(rendered.queryByRole('textbox', { name: 'Value' }), null);
 });
 
 test('a pending read cannot reveal into a different selection', async () => {
@@ -593,7 +603,9 @@ test('copy failures are forwarded to the shell error handler', async () => {
     handled.push(error);
   };
   const r = ui.render(p.draw());
-  ui.fireEvent.click(r.getAllByRole('button', { name: 'Copy' })[0]);
+  ui.fireEvent.click(
+    r.getAllByRole('button', { name: /^Copy (Password|Value)$/ })[0],
+  );
   await ui.waitFor(() => assert.equal(handled.length, 1));
   // No toast of the panel's own: an unsafe agent is not a warning to read past.
   assert.equal(document.querySelector('.toasts')?.textContent ?? '', '');
@@ -617,13 +629,13 @@ test('a login edits in structured fields and serializes through the existing dra
   const username = r.getByLabelText('User name');
   assert.equal(password.getAttribute('type'), 'password');
   assert.equal(password.getAttribute('placeholder'), 'password');
-  assert.equal(r.queryByRole('textbox', { name: 'Contents' }), null);
+  assert.equal(r.queryByRole('textbox', { name: 'Value' }), null);
 
   ui.fireEvent.click(r.getByRole('button', { name: 'Show' }));
   assert.equal(password.getAttribute('type'), 'text');
   ui.fireEvent.change(username, { target: { value: 'satoshi-next' } });
   ui.fireEvent.change(password, { target: { value: 'correct horse' } });
-  ui.fireEvent.click(r.getByRole('button', { name: 'Save changes' }));
+  ui.fireEvent.click(r.getByRole('button', { name: 'Save Changes' }));
 
   await ui.waitFor(() => assert.match(saved, /username: satoshi-next/));
   assert.match(saved, /password: correct horse/);
@@ -668,7 +680,7 @@ test('background version changes retain the draft and its original write precond
     'retained-draft',
   );
   assert.match(rendered.container.textContent ?? '', /original version/);
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Save changes' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Save Changes' }));
   await ui.waitFor(() => assert.ok(conflict));
   assert.equal(submitted?.version, p.subject.version);
   assert.equal(conflict?.version, p.subject.version);
@@ -718,7 +730,7 @@ test('background identity changes preserve the original edit target', async () =
     (rendered.getByLabelText('User name') as HTMLInputElement).value,
     'retained-draft',
   );
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Save changes' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Save Changes' }));
   await ui.waitFor(() => assert.ok(conflict));
   assert.equal(submitted?.version, p.subject.version);
   assert.equal(submitted?.direntId, p.subject.direntId);
@@ -891,7 +903,7 @@ test('a completed edit returns focus to the item actions', async () => {
   p.bridge.editTextItem = async () => ({ applied: true });
   const rendered = ui.render(p.draw());
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
-  const save = await rendered.findByRole('button', { name: 'Save changes' });
+  const save = await rendered.findByRole('button', { name: 'Save Changes' });
   ui.fireEvent.click(save);
   const edit = await rendered.findByRole('button', { name: 'Edit' });
   await ui.waitFor(() => assert.equal(document.activeElement, edit));
@@ -906,17 +918,17 @@ test('a file opens a Replace dialog while text items keep inline Edit', async ()
   };
   const rendered = ui.render(p.draw());
   assert.equal(rendered.queryByRole('button', { name: 'Edit' }), null);
-  const replace = rendered.getByRole('button', { name: 'Replace' });
+  const replace = rendered.getByRole('button', { name: 'Replace…' });
   ui.fireEvent.click(replace);
   const dialog = ui.screen.getByRole('dialog', {
     name: `Replace ${p.subject.path.split('/').at(-1)}`,
   });
   const cancel = ui.within(dialog).getByRole('button', { name: 'Cancel' });
   assert.ok(document.activeElement === cancel, 'Cancel receives initial focus');
-  assert.equal(rendered.queryByRole('button', { name: 'Save changes' }), null);
+  assert.equal(rendered.queryByRole('button', { name: 'Save Changes' }), null);
   await ui.act(async () => {
     ui.fireEvent.click(
-      ui.within(dialog).getByRole('button', { name: 'Choose file…' }),
+      ui.within(dialog).getByRole('button', { name: 'Choose File…' }),
     );
     await Promise.resolve();
     await Promise.resolve();
@@ -950,11 +962,11 @@ test('a file replacement conflict closes Replace and reports replacement-specifi
     conflict = { item, draft, operation };
   };
   const rendered = ui.render(p.draw());
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Replace' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Replace…' }));
   const dialog = ui.screen.getByRole('dialog');
   await ui.act(async () => {
     ui.fireEvent.click(
-      ui.within(dialog).getByRole('button', { name: 'Choose file…' }),
+      ui.within(dialog).getByRole('button', { name: 'Choose File…' }),
     );
     await Promise.resolve();
     await Promise.resolve();

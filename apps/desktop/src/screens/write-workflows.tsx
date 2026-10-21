@@ -1453,9 +1453,10 @@ function DeleteSheet({
   return (
     <AlertDialog
       destructive
-      icon="trash"
-      title={`Delete ${nameOf(workflow.item.path)}?`}
-      message="This cannot be undone."
+      title={`Delete “${nameOf(workflow.item.path)}”?`}
+      // The removal names the version on screen, so a newer edit elsewhere
+      // turns it into a conflict rather than deleting that edit.
+      message="This item will be deleted if it has not been modified by someone else. Earlier versions will no longer be accessible."
       confirmLabel={deleting ? 'Deleting…' : 'Delete'}
       busy={deleting}
       confirmDisabled={uncertain || Boolean(problem)}

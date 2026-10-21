@@ -307,185 +307,232 @@
 }
 
 /* ------------------------------------------------------- details panel
-   The details column's first bar sits on the panel's 44px line; under it the
-   item's groups are form-style property rows on the panel (150px label
-   column, 104px in a column under 520px), divided by hairlines rather than
-   boxed. */
+   The details column: its first bar is the item's location (store mark ›
+   folders, each a link) and the More menu; under it the hero and the item's
+   property rows (`PropertyGroup`/`PropertyRow`), divided by hairlines rather
+   than boxed. The column measures itself, so the label column narrows with
+   the column's width. */
 
-.details .dh {
-  align-items: center;
+.details .bar {
+  gap: 8px;
   padding: 0 10px 0 16px;
 }
-.details .dh .kic {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-  border: 0;
-  background: var(--chip-bg);
-  color: var(--muted);
-  font-size: 14px;
-}
-.details .dh .kic .ic {
-  font-size: 14px;
-}
-.details .dh h2 {
-  font-size: 13px;
-}
-.details .scroll {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 18px 24px 32px;
-}
-.details .scroll > .inset,
-.details .scroll > .prev {
-  padding: 2px 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  overflow: visible;
-}
-.details .scroll > :is(.inset, .prev) + :is(.inset, .prev) {
-  padding-top: 8px;
-  border-top: 1px solid var(--line-soft);
-}
-.details .scroll > * {
-  flex-shrink: 0;
-}
-.details .scroll > .sec {
-  margin: 0 0 -6px 2px;
-}
-.details .scroll > .pfn,
-.details .scroll > .action-error {
-  margin: 0 2px;
-}
-.details .scroll > .eact,
-.details .scroll > .detail-actions {
-  margin: 0;
-}
-.details .detail-actions {
-  gap: 6px;
-}
-.details .detail-actions .btn {
-  height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
-}
-.details .detail-actions .btn .ic {
-  font-size: 14px;
-}
-.details .prev .irow .a button.value-action,
-.details .inset.edit .fr .a button.value-action {
-  width: 24px;
-  padding: 0;
-  justify-content: center;
-}
-.details .scroll > .inset .fr {
-  min-height: var(--prop-row-h);
-  padding: 3px 0;
-  border-top: 0;
-}
-.details .scroll > .inset .fr .k {
-  width: 150px;
-  font-size: 12.5px;
-}
-.details .scroll > .inset .fr .v {
-  font-size: 12.5px;
-}
-.details .scroll > .inset .fr .v.mark {
+.details .pathbar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  white-space: nowrap;
+  gap: 2px;
+  min-width: 0;
   overflow: hidden;
+  margin-left: -6px;
+  font-size: 12.5px;
+  color: var(--muted);
 }
-.details .scroll > .inset .fr .v.mark > span {
+.details .pathbar > button,
+.details .pathbar > .step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-weight: var(--weight-label);
+  white-space: nowrap;
+}
+.details .pathbar > button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.details .pathbar > :last-child {
+  flex: none;
+  color: var(--ink-2);
+}
+.details .pathbar .t {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.details .scroll > .inset .fr .v.mark .kico.account,
-.details .scroll > .inset .fr .v.mark .av.team {
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  font-size: var(--mark-type);
-  padding-bottom: 1px;
+.details .pathbar .sep {
   flex: none;
-}
-.details .prev .irow {
-  min-height: var(--prop-row-h);
-  padding: 3px 0;
-  border-top: 0;
-}
-.details .prev .irow .k {
-  width: 150px;
-  font-size: 12.5px;
-}
-@container (max-width: 519px) {
-  .details .prev .irow .k,
-  .details .scroll > .inset .fr .k {
-    width: 104px;
-  }
-}
-.details .pillrow {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.details .pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 22px;
-  padding: 0 8px;
-  border-radius: var(--radius-pill);
-  background: var(--chip-bg);
   font-size: 12px;
-  font-weight: 600;
-  color: var(--ink-2);
+  color: var(--faint);
 }
-.details .pill.write-access .ic {
-  translate: 0 -1px;
-}
-.details .pill .ic {
-  font-size: 13px;
-}
-.details .filedoc {
+.details .bar .eact {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px;
-}
-.details .filedoc .big {
-  display: grid;
-  place-items: center;
-  flex: none;
-  width: 40px;
-  height: 48px;
-  border: 1px solid var(--line-mid);
-  border-radius: 5px;
-  background: var(--surface);
-  color: var(--muted);
-  font-size: 20px;
-}
-.details .filedoc .t {
-  min-width: 0;
-}
-.details .filedoc .t b {
-  display: block;
-  font-size: 13px;
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-.details .filedoc .t small {
-  display: block;
-  color: var(--muted);
-  font-size: 12px;
-}
-.details .who {
+  gap: 8px;
   margin: 0;
 }
+.details .bar .eact .btn {
+  height: var(--control-h);
+  font-size: 12.5px;
+}
+
+.details .scroll {
+  padding: 18px 24px 32px;
+}
+.details .scroll > * {
+  max-width: 760px;
+}
+.details .hero h2 {
+  font-size: 18px;
+  line-height: 1.3;
+}
+.details .hero p {
+  line-height: 1.4;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+.details .hero .bigtile .ic {
+  font-size: 24px;
+  stroke-width: 1.5;
+}
+.hero .bigtile.pw,
+.sheet .hd .bigtile.pw {
+  background: var(--amber-wash);
+  color: var(--amber-strong);
+}
+.hero .bigtile.file,
+.sheet .hd .bigtile.file {
+  background: var(--accent-wash);
+  color: var(--accent-ink);
+}
+.hero .bigtile.text,
+.sheet .hd .bigtile.text {
+  background: var(--chip-bg);
+  color: var(--ink-3);
+}
+.details .hero-acts .btn .ic {
+  font-size: 14px;
+}
+.details .notice {
+  margin: 4px 0 10px;
+}
+.details .notice .t b {
+  display: block;
+  font-weight: var(--weight-label);
+  color: var(--ink);
+}
+.details .notice > .btn {
+  flex: none;
+  margin-left: auto;
+}
+.details .notice + .prop-group {
+  border-top: 0;
+}
+.details .scroll > .action-error {
+  margin: 4px 0 8px;
+}
+
+.details .prop-row .muted {
+  color: var(--muted);
+}
+.details .prop-row .masked {
+  font-size: 13px;
+}
+.details .prop-row .value-text {
+  font: 12.5px var(--mono);
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.details .prop-row .fname {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.details .prop-row > .a .btn {
+  height: var(--control-h);
+  font-size: 12.5px;
+}
+.details .prop-row.top {
+  align-items: start;
+  padding-block: 8px;
+}
+.details .prop-row.top > .k {
+  padding-top: 5px;
+}
+.details .prop-row .inp {
+  width: 100%;
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 8px;
+  border: 1px solid var(--line-field);
+  border-radius: var(--radius-md);
+  background: var(--field-bg);
+  color: var(--ink);
+  font: 13px var(--sans);
+}
+.details .prop-row textarea.inp {
+  height: auto;
+  min-height: 88px;
+  padding: 5px 8px;
+  resize: vertical;
+  font: 12.5px/1.5 var(--mono);
+}
+.details .prop-row input.inp[type='password'] {
+  letter-spacing: 0.08em;
+}
+.details .prop-row .inp:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash-2);
+  outline: 0;
+}
+
+/* Sharing: one muted note and the readers. */
+.details .sharing .note {
+  max-width: 560px;
+  margin: 4px 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.details .sharing .note b {
+  font-weight: var(--weight-label);
+  color: var(--ink-2);
+}
+.details .roster {
+  display: grid;
+  margin-top: 4px;
+}
+.details .roster .party {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0;
+  border-top: 1px solid var(--line-soft);
+  font-size: 13px;
+}
+.details .roster .party:first-child {
+  border-top: 0;
+}
+.details .roster .party .kico.account {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: var(--mark-type);
+}
+.details .roster .party .store-mark {
+  width: 22px;
+  height: 22px;
+}
+.details .roster .party .nm {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.details .roster .party .nm .t {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 
 .inset .appearance-picker {
   align-self: flex-start;

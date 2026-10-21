@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { Button, Field, SheetDialog } from '../components';
+import { Button, Field, Inset, SectionLabel, SheetDialog } from '../components';
 import type { Bridge } from '../bridge';
 import { normalizeCommandError } from '../bridge';
 import { nameOf, storeOf } from '../model';
 import type { AgentSnapshot, Item } from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { useSheetGuard } from '../navigation-guard';
+import { BigTile, itemTile } from './item-tile';
 import { itemActionProblem } from './store-access';
 import type { WriteWorkflow } from './write-workflows';
 
@@ -87,9 +88,12 @@ export function MoveSheet({
       await onMutationError(failure, { report: false });
     }
   };
+  const storeName = storeOf(snapshot, item.store)?.name ?? item.store;
   return (
     <SheetDialog
-      title="Rename or move"
+      title="Rename or Move"
+      subtitle={`${nameOf(item.path)} in ${storeName}`}
+      glyph={<BigTile face={itemTile(item)} />}
       onClose={() => setWorkflow(null)}
       dismissible={!saving}
       footer={
@@ -100,6 +104,7 @@ export function MoveSheet({
           <Button
             variant="primary"
             disabled={saving || uncertain || !valid || Boolean(problem)}
+            title={problem}
             onClick={() => {
               void submit();
             }}
@@ -109,20 +114,29 @@ export function MoveSheet({
         </>
       }
     >
-      <p>
-        Move {nameOf(item.path)} within this vault. Enter the full destination
-        path, including its new name. The destination folder must already exist.
+      <SectionLabel>Destination</SectionLabel>
+      <Inset>
+        <Field
+          label="Path"
+          mono
+          autoFocus
+          value={destination}
+          disabled={saving || uncertain}
+          onChange={(value) => {
+            setDestination(value);
+            setError(null);
+          }}
+        />
+      </Inset>
+      <p className="hint">
+        Enter the full path, including the new name, in an existing folder of{' '}
+        {storeName}. An item already at that path is never overwritten.
       </p>
-      <Field
-        label="Destination path"
-        value={destination}
-        disabled={saving || uncertain}
-        onChange={(value) => {
-          setDestination(value);
-          setError(null);
-        }}
-      />
-      {problem || error ? <p role="alert">{problem ?? error}</p> : null}
+      {problem || error ? (
+        <p className="action-error" role="alert">
+          {problem ?? error}
+        </p>
+      ) : null}
     </SheetDialog>
   );
 }

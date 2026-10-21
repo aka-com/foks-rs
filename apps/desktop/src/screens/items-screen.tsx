@@ -67,6 +67,7 @@ import {
   whereOf,
 } from './scope';
 import { useFolderMenu } from './folder-menu';
+import { itemTile } from './item-tile';
 import {
   itemActionProblem,
   StoreAccessTakeover,
@@ -83,13 +84,6 @@ function emptyStoreCopy(store: Store): string {
 
 function itemCount(count: number): string {
   return `${count} ${count === 1 ? 'item' : 'items'}`;
-}
-
-/** The tile class and glyph a row draws for its item's kind. */
-function itemTile(item: Item): { className: string; icon: FoksIconName } {
-  if (kindOf(item) === 'Password') return { className: 'pw', icon: 'key' };
-  if (item.kind === 'File') return { className: 'file', icon: 'file' };
-  return { className: 'text', icon: 'fileText' };
 }
 
 interface RowProps {

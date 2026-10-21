@@ -36,6 +36,14 @@ test.before(async () => {
 test.afterEach(() => ui.cleanup());
 test.after(async () => vite.close());
 
+/** Runs an action from the details panel's More menu. */
+async function itemMenuAction(label: string): Promise<void> {
+  ui.fireEvent.click(
+    await ui.screen.findByRole('button', { name: 'More actions' }),
+  );
+  ui.fireEvent.click(await ui.screen.findByRole('menuitem', { name: label }));
+}
+
 async function mount(overrides: Partial<Bridge> = {}) {
   const { App } = (await vite.ssrLoadModule(
     '/src/app-root.tsx',
@@ -469,13 +477,11 @@ test('item rename keeps the selected source version and blocks dismissal during 
   await ui.act(async () => {
     store.select({ store: item.store, path: item.path });
   });
-  ui.fireEvent.click(
-    await rendered.findByRole('button', { name: 'Rename or move…' }),
-  );
+  await itemMenuAction('Rename or Move…');
   const dialog = await rendered.findByRole('dialog', {
-    name: 'Rename or move',
+    name: 'Rename or Move',
   });
-  ui.fireEvent.change(ui.within(dialog).getByLabelText('Destination path'), {
+  ui.fireEvent.change(ui.within(dialog).getByLabelText('Path'), {
     target: { value: '/renamed-item' },
   });
   ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Move' }));
@@ -489,11 +495,11 @@ test('item rename keeps the selected source version and blocks dismissal during 
     }),
   );
   ui.fireEvent.keyDown(dialog, { key: 'Escape' });
-  assert.ok(rendered.getByRole('dialog', { name: 'Rename or move' }));
+  assert.ok(rendered.getByRole('dialog', { name: 'Rename or Move' }));
   await ui.act(async () => finish());
   await ui.waitFor(() =>
     assert.equal(
-      rendered.queryByRole('dialog', { name: 'Rename or move' }),
+      rendered.queryByRole('dialog', { name: 'Rename or Move' }),
       null,
     ),
   );
@@ -522,13 +528,11 @@ test('ambiguous move keeps the draft visible and cannot be submitted twice', asy
   await ui.act(async () => {
     store.select({ store: item.store, path: item.path });
   });
-  ui.fireEvent.click(
-    await rendered.findByRole('button', { name: 'Rename or move…' }),
-  );
+  await itemMenuAction('Rename or Move…');
   const dialog = await rendered.findByRole('dialog', {
-    name: 'Rename or move',
+    name: 'Rename or Move',
   });
-  ui.fireEvent.change(ui.within(dialog).getByLabelText('Destination path'), {
+  ui.fireEvent.change(ui.within(dialog).getByLabelText('Path'), {
     target: { value: '/uncertain' },
   });
   ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Move' }));
@@ -562,7 +566,7 @@ test('Command-Backspace asks to delete the selected item, and Return keeps it', 
   await ui.act(async () => {
     store.select({ store: item.store, path: item.path });
   });
-  await rendered.findByRole('button', { name: 'Delete' });
+  await rendered.findByRole('button', { name: 'More actions' });
   // A text field keeps the key for itself.
   const search = document.querySelector<HTMLInputElement>('.topbar input')!;
   ui.fireEvent.keyDown(search, { key: 'Backspace', metaKey: true });
@@ -603,9 +607,12 @@ test('file deletion uses its selected version and blocks Escape while pending', 
   await ui.act(async () => {
     store.select({ store: item.store, path: item.path });
   });
-  ui.fireEvent.click(await rendered.findByRole('button', { name: 'Delete' }));
+  await itemMenuAction('Delete…');
   const dialog = await rendered.findByRole('alertdialog');
-  assert.match(dialog.textContent ?? '', /This cannot be undone/);
+  assert.match(
+    dialog.textContent ?? '',
+    /deleted if it has not been modified by someone else/,
+  );
   ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Delete' }));
   await ui.waitFor(() =>
     assert.deepEqual(request, {

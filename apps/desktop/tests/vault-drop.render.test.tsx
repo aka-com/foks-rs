@@ -456,7 +456,7 @@ test('replacing a file in the details panel takes the drop from the vault', asyn
   assert.ok(file);
   await ui.waitFor(() => assert.ok(rendered.getAllByText('Personal').length));
   ui.fireEvent.click(rendered.getByText('id_ed25519'));
-  ui.fireEvent.click(await rendered.findByRole('button', { name: 'Replace' }));
+  ui.fireEvent.click(await rendered.findByRole('button', { name: 'Replace…' }));
   await rendered.findByRole('dialog', { name: 'Replace id_ed25519' });
 
   await driver.hover(true);
