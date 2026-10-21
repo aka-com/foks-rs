@@ -295,8 +295,15 @@ test('Account opens first and carries the server inventory at its bottom', async
   assert.ok(
     serversLabel.closest('.sec')?.classList.contains('server-list-label'),
   );
-  assert.ok(rendered.getByRole('button', { name: 'Add a server…' }));
-  assert.equal(rendered.queryByText('Needs attention'), null);
+  assert.ok(rendered.getByRole('button', { name: 'Add a Server…' }));
+  // Design A's groups, in order: the account's facts, Needs attention (the
+  // fixture's unpaired server), Servers, Account tools.
+  assert.deepEqual(
+    [...panel.querySelectorAll('.settings-heading, .server-list-label')].map(
+      (heading) => heading.textContent?.replace('Add a Server…', ''),
+    ),
+    ['Account', 'Needs attention', 'Servers', 'Account tools'],
+  );
   assert.equal(rendered.queryByText('Configured servers'), null);
   assert.equal(rendered.queryByText('Ready'), null);
   const serverRows = [...rendered.container.querySelectorAll('.srow')];
@@ -334,12 +341,12 @@ test('the server inventory remains available when this device has no account', a
 
   assert.ok(rendered.getByText('No available account on this device'));
   assert.ok(rendered.getByText('Servers'));
-  assert.ok(rendered.getByRole('button', { name: 'Add a server…' }));
+  assert.ok(rendered.getByRole('button', { name: 'Add a Server…' }));
 });
 
 test('Add server explains the protocol and starts with example placeholders', async () => {
   const rendered = await renderSettings(await fixture());
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Add a server…' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Add a Server…' }));
 
   const dialog = rendered.getByRole('dialog');
   assert.ok(
@@ -393,7 +400,7 @@ test('Add server verifies online and opens the profile returned by the backend',
         events.push(`navigate:${location.profile}`);
     },
   });
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Add a server…' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Add a Server…' }));
   const dialog = rendered.getByRole('dialog');
   ui.fireEvent.change(ui.within(dialog).getByLabelText('Server name'), {
     target: { value: 'requested-name' },
@@ -439,7 +446,7 @@ test('Add server keeps the sheet open and re-enables submission after verificati
         navigations.push(location.profile);
     },
   });
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Add a server…' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Add a Server…' }));
   const dialog = rendered.getByRole('dialog');
   ui.fireEvent.change(ui.within(dialog).getByLabelText('Server name'), {
     target: { value: 'new-foks' },
@@ -492,7 +499,7 @@ test('a retired Servers address opens the list at the bottom of Account', async 
   assert.ok(rendered.getByRole('heading', { level: 1, name: 'satoshi' }));
   assert.ok(rendered.getByText('Servers'));
   assert.ok(rendered.getByText('foks.example.net'));
-  assert.ok(rendered.getByRole('button', { name: 'Add a server…' }));
+  assert.ok(rendered.getByRole('button', { name: 'Add a Server…' }));
   // A server that answered carries no chip — its mark already reads as one —
   // and only the states worth acting on are named.
   assert.equal(rendered.queryByText('Checked'), null);

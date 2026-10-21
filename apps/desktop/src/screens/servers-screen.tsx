@@ -197,7 +197,8 @@ function resolveServerUiState(
 function StatusChip({ state }: { state: ServerUiState }): ReactNode {
   // A server that answered is the ordinary case, and the row's mark already
   // reads as one: only a state worth acting on carries a chip.
-  if (state === 'unprobed' || state === 'checked') return null;
+  if (state === 'checked') return null;
+  if (state === 'unprobed') return <Chip tone="warn">Not verified</Chip>;
   return (
     <Chip tone={state === 'pending' ? 'default' : 'bad'}>
       {STATE_LABEL[state]}
@@ -534,6 +535,7 @@ function ServerRow({
   onOpen: (profile: string) => void;
   onCheck: (server: Server) => void;
 }): ReactNode {
+  const rowTitle = server.displayLabel?.trim() || server.configuredEndpoint;
   return (
     <InsetRow
       className={['srow', isLocked(state) ? 'crit' : '']
@@ -548,7 +550,6 @@ function ServerRow({
           {state === 'unprobed' || state === 'lapsed' ? (
             <Button
               size="sm"
-              variant={state === 'unprobed' ? 'primary' : 'plain'}
               icon="refresh"
               disabled={busy}
               onClick={() => onCheck(server)}
@@ -568,13 +569,17 @@ function ServerRow({
     >
       <ServerMark state={state} />
       <span className="t">
+        {/* Before its first check a server has no display label yet; the
+            row names it by its address rather than "Loading...". */}
         <b>
-          <span>{serverDisplayLabelOrLoading(server)}</span>
+          <span>{rowTitle}</span>
         </b>
-        {server.configuredEndpoint !== serverDisplayLabelOrLoading(server) && (
+        {server.configuredEndpoint !== rowTitle && (
           <small>{server.configuredEndpoint}</small>
         )}
-        {state === 'checked' ? null : (
+        {/* The chip already says "Not verified"; other states keep the
+            line, which adds what the chip cannot (a date, a cause). */}
+        {state === 'checked' || state === 'unprobed' ? null : (
           <small>
             <StatusLine state={state} expiry={expiry} />
           </small>
@@ -614,7 +619,7 @@ function ServerList({
   const ordered = [...attention, ...ready];
   const add = (
     <Button size="sm" icon="plus" onClick={onAdd}>
-      Add a server…
+      Add a Server…
     </Button>
   );
   return (
