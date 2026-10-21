@@ -283,7 +283,7 @@ test('the chooser offers each way to add, and leads into pairing', async () => {
     [
       'Pair another device',
       'Pair this device with another account',
-      'Create a new recovery recovery phrase',
+      'Create a new recovery phrase',
       'Connect a hardware key',
     ],
   );
@@ -593,7 +593,7 @@ test('the chooser leads into the recovery-phrase and provisioning sheets too', a
     store: 'acct:personal',
   });
 
-  const paper = await choose(rendered, 'Create a new recovery recovery phrase');
+  const paper = await choose(rendered, 'Create a new recovery phrase');
   assert.equal(
     ui.within(paper).getByRole('heading', { level: 2 }).textContent,
     'Create recovery phrase',
