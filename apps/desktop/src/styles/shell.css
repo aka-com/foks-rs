@@ -72,8 +72,9 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .nav-group{display:flex;flex-direction:column;gap:1px}
 .side-tree{display:flex;flex-direction:column;gap:inherit}
 .side .nav-h{display:flex;align-items:center;height:26px;padding:0 4px 0 8px;font-size:13px;font-weight:var(--weight-label);color:var(--side-muted);letter-spacing:0;text-transform:none}
-.side .nav-h .tbtn{margin-left:auto;width:22px;height:22px;color:var(--side-muted)}
-.side .nav-h .tbtn .ic{font-size:14px}
+.side .nav-h .menuwrap{margin-left:auto}
+.side .nav-h .btn.icon{width:22px;height:22px;color:var(--side-muted)}
+.side .nav-h .btn.icon .ic{font-size:14px}
 .side .nav{display:flex;align-items:center;gap:8px;width:100%;min-height:28px;padding:0 8px;border:0;border-radius:var(--radius-md);background:transparent;text-align:left;font-size:13px;font-weight:var(--weight-label);line-height:1.3;color:var(--ink-2);white-space:nowrap}
 .side .nav:hover:not(:disabled){background:var(--hover)}
 .side .nav:active:not(:disabled){background:var(--hover-2)}
