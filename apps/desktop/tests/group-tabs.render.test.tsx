@@ -671,7 +671,7 @@ test('a group whose setup never finished has no tabs, and two ways out', async (
   );
   assert.equal(band.textContent?.includes('Nothing runs while FOKS'), false);
   assert.ok(
-    band.contains(rendered.getByRole('button', { name: 'Finish setup' })),
+    band.contains(rendered.getByRole('button', { name: 'Finish Setup' })),
   );
   assert.equal(
     rendered.queryByRole('button', { name: 'Remove and rotate keys…' }),
@@ -734,7 +734,7 @@ test('Finish setup resumes the existing incomplete group', async () => {
     }),
   });
   await ui.act(async () => {
-    ui.fireEvent.click(rendered.getByRole('button', { name: 'Finish setup' }));
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Finish Setup' }));
   });
   // Resume the existing server-side group instead of creating another.
   assert.deepEqual(resumed, ['team:homelab']);
@@ -754,10 +754,10 @@ test('an unavailable group displays its status and retains parent navigation', a
 test('incomplete group recovery describes durable creation evidence', async () => {
   const base = await fixture();
   for (const [phase, button, detail] of [
-    ['preparing', 'Continue creation', 'has not been submitted'],
-    ['submission-unknown', 'Check creation', 'must be checked'],
-    ['legacy-unknown', 'Check creation', 'must be checked'],
-    ['remote-verified', 'Finish setup', 'was created on'],
+    ['preparing', 'Continue Creation', 'has not been submitted'],
+    ['submission-unknown', 'Check Creation', 'must be checked'],
+    ['legacy-unknown', 'Check Creation', 'must be checked'],
+    ['remote-verified', 'Finish Setup', 'was created on'],
   ] as const) {
     const snapshot = {
       ...base,
