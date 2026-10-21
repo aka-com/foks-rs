@@ -613,6 +613,14 @@
   box-shadow: none;
 }
 
+/* A team's mark (`GroupMark`): its hue as ink on a tint of itself, like the
+   sidebar's store marks (`.store-mark`). */
+.kico.group.tinted {
+  background: color-mix(in srgb, var(--h) var(--mark-tint), var(--panel));
+  color: color-mix(in srgb, var(--h) var(--mark-ink-mix), var(--ink-inverse));
+  font-weight: var(--weight-title);
+}
+
 .kico.invite {
   background: var(--accent);
 }

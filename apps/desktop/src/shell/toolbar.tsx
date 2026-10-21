@@ -1,60 +1,62 @@
 /**
- * The primary New control.
- *
- * It used to sit in a toolbar of its own across the top of the folder
- * browser, beside the kind filter and a scoped search field. The header row
- * carries the search field and this button now, and the kind filter belongs
- * to the tree column, so nothing is left here but the control itself — the
- * header draws it, and the browser's empty states draw it again where the
- * reader is already looking.
+ * The Files list bar's add control: a borderless plus that opens the New
+ * menu. The menu states the native menu's key equivalents beside each item
+ * (⌘N, ⇧⌘N); the keys themselves are bound by the shell and by
+ * `install_macos_menu`, not by this menu.
  */
 
 import type { ReactNode } from 'react';
-import { KindIcon, MenuButton } from '../components';
-import { KIND_LIST, kindLabel } from '../model';
+import { MenuButton, MenuItem } from '../components';
 import type { KindFilter } from '../location';
 
 export interface NewItemButtonProps {
   onNew: (kind: Exclude<KindFilter, 'All'>) => void;
+  /** Opens the New folder sheet; omitted where no folder can be made. */
+  onNewFolder?: () => void;
   /** Tooltip message explaining why item creation is disabled, if applicable. */
   reason?: string | null;
   disabled?: boolean;
 }
 
-/** Primary button that displays a dropdown menu of item kinds to create. */
 export function NewItemButton({
   onNew,
+  onNewFolder,
   reason = null,
   disabled = false,
 }: NewItemButtonProps): ReactNode {
   return (
     <MenuButton
-      label="New"
-      variant="primary"
+      label=""
+      aria-label="New"
+      variant="quiet"
       icon="plus"
+      trailingIcon={null}
       menuLabel="Create item"
       align="end"
       className="newwrap"
       disabled={disabled || reason !== null}
-      {...(reason ? { title: reason } : {})}
+      title={reason ?? 'New item'}
     >
-      {(close) => (
+      {() => (
         <>
-          {KIND_LIST.map((name) => (
-            <button
-              key={name}
-              type="button"
-              role="menuitem"
-              className="kind-menu-item"
-              onClick={() => {
-                close();
-                onNew(name);
-              }}
-            >
-              <KindIcon kind={name} />
-              {kindLabel(name)}
-            </button>
-          ))}
+          <MenuItem icon="key" shortcut="⌘N" onClick={() => onNew('Password')}>
+            New Password
+          </MenuItem>
+          <MenuItem
+            icon="fileText"
+            shortcut="⇧⌘N"
+            onClick={() => onNew('Document')}
+          >
+            New Document
+          </MenuItem>
+          {onNewFolder ? (
+            <>
+              <div className="menu-separator" role="separator" />
+              <MenuItem icon="folder" onClick={onNewFolder}>
+                New Folder…
+              </MenuItem>
+            </>
+          ) : null}
         </>
       )}
     </MenuButton>

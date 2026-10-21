@@ -25,8 +25,8 @@ export function useWindowRuntime({
   useEffect(() => {
     applyRailColor(storedRailColor());
   }, []);
-  // The explicit rail/topbar toggle is the only interaction that changes the
-  // width, and the chosen width persists across navigation and item details.
+  // The sidebar's own toggle and the panel bar's are the only interactions
+  // that hide or show it, and the choice persists across navigation.
   const toggleSidebar = useCallback(() => {
     const collapsed = !sideCollapsed;
     setSideCollapsed(collapsed);
@@ -88,13 +88,13 @@ export function useWindowRuntime({
     ['added', 'checklist-invited', 'checklist-own'].includes(here.step ?? '');
   const railCollapsed =
     sideCollapsed && (here.kind !== 'first-run' || firstRunRailCollapsible);
-  const trafficLightsVisible = !railCollapsed;
+  // The lights stay on screen with the sidebar hidden: the panel's first bar
+  // takes the strip's 52px and keeps their place, so nothing needs to hide
+  // them. The call restores them after an older build that did.
   useEffect(() => {
     if (bridge.native)
-      void bridge
-        .setTrafficLightsVisible(trafficLightsVisible)
-        .catch(commandError);
-  }, [bridge, commandError, trafficLightsVisible]);
+      void bridge.setTrafficLightsVisible(true).catch(commandError);
+  }, [bridge, commandError]);
   // Scrollbars show while a pane is scrolling and for 700ms after. Scroll
   // events do not bubble, so the listener is capture-phase; that also covers
   // keyboard scrolling, which no pointer event would report.

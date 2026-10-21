@@ -88,7 +88,7 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
   });
   const navigate = async (name: string) => {
     const tab = [
-      ...document.querySelectorAll<HTMLButtonElement>('.rail-tabs .nav'),
+      ...document.querySelectorAll<HTMLButtonElement>('.side .nav[data-place]'),
     ].find((node) => node.querySelector('.t')?.textContent === name);
     assert.ok(tab);
     await ui.act(async () => {
@@ -115,7 +115,7 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
   await ui.waitFor(() => assert.equal(calls.cards, 2));
   assert.equal(calls.devices, initial.devices);
   const refresh = document.querySelector<HTMLButtonElement>(
-    '.topbar button.global-refresh',
+    '.side-status button.global-refresh',
   );
   assert.ok(refresh);
   // "primary key" is the fixture's one complete enrollment on this account,

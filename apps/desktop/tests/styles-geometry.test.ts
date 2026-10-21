@@ -147,13 +147,31 @@ test('feature styles use design tokens for colors', async () => {
   }
 });
 
-test('reduced motion is enforced across every component stylesheet', async () => {
+test('reduced motion trades travel for fades across every component stylesheet', async () => {
   const css = await readSource(SHELL, import.meta.url);
   const policy = blockAfter(css, '@media (prefers-reduced-motion: reduce)');
   const values = declarations(blockAfter(policy, '*, *::before, *::after'));
 
   assert.equal(values.get('scroll-behavior'), 'auto !important');
-  assert.equal(values.get('animation-duration'), '0.01ms !important');
   assert.equal(values.get('animation-iteration-count'), '1 !important');
-  assert.equal(values.get('transition-duration'), '0.01ms !important');
+  // Transitions keep colour and opacity, so state changes still fade, but
+  // nothing that moves (transform, position, size) is animated.
+  const properties = (values.get('transition-property') ?? '')
+    .replace('!important', '')
+    .split(',')
+    .map((property) => property.trim());
+  assert.ok(properties.includes('opacity'));
+  for (const moving of ['transform', 'left', 'top', 'width', 'height', 'all'])
+    assert.equal(properties.includes(moving), false, `${moving} still moves`);
+  // The overlay keyframes read their travel from tokens that reduced motion
+  // zeroes, so sheets, alerts and toasts play as plain fades.
+  const tokens = await readSource(TOKENS, import.meta.url);
+  const reduced = declarations(
+    blockAfter(
+      blockAfter(tokens, '@media (prefers-reduced-motion: reduce)'),
+      ':root',
+    ),
+  );
+  assert.equal(reduced.get('--rise'), '0px');
+  assert.equal(reduced.get('--settle-scale'), '1');
 });

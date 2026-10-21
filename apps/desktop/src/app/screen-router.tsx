@@ -6,6 +6,7 @@ import { storeOf } from '../model';
 import type { AgentSnapshot, DeviceLabel } from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { markProfileRostersStale } from '../roster-staleness';
+import { ActivityScreen } from '../screens/activity-screen';
 import { ChatTab } from '../screens/chat-tab';
 import { DevicesScreen } from '../screens/devices-screen';
 import { GroupSettingsScreen } from '../screens/groups-screen';
@@ -193,6 +194,8 @@ export function ScreenRouter({
       {...settingsProps}
       location={here}
     />
+  ) : here.kind === 'activity' ? (
+    <ActivityScreen onNavigate={(location) => locations.navigate(location)} />
   ) : (
     <PlaceholderScreen location={here} />
   );

@@ -159,7 +159,7 @@ test('a loss pending prior to subscription is captured during initial check', as
     },
   };
   const rendered = ui.render(createElement(App, { bridge }));
-  await ui.waitFor(() => assert.ok(document.querySelector('.side.rail')));
+  await ui.waitFor(() => assert.ok(document.querySelector('.side')));
   // The error flag is not read until the listener is attached, avoiding dropped events.
   assert.equal(reads, 0);
 

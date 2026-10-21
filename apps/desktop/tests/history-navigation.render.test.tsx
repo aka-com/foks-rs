@@ -50,9 +50,7 @@ async function mount() {
       bridge: mockBridge(FIXTURE),
     }),
   );
-  await ui.waitFor(() =>
-    assert.ok(view.getByRole('navigation', { name: 'Breadcrumb' })),
-  );
+  await ui.waitFor(() => assert.ok(document.querySelector('.lpane .row')));
   return { store, view };
 }
 

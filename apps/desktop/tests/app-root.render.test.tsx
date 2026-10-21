@@ -31,7 +31,7 @@ test.before(async () => {
   // what says the shell has finished booting.
   await testingLibrary.waitFor(() => {
     assert.ok(document.querySelector('.app'));
-    assert.ok(document.querySelector('.side.rail .who .t b'));
+    assert.ok(document.querySelector('.side .who .t b'));
   });
 });
 
@@ -39,17 +39,16 @@ test.after(async () => {
   await vite.close();
 });
 
-test('the window is the rail and the content column, with no title bar', () => {
+test('the window is the sidebar and the raised panel, with no title bar', () => {
   assert.ok(
     document.querySelector('.window'),
     'window container element should exist',
   );
   assert.equal(document.querySelector('.titlebar'), null);
-  // The window's drag strip is the top of the rail; the web mock draws the
-  // three controls macOS would draw itself.
+  // The window's drag strip is the top of the sidebar; the web mock draws
+  // the three controls macOS would draw itself.
   assert.equal(
-    document.querySelectorAll('.web-mock-window .side.rail .traffic .light')
-      .length,
+    document.querySelectorAll('.web-mock-window .side .traffic .light').length,
     3,
   );
   // Verify main navigation landmark exists.
@@ -58,61 +57,78 @@ test('the window is the rail and the content column, with no title bar', () => {
   assert.equal(document.querySelector('.side .appname'), null);
 });
 
-test('the rail draws the five tabs, the unread badge and the Settings dot', async () => {
-  const tabs = [
-    ...document.querySelectorAll<HTMLButtonElement>(
-      '.side.rail .rail-tabs .nav',
-    ),
-  ];
+/** A sidebar row by the place it stands for (`data-place`). */
+function place(name: string): HTMLButtonElement {
+  const row = document.querySelector<HTMLButtonElement>(
+    `.side .nav[data-place="${name}"]`,
+  );
+  assert.ok(row, `the sidebar has a ${name} row`);
+  return row;
+}
+
+test('the sidebar draws its places, the request count and the Settings dot', async () => {
   assert.deepEqual(
-    tabs.map((tab) => tab.querySelector('.t')?.textContent),
-    ['Files', 'Chat', 'Teams', 'Devices', 'Settings'],
+    [
+      ...document.querySelectorAll<HTMLButtonElement>('.side .nav[data-place]'),
+    ].map((row) => row.querySelector('.t')?.textContent),
+    [
+      'All Items',
+      'Passwords',
+      'Documents',
+      'All Teams',
+      'Chat',
+      'Activity',
+      'Devices',
+      'Settings',
+    ],
   );
   // The fixture's three notifications each already have a home of their own —
   // Acme's lapsed check-in and Partner's unverified trust show on Settings,
-  // Homelab's incomplete setup and its inactive federated membership show on Teams — so
-  // none of them are left for the avatar dot to advertise.
+  // Homelab's incomplete setup and its inactive federated membership show on
+  // its own row — so none of them are left for the avatar dot to advertise.
   assert.equal(
-    document.querySelector('.side.rail .attn'),
+    document.querySelector('.side .attn'),
     null,
     'nothing is left unrouted for the avatar dot to carry',
   );
   // Partner has never been verified (Acme's own lapsed check-in note is only
   // live once its lease is actually expired, which the running demo agent
-  // has not made true here), so the Settings tab carries the orange dot for
+  // has not made true here), so the Settings row carries the amber dot for
   // Partner alone.
-  const settingsDot = tabs[4].querySelector('.rail-tail.dot');
-  assert.ok(settingsDot, 'the Settings tab carries its own dot');
+  const settingsDot = place('settings').querySelector('.nav-tail.dot');
+  assert.ok(settingsDot, 'the Settings row carries its own dot');
   assert.ok(settingsDot.classList.contains('warn'));
   assert.equal(
     settingsDot.getAttribute('aria-label'),
     'foks.partner.dev: not verified',
   );
-  // The Teams badge reads the shared request-count rows, loaded on unlock
+  // All Teams' count reads the shared request-count rows, loaded on unlock
   // for every named team this account can manage: the fixture's inbox holds
   // two requests for each of its two manageable teams. The Devices dot still
   // depends on the Devices page having loaded its signal this session, and
   // that page has not been visited, so it is silent rather than guessing.
   await testingLibrary.waitFor(() =>
     assert.equal(
-      tabs[2].querySelector('.rail-tail.count')?.textContent ?? null,
+      place('teams').querySelector('.nav-tail.count')?.textContent ?? null,
       '4',
     ),
   );
-  assert.equal(tabs[3].querySelector('.rail-tail'), null);
-  // Files is the tab that owns All items, the shell's starting location.
-  assert.equal(tabs[0].getAttribute('aria-current'), 'page');
-  assert.equal(tabs[4].getAttribute('aria-current'), null);
+  assert.equal(place('devices').querySelector('.nav-tail'), null);
+  // All Items is the row that owns the shell's starting location.
+  assert.equal(place('files').getAttribute('aria-current'), 'page');
+  assert.equal(place('settings').getAttribute('aria-current'), null);
 });
 
-test('the rail has no connection status footer or separator', () => {
-  assert.equal(Boolean(document.querySelector('.side.rail .status')), false);
-  assert.equal(Boolean(document.querySelector('.side.rail .foot')), false);
+test('the sidebar foot carries the sync status line under the account', () => {
+  const foot = document.querySelector('.side .side-foot');
+  assert.ok(foot);
+  assert.ok(foot.querySelector('.side-status .global-refresh'));
+  assert.equal(Boolean(document.querySelector('.side .foot')), false);
 });
 
 test('the account header names the active account and opens its menu', async () => {
-  const header = document.querySelector<HTMLButtonElement>('.side.rail .who');
-  assert.ok(header, 'the rail draws the account header');
+  const header = document.querySelector<HTMLButtonElement>('.side .who');
+  assert.ok(header, 'the sidebar draws the account header');
   assert.equal(header.querySelector('.t b')?.textContent, 'satoshi');
   assert.equal(header.getAttribute('aria-expanded'), 'false');
 
@@ -129,26 +145,20 @@ test('the account header names the active account and opens its menu', async () 
   assert.ok(labels.some((text) => text?.includes('satoshi')));
   assert.ok(labels.some((text) => text === 'Add account or server…'));
   assert.ok(labels.some((text) => text === 'Lock'));
+  testingLibrary.fireEvent.keyDown(document, { key: 'Escape' });
 });
 
-test('a tab navigates, and Control-Tab walks the six of them', async () => {
-  const tab = (name: string): HTMLButtonElement => {
-    const found = [
-      ...document.querySelectorAll<HTMLButtonElement>('.side.rail .nav'),
-    ].find((row) => row.querySelector('.t')?.textContent === name);
-    assert.ok(found, `the rail has a ${name} tab`);
-    return found;
-  };
-  testingLibrary.fireEvent.click(tab('Teams'));
+test('a row navigates, and Control-Tab walks the places in sidebar order', async () => {
+  testingLibrary.fireEvent.click(place('teams'));
   await testingLibrary.waitFor(() => {
     assert.equal(document.querySelector('.loc h1')?.textContent, 'Teams');
   });
-  assert.equal(tab('Teams').getAttribute('aria-current'), 'page');
+  assert.equal(place('teams').getAttribute('aria-current'), 'page');
 
-  // Control-Tab moves to the next tab in rail order; Shift walks back.
+  // Control-Tab moves to the next place in sidebar order; Shift walks back.
   testingLibrary.fireEvent.keyDown(document, { key: 'Tab', ctrlKey: true });
   await testingLibrary.waitFor(() => {
-    assert.equal(tab('Devices').getAttribute('aria-current'), 'page');
+    assert.equal(place('chat').getAttribute('aria-current'), 'page');
   });
   testingLibrary.fireEvent.keyDown(document, {
     key: 'Tab',
@@ -156,66 +166,53 @@ test('a tab navigates, and Control-Tab walks the six of them', async () => {
     shiftKey: true,
   });
   await testingLibrary.waitFor(() => {
-    assert.equal(tab('Teams').getAttribute('aria-current'), 'page');
+    assert.equal(place('teams').getAttribute('aria-current'), 'page');
   });
 
-  testingLibrary.fireEvent.click(tab('Files'));
+  testingLibrary.fireEvent.click(place('files'));
   await testingLibrary.waitFor(() => {
-    assert.equal(crumbs(), 'Files›All items');
+    assert.equal(place('files').getAttribute('aria-current'), 'page');
   });
-  assert.equal(document.querySelector('.side.rail .rail-back'), null);
+  assert.ok(document.querySelector('.lpane'));
 });
 
-/** Returns header breadcrumb segments joined by a chevron separator. */
-function crumbs(): string | undefined {
-  const nav = document.querySelector('.topbar .crumbs');
-  if (!nav) return undefined;
-  return [...nav.querySelectorAll('button .t')]
-    .map((segment) => segment.textContent?.trim() ?? '')
-    .join('›');
+/** The sidebar's store tree rows, by the name each draws. */
+function treeRows(): HTMLButtonElement[] {
+  return [
+    ...document.querySelectorAll<HTMLButtonElement>('.side-tree .fselect'),
+  ];
 }
 
-test('the Files tree lists the stores the roots page used to enumerate', async () => {
-  await testingLibrary.waitFor(() => {
-    assert.equal(crumbs(), 'Files›All items');
-  });
-  const rows = [
-    ...document.querySelectorAll<HTMLButtonElement>('.tpane .fselect'),
-  ];
-  const names = rows.map((row) => row.querySelector('.nm')?.textContent);
-  assert.ok(names.includes('All items'));
+test('the sidebar tree lists the stores and opens one in the list', async () => {
+  const names = treeRows().map((row) => row.querySelector('.nm')?.textContent);
   assert.ok(names.includes('Personal'));
   assert.ok(names.includes('Work (Acme)'));
   assert.ok(names.includes('Engineering'));
 
-  const engineering = rows.find(
+  const engineering = treeRows().find(
     (row) => row.querySelector('.nm')?.textContent === 'Engineering',
   );
   assert.ok(engineering);
   testingLibrary.fireEvent.click(engineering);
-  await testingLibrary.waitFor(() => {
-    assert.equal(crumbs(), 'Files›Engineering');
-  });
   // Browsing a store through the tree is client-side selection, not a
-  // location change, but the topbar reads that same selection.
-  assert.equal(crumbs()?.includes('Engineering'), true);
-  assert.equal(document.querySelector('.side.rail .rail-back'), null);
-  const allItems = rows.find(
-    (row) => row.querySelector('.nm')?.textContent === 'All items',
-  );
-  assert.ok(allItems);
-  testingLibrary.fireEvent.click(allItems);
+  // location change; the list's head names the store and the row is current.
   await testingLibrary.waitFor(() => {
-    assert.equal(crumbs(), 'Files›All items');
+    assert.equal(
+      document.querySelector('.lpane .list-head h2')?.textContent,
+      'Engineering',
+    );
   });
+  assert.equal(engineering.getAttribute('aria-current'), 'location');
+  assert.equal(place('files').getAttribute('aria-current'), null);
+  testingLibrary.fireEvent.click(place('files'));
+  await testingLibrary.waitFor(() => {
+    assert.equal(place('files').getAttribute('aria-current'), 'page');
+  });
+  assert.equal(document.querySelector('.lpane .list-head'), null);
 });
 
 test('the chat tab opens a conversation and lists every team at once', async () => {
-  const tab = [
-    ...document.querySelectorAll<HTMLButtonElement>('.side.rail .nav'),
-  ].find((row) => row.querySelector('.t')?.textContent === 'Chat');
-  assert.ok(tab);
-  testingLibrary.fireEvent.click(tab);
+  testingLibrary.fireEvent.click(place('chat'));
   const column = await testingLibrary.waitFor(() => {
     const node = document.querySelector('.chat-inbox');
     assert.ok(node, 'the chat tab draws its team column');
@@ -238,7 +235,7 @@ test('the chat tab opens a conversation and lists every team at once', async () 
       'page',
     ),
   );
-  // Chat follows the server capability grant, as the rail's chat rows did:
+  // Chat follows the server capability grant, as the old rail's chat rows did:
   // Engineering's server offers none, so it sits under "Chat unavailable", dimmed and
   // not selectable.
   assert.ok(engineering.classList.contains('off'));
@@ -266,31 +263,17 @@ test('renders navigation icons as SVG elements', () => {
   assert.ok(icon.children.length > 0, 'icon contains SVG child elements');
 });
 
-test('opens on All items, in the folder browser', async () => {
+test('opens on All Items, in the list column', async () => {
   // This runs after the walk above, so return to the starting location.
-  const files = [
-    ...document.querySelectorAll<HTMLButtonElement>('.side.rail .nav'),
-  ].find((row) => row.querySelector('.t')?.textContent === 'Files');
-  assert.ok(files);
-  testingLibrary.fireEvent.click(files);
+  testingLibrary.fireEvent.click(place('files'));
   await testingLibrary.waitFor(() => {
-    assert.ok(document.querySelector('.tpane'));
+    assert.ok(document.querySelector('.lpane'));
   });
-  const all = [
-    ...document.querySelectorAll<HTMLButtonElement>('.tpane .fselect'),
-  ].find((row) => row.querySelector('.nm')?.textContent === 'All items');
-  assert.ok(all);
-  testingLibrary.fireEvent.click(all);
-  await testingLibrary.waitFor(() => {
-    assert.equal(crumbs(), 'Files›All items');
-  });
-  assert.equal(all.getAttribute('aria-current'), 'location');
-  assert.ok(
-    document.querySelector('.folder-layout'),
-    'item pages open in the folder browser',
-  );
-  const rows = document.querySelectorAll('.body .row');
-  assert.ok(rows.length > 0, 'items list is rendered in main body');
+  assert.equal(place('files').getAttribute('aria-current'), 'page');
+  const rows = document.querySelectorAll('.lpane .body .row');
+  assert.ok(rows.length > 0, 'items list is rendered in the list column');
+  // Nothing is selected, so the details column says so.
+  assert.ok(document.querySelector('.details.details-empty'));
   assert.equal(document.querySelector('[data-shell-placeholder]'), null);
 });
 
@@ -309,13 +292,6 @@ test('Accounts, Devices and Settings draw no StoreRef', async () => {
   assert.ok(refs.includes('acct:personal'), 'the fixture names account stores');
   assert.ok(refs.includes('team:eng'), 'the fixture names team stores');
 
-  const tab = (name: string): HTMLButtonElement => {
-    const found = [
-      ...document.querySelectorAll<HTMLButtonElement>('.side.rail .nav'),
-    ].find((row) => row.querySelector('.t')?.textContent === name);
-    assert.ok(found, `the rail has a ${name} tab`);
-    return found;
-  };
   /** Everything the page shows a reader: its text and its shown attributes. */
   const shownText = (main: Element): string =>
     [
@@ -338,7 +314,7 @@ test('Accounts, Devices and Settings draw no StoreRef', async () => {
     // header names the account it is about rather than the section.
     ['Settings', 'satoshi', 'devices and keys'],
   ] as const) {
-    testingLibrary.fireEvent.click(tab(name));
+    testingLibrary.fireEvent.click(place(name.toLowerCase()));
     const main = await testingLibrary.waitFor(() => {
       assert.equal(document.querySelector('.loc h1')?.textContent, heading);
       const node = document.querySelector('main.main');

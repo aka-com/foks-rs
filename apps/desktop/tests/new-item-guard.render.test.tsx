@@ -69,7 +69,9 @@ async function openSheet(
   kind: string,
 ): Promise<void> {
   ui.fireEvent.click(rendered.getByRole('button', { name: 'New' }));
-  ui.fireEvent.click(await rendered.findByRole('menuitem', { name: kind }));
+  ui.fireEvent.click(
+    await rendered.findByRole('menuitem', { name: `New ${kind}` }),
+  );
   await ui.waitFor(() =>
     assert.ok(rendered.getByText(`New ${kind.toLowerCase()}`)),
   );

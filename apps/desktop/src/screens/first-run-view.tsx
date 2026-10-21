@@ -105,7 +105,7 @@ export function SetupSidebar({
     const current = localStepOf(checkpoint.state);
     const labels = ['Local server', 'Create account', 'Account recovery'];
     return (
-      <nav className="side rail setup-side" aria-label="Setup steps">
+      <nav className="side setup-side" aria-label="Setup steps">
         <TrafficStrip native={native} />
         <div className={`setup-steps${blocked ? ' is-blocked' : ''}`}>
           {labels.map((label, index) => (
@@ -179,7 +179,7 @@ export function SetupSidebar({
     'Complete',
   ];
   return (
-    <nav className="side rail setup-side" aria-label="Setup steps">
+    <nav className="side setup-side" aria-label="Setup steps">
       <TrafficStrip native={native} />
       <div className={`setup-steps${blocked ? ' is-blocked' : ''}`}>
         {labels.map((label, index) => (

@@ -1,9 +1,9 @@
 /**
- * The navigation rail: six tabs, the summed chat badge, the attention dot on
- * the account avatar, Control-Tab, and the account menu's own commands.
+ * The sidebar: its places, the summed chat count, the attention dot on the
+ * account avatar, Control-Tab, and the account menu's own commands.
  *
- * The rail is rendered directly rather than through the shell so the inbox and
- * the lock command can be driven from the test.
+ * The sidebar is rendered directly rather than through the shell so the inbox
+ * and the lock command can be driven from the test.
  */
 
 import assert from 'node:assert/strict';
@@ -125,58 +125,82 @@ async function rail(
   return { rendered, journal, snapshot };
 }
 
+/** The rows that stand for a whole place, in sidebar order. */
 function tabs(): HTMLButtonElement[] {
   return [
-    ...document.querySelectorAll<HTMLButtonElement>(
-      '.side.rail .rail-tabs .nav',
-    ),
+    ...document.querySelectorAll<HTMLButtonElement>('.side .nav[data-place]'),
   ];
 }
 
-test('the rail draws five tabs and marks the one that owns the location', async () => {
+/** One place's row (`data-place`). */
+function place(name: string): HTMLButtonElement {
+  const row = document.querySelector<HTMLButtonElement>(
+    `.side .nav[data-place="${name}"]`,
+  );
+  assert.ok(row, `the sidebar has a ${name} row`);
+  return row;
+}
+
+test('the sidebar draws its places and marks the one that owns the location', async () => {
   await rail({ kind: 'group-settings', ref: 'team:eng' });
   assert.deepEqual(
     tabs().map((tab) => tab.querySelector('.t')?.textContent),
-    ['Files', 'Chat', 'Teams', 'Devices', 'Settings'],
+    [
+      'All Items',
+      'Passwords',
+      'Documents',
+      'All Teams',
+      'Chat',
+      'Activity',
+      'Devices',
+      'Settings',
+    ],
   );
   // A group's settings page belongs to Teams.
-  assert.equal(tabs()[2].getAttribute('aria-current'), 'page');
-  assert.equal(tabs().filter((tab) => tab.className.includes('on')).length, 1);
+  assert.equal(place('teams').getAttribute('aria-current'), 'page');
+  assert.equal(
+    [...document.querySelectorAll('.side .nav.on')].length,
+    1,
+    'one row is selected',
+  );
+  // The store tree lists every store between the item rows and All Teams.
+  const stores = [...document.querySelectorAll('.side-tree .fn.root .nm')].map(
+    (name) => name.textContent,
+  );
+  assert.ok(stores.includes('Personal'));
+  assert.ok(stores.includes('Engineering'));
 });
 
 test('Chat displays total unread and the avatar displays an attention indicator', async () => {
   const { journal } = await rail({ kind: 'all' }, '2', 3);
   // Initial unread loading belongs to the header refresh control.
-  assert.equal(document.querySelector('.side.rail .rail-tail.loading'), null);
+  assert.equal(document.querySelector('.side .nav-tail.loading'), null);
   // The badge is one number over every team whose chat this Mac can read: the
   // fixture's two readable groups, two unread apiece.
   const badge = await ui.waitFor(() => {
-    const node = document.querySelector('.side.rail .rail-tail.count');
-    assert.ok(node, 'the Chat tab draws its count');
+    const node = place('chat').querySelector('.nav-tail.count');
+    assert.ok(node, 'the Chat row draws its count');
     return node;
   });
-  assert.equal(document.querySelector('.side.rail .rail-tail.loading'), null);
+  assert.equal(document.querySelector('.side .nav-tail.loading'), null);
   assert.equal(badge.textContent, '4');
   assert.equal(badge.getAttribute('aria-label'), '4 unread');
   // Attention is advertised on the account avatar, and the dot is the control
   // that opens the list: Settings › Account, by address, whatever page the
   // Settings tab last had open.
-  const dot = document.querySelector<HTMLButtonElement>('.side.rail .attn');
+  const dot = document.querySelector<HTMLButtonElement>('.side .attn');
   assert.ok(dot, 'the avatar carries the dot');
   assert.equal(dot.getAttribute('aria-label'), 'Needs attention');
   // The Settings tab, whose Account section lists the notices, carries the
   // same dot and says why; no other tab does.
-  const settingsDot = tabs()[4].querySelector('.rail-tail.dot');
-  assert.ok(settingsDot, 'the Settings tab draws the dot');
+  const settingsDot = place('settings').querySelector('.nav-tail.dot');
+  assert.ok(settingsDot, 'the Settings row draws the dot');
   assert.equal(
     settingsDot.getAttribute('aria-label'),
     '3 notices need attention',
   );
   assert.equal(settingsDot.textContent, '');
-  assert.equal(
-    document.querySelectorAll('.rail-tabs .rail-tail.dot').length,
-    1,
-  );
+  assert.equal(document.querySelectorAll('.side .nav-tail.dot').length, 1);
   ui.fireEvent.click(dot);
   assert.deepEqual(journal.navigations.at(-1), {
     kind: 'settings',
@@ -187,13 +211,13 @@ test('Chat displays total unread and the avatar displays an attention indicator'
 test('no unread and nothing to attend to leaves both marks off', async () => {
   await rail({ kind: 'all' }, '0', 0);
   await ui.waitFor(() => {
-    assert.ok(document.querySelector('.side.rail .rail-tabs .nav'));
+    assert.ok(document.querySelector('.side .nav[data-place]'));
   });
   await ui.waitFor(() => {
-    assert.equal(document.querySelector('.side.rail .rail-tail.loading'), null);
+    assert.equal(document.querySelector('.side .nav-tail.loading'), null);
   });
-  assert.equal(document.querySelector('.side.rail .rail-tail'), null);
-  assert.equal(document.querySelector('.side.rail .attn'), null);
+  assert.equal(document.querySelector('.side .nav-tail'), null);
+  assert.equal(document.querySelector('.side .attn'), null);
 });
 
 for (const collapsed of [false, true]) {
@@ -223,9 +247,9 @@ for (const collapsed of [false, true]) {
         collapsed,
       );
       await ui.waitFor(() => {
-        const chat = tabs()[1];
-        assert.ok(!chat.querySelector('.rail-tail.loading'));
-        const warning = chat.querySelector('.rail-tail.dot.warn');
+        const chat = place('chat');
+        assert.ok(!chat.querySelector('.nav-tail.loading'));
+        const warning = chat.querySelector('.nav-tail.dot.warn');
         assert.ok(warning);
         assert.match(
           warning.getAttribute('aria-label') ?? '',
@@ -257,13 +281,13 @@ test('Chat keeps a countable total and marks it when a team fails', async () => 
     // The count that could be read is still drawn: a failing team marks the
     // badge amber rather than taking the number away, which on a retrying
     // poll would read as the unread messages themselves going away.
-    const warning = tabs()[1].querySelector('.rail-tail.count.warn');
+    const warning = place('chat').querySelector('.nav-tail.count.warn');
     assert.ok(warning);
     assert.equal(warning.textContent, '2');
     assert.match(warning.getAttribute('aria-label') ?? '', /2 known unread/);
     assert.match(warning.getAttribute('aria-label') ?? '', /unavailable/i);
-    assert.equal(tabs()[1].querySelector('.rail-tail.dot.warn'), null);
-    assert.equal(tabs()[1].querySelector('.rail-tail.loading'), null);
+    assert.equal(place('chat').querySelector('.nav-tail.dot.warn'), null);
+    assert.equal(place('chat').querySelector('.nav-tail.loading'), null);
   });
 });
 
@@ -278,79 +302,61 @@ test('renders a Teams count, Devices and Settings dots, and no empty indicators'
     { description: 'An account has no recovery phrase' },
     { description: 'foks.partner.dev: not verified' },
   );
-  const [, , teamsTab, devicesTab, settingsTab] = tabs();
-  const teamsBadge = teamsTab.querySelector('.rail-tail.count');
-  assert.ok(teamsBadge, 'Teams carries a count in the same slot as Chat');
+  const [teamsTab, devicesTab, settingsTab] = [
+    place('teams'),
+    place('devices'),
+    place('settings'),
+  ];
+  const teamsBadge = teamsTab.querySelector('.nav-tail.count');
+  assert.ok(teamsBadge, 'All Teams carries a count in the same slot as Chat');
   assert.equal(teamsBadge.textContent, '2');
   assert.equal(
     teamsBadge.getAttribute('aria-label'),
     '2 requests to join a team',
   );
-  const devicesDot = devicesTab.querySelector('.rail-tail.dot');
+  const devicesDot = devicesTab.querySelector('.nav-tail.dot');
   assert.ok(devicesDot, 'Devices carries its dot');
-  // A device waiting on approval is a state to act on, so the dot is orange,
+  // A device waiting on approval is a state to act on, so the dot is amber,
   // as the Settings dot is.
   assert.ok(devicesDot.classList.contains('warn'));
   assert.equal(
     devicesDot.getAttribute('aria-label'),
     'An account has no recovery phrase',
   );
-  const settingsDot = settingsTab.querySelector('.rail-tail.dot');
+  const settingsDot = settingsTab.querySelector('.nav-tail.dot');
   assert.ok(settingsDot, 'Settings carries its dot');
   assert.ok(settingsDot.classList.contains('warn'));
   assert.equal(
     settingsDot.getAttribute('aria-label'),
     'foks.partner.dev: not verified',
   );
-
-  // Collapsed, every indicator still draws, in the same slot the stylesheet
-  // folds to the icon's corner.
-  await rail(
-    { kind: 'all' },
-    '0',
-    0,
-    true,
-    false,
-    { label: '2', description: '2 requests to join a team' },
-    { description: 'An account has no recovery phrase' },
-    { description: 'foks.partner.dev: not verified' },
-  );
-  assert.ok(document.querySelector('.side.rail.is-narrow .rail-tail.count'));
-  assert.equal(
-    document.querySelectorAll('.side.rail.is-narrow .rail-tail.dot').length,
-    2,
-  );
 });
 
 test('with nothing known, Teams, Devices and Settings draw nothing', async () => {
   await rail({ kind: 'all' }, '0', 0);
-  const [, , teamsTab, devicesTab, settingsTab] = tabs();
-  assert.equal(teamsTab.querySelector('.rail-tail'), null);
-  assert.equal(devicesTab.querySelector('.rail-tail'), null);
-  assert.equal(settingsTab.querySelector('.rail-tail'), null);
+  assert.equal(place('teams').querySelector('.nav-tail'), null);
+  assert.equal(place('devices').querySelector('.nav-tail'), null);
+  assert.equal(place('settings').querySelector('.nav-tail'), null);
 });
 
 for (const agent of ['ready', 'starting', 'stopped', 'locked'] as const) {
-  test(`the ${agent} rail has no connection footer in either width`, async () => {
-    for (const collapsed of [false, true]) {
-      const { rendered } = await rail(
-        { kind: 'all' },
-        '0',
-        0,
-        collapsed,
-        false,
-        null,
-        null,
-        null,
-        agent,
-      );
-      assert.equal(
-        Boolean(document.querySelector('.side.rail .status')),
-        false,
-      );
-      assert.equal(Boolean(document.querySelector('.side.rail .foot')), false);
-      rendered.unmount();
-    }
+  test(`without a sync service the ${agent} sidebar states the agent in its status line`, async () => {
+    const { rendered } = await rail(
+      { kind: 'all' },
+      '0',
+      0,
+      false,
+      false,
+      null,
+      null,
+      null,
+      agent,
+    );
+    const status = document.querySelector('.side .side-status .status');
+    assert.ok(status);
+    assert.ok(status.classList.contains(`agent-${agent}`));
+    assert.equal(Boolean(document.querySelector('.side .foot')), false);
+    rendered.unmount();
   });
 }
 
@@ -402,14 +408,15 @@ test('setup omits Restart until leaving the first step', async () => {
   assert.ok(view.getByRole('button', { name: 'Restart setup' }));
 });
 
-test('a tab click and Control-Tab both navigate over the five tabs', async () => {
+test('a row click and Control-Tab both navigate over the places', async () => {
   const { journal } = await rail({ kind: 'files' });
-  ui.fireEvent.click(tabs()[4]);
+  ui.fireEvent.click(place('settings'));
   assert.deepEqual(journal.navigations.at(-1), { kind: 'settings' });
 
-  // Files is the first tab, so forward is Chat and backward wraps to Settings.
+  // All Items is the first place, so forward is Teams and backward wraps to
+  // Settings.
   ui.fireEvent.keyDown(document, { key: 'Tab', ctrlKey: true });
-  assert.deepEqual(journal.navigations.at(-1), { kind: 'chat' });
+  assert.deepEqual(journal.navigations.at(-1), { kind: 'teams' });
   ui.fireEvent.keyDown(document, {
     key: 'Tab',
     ctrlKey: true,
@@ -436,37 +443,38 @@ test('Control-Tab is disabled while a modal dialog is open', async () => {
   assert.deepEqual(journal.navigations, []);
 });
 
-test('a tab is titled only where its label is hidden', async () => {
+test('a hidden sidebar keeps its rows out of the window', async () => {
   await rail({ kind: 'files' });
-  assert.deepEqual(
-    tabs().map((tab) => tab.getAttribute('title')),
-    [null, null, null, null, null],
+  assert.equal(
+    document.querySelector('nav.side')?.hasAttribute('hidden'),
+    false,
   );
   ui.cleanup();
   await rail({ kind: 'files' }, '0', 0, true);
-  assert.deepEqual(
-    tabs().map((tab) => tab.getAttribute('title')),
-    ['Files', 'Chat', 'Teams', 'Devices', 'Settings'],
+  assert.equal(
+    document.querySelector('nav.side')?.hasAttribute('hidden'),
+    true,
   );
 });
 
-test('the cycle helpers hold the rail order and wrap at both ends', async () => {
+test('the cycle helpers hold the sidebar order and wrap at both ends', async () => {
   const { sidebarCycleLocations, nextSidebarCycleLocation } =
     (await vite.ssrLoadModule(
       '/src/shell/sidebar.tsx',
     )) as typeof import('../src/shell/sidebar');
   assert.deepEqual(sidebarCycleLocations(), [
     { kind: 'files' },
-    { kind: 'chat' },
     { kind: 'teams' },
+    { kind: 'chat' },
+    { kind: 'activity' },
     { kind: 'devices' },
     { kind: 'settings' },
   ]);
-  // Control-Tab walks the tab a location belongs to, not the location itself:
-  // a group's settings page is on Teams, so forward from it is Devices.
+  // Control-Tab walks the place a location belongs to, not the location
+  // itself: a group's settings page is on Teams, so forward from it is Chat.
   assert.deepEqual(
     nextSidebarCycleLocation({ kind: 'group-settings', ref: 'team:eng' }, 1),
-    { kind: 'devices' },
+    { kind: 'chat' },
   );
   assert.deepEqual(nextSidebarCycleLocation({ kind: 'store', ref: 'x' }, -1), {
     kind: 'settings',
@@ -495,7 +503,7 @@ test('the account menu switches account, adds one, and locks the app', async () 
     section: 'account',
     store: 'acct:personal',
   });
-  const header = document.querySelector<HTMLButtonElement>('.side.rail .who');
+  const header = document.querySelector<HTMLButtonElement>('.side .who');
   assert.ok(header);
   assert.equal(header.querySelector('.t b')?.textContent, 'satoshi');
   // The foot's second line is the host the account lives on, not the reader's
@@ -554,7 +562,7 @@ test('a stopped account is dimmed and carries the way to restore it', async () =
     section: 'account',
     store: 'acct:personal',
   });
-  const header = document.querySelector<HTMLButtonElement>('.side.rail .who');
+  const header = document.querySelector<HTMLButtonElement>('.side .who');
   assert.ok(header);
   ui.fireEvent.click(header);
   const menu = await ui.waitFor(() => {
@@ -581,7 +589,7 @@ test('a stopped account is dimmed and carries the way to restore it', async () =
   assert.equal(journal.navigations.length, 0);
 });
 
-test('the rail names the account through which the selected group is accessed', async () => {
+test('the sidebar names the account through which the selected group is accessed', async () => {
   await rail({ kind: 'group-settings', ref: 'team:eng' });
   assert.match(
     document.querySelector('.rail-account')?.textContent ??
@@ -591,7 +599,7 @@ test('the rail names the account through which the selected group is accessed', 
   );
 });
 
-test('native titlebar controls follow rail collapse and expansion', async () => {
+test('native titlebar controls stay visible while the sidebar is hidden', async () => {
   const { App } = (await vite.ssrLoadModule(
     '/src/app-root.tsx',
   )) as typeof import('../src/app-root');
@@ -612,11 +620,15 @@ test('native titlebar controls follow rail collapse and expansion', async () => 
   };
   const r = ui.render(createElement(App, { snapshot: FIXTURE, bridge }));
   await ui.waitFor(() => assert.equal(calls.at(-1), true));
+  // The panel's first bar takes the strip's height while the sidebar is
+  // hidden, so the lights keep their place and are never asked to hide.
   ui.fireEvent.click(r.getByRole('button', { name: 'Collapse sidebar' }));
-  await ui.waitFor(() => assert.equal(calls.at(-1), false));
-  assert.ok(document.querySelector('.app.side-narrow'));
+  await ui.waitFor(() => assert.ok(document.querySelector('.app.no-side')));
   ui.fireEvent.click(r.getByRole('button', { name: 'Expand sidebar' }));
-  await ui.waitFor(() => assert.equal(calls.at(-1), true));
+  await ui.waitFor(() =>
+    assert.equal(document.querySelector('.app.no-side'), null),
+  );
+  assert.equal(calls.includes(false), false);
   window.localStorage.clear();
 });
 
@@ -648,7 +660,7 @@ test('device crumbs use the name resolved for the exact account and address', as
 });
 
 for (const legacy of [false, true]) {
-  test(`the rail resolves a Teams target to its owner (legacy=${legacy})`, async () => {
+  test(`the sidebar resolves a Teams target to its owner (legacy=${legacy})`, async () => {
     await rail({
       kind: 'teams',
       ...(legacy ? { store: 'team:eng' } : { ref: 'team:eng' }),

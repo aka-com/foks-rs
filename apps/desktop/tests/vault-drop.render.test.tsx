@@ -102,7 +102,7 @@ async function openFileDocument(
 ): Promise<void> {
   ui.fireEvent.click(rendered.getByRole('button', { name: 'New' }));
   ui.fireEvent.click(
-    await rendered.findByRole('menuitem', { name: 'Document' }),
+    await rendered.findByRole('menuitem', { name: 'New Document' }),
   );
   await rendered.findByRole('dialog', { name: 'New document' });
   ui.fireEvent.click(rendered.getByRole('button', { name: 'File' }));
@@ -246,7 +246,7 @@ test('the all-items view has no single destination, so it takes no drop', async 
       },
     },
   );
-  await ui.waitFor(() => assert.ok(rendered.getAllByText('All items').length));
+  await ui.waitFor(() => assert.ok(rendered.getAllByText('All Items').length));
 
   await driver.hover(true);
   assert.equal(rendered.queryByText(/Drop to upload/), null);
@@ -293,7 +293,7 @@ test('the new-item sheet keeps the drop while it is open', async () => {
   await ui.waitFor(() => assert.ok(rendered.getAllByText('Personal').length));
   ui.fireEvent.click(rendered.getByRole('button', { name: 'New' }));
   ui.fireEvent.click(
-    await rendered.findByRole('menuitem', { name: 'Document' }),
+    await rendered.findByRole('menuitem', { name: 'New Document' }),
   );
   await ui.waitFor(() => assert.ok(rendered.getByText('New document')));
 

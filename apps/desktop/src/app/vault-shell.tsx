@@ -34,6 +34,7 @@ import {
   applyLease,
   defaultCreateStore,
   settingsAlertSummary,
+  storeDescriptionState,
   storeOf,
   storeReadable,
   type AgentSnapshot,
@@ -62,6 +63,8 @@ import {
 import { useSearchShortcut } from '../shell/search-palette';
 import { Sidebar } from '../shell/sidebar';
 import { Topbar } from '../shell/topbar';
+import { FilesViewMenu } from '../shell/files-view-menu';
+import { PlainSyncStatus, SyncControls } from '../shell/sync-status';
 import { requestNewChat } from '../screens/chat-tab';
 import { chatTeams } from '../screens/chat-teams';
 import { useAccessRuntime } from './access-runtime';
@@ -528,11 +531,39 @@ export function VaultShell({
       stop?.();
     };
   }, [bridge, openNewItem]);
+  const refreshShell = (): void =>
+    refreshAll(() => {
+      reconciliation.scheduler.requestAll('manual', [
+        'discovery',
+        'metadata',
+        'registry',
+        'connectivity',
+      ]);
+    }, commandError);
+  const openServer = (profile: string): void =>
+    locations.navigate({ kind: 'settings', section: 'account', profile });
   const chatMigration = useChatMigration(
     bridge,
     agentLifecycle.state === 'ready' && agentCatalogReady && !chrome.blocked,
     concealSignal,
   );
+  // Files is a list beside its details: with nothing selected (or the
+  // details closed) the details column says No Selection rather than going
+  // away, so the list keeps its width.
+  const teamInfoShown =
+    !chrome.blocked && filesHere && !detailsShown && infoStore?.kind === 'team';
+  // A store page whose store is gone or cannot be used is a page of its own
+  // (the unavailable notice, the access takeover), not a list.
+  const herePage =
+    here.kind === 'store' &&
+    (() => {
+      const pageStore = storeOf(shown, here.ref);
+      return (
+        !pageStore || storeDescriptionState(shown, pageStore) !== 'normal'
+      );
+    })();
+  const splitEmpty =
+    filesHere && !herePage && !detailsShown && !teamInfoShown;
   const shell = (
     <div
       className={[
@@ -546,12 +577,14 @@ export function VaultShell({
       <div
         className={[
           'app',
-          detailsShown || (here.kind === 'first-run' && here.step === 'added')
+          detailsShown ||
+          splitEmpty ||
+          (here.kind === 'first-run' && here.step === 'added')
             ? 'with-details'
             : '',
-          // The setup steps replace the rail with one that has no toggle; the
-          // checklist screens draw the rail itself and collapse with it.
-          railCollapsed ? 'side-narrow' : '',
+          // The setup steps replace the sidebar with one that has no toggle;
+          // the checklist screens draw the sidebar itself and hide with it.
+          railCollapsed ? 'no-side' : '',
         ]
           .filter(Boolean)
           .join(' ')}
@@ -639,9 +672,55 @@ export function VaultShell({
                 }
                 onToggleCollapsed={toggleSidebar}
                 collapsed={sideCollapsed}
-                // The lifecycle is the rail's own authority for whether the
-                // agent is gone, whichever path raised the disconnect.
+                files={{
+                  folder: state.folder,
+                  kind: state.kind,
+                  onOpen: (folder, kind) => locations.openFiles(folder, kind),
+                  accessNow,
+                  folderActions: {
+                    onNewFolder: (storeId, initialFolder) =>
+                      setWorkflow({
+                        kind: 'new-folder',
+                        storeId,
+                        initialFolder,
+                      }),
+                    onMove: (item) => setWorkflow({ kind: 'move', item }),
+                    // Team info is a panel beside the Files list, so it is
+                    // offered only while the list is on screen.
+                    ...(filesHere
+                      ? {
+                          onTeamInfo: (
+                            storeId: string,
+                            trigger?: HTMLElement,
+                          ) => {
+                            locations.setDetails(false);
+                            setTeamInfo({ storeId, trigger });
+                          },
+                        }
+                      : {}),
+                  },
+                }}
+                // The lifecycle is the sidebar's own authority for whether
+                // the agent is gone, whichever path raised the disconnect.
                 agent={chrome.agent}
+                statusLine={
+                  bridge.native ? (
+                    <SyncControls
+                      snapshot={shown}
+                      service={reconciliation}
+                      refreshing={refreshingSnapshot}
+                      blocked={chrome.blocked}
+                      onRefresh={refreshShell}
+                      onOpenServers={openServer}
+                    />
+                  ) : (
+                    <PlainSyncStatus
+                      refreshing={refreshingSnapshot}
+                      blocked={chrome.blocked}
+                      onRefresh={refreshShell}
+                    />
+                  )
+                }
                 nativeChrome={bridge.native}
                 blocked={chrome.blocked}
               />
@@ -672,39 +751,36 @@ export function VaultShell({
                     ? {
                         onNew: (itemKind: Exclude<KindFilter, 'All'>) =>
                           void openNewItem(itemKind),
+                        onNewFolder: () =>
+                          setWorkflow({
+                            kind: 'new-folder',
+                            storeId: newStore.id,
+                            initialFolder:
+                              newSelection && newSelection.store !== ALL_ITEMS
+                                ? newSelection.path
+                                : '/',
+                          }),
                         newBlocked: writeBlockReason(shown, newStore),
                       }
                     : {})}
-                  detailsOpen={detailsShown}
                   {...(filesHere
                     ? {
-                        onToggleDetails: () => {
-                          if (detailsShown) locations.setDetails(false);
-                          else if (state.selection) locations.setDetails(true);
-                        },
+                        actions: (
+                          <FilesViewMenu
+                            sort={state.sort}
+                            direction={state.sortDirection}
+                            onSort={(sort, direction) =>
+                              locations.setSort(sort, direction)
+                            }
+                            locationSort={newSelection?.store === ALL_ITEMS}
+                            disabled={chrome.blocked}
+                          />
+                        ),
                       }
                     : {})}
                   collapsed={sideCollapsed}
                   onToggleCollapsed={toggleSidebar}
-                  refreshing={refreshingSnapshot}
-                  onRefresh={() =>
-                    refreshAll(() => {
-                      reconciliation.scheduler.requestAll('manual', [
-                        'discovery',
-                        'metadata',
-                        'registry',
-                        'connectivity',
-                      ]);
-                    }, commandError)
-                  }
-                  syncService={bridge.native ? reconciliation : undefined}
-                  onOpenServers={(profile) =>
-                    locations.navigate({
-                      kind: 'settings',
-                      section: 'account',
-                      profile,
-                    })
-                  }
+                  nativeChrome={bridge.native}
                 />
                 {chatMigration.notice}
                 {/* Reset screen failures when the location changes while keeping
@@ -763,6 +839,18 @@ export function VaultShell({
                   teamInfo?.trigger?.focus({ preventScroll: true });
               }}
             />
+          ) : null}
+          {splitEmpty ? (
+            <section className="details details-empty" aria-label="Details">
+              {chrome.blocked ? null : (
+                <>
+                  <div className="bar" data-tauri-drag-region="" />
+                  <div className="empty">
+                    <b>No Selection</b>
+                  </div>
+                </>
+              )}
+            </section>
           ) : null}
           {here.kind !== 'first-run' && detailsShown ? (
             <DetailsPanel

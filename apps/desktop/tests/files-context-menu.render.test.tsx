@@ -32,6 +32,9 @@ async function mount(accessNow?: () => number) {
   const { ItemsScreen } = (await vite.ssrLoadModule(
     '/src/screens/items-screen.tsx',
   )) as typeof import('../src/screens/items-screen');
+  const { FilesTree } = (await vite.ssrLoadModule(
+    '/src/shell/files-tree.tsx',
+  )) as typeof import('../src/shell/files-tree');
   const { FIXTURE } = (await vite.ssrLoadModule(
     '/src/fixture.ts',
   )) as typeof import('../src/fixture');
@@ -76,22 +79,38 @@ async function mount(accessNow?: () => number) {
       locations.subscribe,
       locations.getSnapshot,
     );
-    return createElement(ItemsScreen, {
-      snapshot,
-      bridge,
-      state,
-      locations,
-      accessNow,
-      onReveal: (item: Item) => reveals.push(item),
-      onDelete: (item: Item) => deletions.push(item),
-      onNew: () => {},
-      onResume: async () => {},
-      onSettings: () => {},
-      onNewFolder: (storeId: string, path: string) =>
-        folders.push({ storeId, path }),
-      onTeamInfo: (storeId: string) => teamInfo.push(storeId),
-      onCommandError: (error: unknown) => failures.push(error),
-    });
+    const onNewFolder = (storeId: string, path: string) =>
+      folders.push({ storeId, path });
+    const onTeamInfo = (storeId: string) => teamInfo.push(storeId);
+    // The sidebar's store tree and the list share the folder menu.
+    return createElement(
+      'div',
+      null,
+      createElement(FilesTree, {
+        snapshot,
+        location: state.location,
+        folder: state.folder,
+        onOpen: (folder: string) => locations.openFiles(folder, 'All'),
+        onNavigate: (location) => locations.navigate(location),
+        folderActions: { onNewFolder, onTeamInfo },
+        accessNow,
+      }),
+      createElement(ItemsScreen, {
+        snapshot,
+        bridge,
+        state,
+        locations,
+        accessNow,
+        onReveal: (item: Item) => reveals.push(item),
+        onDelete: (item: Item) => deletions.push(item),
+        onNew: () => {},
+        onResume: async () => {},
+        onSettings: () => {},
+        onNewFolder,
+        onTeamInfo,
+        onCommandError: (error: unknown) => failures.push(error),
+      }),
+    );
   }
   const view = (snapshot: AgentSnapshot, blocking = false) =>
     createElement(OverlayProvider, {
@@ -117,6 +136,14 @@ async function mount(accessNow?: () => number) {
     update: (snapshot: AgentSnapshot, blocking = false) =>
       rendered.rerender(view(snapshot, blocking)),
   };
+}
+
+/** Switches the list to cards, as the list bar's view menu does. */
+async function cards(): Promise<void> {
+  const { setFilesView } = (await vite.ssrLoadModule(
+    '/src/files-view-pref.ts',
+  )) as typeof import('../src/files-view-pref');
+  ui.act(() => setFilesView('grid'));
 }
 
 function row(name: string): HTMLElement {
@@ -237,7 +264,7 @@ test('read actions recheck a lease that expires while the menu is open', async (
 test('vault and team roots expose scoped folder creation and team info without selection changes', async () => {
   const mounted = await mount();
   const vault = document.querySelector<HTMLElement>(
-    '[data-folder-store="acct:personal"][data-folder-path="/"]',
+    '.side-tree [data-folder-store="acct:personal"][data-folder-path="/"]',
   )!;
   ui.fireEvent.contextMenu(vault);
   assert.equal(
@@ -253,7 +280,7 @@ test('vault and team roots expose scoped folder creation and team info without s
   assert.deepEqual(mounted.folders, [{ storeId: 'acct:personal', path: '/' }]);
   const before = mounted.locations.getSnapshot();
   const team = document.querySelector<HTMLElement>(
-    '[data-folder-store="team:eng"][data-folder-path="/"] .fselect',
+    '.side-tree [data-folder-store="team:eng"][data-folder-path="/"] .fselect',
   )!;
   ui.fireEvent.keyDown(team, { key: 'F10', shiftKey: true });
   ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Team info' }));
@@ -279,8 +306,14 @@ test('vault and team roots expose scoped folder creation and team info without s
 
 test('tree and content folders target their own path and explain unsupported deletion', async () => {
   const mounted = await mount();
+  // Folders show once their store is open in the tree.
+  ui.fireEvent.click(
+    document.querySelector<HTMLElement>(
+      '.side-tree [data-folder-store="acct:personal"][data-folder-path="/"] .twist',
+    )!,
+  );
   const folder = document.querySelector<HTMLElement>(
-    '.tpane [data-folder-store="acct:personal"][data-folder-path="/logins"] .fselect',
+    '.side-tree [data-folder-store="acct:personal"][data-folder-path="/logins"] .fselect',
   )!;
   ui.fireEvent.contextMenu(folder);
   const deletion = ui.screen.getByRole('menuitem', { name: 'Delete folder' });
@@ -310,7 +343,7 @@ test('tree and content folders target their own path and explain unsupported del
 
 test('grid cards keep item selection, quick actions, and keyboard context menus', async () => {
   const mounted = await mount();
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Grid view' }));
+  await cards();
   const password = row('github.com');
   assert.ok(password.closest('.files-grid'));
   ui.fireEvent.keyDown(password, { key: ' ' });
@@ -342,7 +375,7 @@ test('grid cards keep item selection, quick actions, and keyboard context menus'
 test('grid folder menus preserve their scope for right click and Shift+F10', async () => {
   const mounted = await mount();
   ui.act(() => mounted.locations.setFolder('acct:personal|/'));
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Grid view' }));
+  await cards();
   const folder = row('logins');
   for (const open of [
     () => ui.fireEvent.contextMenu(folder),

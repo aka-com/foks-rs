@@ -127,6 +127,7 @@ export class LocationStore {
       chat: chatTabLocation(),
       files: { kind: 'files' },
       teams: { kind: 'teams' },
+      activity: { kind: 'activity' },
       devices: { kind: 'devices' },
       settings: { kind: 'settings' },
     };
@@ -459,6 +460,47 @@ export class LocationStore {
 
   toggleFolder(folder: string): void {
     this.dispatch({ type: 'toggle-folder', folder });
+  }
+
+  /**
+   * Opens a Files place from the sidebar: All Items narrowed to one kind
+   * (`folder` empty), or a store or folder (`folder` as `store|/path`, the
+   * value an `all` location reads). A store page keeps its address when the
+   * folder is inside its own store; any other page navigates to All Items
+   * first, as one guarded move, so a guard that holds the navigation back
+   * also holds the folder and the kind.
+   */
+  openFiles(folder: string, kind: KindFilter): void {
+    const here = this.current.location;
+    const apply = (): void => {
+      this.dispatch({ type: 'folder', folder: this.folderAt(folder) });
+      this.dispatch({ type: 'kind', kind });
+    };
+    if (
+      here.kind === 'all' ||
+      here.kind === 'files' ||
+      (here.kind === 'store' && folder.startsWith(`${here.ref}|`))
+    ) {
+      apply();
+      return;
+    }
+    const location: Location = { kind: 'all' };
+    this.guarded(
+      { kind: 'navigate', location },
+      () => {
+        this.dispatch({ type: 'navigate', location });
+        apply();
+      },
+      {},
+    );
+  }
+
+  /** `folder` (an `all` value) as the current location reads it. */
+  private folderAt(folder: string): string {
+    const here = this.current.location;
+    if (here.kind !== 'store') return folder;
+    const path = folder.slice(here.ref.length + 1);
+    return path === '/' ? '' : path;
   }
 }
 

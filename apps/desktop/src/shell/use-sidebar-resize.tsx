@@ -1,9 +1,10 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-const MIN_WIDTH = 150;
-const DEFAULT_WIDTH = MIN_WIDTH;
-const MAX_WIDTH = 240;
+/** The design's 220px source list; narrower stops truncating store names. */
+const MIN_WIDTH = 200;
+const DEFAULT_WIDTH = 220;
+const MAX_WIDTH = 300;
 const KEY = 'sidebarWidth';
 const clamp = (width: number, max = MAX_WIDTH) =>
   Math.max(MIN_WIDTH, Math.min(max, width));
@@ -33,7 +34,7 @@ export function useSidebarResize(enabled: boolean) {
       ?.closest('.window')
       ?.getBoundingClientRect().width;
     return available
-      ? Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, available - 420))
+      ? Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, available - 600))
       : MAX_WIDTH;
   };
   const save = (value: number) => {

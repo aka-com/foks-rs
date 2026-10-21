@@ -88,8 +88,12 @@ export const TEAMS_SHEET_INTENTS: readonly TeamsSheetIntent[] = [
 export type FirstRunStep = string;
 export type FirstRunPath = 'invited' | 'own';
 
-/** The rail tab a location belongs to. First run belongs to none. */
-export type RailTab = 'chat' | 'files' | 'teams' | 'devices' | 'settings';
+/**
+ * The sidebar place a location belongs to: the rows that stand for a whole
+ * area rather than one store. First run belongs to none.
+ */
+export type RailTab =
+  'chat' | 'files' | 'teams' | 'activity' | 'devices' | 'settings';
 
 export type Location =
   | { kind: 'all' }
@@ -102,6 +106,12 @@ export type Location =
   | { kind: 'chat'; ref?: StoreRef; channel?: string }
   /** The Files roots page: All items, then vaults, groups and shares. */
   | { kind: 'files' }
+  /**
+   * Activity: the place for requests, unfinished operations and server trust
+   * notices across accounts. Only the route exists so far; the page is a
+   * placeholder.
+   */
+  | { kind: 'activity' }
   /**
    * The Teams list, optionally with a sheet open. `store` selects the acting
    * account; `ref` identifies the target team for add/invite actions.

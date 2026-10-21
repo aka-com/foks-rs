@@ -33,7 +33,7 @@ federation facts in one call. Its header is the group mark, its name and
 "server · Role"; it has four tabs — Members, Channels, Files and Settings —
 implemented as a tablist. Arrow keys select adjacent tabs, and the selected tab
 labels the panel below it. Channels reads the same per-group inbox entry as the
-rail and Chat column, so its count and rows use the same data. Each channel row
+sidebar and Chat column, so its count and rows use the same data. Each channel row
 displays the name, description or access summary, last activity, unread count,
 and Open in Chat. Add channel opens the New chat sheet at the create step and
 shows Cancel instead of Back because team selection was skipped. Hidden
@@ -98,7 +98,7 @@ manageable usernames.
 An inactive or ambiguous federation admission has no extra payload. Active ad-hoc
 groups retain read-only roster facts but suppress member and federation actions.
 Native clipboard hygiene uses `copy_text`. First run is a location
-inside the same main window, with the rail replaced by the setup-step list.
+inside the same main window, with the sidebar replaced by the setup-step list.
 Its versioned local checkpoint contains only nonsecret progress and display facts;
 invite, passphrase, entered recovery phrase and prepared recovery phrase values are held
 only in their live form or one-time sheet and are never encoded. Reopening
@@ -284,9 +284,9 @@ authenticated in the catalog.
 | Path                       | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/main.tsx`             | Entry point. One window; mounts `src/app-root.tsx`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `src/app-root.tsx`         | App shell: window, rail, screen, details panel, deep links.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `src/app-root.tsx`         | App shell: window, sidebar, screen, details panel, deep links.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `src/components/`          | Components: Button, Chip, Tag, Badge, KindIcon, Inset, SectionLabel, Notice, Band, SegmentedControl, SplitButton, MenuButton, SearchField.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `src/shell/`               | Window chrome: `sidebar.tsx` (the rail), `topbar.tsx` (the crumbs, the back chevron and the shell's own controls), `page-header.tsx`, `search-palette.tsx` (⌘K), `toolbar.tsx`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `src/shell/`               | Window chrome: `sidebar.tsx` (the source list), `files-tree.tsx` (its store tree), `topbar.tsx` (the panel's first bar: search, view menu and add control, or crumbs and Back), `files-view-menu.tsx`, `sync-status.tsx` (the status line and its popover), `page-header.tsx`, `search-palette.tsx` (⌘K), `toolbar.tsx` (the New menu).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `src/screens/`             | Screens: `items-screen.tsx` (list, cards, notices, empties), `groups-screen.tsx` (the group page, its Members and Settings tabs and the add/role/remove/create sheets), `group-tabs.tsx` (the Channels and Files tabs and the unfinished-group page), `group-model.ts` (the permission rules and reasons the Teams list and the group page share), `group-mark.tsx` (the one mark a group carries everywhere), `invite-sheet.tsx` (the per-account invitation), `store-access.tsx` (the shared unavailable-store takeover and All items summaries), `first-run-screen.tsx`, `servers-screen.tsx` (`ServersSection`, the server list Settings draws, and one server's page), `settings-screen.tsx` (the Settings tab and its sub-navigation), `devices-screen.tsx` (one account's Macs and device keys, recovery phrases and security key enrollments, and one key's own page), `device-sheets.tsx` (the sheets Devices and Settings share), `device-model.ts` (the four per-account key calls and the one row model Accounts and Devices share), `account-switcher.tsx` (the switcher Accounts, Devices and Settings share), `details-panel.tsx`, `write-workflows.tsx`, `edit-value.ts`, `account-section.tsx` (Settings › Account: the attention list and the account profile: teams, devices, keys and the account rows), `files-screen.tsx` (the roots page), `teams-screen.tsx`, `chat-tab.tsx` (the Chat tab: the inbox column, the open conversation and the info panel), `chat-teams.tsx` (the cross-team inbox column), `chat-new.tsx` (the two-step New chat sheet), `chat-screen.tsx` (one team's conversation), `chat-info.tsx` (the channel info panel), `scope.ts` (what is listed, in what order). |
 | `src/bridge.ts`            | The typed `Bridge` interface and the Tauri implementation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `src/mock-bridge.ts`       | The same interface, using the fixture.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
@@ -294,81 +294,75 @@ authenticated in the catalog.
 | `src/model/`               | The pure model — roles, kinds, readers, format, lease. TypeScript only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `src/location.ts`          | `Location`, `Selection`, `transition`, the `?state=` codec, the store.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `src/first-run-state.ts`   | Pure versioned resumable setup state and its explicit nonsecret checkpoint codec.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `src/sidebar-prefs.ts`     | The rail's stored width: the `sideCollapsed` `localStorage` key.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `src/sidebar-prefs.ts`     | Whether the sidebar is hidden: the `sideCollapsed` `localStorage` key.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `src/icons.ts`             | The mock's 47 icons as structured data.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `src/components/icon.tsx`  | `<Icon name size />`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `src/styles/shell.css`     | `wave6/shell.css` copied in full, minus the shared tokens.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `src/styles/app.css`       | Styles that replace the mock browser chrome with the app window.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `tests/`                   | `node:test` via `tsx`: goldens, source invariants, render tests.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
-### The rail
+### The sidebar
 
-`nav.side.rail` is a fixed six-tab rail, 200px wide and blue
-(`--rail`, `--rail-ink`, `--rail-line`, `--rail-active` in
-`apps/desktop/kit/tokens.css`). It does not enumerate stores. Its tabs are
-Accounts, Chat, Files, Teams, Devices and Settings; `railTabOf(location)` in
-`src/location.ts` decides which one a location belongs to, so All items and a
-store page mark Files, a group's settings page marks Teams, and a team chat
-marks Chat. Chat carries one badge summing the unread across every team whose
-chat this Mac can read, in the same orange every unread count uses
-(`--unread`); Accounts carries a dot while anything needs attention. Chat's tab
-goes to `chatTabLocation()` — the team and channel the Chat tab last had open.
-Control-Tab walks the six tabs. Returning to a tab restores its last page,
-folder and filters; account-specific pages follow the acting account. Item
-details are closed on return. A conceal clears this in-memory tab history.
-The topbar's chevron opens the current page's parent explicitly; it is not a
-browser-history Back button. URLs restore the current scene on reload, without
-creating a browser history stack.
+`nav.side` is one source list on the window ground (`src/shell/sidebar.tsx`),
+220px wide and resizable from 200 to 300px. From the top: the window's drag
+strip (`.traffic`, 52px, `data-tauri-drag-region`) with the product name and
+the control that hides the sidebar; All Items, Passwords and Documents (All
+Items narrowed by kind); the Vaults and Teams groups, each store with a
+disclosure over its folder tree (`src/shell/files-tree.tsx`), and All Teams;
+Chat and Activity. The foot holds the Finish setting up card, Devices and
+Settings, the account switcher and the sync status line. The native build
+leaves the strip's left end empty for the controls macOS draws at
+`trafficLightPosition {x: 14, y: 24}`; the web mock draws three circles there.
+First run's step list carries the same strip.
 
-There is no title bar. The rail's top is the window's drag strip
-(`.traffic`, `data-tauri-drag-region`): the native build leaves it empty for
-the controls macOS draws over it, and the web mock draws three rail-tinted
-circles in their place. First run's step list carries the same strip.
+Rows are quiet: icons and counts in the muted sidebar ink, the selected row a
+low-contrast fill. Counts are plain numbers (items, Chat's unread total, All
+Teams' pending requests); state lives in dots, amber where there is something
+to act on (a team with incomplete setup, Devices, Settings). Store trees start
+collapsed; selecting a store does not expand it, and a folder selected from the
+list opens its ancestors. Selecting a kind row, a store or a folder calls
+`LocationStore.openFiles`, which keeps a store page's address when it can and
+otherwise opens All Items, as one guarded move. `railTabOf(location)` names
+the place a location belongs to; Control-Tab walks All Items, Teams, Chat,
+Activity, Devices and Settings in that order, and a place resumes its last
+page. Account scoping is unchanged: the account switcher in the foot keeps an
+account-scoped page (Teams, Devices, Settings) and opens Settings › Account
+otherwise (`selectAccount`), and `accountAtLocation` decides whose account a
+page acts through.
 
-Under the strip, the account header names the acting account. Account-specific
-tabs retain that account when switching tabs. Opening a group, chat or vault
-uses the account through which that object is held. Files, Chat and Teams
-still list all accounts on this Mac. The header opens a menu of the accounts on
-this Mac grouped by server, then "Add an account or server…" (the first-run
-flow) and "Lock" (the command Settings › Device also offers). The account the
-window is acting as carries a check at the right end of its row; an account
-whose access has stopped is dimmed and carries an amber line under its caption
-with the one link that would restore it — "Check in" for a lapsed or missing
-check-in, "Server settings" otherwise. An orange dot on the avatar is the only
-place attention is advertised; it is a button, and it opens the Accounts tab.
+The switcher's menu lists the accounts on this Mac grouped by server, then
+"Add account or server…" and "Lock". The acting account carries a check; an
+account whose access has stopped is dimmed with the one link that would
+restore it. An amber dot on the avatar advertises a notice no row's own badge
+can resolve, and opens Settings › Account. Under the switcher, the sync status
+line reads "Synced" with a green dot, or states the refresh in words; pointing
+at it opens the per-server Refresh status popover (`src/shell/sync-status.tsx`,
+`SyncPopover`). Without a sync service (the blocked shell, first run) the line
+is the agent light.
 
-The foot holds the agent light and nothing else: a 7px dot and a label in four
-states — green "Agent ready", amber pulsing "Starting agent…", red "Agent
-stopped" and gray "Locked". It never names an internal step.
+Hiding the sidebar (`sideCollapsed` in `localStorage`, `src/sidebar-prefs.ts`)
+removes its column; the panel then fills the window and its first bar takes the
+strip's 52px, leading with the lights' place and the control that shows the
+sidebar again. The lights stay visible either way. Item selection and
+navigation leave the choice unchanged.
 
-The rail collapses to a 56px icon-only track. Collapsing is CSS alone —
-`nav.side` gains `is-narrow`, and every row stays in the document — so the
-collapsed rail keeps its glyphs, the unread count on the Chat glyph's corner
-and the attention dot on the avatar's, with the labels becoming tooltips. The
-width is the one the reader chose: a collapsed rail does not expand on hover or
-on focus. The toggle is in the topbar, not in the rail, and writes
-`sideCollapsed` to `localStorage` through `src/sidebar-prefs.ts`. Item
-selection and navigation leave that chosen width unchanged. First run
-replaces the rail with its own step list, which is `nav.side` without `rail`
-and has no toggle; the blue styling is scoped to `.side.rail` for that reason.
+### The panel and its bars
 
-### The topbar
+The list and the details sit on one raised panel inset 8px from the window
+ground, drawn by the columns' own margins and outline (`.app > .main`,
+`.app > .details`) rather than a wrapper. On Files the list column is 300px
+(260px under 1100px of window width) and the details column takes the rest;
+with nothing selected it says No Selection. Every other place is one page
+filling the panel.
 
-`.topbar` is a 44px bar at the top of the content column, and the only bar with
-a hairline under it: the page header below it reads as the top of the page
-rather than as a second toolbar. It carries, left to right, the back chevron
-(disabled at a tab's root; `parentLocation(location)` in `src/location.ts`
-decides where it goes), the crumbs — the tab in bold, then the page under it
-when the address names one, such as "Files › Engineering", "Chat › Household
-#general" or "Settings › Servers" — a flexible gap, the "Search everything"
-trigger with its ⌘K hint, the rail's collapse toggle and the catalog refresh.
-The refresh is one square button: it refreshes on click, carries a spinner
-badge while any server is refreshing and an orange dot when one could not be
-refreshed, and pointing at it opens the per-server Refresh status popover
-(`SyncPopover`), which stays up while the pointer is on the button or on the
-popover itself. Its empty parts carry `data-tauri-drag-region`, because the
-rail's strip alone does not reach across the window. First run draws no
-topbar.
+Every bar is 44px with a hairline under it, centred on the lights' line at
+y=30. The panel's first bar (`src/shell/topbar.tsx`) is the list column's on
+Files and Chat — the search field (⌘K hint), the view menu (List or Cards,
+sort key and direction) and the add control (New Password ⌘N, New Document
+⇧⌘N, New Folder…) on Files, the search and New chat on Chat — and names the
+page with crumbs everywhere else, led by Back on a page inside an area (a
+team, a device). Its empty parts carry `data-tauri-drag-region`. First run
+draws no topbar.
 
 Back and Forward traverse committed app history across tabs and folders. The
 ⌘[/⌘], Alt+Left/Right, browser navigation keys, mouse buttons 3/4, and trackpad
@@ -392,9 +386,9 @@ same confirmation dialogs and refusal toasts as buttons and shortcuts.
 ### Blocking states
 
 Three takeovers leave as much of the shell readable as they safely can, and the
-rail's light says which one is in force.
+sidebar's status line says which one is in force.
 
-- **Starting.** The rail and topbar are displayed before a snapshot exists,
+- **Starting.** The sidebar and topbar are displayed before a snapshot exists,
   dimmed and inert. The content area displays a spinner, "Starting the FOKS
   agent…", and "Startup usually takes a few seconds." Internal step names remain hidden, and
   maintenance uses the same presentation as the first connection.
@@ -404,8 +398,8 @@ rail's light says which one is in force.
   `foks-rs` recovery commands, and the available actions. `restart-required`
   adds: "Your vaults remain on this Mac and on their configured servers." The
   same card appears at startup over the empty frame.
-- **Locked.** A full-window takeover over the rail as well (`.lock-back`,
-  blurred), because the rail names accounts and counts unread messages: a round
+- **Locked.** A full-window takeover over the sidebar as well (`.lock-back`,
+  blurred), because the sidebar names accounts and counts unread messages: a round
   accent glyph, "FOKS is locked", the one sentence naming the authentication
   the platform offers, and a full-width Unlock. The boot error card shares the
   same box.
@@ -472,17 +466,12 @@ people search because the bridge has no directory lookup. New people can be
 added only by invitation, which is managed in Teams. Chat is one inbox column, listing
 every team with chat, beside the open conversation; the tab with no
 conversation chosen opens the most recent one, and says how chat gets turned on
-when no team has any. The Files tab defaults to All items and displays items
-across all stores in a table with sortable Name, Kind, Location, and Size
-columns. A permanent tree lists All items followed by vaults, teams, and their
-folders, including item counts and team initials badges. Selecting a store or
-folder filters the table, omits Location for single-store views, and updates the
-toolbar search placeholder to "Search this vault", "Search this team", or
-"Search this folder". That field is the width of the topbar's own "Search
-everything" trigger rather than the width of the list column, and the kind
-filter beside it sizes each of All / Passwords / Documents to its own label
-rather than to an equal share of the tree column. The topbar breadcrumb displays the active folder, and Back
-navigates up the hierarchy to All items. Teams lists the groups and
+when no team has any. Files opens on All Items: every item across all stores as two-line rows (the
+name over the store and folder, the size at the trailing edge), sorted from the
+list bar's view menu. Selecting a store or folder in the sidebar lists its
+subfolders and then its own items under a head naming it, with the folders
+above it as a crumb and, for a team, Manage…; the second line then gives the
+kind and version. Search runs over the sidebar's selection. Teams lists the groups and
 shares — the group mark, name, server, the roster summary the per-group
 `list_group_details` call loaded on the last refresh, the role this Mac's
 account holds and a chip for an abnormal state — and the row itself is the
@@ -681,7 +670,7 @@ column selection, or restored navigation state. Later messages in other teams
 do not change the active conversation. A dismissible note identifies the
 automatically selected conversation and the reason for the selection until the
 user selects a conversation or dismisses the note. The tab remembers the team and
-channel it had open, and the rail's Chat tab returns there rather than
+channel it had open, and the sidebar's Chat row returns there rather than
 re-running the fallback. A conceal forgets that memory, because the account
 that comes back may not have the team on this Mac; a location naming a team
 without chat leaves it alone unless the remembered team is the one that lost
@@ -710,7 +699,7 @@ mount.
 
 Every row is built from `useSidebarInbox()` — the `TeamInbox` projections
 `ChatInboxService` already keeps and polls for each eligible team, the same
-ones the rail's badge sums — so previews, channel lists and counts arrive for
+ones the sidebar's count sums — so previews, channel lists and counts arrive for
 every team without a conversation being mounted for any of them. Only a plain
 count is interpolated into a row; the states `teamUnread` also reports ("…",
 "!", "3+") stay in the badge and its description. A team this Mac cannot reach
@@ -730,7 +719,7 @@ does not. A hidden conversation keeps its channel listed, marked "Hidden",
 dimmed and placed last, rather than being dropped, which used to make a team
 whose only conversation was hidden claim it had no channels. Named teams whose server
 offers no chat sit dimmed at the foot under "No chat" with the reason; shares
-are not listed. Unread counts are the rail's orange (`--unread`) wherever they
+are not listed. Unread counts use `--unread` wherever they
 appear.
 
 The column's search field filters teams and channels by name across the whole
@@ -863,31 +852,41 @@ and reader computations are client-side presentation models without protocol equ
 
 ## Design tokens and the theme decision
 
-`src/styles/shell.css` defines the desktop shell styles. Make shell design
-changes directly in this stylesheet.
+`apps/desktop/kit/tokens.css` holds every colour, radius and elevation token,
+light and dark, and is the only sheet allowed to declare them
+(`tests/styles-geometry.test.ts`). The palette is the Linear skin the
+redesign is built on: neutral, slightly cool greys, two hairline weights
+(`--bar-rule` under bars, `--row-rule` between list rows), flat surfaces that
+carry a hairline and no shadow, a quiet grey selection (`--side-sel`,
+`--row-sel`) and status colours with less chroma. Dark is a graphite ramp:
+the window ground (`--ground`) is the darkest step and the panel
+(`--main-surface`) one above it. Radii are 6px for controls, 8px for cards and
+groups, 10px for the panel and floating panels and 12px for sheets. Under
+`prefers-contrast: more` the hairlines rise to 0.16–0.24 alpha and the muted
+inks darken.
 
-Layout is a separate concern from color, and its custom properties are
-declared on `.app` rather than on `:root`: `--side-track`, `--side-w-open`
-(224px), `--side-w`, `--side-pad`, `--side-head-pad`, `--side-open-content`
-and `--details-w` (300px; `--side-w-open` is 200px where the rail is drawn).
-The rail animates its own width instead of the
-grid track, which avoids interpolating `grid-template-columns`, and
-`.app.side-narrow` is what sets the collapsed width (`56px`).
+The accent is the reader's Accent color preference (`data-rail`,
+`src/rail-theme.ts`): `--accent` is its hue for rings, links and washes, and
+`--accent-fill` the solid behind white text, which keeps 4.5:1 with white in
+both appearances (the default fill is #4c6be1 in dark as well as light).
 
-The one edit is the token block. Measured against `ui/styles.css`, the mock's
-48 `:root` tokens split **35 identical / 5 same-name-different-value / 8
-FOKS-only**. The 35 moved to `apps/desktop/kit/tokens.css`, which this sheet `@import`s
-first; the thirteen that remain are declared after it, so the cascade gives
-FOKS its own `--faint`, `--surface`, `--main-surface`, `--hover` and
-`--shadow-menu` plus `--sans`, `--mono` and the six `--c-*` kind tints.
-`tests/styles-geometry.test.ts` fails if a token is ever declared in both
-places.
+The interface face is Inter v4.1, bundled as `kit/fonts/InterVariable.woff2`
+(SIL OFL 1.1, `kit/fonts/Inter-OFL.txt`) because the webview is offline and
+its CSP admits only same-origin fonts; `cv11` and `ss01` are on. Text is 13px,
+labels 500, titles 600, and section labels 12px muted in sentence case.
+
+`src/styles/shell.css` holds the window, the sidebar, the panel and its bars,
+and the shared components; `src/styles/app.css` and the feature sheets build
+on it in later cascade layers. Layout custom properties live on `.window`:
+`--side-w` (220px), `--list-w` (300px, 260px under 1100px), `--panel-inset`
+(8px) and `--bar-h` (44px). Under `prefers-reduced-motion` nothing travels:
+the overlay keyframes read their distance from tokens that drop to zero, and
+transitions keep only colour and opacity, so sheets, alerts and menus fade.
 
 **Appearance:** Preferences offers Light, Dark, and System. Light is the default;
 the choice is stored locally as `appearance`. `public/theme-init.js` applies the
 choice before first paint, and `src/appearance.ts` follows system and storage
-changes. Dark overrides live in `kit/tokens.css`, using the Files redesign palette
-while preserving the selected sidebar color.
+changes. Dark overrides live in `kit/tokens.css`.
 
 ## Navigation guards
 
@@ -903,7 +902,7 @@ revealed vault values hide, the first-run recovery phrase stays on its current
 step with its words masked, and plaintext item drafts remain mounted but masked
 until the reader reveals them again. Displayed recovery phrases and password inputs
 keep their workflow state.
-Other navigation still unmounts the workflow and asks its guard. Every entry point — the rail's tabs, Control-Tab,
+Other navigation still unmounts the workflow and asks its guard. Every entry point — the sidebar's rows, Control-Tab,
 the topbar's back chevron, the account switcher, the ⌘K palette, attention
 links, the trackpad's back swipe — reaches the same three methods on
 `LocationStore`: `navigate`, `navigateTab` and `select`. Guards allow the active
@@ -947,7 +946,7 @@ own behalf and no screen may refuse:
 - a workflow applying its own resolution as it closes, such as the write
   overlay selecting the item whose path it just resolved.
 
-All user navigation requests pass through the guards, including the rail tabs
+All user navigation requests pass through the guards, including the sidebar rows
 and the ⌘K palette. A palette item result is one move rather than two:
 `navigateAndSelect` opens the store page with the item selected on it, so a
 held-back navigation cannot leave another page's item in the details panel.

@@ -1,7 +1,7 @@
 /**
- * Tests for the Files browser view, covering the tree navigation column,
- * item kind filters, folder title headers, item table columns, sorting,
- * and per-row action buttons across various store states.
+ * Tests for the Files list and the sidebar that drives it: the store tree,
+ * the item kind rows, the list head, the rows' second lines, the view menu's
+ * sorting and cards, and per-row action buttons across various store states.
  */
 
 import assert from 'node:assert/strict';
@@ -39,7 +39,7 @@ async function mount(
   location: Location,
   browsing?: Partial<LocationState>,
   /** What the page must have drawn before the test reads it. */
-  ready = '.tpane',
+  ready = '.side-tree',
 ): Promise<{ store: LocationStore }> {
   const { App } = (await vite.ssrLoadModule(
     '/src/app-root.tsx',
@@ -76,126 +76,155 @@ async function search(store: LocationStore, query: string): Promise<void> {
 /** A tree row's own select button, found by the name it draws. */
 function treeRow(name: string): HTMLButtonElement {
   const node = [
-    ...document.querySelectorAll<HTMLButtonElement>('.tpane .fselect'),
+    ...document.querySelectorAll<HTMLButtonElement>('.side-tree .fselect'),
   ].find((button) => button.querySelector('.nm')?.textContent === name);
   assert.ok(node, `no tree row named ${name}`);
   return node;
 }
 
-/** Returns the title of the currently open folder in the list column. */
-function currentTitle(): string {
-  const where = document.querySelector('.lpane .lt .where');
-  assert.ok(where, 'expected list column title row to be present');
-  const copy = where.cloneNode(true) as Element;
-  for (const extra of copy.querySelectorAll('.sub, .kico, .av')) extra.remove();
-  return copy.textContent?.trim() ?? '';
+/** Opens a tree row's disclosure, if it is closed. */
+async function expand(name: string): Promise<void> {
+  const twist =
+    treeRow(name).parentElement?.querySelector<HTMLButtonElement>(
+      ':scope > .twist',
+    );
+  assert.ok(twist, `${name} has a disclosure`);
+  if (twist.getAttribute('aria-expanded') === 'true') return;
+  ui.fireEvent.click(twist);
+  await ui.waitFor(() =>
+    assert.equal(twist.getAttribute('aria-expanded'), 'true'),
+  );
 }
 
-/** Returns the item count subtitle displayed beside the folder name. */
+/** A sidebar place row (`data-place`). */
+function place(name: string): HTMLButtonElement {
+  const row = document.querySelector<HTMLButtonElement>(
+    `.side .nav[data-place="${name}"]`,
+  );
+  assert.ok(row, `the sidebar has a ${name} row`);
+  return row;
+}
+
+/** The list head's title: the store, folder or search it names. */
+function currentTitle(): string | undefined {
+  return (
+    document.querySelector('.lpane .list-head h2')?.textContent?.trim() ??
+    undefined
+  );
+}
+
+/** The list head's second line: the count and where it lives. */
 function currentSubtitle(): string | undefined {
-  return document.querySelector('.lpane .lt .where .sub')?.textContent?.trim();
+  return document.querySelector('.lpane .list-head p')?.textContent?.trim();
 }
 
-/** The table header's column labels, sort arrow stripped. */
-function columns(): string[] {
-  return [...document.querySelectorAll('.lpane .hdr > *')]
-    .map((cell) => cell.textContent?.replace(/ [↑↓]/, '').trim() ?? '')
-    .filter(Boolean);
+/** The list's rows, by name. */
+function listRow(name: string): HTMLElement {
+  const node = [...document.querySelectorAll<HTMLElement>('.lpane .row')].find(
+    (row) => row.querySelector('.name .nm')?.textContent === name,
+  );
+  assert.ok(node, `no row named ${name}`);
+  return node;
 }
 
-test('defaults to All items, displaying all stores in one table', async () => {
+/** Opens the list bar's view menu and chooses one of its items. */
+async function choose(label: string): Promise<void> {
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'View options' }));
+  const item = await ui.screen.findByRole('menuitemradio', { name: label });
+  ui.fireEvent.click(item);
+  await ui.waitFor(() => assert.equal(ui.screen.queryByRole('menu'), null));
+}
+
+/** Whether the view menu has `label` checked, read by opening it. */
+async function checked(label: string): Promise<boolean> {
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'View options' }));
+  const item = await ui.screen.findByRole('menuitemradio', { name: label });
+  const on = item.getAttribute('aria-checked') === 'true';
+  ui.fireEvent.keyDown(document, { key: 'Escape' });
+  await ui.waitFor(() => assert.equal(ui.screen.queryByRole('menu'), null));
+  return on;
+}
+
+test('defaults to All Items, listing every store with its place on the second line', async () => {
   await mount({ kind: 'all' });
-  assert.equal(currentTitle(), 'All items');
-  assert.equal(currentSubtitle(), '13 items');
-  assert.equal(treeRow('All items').getAttribute('aria-current'), 'location');
-  // The page does not render a separate header; the list column's title row serves as the header.
+  // All Items is named by the sidebar alone; the list draws no head.
+  assert.equal(currentTitle(), undefined);
+  assert.equal(place('files').getAttribute('aria-current'), 'page');
+  assert.equal(place('files').querySelector('.n')?.textContent, '13');
   assert.equal(document.querySelector('.lpane .path'), null);
   assert.equal(document.querySelector('.loc h1'), null);
   const rows = document.querySelectorAll('.lpane .body .row');
   assert.ok(rows.length > 1, 'items from more than one store are listed');
-  // Items span stores, so Location identifies each item's store.
-  assert.deepEqual(columns(), ['Name', 'Kind', 'Location', 'Size']);
-  assert.equal(document.querySelector('.rail-back'), null);
-  // The browser draws no toolbar band of its own any more: search and New
-  // belong to the window header.
-  assert.equal(document.querySelector('.folder-layout .toolbar'), null);
-});
-
-test('the folder tree resizes by keyboard and persists its width', async () => {
-  await mount({ kind: 'all' });
-  const handle = ui.screen.getByRole('separator', {
-    name: 'Resize Files sidebar',
-  });
-  assert.equal(handle.getAttribute('aria-valuenow'), '232');
-  assert.equal(
-    document.getElementById(handle.getAttribute('aria-controls')!),
-    document.querySelector('.tpane'),
-  );
-
-  ui.fireEvent.keyDown(handle, { key: 'ArrowRight' });
-  assert.equal(handle.getAttribute('aria-valuenow'), '240');
-  assert.equal(
-    document
-      .querySelector<HTMLElement>('.folder-layout')
-      ?.style.getPropertyValue('--files-tree-w'),
-    '240px',
-  );
-  assert.equal(window.localStorage.getItem('filesSidebarWidth'), '240');
-});
-
-test('renders kind filter at the top of the tree column', async () => {
-  await mount({ kind: 'all' });
-  const filter = document.querySelector(
-    '.tpane > .filt [aria-label="Filter items by kind"]',
-  );
-  assert.ok(filter, 'expected kind filter to be present');
-  assert.deepEqual(
-    [...filter.querySelectorAll('button')].map((button) =>
-      button.textContent?.trim(),
+  // Items span stores, so each row's second line names its store.
+  const places = new Set(
+    [...rows].map(
+      (row) => row.querySelector('.name small')?.textContent?.split(' › ')[0],
     ),
-    ['All', 'Passwords', 'Documents'],
   );
-  const pane = filter.closest('.tpane');
-  assert.ok(pane);
-  assert.ok(pane.children[0]?.classList.contains('filt'));
-  assert.ok(pane.children[1]?.classList.contains('tscroll'));
-  assert.ok(
-    pane.querySelector('.tscroll .fn'),
-    'expected tree items to render in scrollable container below filter',
-  );
+  assert.ok(places.size > 1);
+  // Search and New belong to the list bar above.
+  assert.ok(document.querySelector('.topbar .topsearch'));
+  assert.ok(ui.screen.getByRole('button', { name: 'New' }));
 });
 
-test('All items is the first tree row; stores follow under their headings', async () => {
-  await mount({ kind: 'all' });
-  const names = [...document.querySelectorAll('.tpane .fselect .nm')].map(
-    (node) => node.textContent,
-  );
-  assert.equal(names[0], 'All items');
+test('the item rows filter All Items by kind', async () => {
+  const { store } = await mount({ kind: 'all' });
   assert.deepEqual(
-    [...document.querySelectorAll('.tpane h6')].map((h) =>
+    ['files', 'passwords', 'documents'].map(
+      (name) => place(name).querySelector('.t')?.textContent,
+    ),
+    ['All Items', 'Passwords', 'Documents'],
+  );
+  ui.fireEvent.click(place('passwords'));
+  await ui.waitFor(() => assert.equal(store.getSnapshot().kind, 'Password'));
+  assert.equal(place('passwords').getAttribute('aria-current'), 'page');
+  assert.equal(place('files').getAttribute('aria-current'), null);
+  const tiles = [...document.querySelectorAll('.lpane .row .tile')];
+  assert.ok(tiles.length > 0);
+  assert.ok(tiles.every((tile) => tile.classList.contains('pw')));
+  // Choosing a store shows all of its kinds again.
+  ui.fireEvent.click(treeRow('Personal'));
+  await ui.waitFor(() => assert.equal(store.getSnapshot().kind, 'All'));
+});
+
+test('stores follow under their headings, marked and counted', async () => {
+  await mount({ kind: 'all' });
+  assert.deepEqual(
+    [...document.querySelectorAll('.side-tree .nav-h')].map((h) =>
       h.firstChild?.textContent?.trim(),
     ),
     ['Vaults', 'Teams'],
   );
-  // Every row keeps a twist cell so names line up down the column; only a
-  // row with folders under it puts a button in that cell.
-  assert.ok(document.querySelector('.tpane .fn.root .twist:not(.none)'));
-  assert.ok(document.querySelector('.tpane .fn .twist.none'));
-  // Teams and personal vaults are marked with their respective initials.
-  assert.ok(treeRow('Household').querySelector('.av.team'));
-  const accountMark = treeRow('Personal').querySelector('.kico.account');
-  assert.ok(accountMark);
-  assert.equal(accountMark.textContent, 'S');
-  assert.equal(treeRow('Personal').querySelector('.fselect > .ic'), null);
-  // Item counts are shown for all tree rows: the total aggregate, individual stores, and subfolders.
-  assert.equal(
-    treeRow('All items').parentElement?.querySelector(':scope > .c')
-      ?.textContent,
-    '13',
+  // Only a store with folders under it draws a disclosure, and trees start
+  // collapsed.
+  assert.ok(
+    treeRow('Personal').parentElement?.querySelector(':scope > .twist'),
   );
-  assert.ok(treeRow('Personal').parentElement?.querySelector(':scope > .c'));
-  assert.ok(treeRow('logins').parentElement?.querySelector(':scope > .c'));
-  // Nested folders indent incrementally based on their folder depth.
+  assert.equal(
+    treeRow('Work (Acme)').parentElement?.querySelector(':scope > .twist'),
+    null,
+  );
+  assert.equal(
+    [...document.querySelectorAll('.side-tree .fselect .nm')].some(
+      (node) => node.textContent === 'logins',
+    ),
+    false,
+  );
+  // Teams and personal vaults are marked with their initials.
+  assert.equal(
+    treeRow('Household').querySelector('.store-mark')?.textContent,
+    'H',
+  );
+  assert.equal(
+    treeRow('Personal').querySelector('.store-mark')?.textContent,
+    'S',
+  );
+  // Item counts are shown for stores and, once open, their folders.
+  assert.ok(treeRow('Personal').querySelector('.c'));
+  await expand('Personal');
+  assert.ok(treeRow('logins').querySelector('.c'));
+  await expand('env');
+  // Nested folders indent with their depth.
   assert.equal(
     treeRow('Personal').parentElement?.style.getPropertyValue('--d'),
     '0',
@@ -227,111 +256,93 @@ test('a store with nothing in it is still reachable from the tree', async () => 
   assert.ok(treeRow('Personal'));
 });
 
-test('an empty team displays shared-item details and inline settings', async () => {
-  await mount({ kind: 'all' });
+test('an empty team displays shared-item details and its Manage command', async () => {
+  const { store } = await mount({ kind: 'all' });
   // "Homelab" is a team with nothing in it.
-  assert.ok(
-    treeRow('Homelab').parentElement?.querySelector(
-      '.fact[aria-label="Homelab settings"]',
-    ),
-    'team settings is mounted before selection so row hover can reveal it',
-  );
   ui.fireEvent.click(treeRow('Homelab'));
   await ui.waitFor(() => assert.equal(currentTitle(), 'Homelab'));
   assert.equal(
     document.querySelector('.lpane .empty p')?.textContent,
     'Items stored in this team vault are accessible to team members according to their assigned roles.',
   );
-  assert.ok(
-    treeRow('Homelab').parentElement?.querySelector(
-      '.fact[aria-label="Homelab settings"]',
-    ),
+  // A team's head offers its page.
+  ui.fireEvent.click(treeRow('Household'));
+  await ui.waitFor(() => assert.equal(currentTitle(), 'Household'));
+  assert.match(currentSubtitle() ?? '', /3 items/);
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Manage…' }));
+  await ui.waitFor(() =>
+    assert.deepEqual(store.getSnapshot().location, {
+      kind: 'group-settings',
+      ref: 'team:household',
+      tab: 'people',
+    }),
   );
 });
 
 test('nested folders use explicit tree navigation', async () => {
   await mount({ kind: 'store', ref: 'acct:personal' }, { folder: '/env/prod' });
   assert.equal(currentTitle(), 'prod');
-  assert.deepEqual(columns(), ['Name', 'Kind', 'Size']);
+  // The head names the folders above the one that is open.
+  assert.deepEqual(
+    [...document.querySelectorAll('.lpane .list-head .crumb button')].map(
+      (button) => button.textContent,
+    ),
+    ['Personal', 'env'],
+  );
+  // The selected folder's ancestors open in the tree so it stays visible.
+  assert.equal(treeRow('prod').getAttribute('aria-current'), 'location');
 
   ui.fireEvent.click(treeRow('env'));
   await ui.waitFor(() => assert.equal(currentTitle(), 'env'));
   // The parent folder lists its child folder as a row with its item count.
   const folder = document.querySelector('.lpane .row.folder');
   assert.ok(folder);
-  assert.deepEqual(
-    [...folder.querySelectorAll('.cell')].map((cell) => cell.textContent),
-    ['Folder', '1 item'],
-  );
+  assert.equal(folder.querySelector('.name small')?.textContent, 'Folder');
+  assert.equal(folder.querySelector('.r')?.textContent, '1 item');
 });
 
-test('the column headers are the sort control', async () => {
-  await mount({ kind: 'all' });
-  const header = (label: string): HTMLButtonElement => {
-    const node = [
-      ...document.querySelectorAll<HTMLButtonElement>('.lpane .hdr button'),
-    ].find((button) => button.textContent?.startsWith(label));
-    assert.ok(node, `no column named ${label}`);
-    return node;
-  };
-  assert.equal(header('Name').getAttribute('aria-pressed'), 'true');
-  ui.fireEvent.click(header('Kind'));
-  await ui.waitFor(() =>
-    assert.equal(header('Kind').getAttribute('aria-pressed'), 'true'),
-  );
-  assert.equal(header('Name').getAttribute('aria-pressed'), 'false');
+test('the view menu is the sort control', async () => {
+  const { store } = await mount({ kind: 'all' });
+  assert.equal(await checked('Name'), true);
+  await choose('Kind');
+  await ui.waitFor(() => assert.equal(store.getSnapshot().sort, 'kind'));
+  assert.equal(await checked('Kind'), true);
+  assert.equal(await checked('Name'), false);
   // Kind order is the filter's own — Passwords, then Documents.
-  const kinds = [...document.querySelectorAll('.lpane .row .cell.kind')].map(
-    (cell) => cell.textContent,
+  const kinds = [...document.querySelectorAll('.lpane .row .tile')].map(
+    (tile) => (tile.classList.contains('pw') ? 'Password' : 'Document'),
   );
   assert.ok(kinds.includes('Password') && kinds.includes('Document'));
   assert.ok(kinds.lastIndexOf('Password') < kinds.indexOf('Document'));
-  ui.fireEvent.click(header('Location'));
-  await ui.waitFor(() =>
-    assert.equal(header('Location').getAttribute('aria-pressed'), 'true'),
-  );
+  await choose('Location');
+  await ui.waitFor(() => assert.equal(store.getSnapshot().sort, 'group'));
 });
 
-test('a row names its item, its folder, and the actions its kind allows', async () => {
+test('a row names its item, its place, and the actions its kind allows', async () => {
   await mount({ kind: 'all' });
-  const rows = [...document.querySelectorAll('.lpane .row')];
-  const login = rows.find(
-    (candidate) =>
-      candidate.querySelector('.name .nm')?.textContent === 'github.com',
+  const login = listRow('github.com');
+  // The second line is the store and the folder.
+  assert.equal(
+    login.querySelector('.name small')?.textContent,
+    'Personal › logins',
   );
-  assert.ok(login, 'the GitHub login is listed');
-  // The folder follows the name, in place of the chip the row used to carry.
-  assert.equal(login.querySelector('.name .fpath')?.textContent, '/logins');
-  assert.equal(login.querySelector('.pchip'), null);
+  assert.ok(login.querySelector('.tile.pw'));
   // A value the panel reads as text copies and reveals; a file node
   // downloads. The row decides the same way the details panel does, so a
   // text Secret filed as a "Document" is not offered Download here and Copy
   // there.
   assert.deepEqual(actionsOf(login), ['Copy', 'Reveal']);
-  const named = (name: string): Element => {
-    const node = rows.find(
-      (candidate) => candidate.querySelector('.name .nm')?.textContent === name,
-    );
-    assert.ok(node, `no row named ${name}`);
-    return node;
-  };
   // A Secret whose value carries no password line: kind "Document", read as
   // text all the same.
-  const secretDocument = named('DATABASE_URL');
-  assert.equal(
-    secretDocument.querySelector('.cell.kind')?.textContent,
-    'Document',
-  );
+  const secretDocument = listRow('DATABASE_URL');
+  assert.ok(secretDocument.querySelector('.tile.text'));
   assert.deepEqual(actionsOf(secretDocument), ['Copy', 'Reveal']);
-  const fileDocument = named('passport-scan.pdf');
-  assert.equal(
-    fileDocument.querySelector('.cell.kind')?.textContent,
-    'Document',
-  );
+  const fileDocument = listRow('passport-scan.pdf');
+  assert.ok(fileDocument.querySelector('.tile.file'));
   assert.deepEqual(actionsOf(fileDocument), ['Download']);
 });
 
-test('grid view preserves browsing state, sorting, and selected details and persists across remounts', async () => {
+test('cards preserve browsing state, sorting, and selected details and persist across remounts', async () => {
   const { store } = await mount(
     { kind: 'all' },
     {
@@ -343,67 +354,43 @@ test('grid view preserves browsing state, sorting, and selected details and pers
     },
   );
   const before = store.getSnapshot();
-  assert.equal(
-    ui.screen
-      .getByRole('button', { name: 'List view' })
-      .getAttribute('aria-pressed'),
-    'true',
-  );
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Grid view' }));
+  assert.equal(await checked('As List'), true);
+  await choose('As Cards');
   assert.equal(store.getSnapshot(), before);
-  assert.equal(
-    ui.screen
-      .getByRole('button', { name: 'Grid view' })
-      .getAttribute('aria-pressed'),
-    'true',
-  );
+  assert.equal(await checked('As Cards'), true);
   assert.equal(document.querySelectorAll('.files-grid .row').length, 1);
   assert.equal(
     document.querySelector('.files-grid .row')?.getAttribute('aria-pressed'),
     'true',
   );
-  const sort = ui.screen.getByRole<HTMLSelectElement>('combobox', {
-    name: 'Sort items',
-  });
-  assert.equal(sort.value, 'name:desc');
-  assert.ok(sort.closest('.lt'));
-  assert.equal(
-    sort.closest('.files-sort-control')?.nextElementSibling?.className,
-    'seg',
-  );
-  ui.fireEvent.change(ui.screen.getByRole('combobox', { name: 'Sort items' }), {
-    target: { value: 'kind:asc' },
-  });
+  assert.equal(await checked('Descending'), true);
+  await choose('Kind');
+  await choose('Ascending');
   assert.equal(store.getSnapshot().sort, 'kind');
   assert.equal(store.getSnapshot().sortDirection, 'asc');
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'List view' }));
+  await choose('As List');
   assert.equal(document.querySelector('.files-grid'), null);
   assert.equal(store.getSnapshot().query, 'github');
   assert.deepEqual(store.getSnapshot().selection, before.selection);
   assert.equal(store.getSnapshot().sort, 'kind');
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Grid view' }));
+  await choose('As Cards');
   ui.cleanup();
   await mount({ kind: 'all' });
   assert.ok(document.querySelector('.files-grid'));
-  assert.equal(
-    ui.screen
-      .getByRole('button', { name: 'Grid view' })
-      .getAttribute('aria-pressed'),
-    'true',
-  );
+  assert.equal(await checked('As Cards'), true);
 });
 
-test('grid folder cards navigate with the keyboard and retain the grid and kind filter', async () => {
+test('folder cards navigate with the keyboard and retain the cards and kind filter', async () => {
   const { store } = await mount(
     { kind: 'store', ref: 'acct:personal' },
     { kind: 'Password' },
   );
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Grid view' }));
+  await choose('As Cards');
   const folder = document.querySelector<HTMLElement>(
     '.files-grid [data-folder-path="/logins"]',
   );
   assert.ok(folder);
-  assert.equal(folder.querySelector('.cell.kind')?.textContent, 'Folder');
+  assert.equal(folder.querySelector('.name small')?.textContent, 'Folder');
   ui.fireEvent.keyDown(folder, { key: 'Enter' });
   assert.equal(store.getSnapshot().folder, '/logins');
   assert.equal(store.getSnapshot().kind, 'Password');
@@ -427,12 +414,16 @@ test('search scopes to the selected tree row', async () => {
   await ui.waitFor(() =>
     assert.equal(document.querySelectorAll('.lpane .body .row').length, 1),
   );
+  assert.equal(
+    document.querySelector('.lpane .list-head .search-scope')?.textContent,
+    'in Household',
+  );
 });
 
 /** Returns a summary of each tree row containing its name, count, and selected state. */
 function treeShape(): string[] {
   return [
-    ...document.querySelectorAll<HTMLButtonElement>('.tpane .fselect'),
+    ...document.querySelectorAll<HTMLButtonElement>('.side-tree .fselect'),
   ].map((button) =>
     [
       button.querySelector('.nm')?.textContent ?? '',
@@ -446,6 +437,7 @@ test('typing a query leaves the folder tree unchanged', async () => {
   const { store } = await mount({ kind: 'all' });
   ui.fireEvent.click(treeRow('Personal'));
   await ui.waitFor(() => assert.equal(currentTitle(), 'Personal'));
+  await expand('Personal');
   const before = treeShape();
   assert.ok(before.length > 1, 'the tree draws more than one row');
   // The tree is the browser's map: a search narrows the list beside it, not
@@ -472,39 +464,33 @@ test('a missing store renders the unavailable state', async () => {
     document.querySelector('.notice')?.textContent ?? '',
     /Vault no longer available/,
   );
-  // Neither the empty-folder invitation nor a bare table of column headings.
+  // Neither the empty-folder invitation nor an empty list.
   assert.equal(document.querySelector('.list-window'), null);
-  assert.equal(document.querySelector('.empty'), null);
+  assert.equal(document.querySelector('.lpane .empty'), null);
 });
 
 for (const browsing of [{}, { query: 'logins' }]) {
-  test(`Files reverses every sortable column${'query' in browsing ? ' during search' : ''}`, async () => {
+  test(`Files reverses every sort key${'query' in browsing ? ' during search' : ''}`, async () => {
     const { store } = await mount({ kind: 'all' }, browsing);
     const rows = () =>
       [...document.querySelectorAll('.lpane .row .name .nm')].map(
         (node) => node.textContent,
       );
     for (const label of ['Name', 'Kind', 'Location']) {
-      const header = () =>
-        [
-          ...document.querySelectorAll<HTMLButtonElement>('.lpane .hdr button'),
-        ].find((node) => node.textContent?.startsWith(label))!;
-      if (header().getAttribute('aria-pressed') !== 'true')
-        ui.fireEvent.click(header());
+      await choose(label);
+      await choose('Ascending');
       await ui.waitFor(() =>
         assert.equal(store.getSnapshot().sortDirection, 'asc'),
       );
       const ascending = rows();
       assert.ok(ascending.length > 1);
-      ui.fireEvent.click(header());
+      await choose('Descending');
       await ui.waitFor(() =>
         assert.deepEqual(rows(), [...ascending].reverse()),
       );
       assert.equal(store.getSnapshot().sortDirection, 'desc');
-      assert.match(header().textContent ?? '', /↓/);
-      ui.fireEvent.click(header());
+      await choose('Ascending');
       await ui.waitFor(() => assert.deepEqual(rows(), ascending));
-      assert.match(header().textContent ?? '', /↑/);
     }
   });
 }
@@ -520,16 +506,15 @@ test('folder sorting reverses folders and items while keeping folders first', as
     );
   const ascending = rows();
   assert.ok(ascending.length > 1);
-  const name = [
-    ...document.querySelectorAll<HTMLButtonElement>('.lpane .hdr button'),
-  ].find((node) => node.textContent?.startsWith('Name'))!;
-  ui.fireEvent.click(name);
+  // Within one store, Location is not offered and the menu reads Name.
+  assert.equal(await checked('Name'), true);
+  await choose('Descending');
   await ui.waitFor(() =>
     assert.equal(store.getSnapshot().sortDirection, 'desc'),
   );
   assert.equal(store.getSnapshot().sort, 'name');
   assert.notDeepEqual(rows(), ascending);
-  ui.fireEvent.click(name);
+  await choose('Ascending');
   await ui.waitFor(() => assert.deepEqual(rows(), ascending));
 });
 
@@ -542,7 +527,7 @@ function actionsOf(row: Element): (string | null)[] {
 test('the tree’s New team button lands on Teams with the create sheet up', async () => {
   const { store } = await mount({ kind: 'all' });
   const plus = document.querySelector<HTMLButtonElement>(
-    '.tpane button.plus[aria-label="New team"]',
+    '.side-tree button.plus[aria-label="New team"]',
   );
   assert.ok(plus, 'the Teams heading carries a New team button');
   await ui.act(async () => {

@@ -1,25 +1,32 @@
-import { inventoryReadiness } from '../model';
+import { inventoryReadiness, itemsReadiness } from '../model';
 /**
- * The navigation rail.
+ * The sidebar: one source list on the window ground.
  *
- * Five fixed tabs — Files, Chat, Teams, Devices, Settings — under the window's
- * traffic-light strip and the product mark, over the setup card and the
- * account switcher that names the active account and opens the account menu.
- * There is no title bar above the strip. The rail does not enumerate stores;
- * Files and Teams list them on their own pages. Control-Tab cycles through the
- * five tabs. Every tab's indicator sits in one trailing slot: Chat and Teams
- * carry a count pill, while Devices and Settings use plain alert dots. Chat
- * loading appears in the header Refresh control.
- * The rail defaults to 150px open and 56px collapsed. Its expanded width is
- * resizable and persisted; it never expands on hover or focus.
+ * From the top: the window's drag strip with the traffic lights, the product
+ * name and the control that hides the sidebar; All Items, Passwords and
+ * Documents; the Vaults and Teams groups with each store's folder tree
+ * (`files-tree.tsx`) and All Teams; Chat and Activity. The foot holds the
+ * Finish setting up card, Devices and Settings, the account switcher and the
+ * sync status line.
+ *
+ * Rows are quiet: icons and counts in the muted sidebar ink, the selected row
+ * a low-contrast fill. Counts are plain numbers; state lives in dots (amber
+ * for something to act on). Control-Tab walks the places that stand for a
+ * whole area, in the order the sidebar draws them.
+ *
+ * Hidden, the sidebar keeps its state and its Control-Tab handler; the
+ * panel's first bar then carries the control that shows it again.
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Menu, Popover, anyDialogOpen } from '/kit/overlay-primitives';
 import { Icon } from '../components';
 import { useSidebarResize } from './use-sidebar-resize';
+import { FilesTree, type FilesTreeProps } from './files-tree';
 import {
+  catalog,
   chatAvailable,
+  kindOf,
   localAliasOf,
   serverDisplayLabelOrLoading,
   storeAvailability,
@@ -33,45 +40,43 @@ import type { FoksIconName } from '../icons';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import { teamUnread } from '../chat/unread';
 import { accountAtLocation, chatTabLocation, railTabOf } from '../location';
-import type { Location, RailTab } from '../location';
+import type { KindFilter, Location, RailTab } from '../location';
 import { AccountMark } from '../screens/account-switcher';
-
-interface RailTabSpec {
-  id: RailTab;
-  label: string;
-  icon: FoksIconName;
-  location: Location;
-}
-
-const RAIL_TABS: readonly RailTabSpec[] = [
-  { id: 'files', label: 'Files', icon: 'folder', location: { kind: 'files' } },
-  { id: 'chat', label: 'Chat', icon: 'chat', location: { kind: 'chat' } },
-  { id: 'teams', label: 'Teams', icon: 'users', location: { kind: 'teams' } },
-  {
-    id: 'devices',
-    label: 'Devices',
-    icon: 'shield',
-    location: { kind: 'devices' },
-  },
-  {
-    id: 'settings',
-    label: 'Settings',
-    icon: 'settings',
-    location: { kind: 'settings' },
-  },
-];
+import { ALL_ITEMS, folderSelection, listsItems } from '../screens/scope';
 
 /**
- * Where a tab goes. Chat returns to the team and channel it last had open, so
- * leaving Chat and coming back does not re-run the first-team fallback.
+ * The places Control-Tab walks, in sidebar order. Files is All Items; Teams
+ * is the Teams list; Chat returns to the team and channel it last had open.
  */
-function tabLocation(tab: RailTabSpec): Location {
-  return tab.id === 'chat' ? chatTabLocation() : tab.location;
+const CYCLE: readonly RailTab[] = [
+  'files',
+  'teams',
+  'chat',
+  'activity',
+  'devices',
+  'settings',
+];
+
+function placeLocation(tab: RailTab): Location {
+  switch (tab) {
+    case 'chat':
+      return chatTabLocation();
+    case 'files':
+      return { kind: 'files' };
+    case 'teams':
+      return { kind: 'teams' };
+    case 'activity':
+      return { kind: 'activity' };
+    case 'devices':
+      return { kind: 'devices' };
+    case 'settings':
+      return { kind: 'settings' };
+  }
 }
 
-/** Control-Tab destinations in rail order. */
+/** Control-Tab destinations in sidebar order. */
 export function sidebarCycleLocations(): Location[] {
-  return RAIL_TABS.map(tabLocation);
+  return CYCLE.map(placeLocation);
 }
 
 export function nextSidebarCycleLocation(
@@ -79,11 +84,10 @@ export function nextSidebarCycleLocation(
   delta: 1 | -1,
 ): Location | null {
   const places = sidebarCycleLocations();
-  // Every location a tab owns answers `railTabOf`, so the tab it belongs to is
-  // the only thing the walk needs; first run belongs to none and starts at an
-  // end.
+  // Every location answers `railTabOf` with the place it belongs to; first
+  // run belongs to none and starts at an end.
   const here = railTabOf(current);
-  const index = RAIL_TABS.findIndex((tab) => tab.id === here);
+  const index = CYCLE.findIndex((tab) => tab === here);
   if (index < 0) return delta > 0 ? places[0] : places[places.length - 1];
   return places[(index + delta + places.length) % places.length];
 }
@@ -91,9 +95,10 @@ export function nextSidebarCycleLocation(
 /* --------------------------------------------------------- window controls -- */
 
 /**
- * The strip the window is dragged by, at the top of the rail. macOS draws its
- * own controls over the native window's strip, so the fake lights are the web
- * mock's alone; either way the strip reserves the height they occupy.
+ * The strip the window is dragged by, at the top of the sidebar: 52px, so the
+ * traffic lights (trafficLightPosition {x: 14, y: 24}) and the panel's 44px
+ * bars, inset 8px, share one centreline at y=30. macOS draws its own lights
+ * over the native window; the drawn ones are the web mock's alone.
  */
 export function TrafficStrip({
   native = false,
@@ -103,8 +108,10 @@ export function TrafficStrip({
   children?: ReactNode;
 }): ReactNode {
   return (
-    <div className="traffic" data-tauri-drag-region="">
-      {native ? null : (
+    <div className="traffic side-head" data-tauri-drag-region="">
+      {native ? (
+        <span className="lights-space" aria-hidden="true" />
+      ) : (
         <span className="lights" aria-hidden="true">
           <span className="light" />
           <span className="light" />
@@ -118,7 +125,7 @@ export function TrafficStrip({
 
 /* ------------------------------------------------------------ agent light -- */
 
-/** Connection states displayed in the rail footer. */
+/** Connection states the sidebar can report for the agent. */
 export type RailAgentState = 'ready' | 'starting' | 'stopped' | 'locked';
 
 const AGENT_LABEL: Readonly<Record<RailAgentState, string>> = {
@@ -152,8 +159,8 @@ export function railAgentState(
 }
 
 /**
- * The light itself. Exported because first run's step list is the same rail
- * and closes with the same row.
+ * The agent light: a dot and a word. The sidebar's status line falls back to
+ * it where no sync service reports (the blocked shell, first run).
  */
 export function AgentLight({ state }: { state: RailAgentState }): ReactNode {
   const label = AGENT_LABEL[state];
@@ -171,14 +178,16 @@ export interface NavRowProps {
   active: boolean;
   glyph?: ReactNode;
   name: string;
-  /** Tooltip. The rail sets it only while collapsed, where the label is gone. */
   title?: string;
   tail?: ReactNode;
-  /** A blocked shell draws its tabs but does not let them be used. */
+  /** A blocked shell draws its rows but does not let them be used. */
   disabled?: boolean;
+  /** Names the place for tests and styles: `data-place`. */
+  place?: string;
   onSelect: () => void;
 }
 
+/** One sidebar row: icon, label, and a trailing count or dot. */
 export function NavRow({
   active,
   glyph,
@@ -186,6 +195,7 @@ export function NavRow({
   title,
   tail,
   disabled = false,
+  place,
   onSelect,
 }: NavRowProps): ReactNode {
   return (
@@ -195,6 +205,7 @@ export function NavRow({
       title={title}
       disabled={disabled || undefined}
       aria-current={active ? 'page' : undefined}
+      data-place={place}
       onClick={onSelect}
     >
       {glyph}
@@ -204,7 +215,7 @@ export function NavRow({
   );
 }
 
-/** Configuration and action callbacks for the sidebar setup progress card. */
+/** Configuration and action callbacks for the sidebar setup card. */
 export interface RailSetup {
   /** Number of completed steps. */
   done: number;
@@ -212,67 +223,77 @@ export interface RailSetup {
   /** Short label for the next setup step. */
   next: string;
   onContinue: () => void;
-  /** Optional callback invoked when dismissing the card with "Later". When omitted, the "Later" button is hidden. */
+  /** Dismisses the card ("Later"); without it the card has no Later. */
   onLater?: () => void;
 }
 
+/** The Files state the sidebar's item rows and store tree read and set. */
+export interface SidebarFiles {
+  /** `LocationState.folder`. */
+  folder: string;
+  /** `LocationState.kind`. */
+  kind: KindFilter;
+  /**
+   * Opens a Files place: `folder` as the `all` location's value (`''` for
+   * All Items, `store|/path` for a store or folder) with a kind filter.
+   * The shell passes `LocationStore.openFiles`.
+   */
+  onOpen: (folder: string, kind: KindFilter) => void;
+  folderActions?: FilesTreeProps['folderActions'];
+  accessNow?: () => number;
+}
+
 export interface SidebarProps {
-  /** Absent while the agent is starting: the rail draws its frame regardless. */
+  /** Absent while the agent is starting: the sidebar draws its frame regardless. */
   snapshot?: AgentSnapshot;
   location: Location;
   account?: StoreRef;
   /**
-   * Notices no tab's own badge can resolve — a catalog read that only a
+   * Notices no row's own badge can resolve — a catalog read that only a
    * retry can fix, or a note whose place could not be derived. Draws the dot
-   * on the account avatar and on the Settings tab, whose Account section lists
-   * them; every note type with a tab of its own reaches it through that tab's
-   * badge instead.
+   * on the account avatar and on the Settings row, whose Account section
+   * lists them.
    */
   attention?: number;
-  /** The Teams tab's badge: pending membership requests this session knows about. */
+  /** All Teams' count: pending membership requests this session knows about. */
   teamRequests?: { label: string; description: string } | null;
-  /** The Devices tab's dot: an open pairing offer, or an account with no recovery phrase. */
+  /** The Devices dot: an open pairing offer, or an account with no recovery phrase. */
   devicesAlert?: { description: string } | null;
   /**
-   * The Settings tab's dot: a lapsed check-in or an unverified server. The
-   * tab also draws the dot for `attention`, with both reasons in its label.
+   * The Settings dot: a lapsed check-in or an unverified server. The row
+   * also draws the dot for `attention`, with both reasons in its label.
    */
   settingsAlert?: { description: string } | null;
   onNavigate: (location: Location) => void;
   onTabNavigate?: (tab: RailTab) => void;
-  /**
-   * Rows between the tabs and the foot. First run puts its progress there;
-   * the shell has no additional status to display at that point.
-   */
+  /** The Files state; without it the item rows and stores navigate by address. */
+  files?: SidebarFiles;
+  /** Rows above the setup card. First run puts its invitation note there. */
   status?: ReactNode;
-  /**
-   * First run's progress, drawn in the same slot as the setup card rather
-   * than as a row. Omitted once setup is done, or by a caller that has only
-   * the row to give.
-   */
+  /** First run's progress, drawn as the Finish setting up card. */
   setup?: RailSetup;
   /**
-   * First run is already in the flow, so the account menu's "Add an account or
+   * First run is already in the flow, so the account menu's "Add account or
    * server…" re-enters it rather than navigating to the flow's first step.
    */
   onReenter?: () => void;
   /** Arms the application lock. Omitted where no lock command is reachable. */
   onLock?: () => void;
-  /**
-   * Collapsed to the 56px icon-only track. The traffic strip carries the toggle.
-   */
+  /** Hidden: the panel's first bar shows the sidebar again. */
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
-  /** Connection status displayed in the rail footer. */
+  /** The agent's state, for the status line when no `statusLine` is given. */
   agent?: RailAgentState;
-  /** The OS draws the window controls over the strip, so no lights are faked. */
+  /** The status line under the account switcher: the sync status. */
+  statusLine?: ReactNode;
+  /** The OS draws the window controls over the strip, so no lights are drawn. */
   nativeChrome?: boolean;
-  /** A blocking state: the header and the tabs are dimmed and inert. */
+  /** A blocking state: the rows are dimmed and inert. */
   blocked?: boolean;
 }
 
 /**
- * The rail's account switcher and its menu, at the foot of the rail: the
+ * The account switcher and its menu, at the foot of the sidebar: the
  * accounts on this Mac grouped by
  * server, then the two commands that are not a place — adding an account and
  * locking the app. The row names the account and the host it lives on; no
@@ -361,7 +382,7 @@ export function AccountHeader({
   // Account marks use the same username-derived hue as the Files vault row.
   const close = (): void => setOpen(false);
   return (
-    <div className={blocked ? 'rail-foot is-blocked' : 'rail-foot'}>
+    <div className={blocked ? 'side-account is-blocked' : 'side-account'}>
       <button
         type="button"
         ref={anchorRef}
@@ -378,7 +399,7 @@ export function AccountHeader({
           <small>{host}</small>
         </span>
         <span className="chev">
-          <Icon name="chevronDown" />
+          <Icon name="chevronsUpDown" />
         </span>
       </button>
       {attention > 0 ? (
@@ -398,13 +419,13 @@ export function AccountHeader({
           className="menu-portal"
           align="start"
           gap={4}
-          // The rail runs to the window's left edge, so the usual viewport
+          // The sidebar runs to the window's left edge, so the usual viewport
           // margin would push the menu off the edge it aligns with.
           inset={0}
           onClose={close}
         >
           <Menu
-            className="menu rail-account-menu"
+            className="menu account-menu"
             anchorRef={anchorRef}
             onClose={close}
             aria-label="Accounts on this device"
@@ -534,7 +555,7 @@ export function AccountHeader({
  * The total unread across the teams whose chat this Mac can read. `teamUnread`
  * reports one team at a time, including the states that have no number
  * (loading, unavailable); those contribute nothing to the sum. Loading is
- * reported by the header Refresh control.
+ * reported by the sync status line.
  *
  * A team whose synchronization failed or arrived incomplete marks the badge
  * rather than replacing it: an inbox poll fails and retries on a backoff, and
@@ -543,10 +564,10 @@ export function AccountHeader({
  * description says what is unaccounted for. Only when no team could be counted
  * at all does the badge fall back to a warning dot with nothing to show.
  */
-function railChatUnread(
+function chatUnread(
   snapshot: AgentSnapshot,
   inbox: ReturnType<typeof useSidebarInbox>,
-): RailCount | { warning: true; description: string } | null {
+): NavCount | { warning: true; description: string } | null {
   let total = 0;
   let known = false;
   const warnings = new Set<string>();
@@ -583,16 +604,14 @@ function railChatUnread(
   return null;
 }
 
-type RailCount = { label: string; description: string; warning?: boolean };
+type NavCount = { label: string; description: string; warning?: boolean };
 
 /**
- * Status indicator for each tab. Unread counts trail the label as an orange
- * pill; orange dots indicate actionable status and stand beside whatever
- * number is known rather than replacing it.
- * A count carrying `warn` is a total that is known to be short of something,
- * drawn in orange rather than dropped.
+ * A row's trailing indicator. A count is a plain muted number; a dot is
+ * state, amber when there is something to act on. A count carrying `warn` is
+ * a total known to be short of something: the number stays, in amber.
  */
-function RailTail({
+function NavTail({
   kind,
   description,
   children,
@@ -603,7 +622,7 @@ function RailTail({
 }): ReactNode {
   return (
     <span
-      className={`rail-tail ${kind}`}
+      className={`nav-tail ${kind}`}
       aria-label={description}
       title={description}
     >
@@ -613,45 +632,90 @@ function RailTail({
 }
 
 /**
- * Setup progress card displayed above the account switcher. Shows completion progress, the next setup action, and buttons to continue or postpone setup. When collapsed, renders a compact fraction icon with full details in the tooltip.
- *
- * The "Later" button is only rendered when an onLater callback is provided.
+ * The Finish setting up card above Devices and Settings: the heading opens
+ * setup where it stopped, the next step is named under it, and Continue and
+ * Later act on it. Under 720px of window height it folds to one row — the
+ * heading and Later — so the foot never clips.
  */
-function SetupCard({ setup }: { setup?: RailSetup }): ReactNode {
+function SetupCard({
+  setup,
+  disabled,
+}: {
+  setup?: RailSetup;
+  disabled: boolean;
+}): ReactNode {
   if (!setup) return null;
   const { done, total, next, onContinue, onLater } = setup;
-  const share = total > 0 ? Math.min(1, Math.max(0, done / total)) : 0;
   return (
     <div
       className="setup-card"
-      data-short={`${done}/${total}`}
-      title={`Finish setting up: ${done} of ${total} steps done`}
+      role="group"
+      aria-label={`Finish setting up: ${done} of ${total} steps done`}
     >
-      <b>Finish setting up</b>
-      <small>{next}</small>
-      <div
-        className="bar"
-        role="progressbar"
-        aria-valuemin={0}
-        aria-valuemax={total}
-        aria-valuenow={done}
-        aria-label="Setup progress"
+      <button
+        type="button"
+        className="h"
+        disabled={disabled}
+        onClick={onContinue}
       >
-        <i style={{ width: `${Math.round(share * 100)}%` }} />
-      </div>
-      <div className="act">
-        <button type="button" onClick={onContinue}>
+        <Icon name="flag" />
+        <span className="lbl">Finish setting up</span>
+      </button>
+      <span className="step">
+        <i aria-hidden="true" />
+        {next}
+      </span>
+      <span className="acts">
+        <button
+          type="button"
+          className="lnk"
+          disabled={disabled}
+          onClick={onContinue}
+        >
           Continue
         </button>
         {onLater ? (
-          <button type="button" className="dim" onClick={onLater}>
+          <button
+            type="button"
+            className="lnk muted"
+            disabled={disabled}
+            onClick={onLater}
+          >
             Later
           </button>
         ) : null}
-      </div>
+      </span>
+      {onLater ? (
+        <button
+          type="button"
+          className="tbtn x"
+          aria-label="Later"
+          title="Later"
+          disabled={disabled}
+          onClick={onLater}
+        >
+          <Icon name="close" />
+        </button>
+      ) : null}
     </div>
   );
 }
+
+const KIND_ROWS: readonly {
+  kind: KindFilter;
+  label: string;
+  icon: FoksIconName;
+  place: string;
+}[] = [
+  { kind: 'All', label: 'All Items', icon: 'grid', place: 'files' },
+  { kind: 'Password', label: 'Passwords', icon: 'key', place: 'passwords' },
+  {
+    kind: 'Document',
+    label: 'Documents',
+    icon: 'fileText',
+    place: 'documents',
+  },
+];
 
 export function Sidebar({
   snapshot,
@@ -663,60 +727,25 @@ export function Sidebar({
   settingsAlert = null,
   onNavigate,
   onTabNavigate,
+  files,
   status,
   setup,
   onReenter,
   onLock,
   collapsed = false,
   onToggleCollapsed,
+  agent = 'ready',
+  statusLine,
   nativeChrome = false,
   blocked = false,
 }: SidebarProps): ReactNode {
   const resize = useSidebarResize(!collapsed && !blocked);
   const chatInbox = useSidebarInbox();
-  const unread = snapshot ? railChatUnread(snapshot, chatInbox) : null;
+  const unread = snapshot ? chatUnread(snapshot, chatInbox) : null;
   const here = railTabOf(location);
-  /**
-   * A tab's own indicator: a muted count for Chat and Teams, and orange dots
-   * for Devices and Settings. Dots overlay the icon's upper corner; counts
-   * also become icon dots when the rail is collapsed.
-   */
-  const railTail = (tab: RailTab): ReactNode => {
-    if (tab === 'chat') {
-      if (!unread) return undefined;
-      if (!('label' in unread))
-        return <RailTail kind="dot warn" description={unread.description} />;
-      return (
-        <RailTail
-          kind={unread.warning ? 'count warn' : 'count'}
-          description={unread.description}
-        >
-          {unread.label}
-        </RailTail>
-      );
-    }
-    if (tab === 'teams')
-      return teamRequests ? (
-        <RailTail kind="count" description={teamRequests.description}>
-          {teamRequests.label}
-        </RailTail>
-      ) : undefined;
-    if (tab === 'devices')
-      return devicesAlert ? (
-        <RailTail kind="dot warn" description={devicesAlert.description} />
-      ) : undefined;
-    if (tab === 'settings') {
-      const reasons = [
-        settingsAlert?.description,
-        attention > 0
-          ? `${attention} ${attention === 1 ? 'notice needs' : 'notices need'} attention`
-          : undefined,
-      ].filter((reason): reason is string => Boolean(reason));
-      return reasons.length ? (
-        <RailTail kind="dot warn" description={reasons.join('; ')} />
-      ) : undefined;
-    }
-    return undefined;
+  const go = (tab: RailTab): void => {
+    if (onTabNavigate) onTabNavigate(tab);
+    else onNavigate(placeLocation(tab));
   };
   useEffect(() => {
     if (blocked) return;
@@ -729,8 +758,8 @@ export function Sidebar({
       )
         return;
       // This listener runs on document, beyond a dialog's event boundary.
-      // Disable sidebar tab cycling while a dialog is open so the underlying
-      // view does not change.
+      // Disable cycling while a dialog is open so the view under it does not
+      // change.
       if (anyDialogOpen()) return;
       const next = nextSidebarCycleLocation(location, event.shiftKey ? -1 : 1);
       if (!next) return;
@@ -743,114 +772,200 @@ export function Sidebar({
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [blocked, location, onNavigate, onTabNavigate]);
 
+  // Item counts over the whole catalog, drawn once every store has reported.
+  const items = snapshot ? catalog(snapshot) : [];
+  const countsReady = snapshot ? itemsReadiness(snapshot) === 'ready' : false;
+  const kindCount = (kind: KindFilter): number =>
+    kind === 'All'
+      ? items.length
+      : items.filter((item) => kindOf(item) === kind).length;
+  const allItemsHere =
+    listsItems(location) &&
+    (files
+      ? folderSelection(location, files.folder).store === ALL_ITEMS
+      : location.kind !== 'store');
+  const kindRow = (row: (typeof KIND_ROWS)[number]): ReactNode => (
+    <NavRow
+      key={row.kind}
+      place={row.place}
+      active={allItemsHere && (files?.kind ?? 'All') === row.kind}
+      glyph={<Icon name={row.icon} />}
+      name={row.label}
+      disabled={blocked}
+      tail={
+        countsReady ? <span className="n">{kindCount(row.kind)}</span> : null
+      }
+      onSelect={() => {
+        if (files) files.onOpen('', row.kind);
+        else go('files');
+      }}
+    />
+  );
+
+  const settingsReasons = [
+    settingsAlert?.description,
+    attention > 0
+      ? `${attention} ${attention === 1 ? 'notice needs' : 'notices need'} attention`
+      : undefined,
+  ].filter((reason): reason is string => Boolean(reason));
+
+  const chatTail = !unread ? undefined : !('label' in unread) ? (
+    <NavTail kind="dot warn" description={unread.description} />
+  ) : (
+    <NavTail
+      kind={unread.warning ? 'count warn' : 'count'}
+      description={unread.description}
+    >
+      {unread.label}
+    </NavTail>
+  );
+
+  const allTeams = (
+    <NavRow
+      place="teams"
+      active={here === 'teams'}
+      glyph={<Icon name="users" />}
+      name="All Teams"
+      disabled={blocked}
+      tail={
+        teamRequests ? (
+          <NavTail kind="count" description={teamRequests.description}>
+            {teamRequests.label}
+          </NavTail>
+        ) : undefined
+      }
+      // The list itself, not the team page the area last had open.
+      onSelect={() => onNavigate({ kind: 'teams' })}
+    />
+  );
+
   return (
     <nav
       ref={resize.ref}
-      className={[
-        'side',
-        'rail',
-        collapsed ? 'is-narrow' : '',
-        resize.dragging ? 'is-resizing' : '',
-      ]
+      className={['side', resize.dragging ? 'is-resizing' : '']
         .filter(Boolean)
         .join(' ')}
+      hidden={collapsed}
       aria-label="Main Navigation"
     >
       {resize.handle}
       <TrafficStrip native={nativeChrome}>
-        {onToggleCollapsed && !collapsed ? (
+        <span className="brand">FOKS</span>
+        {onToggleCollapsed ? (
           <button
             type="button"
-            className="side-collapse"
+            className="tbtn side-collapse"
             aria-expanded="true"
             aria-label="Collapse sidebar"
             title="Collapse sidebar"
             disabled={blocked}
             onClick={onToggleCollapsed}
           >
-            <Icon name="panelLeftClose" />
+            <Icon name="panelLeft" />
           </button>
         ) : null}
       </TrafficStrip>
-      <div className={blocked ? 'rail-body is-blocked' : 'rail-body'}>
-        {collapsed && onToggleCollapsed ? (
-          <button
-            type="button"
-            className="rail-brand"
-            aria-expanded="false"
-            aria-label="Expand sidebar"
-            title="Expand sidebar"
+      <div className={blocked ? 'side-scroll is-blocked' : 'side-scroll'}>
+        <div className="nav-group">{KIND_ROWS.map(kindRow)}</div>
+        {snapshot ? (
+          <FilesTree
+            snapshot={snapshot}
+            location={location}
+            folder={files?.folder ?? ''}
+            onOpen={(folder) => {
+              if (files) {
+                files.onOpen(folder, 'All');
+                return;
+              }
+              const store = folder.slice(0, folder.indexOf('|'));
+              onNavigate({ kind: 'store', ref: store });
+            }}
+            onNavigate={onNavigate}
+            folderActions={files?.folderActions}
+            accessNow={files?.accessNow}
+            teamsTail={allTeams}
             disabled={blocked}
-            onClick={onToggleCollapsed}
-          >
-            <span className="mark" aria-hidden="true">
-              <Icon name="pawPrint" />
-            </span>
-            <span className="lab">foks-rs</span>
-          </button>
+          />
         ) : (
-          <div className="rail-brand">
-            <span className="mark" aria-hidden="true">
-              <Icon name="pawPrint" />
-            </span>
-            <span className="lab">foks-rs</span>
+          <div className="nav-group">{allTeams}</div>
+        )}
+        <div className="nav-group">
+          <NavRow
+            place="chat"
+            active={here === 'chat'}
+            glyph={<Icon name="chat" />}
+            name="Chat"
+            disabled={blocked}
+            tail={chatTail}
+            onSelect={() => go('chat')}
+          />
+          <NavRow
+            place="activity"
+            active={here === 'activity'}
+            glyph={<Icon name="activity" />}
+            name="Activity"
+            disabled={blocked}
+            onSelect={() => go('activity')}
+          />
+        </div>
+      </div>
+      <div className={blocked ? 'side-foot is-blocked' : 'side-foot'}>
+        {status}
+        <SetupCard setup={setup} disabled={blocked} />
+        <NavRow
+          place="devices"
+          active={here === 'devices'}
+          glyph={<Icon name="shield" />}
+          name="Devices"
+          disabled={blocked}
+          tail={
+            devicesAlert ? (
+              <NavTail kind="dot warn" description={devicesAlert.description} />
+            ) : undefined
+          }
+          onSelect={() => go('devices')}
+        />
+        <NavRow
+          place="settings"
+          active={here === 'settings'}
+          glyph={<Icon name="settings" />}
+          name="Settings"
+          disabled={blocked}
+          tail={
+            settingsReasons.length ? (
+              <NavTail
+                kind="dot warn"
+                description={settingsReasons.join('; ')}
+              />
+            ) : undefined
+          }
+          onSelect={() => go('settings')}
+        />
+        <div className="foot-rule" aria-hidden="true" />
+        {snapshot ? (
+          <AccountHeader
+            snapshot={snapshot}
+            location={location}
+            account={account}
+            attention={attention}
+            blocked={blocked}
+            onNavigate={onNavigate}
+            onReenter={onReenter}
+            onLock={onLock}
+          />
+        ) : (
+          // No account is known yet. The foot keeps its height so nothing
+          // above it moves once one is.
+          <div className="side-account">
+            <div className="who who-empty">
+              <span className="avatar" aria-hidden="true" />
+            </div>
           </div>
         )}
-        <div className="rail-tabs">
-          {RAIL_TABS.map((tab) => (
-            <NavRow
-              key={tab.id}
-              active={here === tab.id}
-              glyph={
-                <Icon
-                  name={tab.icon}
-                  className={
-                    tab.id === 'chat'
-                      ? 'rail-chat-icon'
-                      : tab.id === 'files'
-                        ? 'rail-files-icon'
-                        : undefined
-                  }
-                />
-              }
-              name={tab.label}
-              // The expanded rail already reads the label; a tooltip repeating
-              // it is noise.
-              title={collapsed ? tab.label : undefined}
-              disabled={blocked}
-              tail={railTail(tab.id)}
-              onSelect={() => {
-                if (onTabNavigate) onTabNavigate(tab.id);
-                else onNavigate(tabLocation(tab));
-              }}
-            />
-          ))}
+        <div className="side-status">
+          {statusLine ?? <AgentLight state={agent} />}
         </div>
       </div>
-      <div className="side-bottom">
-        {status}
-        <SetupCard setup={setup} />
-      </div>
-      {snapshot ? (
-        <AccountHeader
-          snapshot={snapshot}
-          location={location}
-          account={account}
-          attention={attention}
-          blocked={blocked}
-          onNavigate={onNavigate}
-          onReenter={onReenter}
-          onLock={onLock}
-        />
-      ) : (
-        // No account is known yet. The foot keeps its height so nothing above
-        // it moves once one is.
-        <div className="rail-foot">
-          <div className="who who-empty">
-            <span className="avatar" aria-hidden="true" />
-          </div>
-        </div>
-      )}
     </nav>
   );
 }

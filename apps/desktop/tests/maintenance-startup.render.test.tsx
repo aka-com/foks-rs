@@ -78,14 +78,14 @@ test('startup waits for catalog completion and hands off maintenance once', asyn
   );
   try {
     await ui.waitFor(() => assert.ok(document.querySelector('.booting')));
-    assert.equal(document.querySelector('.side.rail .who .t'), null);
+    assert.equal(document.querySelector('.side .who .t'), null);
     await ui.act(async () => finish(full));
     await ui.waitFor(() => {
       assert.doesNotMatch(
         document.body.textContent ?? '',
         /Starting the FOKS agent/,
       );
-      assert.ok(document.querySelector('.side.rail .who .t'));
+      assert.ok(document.querySelector('.side .who .t'));
     });
     assert.doesNotMatch(document.body.textContent ?? '', /Welcome to FOKS/);
     await ui.waitFor(() => assert.equal(listeners.size, 1));
@@ -249,7 +249,7 @@ test('startup paused by maintenance resumes from the terminal native event', asy
   await ui.waitFor(() => {
     assert.match(document.body.textContent ?? '', /Starting the FOKS agent…/);
   });
-  assert.equal(document.querySelector('.side.rail .who .t'), null);
+  assert.equal(document.querySelector('.side .who .t'), null);
   assert.equal(statusCalls, 0);
   assert.equal(catalogCalls, 0);
 
@@ -327,10 +327,10 @@ test('mounted shell ignores duplicate maintenance completion side effects', asyn
     },
   };
   const rendered = ui.render(createElement(App, { bridge, leaseClock }));
-  // The rail draws before a snapshot loads, so the account header is what says
+  // The sidebar draws before a snapshot loads, so the account header is what says
   // the shell itself has mounted.
   await ui.waitFor(() => {
-    assert.ok(document.querySelector('.side.rail .who .t'));
+    assert.ok(document.querySelector('.side .who .t'));
   });
   await ui.waitFor(() => assert.equal(listeners.size, 1));
 
@@ -471,7 +471,7 @@ test('startup restoration retry continues through catalog load into the shell', 
     await Promise.resolve();
   });
   await ui.waitFor(() =>
-    assert.ok(document.querySelector('.side.rail .who .t')),
+    assert.ok(document.querySelector('.side .who .t')),
   );
   assert.ok(statusCalls >= 1);
   assert.ok(catalogCalls >= 1);
@@ -533,7 +533,7 @@ test('maintenance invalidates a pending startup catalog before shell handoff', a
   await ui.waitFor(() => {
     assert.match(document.body.textContent ?? '', /Starting the FOKS agent…/);
   });
-  assert.equal(document.querySelector('.side.rail .who .t'), null);
+  assert.equal(document.querySelector('.side .who .t'), null);
   assert.equal(
     catalogCalls,
     1,
@@ -553,7 +553,7 @@ test('maintenance invalidates a pending startup catalog before shell handoff', a
     await Promise.resolve();
   });
   await ui.waitFor(() =>
-    assert.ok(document.querySelector('.side.rail .who .t')),
+    assert.ok(document.querySelector('.side .who .t')),
   );
   assert.ok(catalogCalls >= 2);
   assert.equal(listeners.size, 1);

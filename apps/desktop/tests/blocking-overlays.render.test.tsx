@@ -423,7 +423,7 @@ async function shellOverlay(
   };
   const rendered = ui.render(createElement(App, { bridge }));
   await ui.waitFor(() => {
-    assert.ok(document.querySelector('.side.rail .who .t'));
+    assert.ok(document.querySelector('.side .who .t'));
   });
   current = snapshot;
   await ui.act(async () => {
@@ -604,7 +604,8 @@ test('locked startup outranks maintenance and keeps unlock errors in its card', 
   assert.ok(dialog.classList.contains('lock-back'));
   assert.equal(dialog.parentElement, document.querySelector('.window'));
   assert.equal(document.querySelector('.stopcard'), null);
-  assert.equal(Boolean(document.querySelector('.side.rail .status')), false);
+  // The sidebar's status line states the agent while the card is up.
+  assert.ok(document.querySelector('.side .side-status'));
   await ui.act(async () => {
     rendered.getByRole('button', { name: 'Unlock' }).click();
     await Promise.resolve();
@@ -641,8 +642,8 @@ test('boot error retry restarts startup', async () => {
   await ui.waitFor(() =>
     assert.equal(document.querySelector('.takeover'), null),
   );
-  assert.ok(document.querySelector('.side.rail'));
-  assert.equal(Boolean(document.querySelector('.side.rail .status')), false);
+  assert.ok(document.querySelector('.side'));
+  assert.equal(Boolean(document.querySelector('.side .status')), false);
   assert.ok(statusCalls >= 2);
   rendered.unmount();
 });
@@ -912,9 +913,9 @@ test('in-shell stop notice renders outside the inert main container', async () =
   );
   assert.equal(dialog.closest('[aria-hidden="true"]'), null);
   assert.ok(document.querySelector('.window > .stopveil'));
-  // The rail and topbar beside the veil are dimmed and disabled.
-  assert.ok(document.querySelector('.rail-body.is-blocked'));
-  for (const tab of document.querySelectorAll('.rail-tabs .nav'))
+  // The sidebar and topbar beside the veil are dimmed and disabled.
+  assert.ok(document.querySelector('.side-scroll.is-blocked'));
+  for (const tab of document.querySelectorAll('.side .nav[data-place]'))
     assert.ok(tab.hasAttribute('disabled'));
   rendered.unmount();
 });
@@ -925,8 +926,8 @@ test('lost-connection dialog renders beside a dimmed navigation rail', async () 
   assert.ok(dialog);
   assert.equal(dialog.closest('[aria-hidden="true"]'), null);
   assert.ok(document.querySelector('.window > .stopwrap'));
-  assert.ok(document.querySelector('.side.rail .rail-tabs'));
-  assert.ok(document.querySelector('.rail-body.is-blocked'));
+  assert.ok(document.querySelector('.side .side-scroll'));
+  assert.ok(document.querySelector('.side-scroll.is-blocked'));
   assert.ok(
     document
       .querySelector('.topbar .topsearch input')
@@ -1100,8 +1101,8 @@ test('catalog failure after reconnect reports a toast with the agent ready', asy
     await Promise.resolve();
   });
   await rendered.findByText('The catalog could not be refreshed.');
-  assert.ok(document.querySelector('.side.rail'));
-  assert.equal(Boolean(document.querySelector('.side.rail .status')), false);
+  assert.ok(document.querySelector('.side'));
+  assert.equal(Boolean(document.querySelector('.side .status')), false);
   assert.equal(document.querySelector('.stopwrap'), null);
   rendered.unmount();
 });
@@ -1134,7 +1135,7 @@ test('agent loss from the reconnect catalog restores the takeover', async () => 
   });
   assert.notEqual(second, first);
   assert.match(second.textContent ?? '', /disconnected during catalog refresh/);
-  assert.equal(Boolean(document.querySelector('.side.rail .status')), false);
+  assert.equal(Boolean(document.querySelector('.side .status')), false);
   rendered.unmount();
 });
 
@@ -1351,7 +1352,7 @@ test('command-only agent loss preserves the active write workflow', async () => 
     document.querySelector('.stopwrap')?.textContent ?? '',
     /create command/,
   );
-  assert.equal(Boolean(document.querySelector('.side.rail .status')), false);
+  assert.equal(Boolean(document.querySelector('.side .status')), false);
   assert.equal(document.querySelector('[aria-label="New password"]'), sheet);
   assert.equal(rendered.getByLabelText('Site'), site);
   assert.equal(site.value, 'command.example');
