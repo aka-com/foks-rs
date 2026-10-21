@@ -279,8 +279,12 @@ test('device rendering never scans hardware or prompts for credentials', async (
   });
   assert.equal(scans, 0);
   assert.equal(hardwareCommands, 0);
+  // The hardware scan is in the bar's More menu.
+  await ui.act(async () => {
+    ui.fireEvent.click(ui.screen.getByRole('button', { name: 'More' }));
+  });
   ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Refresh hardware keys' }),
+    await ui.screen.findByRole('menuitem', { name: 'Refresh Hardware Keys' }),
   );
   await ui.waitFor(() => assert.equal(scans, 1));
   assert.equal(hardwareCommands, 0);
