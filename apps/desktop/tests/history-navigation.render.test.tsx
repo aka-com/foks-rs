@@ -78,7 +78,9 @@ test('the header omits history controls', async () => {
   assert.ok(up);
   assert.equal(up.getAttribute('aria-label'), 'All Teams');
   assert.equal(up.title, 'All Teams');
-  ui.act(() => ui.fireEvent.click(up));
+  ui.act(() => {
+    ui.fireEvent.click(up);
+  });
   assert.equal(store.getSnapshot().location.kind, 'teams');
 });
 
