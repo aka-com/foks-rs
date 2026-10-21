@@ -110,8 +110,8 @@ Activity (`screens/activity-screen.tsx`) is a list column beside a details
 column. "Waiting for you" lists the membership requests of every team this
 Mac manages whose shared request count is above zero; "Needs attention" lists
 what `src/activity.ts` derives from the snapshot: a team whose setup did not
-finish, an inactive federated admission, and a server that is unverified or
-whose check-in lapsed, plus "<team> has unfinished changes" for a team whose
+finish, an inactive federated admission, and a server that is not verified
+(never checked) or whose check-in lapsed, plus "<team> has unfinished changes" for a team whose
 pending membership operations or invitation recoveries are already in the
 shared query cache (no new reads are made for it). A request's details approve, reject or verify it
 through `useMembershipInbox` (`components/membership-inbox.ts`), the hook the
@@ -125,7 +125,10 @@ inside the same main window: a 52px title bar on the window ground above a
 centred card, whose left panel carries the step's title and lead (each step's
 `StepIntro`, portaled there), the step list and the restart and leave
 commands, and whose right column carries the step with its actions in a foot
-band.
+band. At the 640px minimum height the step body scrolls and the foot stays in
+view. The first question opens with Set up my own account chosen, the server
+step is titled Select a server in every state, and the one-time recovery
+phrase is revealed in the sheet Devices uses (`recovery-phrase-sheet.tsx`).
 Its versioned local checkpoint contains only nonsecret progress and display facts;
 invite, passphrase, entered recovery phrase and prepared recovery phrase values are held
 only in their live form or one-time sheet and are never encoded. Reopening
@@ -413,8 +416,11 @@ by hairlines: the value rows with Show/Hide and Copy at the trailing edge;
 Vault, Path, Version and Size; Read and Write access; Sharing. Editing a value
 puts Cancel and Save Changes in the bar (after the fields in the DOM, so Tab
 reaches them from the last field); Return in a field, ⌘Return and ⌘S save, and
-the panel then shows the fields it wrote for the new version until another
-version or a conceal replaces them. A store that cannot be read draws a
+the panel then shows the fields it wrote, the password masked, for the new
+version. They last as a shown value does: Hide, a selection change, another
+version, window blur or a conceal drops them, and a save that completes after
+one of these leaves none. The editor's plaintext is cleared once the write
+succeeds. A store that cannot be read draws a
 lock notice with Check Status and leaves every action disabled with its reason.
 The list foot holds the drop hint and the store's Uploads… sheet; the item
 sheets (New Password, New Document, New Folder, Rename or Move) carry the kind
@@ -636,7 +642,9 @@ the sidebar's selection. Teams lists the groups and
 shares — the group mark, name, server, the roster summary the per-group
 `list_group_details` call loaded on the last refresh, the role this Mac's
 account holds and a chip for an abnormal state — and the row itself is the
-button that opens that group's page, which returns here. One caption builder
+button that opens that group's page, which returns here; the rows are one
+listbox (one Tab stop, arrows, Home, End and type-select, Return opens the
+team). One caption builder
 writes the line under a group's name wherever one is listed — on Teams, on
 Accounts and on a server's page: what the object is ("Named group", "Ad-hoc
 share"), then the server it lives on, and the account it is held through only
@@ -645,7 +653,8 @@ the surface already says it: the server on a page that is about one server, the
 kind on Teams, whose Groups and Shares section labels say it one row above.
 The tab and its headings say Teams; the object in
 body copy is a group. Beside the row, not inside it, sits a menu of that
-group's actions; an action that does not apply stays, inert, with its reason in
+group's actions, out of the Tab order (`tabIndex=-1`): from the keyboard the
+row's ContextMenu key or Shift-F10 opens the same actions; an action that does not apply stays, inert, with its reason in
 the item's `title` — the server-dependent entries while its
 server is out of reach. Discovery is an occasional per-server action, not a
 landing surface: the bar's Find Teams menu lists each server this Mac signs in
@@ -679,8 +688,11 @@ list's three groups are Devices (a laptop or key glyph, the name, the kind and
 the role, and a “This device” chip on this Mac; a key on a card carries a Key on
 a card chip), Security keys (each enrollment with its Enrolled or Incomplete
 state) and Recovery phrases (each phrase's name). Actions belong to the
-selected entry and live in the details column, not on the rows: Remove… or
-Revoke… in its Danger zone, and on a security key's page the Card operations
+selected entry and live in the details column, not on the rows (a row's
+context menu repeats Show Details, Copy Device Key or Copy Backup ID and the
+page's Remove… or Revoke…, with the same reasons): Remove… or Revoke… in its
+Danger zone, each danger row a label and its consequence with the button
+trailing, and on a security key's page the Card operations
 group (Sync, Passphrase and Recovery rows, plus Provision… and PIN Status for
 the card connected now). The Security keys group is the one part of the page
 that is not about the account above it: enrollments are listed for the
@@ -700,7 +712,8 @@ and Resume Offer in step 1 and the phrase with Copy, and step 2 is quiet until
 there is one; entering a phrase is the other Mac's step 1 and this Mac's
 fields in step 2. A phrase that came from Resume says the agent is still
 holding that offer, and nothing counts down, because `PairingOffer` carries
-only an alias and a phrase. The recovery-phrase sheet reveals the 17 words the
+only an alias and a phrase. The recovery-phrase sheet (`RecoveryPhraseSheet`, the one first run
+uses too) reveals the 17 words the
 account's phrase is, one grid, not copyable, behind "I have written down these
 words" and Save Recovery Phrase. Cancel beside it discards the revealed phrase:
 `prepare_owner_backup` generates it and nothing else — it writes no local
@@ -758,8 +771,14 @@ the profile ids, when they differ. Older `section=` addresses — `credentials`,
 `notifications`, `device`, `about`, `agent`, `security-keys` — resolve to the
 page that holds their content.
 A server's own page
-carries a Check in its header, and the band a never-checked or lapsed server
-draws offers the same check beside the reason. Under the check-in rows the
+carries a Check in its header, and a server that is not in normal use draws a
+notice (a title, the reason, and an action where one helps: Check Now for a
+never-checked or lapsed server, Remove… for an identity mismatch). A server
+that has never been checked reads "Not verified" (with "Check this server
+before use") in the Servers list, on its page, in Activity and in Needs
+attention. A server is named by its label, else its address; "Loading…"
+stands in only while the server itself is unknown. The server's Security keys
+section comes before its danger zone. Under the check-in rows the
 page answers what stops if this server lapses: Accounts on
 this server (the account's mark, username and alias, with Accounts) and Teams on
 this server (each group or share on it, the same caption the other lists
@@ -874,7 +893,8 @@ offers no chat sit dimmed at the foot under "Chat unavailable" with the
 reason; shares are not listed. Unread counts use `--unread` wherever they
 appear.
 
-The column's search field filters teams and channels by name across the whole
+The column's search field (in the bar, with the placeholder "Search
+channels") filters teams and channels by name across the whole
 column — a team match keeps all of that team's channels, a channel match keeps
 its team's heading and that channel — and says when nothing matches.
 The input is a `type="search"` field with its own accessible name rather than a
@@ -935,14 +955,19 @@ backend validation. Input elements omit `maxLength` to prevent UTF-16
 truncation of Unicode scalar counts. Case folding normalizes one scalar per
 character (retaining the first mapped scalar) to align with backend length
 checks. Form submission via Enter is disabled whenever the Create button is
-disabled. The pane's empty state opens the same sheet on the team it is showing.
+disabled. The sheet opens without an error: when the team already has #general,
+the empty name field carries the hint "This team already has #general. Name the
+new channel." and the placeholder "e.g. planning" until the reader types in it.
+The pane's empty state opens the same sheet on the team it is showing.
 
 The conversation view is implemented in `chat-screen.tsx` and
 `chat/chat-thread.tsx`. Its bar names the channel (#name), with the channel's
 description (or its member count) beside it, an Admins or Restricted chip
 where one applies, and ⓘ, which opens `chat-info.tsx`: a third column when
 the window is at least 1100px wide (`COLUMN_QUERY`), and below that a dialog
-over the conversation, with the team column still visible to navigate away.
+over the conversation, which is dimmed under it (its bar with ⓘ stays clear),
+with the team column still visible to navigate away; a click on a channel
+there closes the panel.
 History, channel list and saved work reload with the inbox's own schedule and
 the sidebar's status line, so the bar carries no Refresh. Channel info shows
 the access line ("Member can read and write" — the visibility band is a FOKS
@@ -969,8 +994,8 @@ column stays and the pane carries the notice, with "Check in" opening that
 server in Settings › Account (its server page); every other unavailable state is stated without
 an action, because no button in Chat resolves it, and "Open Another Team" is
 offered only when another team can actually be opened. A location naming a team
-that has no chat says so in the pane rather than waiting for an inbox that will
-not arrive. A location naming a channel the team does not list _yet_ is the
+that has no chat says so in the pane, with Open Team, rather than waiting for
+an inbox that will not arrive. A location naming a channel the team does not list _yet_ is the
 opposite case: while that team has been invalidated and its next synchronization
 has not landed, the pane says it is loading rather than calling the channel
 unavailable, which is what a channel created a moment ago would otherwise read
