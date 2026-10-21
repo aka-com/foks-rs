@@ -157,6 +157,13 @@ export function MoveSheet({
         Enter the full path, including the new name, in an existing folder of{' '}
         {storeName}. An item already at that path is never overwritten.
       </p>
+      {valid && kindOf({ ...item, path: destination }) !== kindOf(item) ? (
+        <p className="hint">
+          {kindOf(item) === 'Password'
+            ? 'Outside /logins, this item is listed with Documents.'
+            : 'Under /logins, this item is listed with Passwords.'}
+        </p>
+      ) : null}
       {/* A refused destination is stated on the field itself; this is the
           account's access to the item, which no path can change. */}
       {problem ? (

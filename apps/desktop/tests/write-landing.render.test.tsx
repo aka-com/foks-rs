@@ -280,3 +280,22 @@ test('filesListShows follows the list rules for each place', async () => {
     false,
   );
 });
+
+test('the move sheet says when the destination changes how the item is listed', async () => {
+  const { store } = await mount();
+  await ui.act(async () => {
+    store.select({ store: 'acct:personal', path: '/env/prod/DATABASE_URL' });
+  });
+  await itemMenuAction('Rename or Move…');
+  const dialog = await ui.waitFor(() => {
+    const found = sheet('Rename or Move');
+    assert.ok(found);
+    return found;
+  });
+  const hint = 'Under /logins, this item is listed with Passwords.';
+  assert.equal(dialog.textContent?.includes(hint), false);
+  ui.fireEvent.change(ui.within(dialog).getByLabelText('Path'), {
+    target: { value: '/logins/DATABASE_URL' },
+  });
+  assert.equal(dialog.textContent?.includes(hint), true);
+});
