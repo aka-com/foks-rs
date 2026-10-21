@@ -268,3 +268,32 @@ test('Return in a sheet field presses its enabled default button, and only then'
   ui.fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
   assert.equal(presses, 1);
 });
+
+test('Escape belongs to the page: not from the sidebar, and from blank space it lands on the row', async () => {
+  const { store } = await mount(
+    {},
+    {
+      selection: { store: 'acct:personal', path: '/logins/github.com' },
+      details: true,
+    },
+  );
+  await ui.waitFor(() => assert.ok(document.querySelector('.details')));
+  const allItems = document.querySelector<HTMLButtonElement>(
+    '.side .nav[data-place="files"]',
+  )!;
+  allItems.focus();
+  key(allItems, { key: 'Escape' });
+  assert.equal(store.getSnapshot().selection?.path, '/logins/github.com');
+
+  // A click on blank space leaves the focus on <body>; Escape there clears
+  // the selection and puts the focus on the row that was selected.
+  allItems.blur();
+  key(document.body, { key: 'Escape' });
+  assert.equal(store.getSnapshot().selection, null);
+  await ui.waitFor(() =>
+    assert.equal(
+      (document.activeElement as HTMLElement | null)?.dataset.rowKey,
+      'acct:personal|/logins/github.com',
+    ),
+  );
+});
