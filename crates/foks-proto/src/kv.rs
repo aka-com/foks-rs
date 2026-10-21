@@ -4,8 +4,9 @@ use std::collections::BTreeMap;
 
 use crate::codec::value_name;
 use crate::{
-    array, binary, boolean, decode, encode, expect_unsigned, fixed_blob, list, option, role,
-    unsigned, variant, EntityId, Error, Result, Role, RoleAndGeneration, SecretBox, Value,
+    array, array_at_least, binary, boolean, decode, encode, expect_unsigned, fixed_blob, list,
+    option, role, unsigned, unsigned_rpc_fields, variant, EntityId, Error, Result, Role,
+    RoleAndGeneration, SecretBox, Value,
 };
 
 /// Hard protocol-policy bounds shared by storage admission and client sync.
@@ -110,8 +111,10 @@ impl KvPathVersionVector {
         Self::from_value(&decode(bytes)?)
     }
 
+    /// An unsigned RPC argument and status payload that both sides only read,
+    /// so fields appended at any level are accepted and discarded.
     pub fn from_value(value: &Value) -> Result<Self> {
-        let fields = array(value, 2)?;
+        let fields = unsigned_rpc_fields(value, 2)?;
         Ok(Self {
             root_version: unsigned(&fields[0])?,
             directories: list(&fields[1], kv_directory_version)?,
@@ -320,9 +323,11 @@ impl KvDirectoryPair {
         })
     }
 
+    /// The pair is an unsigned response wrapper around exact directories.
+    /// Appended fields are accepted and retained in [`Self::encoded`].
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = decode(bytes)?;
-        let fields = array(&value, 2)?;
+        let fields = array_at_least(&value, 2)?;
         Ok(Self {
             active: kv_directory(&fields[0])?,
             encrypting: option(&fields[1], kv_directory)?,
@@ -468,9 +473,11 @@ impl KvGetResponse {
         })
     }
 
+    /// An unsigned response wrapper around an exact dirent and node. Appended
+    /// fields are accepted and retained in [`Self::encoded`].
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = decode(bytes)?;
-        let fields = array(&value, 2)?;
+        let fields = array_at_least(&value, 2)?;
         Ok(Self {
             dirent: kv_dirent(&fields[0])?,
             node: option(&fields[1], KvNode::from_value)?,
@@ -536,9 +543,12 @@ impl KvListResponse {
         })
     }
 
+    /// An unsigned response wrapper around exact dirents and small-file
+    /// boxes. Appended fields, here or in an extended entry, are accepted and
+    /// retained in [`Self::encoded`].
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = decode(bytes)?;
-        let fields = array(&value, 3)?;
+        let fields = array_at_least(&value, 3)?;
         Ok(Self {
             entries: list(&fields[0], kv_dirent)?,
             final_page: boolean(&fields[1])?,
@@ -737,12 +747,14 @@ pub struct KvUsage {
 }
 
 impl KvUsage {
+    /// An unsigned result the client only reads; fields appended at any level
+    /// are accepted and discarded.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = decode(bytes)?;
-        let fields = array(&value, 2)?;
-        let small = array(&fields[0], 2)?;
-        let large = array(&fields[1], 2)?;
-        let large_base = array(&large[0], 2)?;
+        let fields = unsigned_rpc_fields(&value, 2)?;
+        let small = unsigned_rpc_fields(&fields[0], 2)?;
+        let large = unsigned_rpc_fields(&fields[1], 2)?;
+        let large_base = unsigned_rpc_fields(&large[0], 2)?;
         Ok(Self {
             small: KvUsageStats {
                 number: unsigned(&small[0])?,
@@ -787,9 +799,11 @@ pub struct KvEncryptedChunk {
 }
 
 impl KvEncryptedChunk {
+    /// An unsigned result the client only reads (the ciphertext is
+    /// authenticated on its own); appended fields are accepted and discarded.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = decode(bytes)?;
-        let fields = array(&value, 3)?;
+        let fields = unsigned_rpc_fields(&value, 3)?;
         Ok(Self {
             ciphertext: binary(&fields[0])?.to_vec(),
             offset: unsigned(&fields[1])?,
@@ -973,7 +987,7 @@ fn kv_directory_status(value: &Value) -> Result<KvDirectoryStatus> {
 }
 
 fn kv_dirent_version(value: &Value) -> Result<KvDirentVersion> {
-    let fields = array(value, 2)?;
+    let fields = unsigned_rpc_fields(value, 2)?;
     Ok(KvDirentVersion {
         id: fixed_blob(&fields[0], "KV dirent version ID")?,
         version: unsigned(&fields[1])?,
@@ -981,7 +995,7 @@ fn kv_dirent_version(value: &Value) -> Result<KvDirentVersion> {
 }
 
 fn kv_directory_version(value: &Value) -> Result<KvDirectoryVersion> {
-    let fields = array(value, 3)?;
+    let fields = unsigned_rpc_fields(value, 3)?;
     Ok(KvDirectoryVersion {
         id: fixed_blob(&fields[0], "KV directory version ID")?,
         version: unsigned(&fields[1])?,
@@ -1036,7 +1050,7 @@ fn kv_small_file_box(value: &Value) -> Result<KvSmallFileBox> {
 }
 
 fn kv_extended_dirent(value: &Value) -> Result<KvExtendedDirent> {
-    let fields = array(value, 2)?;
+    let fields = array_at_least(value, 2)?;
     Ok(KvExtendedDirent {
         position: unsigned(&fields[0])?,
         small_file: kv_small_file_box(&fields[1])?,

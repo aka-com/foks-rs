@@ -1,6 +1,10 @@
+//! Client-version and device-count values exchanged at login. All are unsigned
+//! RPC arguments or results that the receiver only reads, so each decoder
+//! accepts fields appended by a later release and discards them.
+
 use foks_snowpack::{decode, encode, Value};
 
-use crate::{array, boolean, option, type_error, unsigned, Result};
+use crate::{boolean, option, type_error, unsigned, unsigned_rpc_fields, Result};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SemVer {
@@ -19,7 +23,7 @@ impl SemVer {
     }
 
     fn from_value(value: &Value) -> Result<Self> {
-        let fields = array(value, 3)?;
+        let fields = unsigned_rpc_fields(value, 3)?;
         Ok(Self {
             major: unsigned(&fields[0])?,
             minor: unsigned(&fields[1])?,
@@ -46,7 +50,7 @@ impl ClientVersionExt {
 
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = decode(bytes)?;
-        let fields = array(&value, 3)?;
+        let fields = unsigned_rpc_fields(&value, 3)?;
         let Value::Text(linker_version) = &fields[1] else {
             return Err(type_error("text", &fields[1]));
         };
@@ -79,7 +83,7 @@ impl ServerClientVersionInfo {
 
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = decode(bytes)?;
-        let fields = array(&value, 3)?;
+        let fields = unsigned_rpc_fields(&value, 3)?;
         let Value::Text(message) = &fields[2] else {
             return Err(type_error("text", &fields[2]));
         };
@@ -107,7 +111,7 @@ impl DeviceNagInfo {
 
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = decode(bytes)?;
-        let fields = array(&value, 2)?;
+        let fields = unsigned_rpc_fields(&value, 2)?;
         Ok(Self {
             num_devices: unsigned(&fields[0])?,
             cleared: boolean(&fields[1])?,

@@ -1,8 +1,8 @@
 //! Pinned Go OIDC wire objects. Decoding establishes shape, never authorization.
 use crate::{
-    array, binary, boolean, decode, encode, entity, fixed_blob, option, text, unsigned, variant,
-    EntityId, Error, Result, Signature, TreeRoot, UsernameReservation, Value, ENTITY_HOST,
-    ENTITY_USER,
+    array, binary, boolean, decode, encode, entity, fixed_blob, option, text, unsigned,
+    unsigned_rpc_fields, variant, EntityId, Error, Result, Signature, TreeRoot,
+    UsernameReservation, Value, ENTITY_HOST, ENTITY_USER,
 };
 use zeroize::Zeroizing;
 
@@ -68,7 +68,7 @@ impl OAuth2Config {
         ])
     }
     fn parse(v: &Value) -> Result<Self> {
-        let f = array(v, 5)?;
+        let f = unsigned_rpc_fields(v, 5)?;
         Ok(Self {
             id: fixed_blob(&f[0], "SSO config ID")?,
             config_uri: text(&f[1])?,
@@ -99,9 +99,11 @@ pub enum SsoProtocol {
     Saml = 2,
 }
 impl SsoConfig {
+    /// An unsigned result the client only reads; appended fields, here or in
+    /// the OAuth2 configuration, are accepted and discarded.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let v = decode(bytes)?;
-        let f = array(&v, 2)?;
+        let f = unsigned_rpc_fields(&v, 2)?;
         let active = match unsigned(&f[0])? {
             0 => SsoProtocol::None,
             1 => SsoProtocol::Oauth2,
@@ -175,9 +177,11 @@ pub struct OAuth2TokenSet {
     pub username: String,
 }
 impl OAuth2TokenSet {
+    /// An unsigned result the client only reads; appended fields are accepted
+    /// and discarded. The signed binding is a separate, exact object.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let v = decode(bytes)?;
-        let f = array(&v, 4)?;
+        let f = unsigned_rpc_fields(&v, 4)?;
         Ok(Self {
             access_token: OAuth2Secret::parse(&f[0])?,
             id_token: OAuth2Secret::parse(&f[1])?,
@@ -205,9 +209,11 @@ impl std::fmt::Debug for OAuth2PollResult {
     }
 }
 impl OAuth2PollResult {
+    /// An unsigned result the client only reads; appended fields are accepted
+    /// and discarded. The username reservation inside it stays exact.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let v = decode(bytes)?;
-        let f = array(&v, 2)?;
+        let f = unsigned_rpc_fields(&v, 2)?;
         Ok(Self {
             tokens: OAuth2TokenSet::decode(&encode(&f[0])?)?,
             reservation: UsernameReservation::decode(&encode(&f[1])?)?,
@@ -292,7 +298,9 @@ impl RegSsoArgs {
         match unsigned(&f[0])? {
             0 if f[1] == Value::Variant(None) => Ok(Self::None),
             1 => {
-                let a = array(variant(&f[1], "1")?, 2)?;
+                // The arm is an unsigned argument struct; the binding inside it
+                // is signed and stays exact.
+                let a = unsigned_rpc_fields(variant(&f[1], "1")?, 2)?;
                 Ok(Self::Oauth2 {
                     id: OAuth2SessionId::parse(&a[0])?,
                     binding: OAuth2IdTokenBinding::decode(&encode(&a[1])?)?,
@@ -327,9 +335,11 @@ pub struct InitOAuth2SessionArgument {
     pub uid: Option<EntityId>,
 }
 impl InitOAuth2SessionArgument {
+    /// An unsigned argument the server only reads; appended fields are
+    /// accepted and discarded.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let v = decode(bytes)?;
-        let f = array(&v, 4)?;
+        let f = unsigned_rpc_fields(&v, 4)?;
         Ok(Self {
             id: OAuth2SessionId::parse(&f[0])?,
             pkce_verifier: OAuth2Secret::parse(&f[1])?,
@@ -358,9 +368,11 @@ pub struct PollOAuth2SessionArgument {
     pub for_login: bool,
 }
 impl PollOAuth2SessionArgument {
+    /// An unsigned argument the server only reads; appended fields are
+    /// accepted and discarded.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let v = decode(bytes)?;
-        let f = array(&v, 3)?;
+        let f = unsigned_rpc_fields(&v, 3)?;
         Ok(Self {
             id: OAuth2SessionId::parse(&f[0])?,
             wait_duration_ms: unsigned(&f[1])?,
@@ -381,9 +393,11 @@ pub struct SsoLoginArgument {
     pub args: RegSsoArgs,
 }
 impl SsoLoginArgument {
+    /// An unsigned argument the server only reads; appended fields are
+    /// accepted and discarded.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let v = decode(bytes)?;
-        let f = array(&v, 2)?;
+        let f = unsigned_rpc_fields(&v, 2)?;
         Ok(Self {
             uid: entity(&f[0])?.require_type(ENTITY_USER)?,
             args: RegSsoArgs::decode(&encode(&f[1])?)?,

@@ -1,8 +1,9 @@
 //! Interactive software-device key exchange values from FOKS v0.1.9.
 
 use crate::{
-    array, decode, encode, entity, fixed_blob, option, text, unsigned, DeviceLabel, DeviceType,
-    EntityId, Hepk, Result, SecretBox, Signature, StretchVersion, UserLink, Value,
+    array, decode, encode, entity, fixed_blob, option, text, unsigned, unsigned_rpc_fields,
+    DeviceLabel, DeviceType, EntityId, Hepk, Result, SecretBox, Signature, StretchVersion,
+    UserLink, Value,
 };
 use zeroize::Zeroize as _;
 
@@ -85,9 +86,11 @@ pub struct KexSendArgument {
 }
 
 impl KexSendArgument {
+    /// An unsigned relay argument the server only reads; appended fields are
+    /// accepted and discarded. The signed wrapper message stays exact.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = decode(bytes)?;
-        let fields = array(&value, 3)?;
+        let fields = unsigned_rpc_fields(&value, 3)?;
         Ok(Self {
             message: KexWrapperMessage::from_value(&fields[0])?,
             signature: crate::host::signature(&fields[1])?,
@@ -114,9 +117,11 @@ pub struct KexReceiveArgument {
 }
 
 impl KexReceiveArgument {
+    /// An unsigned relay argument the server only reads; appended fields are
+    /// accepted and discarded.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = decode(bytes)?;
-        let fields = array(&value, 5)?;
+        let fields = unsigned_rpc_fields(&value, 5)?;
         Ok(Self {
             session_id: fixed_blob(&fields[0], "KEX session ID")?,
             receiver: entity(&fields[1])?,

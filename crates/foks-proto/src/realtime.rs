@@ -1,7 +1,8 @@
 //! Pinned v0.1.9 realtime wire values. Authorization belongs to the service/client.
 use crate::{
     array, binary, boolean, decode_grown, entity, fixed_blob, integer, list, option, unsigned,
-    variant, Error, FqParty, Result, Role, RoleAndGeneration, SecretBox, TrailingFields, Value,
+    unsigned_rpc_fields, variant, Error, FqParty, Result, Role, RoleAndGeneration, SecretBox,
+    TrailingFields, Value,
 };
 use foks_snowpack::{decode_sensitive, encode_ref, ValueRef};
 use zeroize::{Zeroize, Zeroizing};
@@ -232,14 +233,32 @@ rt_entity!(
     crate::ENTITY_USER | crate::ENTITY_NAMED_TEAM | crate::ENTITY_AD_HOC_TEAM
 );
 
-/// Positional realtime structs. The plain form decodes with an exact field
-/// count, as signed, hashed or re-served canonical objects require. The
-/// `grown` form is for unsigned RPC structs that upstream extends by appending
-/// fields: the listed optional fields decode as their default when a peer
-/// omits them and are encoded only up to the last non-default one (or as far
-/// as a decoded value carried them), and fields after them are retained in
-/// `trailing` so a decoded value re-encodes to the same bytes.
+/// Positional realtime structs, following the decoding policy in
+/// `trailing.rs`. The plain form decodes with an exact field count, as signed,
+/// hashed or re-served canonical objects require. The `grown` form is for
+/// unsigned RPC structs that upstream extends by appending fields: the listed
+/// optional fields decode as their default when a peer omits them and are
+/// encoded only up to the last non-default one (or as far as a decoded value
+/// carried them), and fields after them are retained in `trailing` so a
+/// decoded value re-encodes to the same bytes. The `tolerant` form is for
+/// unsigned RPC arguments and results that the receiver only reads: fields
+/// after the known ones are accepted and discarded, and encoding is the same
+/// as the plain form.
 macro_rules! rt_struct {
+    ($name:ident {$($field:ident : $ty:ty),+ $(,)?} tolerant) => {
+        #[derive(Clone,Debug,Eq,PartialEq)]
+        pub struct $name {$(pub $field:$ty),+}
+        impl RealtimeWire for $name {
+            fn validate(&self)->Result<()> { $(self.$field.validate()?;)+ Ok(()) }
+            fn to_value_ref(&self)->ValueRef<'_>{ValueRef::Array(vec![$(self.$field.to_value_ref()),+])}
+            fn to_value(&self)->Value{Value::Array(vec![$(RealtimeWire::to_value(&self.$field)),+])}
+            fn from_value(v:&Value)->Result<Self>{
+                let fields=unsigned_rpc_fields(v,[$(stringify!($field)),+].len())?;
+                let mut fields=fields.iter();
+                Ok(Self{$($field:<$ty>::from_value(fields.next().expect("validated field count"))?),+})
+            }
+        }
+    };
     ($name:ident {$($field:ident : $ty:ty),+ $(,)?} grown {$($opt:ident : $oty:ty),+ $(,)?}) => {
         #[derive(Clone,Debug,Eq,PartialEq)]
         pub struct $name {$(pub $field:$ty,)+ $(pub $opt:$oty,)+ pub trailing:TrailingFields}
@@ -531,37 +550,39 @@ rt_struct!(RtMessageMetadata { id: RtMessageId, previous_id: RtMessageId, previo
 
 rt_struct!(RtMessageNoncer { metadata: RtMessageMetadata, sender: Option<FqParty>, app: RtAppId, team: FqParty, channel: RtChannelId });
 
-rt_struct!(RtLastMessage { sequence: u64, kind: RtMessageType, insert_time: u64, sender: Option<RtPartyId>, further_user_attribution: Option<RtUserId> });
+// Unsigned and read-only: the Rust server stores only the activity record it
+// generated and refuses one supplied in rtNewChannel.
+rt_struct!(RtLastMessage { sequence: u64, kind: RtMessageType, insert_time: u64, sender: Option<RtPartyId>, further_user_attribution: Option<RtUserId> } tolerant);
 
 // go-foks c334c97 appended `noPush @13`; not hashed or signed, and re-served
 // by the Rust server to other members, so unknown later fields are retained.
 rt_struct!(RtChannelMetadata { id: RtChannelId, team: RtTeamId, app: RtAppId, sequence: u64, name: RtBox, description: Option<RtBox>, roles: RtRolePair, last_message: Option<RtLastMessage>, ctime: u64, mtime: u64, updated_at: u64, tier: RtChannelTier, unreadable: bool } grown { no_push: bool });
 
-rt_struct!(RtChannelSet { version: u64, channels: Vec<RtChannelMetadata>, mtime: u64 });
+rt_struct!(RtChannelSet { version: u64, channels: Vec<RtChannelMetadata>, mtime: u64 } tolerant);
 
-rt_struct!(RtInboxKey { app: RtAppId });
+rt_struct!(RtInboxKey { app: RtAppId } tolerant);
 
 rt_struct!(RtChangedThreads {
     app: RtAppId,
     since: u64,
     maximum: u64
-});
+} tolerant);
 
 rt_struct!(RtReadThrough {
     channel: RtChannelId,
     sequence: u64
-});
+} tolerant);
 
 rt_struct!(RtPollInbox {
     app: RtAppId,
     since: u64,
     timeout_milliseconds: u64
-});
+} tolerant);
 
 rt_struct!(RtInboxPollResult {
     bumped: bool,
     inbox_version: u64
-});
+} tolerant);
 
 rt_struct!(RtInboxChannel {
     metadata: RtChannelMetadata,
@@ -569,9 +590,9 @@ rt_struct!(RtInboxChannel {
     read_through: u64,
     hidden: bool,
     muted: bool
-});
+} tolerant);
 
-rt_struct!(RtInboxDelta { inbox_version: u64, app: RtAppId, channels: Vec<RtInboxChannel> });
+rt_struct!(RtInboxDelta { inbox_version: u64, app: RtAppId, channels: Vec<RtInboxChannel> } tolerant);
 
 rt_struct!(RtSend {
     metadata: RtMessageMetadata,
@@ -595,52 +616,52 @@ pub type RtSendResult = ChatSendReceipt;
 rt_struct!(RtThreadRange {
     start: u64,
     end: u64
-});
+} tolerant);
 
-rt_struct!(RtThreadQuery { channel: RtChannelId, ranges: Vec<RtThreadRange>, sequences: Vec<u64> });
+rt_struct!(RtThreadQuery { channel: RtChannelId, ranges: Vec<RtThreadRange>, sequences: Vec<u64> } tolerant);
 
 rt_struct!(RtMessage { metadata: RtMessageMetadata, wrapper: RtMessageWrapper, sequence: u64, sender: Option<RtPartyId>, insert_time: u64 });
 
-rt_struct!(RtMessageList { messages: Vec<RtMessage> });
+rt_struct!(RtMessageList { messages: Vec<RtMessage> } tolerant);
 
-rt_struct!(RtThreadPage { ranges: Vec<RtMessageList>, sequences: Vec<RtMessage> });
+rt_struct!(RtThreadPage { ranges: Vec<RtMessageList>, sequences: Vec<RtMessage> } tolerant);
 
 rt_struct!(RtCreateChannelArgument {
     metadata: RtChannelMetadata,
     set_version: u64
-});
+} tolerant);
 
 rt_struct!(RtListChannelsArgument {
     team: RtTeamId,
     app: RtAppId,
     last: u64
-});
+} tolerant);
 
-rt_struct!(RtSendArgument { send: RtSend });
+rt_struct!(RtSendArgument { send: RtSend } tolerant);
 
 rt_struct!(RtGetThreadArgument {
     query: RtThreadQuery
-});
+} tolerant);
 
-rt_struct!(RtGetInboxVersionArgument { key: RtInboxKey });
+rt_struct!(RtGetInboxVersionArgument { key: RtInboxKey } tolerant);
 
 rt_struct!(RtGetChangedThreadsArgument {
     query: RtChangedThreads
-});
+} tolerant);
 
 rt_struct!(RtReadThroughArgument {
     read: RtReadThrough
-});
+} tolerant);
 
-rt_struct!(RtPollInboxArgument { poll: RtPollInbox });
+rt_struct!(RtPollInboxArgument { poll: RtPollInbox } tolerant);
 
-rt_struct!(RtSelectVhostArgument { host: RtHostId });
+rt_struct!(RtSelectVhostArgument { host: RtHostId } tolerant);
 
 rt_struct!(RtRecentsArgument {
     channel: RtChannelId,
     stop_at: u64,
     limit: u64
-});
+} tolerant);
 
 fn borrowed_arm<'a>(kind: u64, tag: &'a [u8], payload: ValueRef<'a>) -> ValueRef<'a> {
     ValueRef::Array(vec![

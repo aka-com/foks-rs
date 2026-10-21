@@ -1,8 +1,9 @@
 //! Passphrase-encryption (PPE) values from the FOKS v0.1.9 protocol.
 
 use crate::{
-    array, encode, entity, fixed_blob, role, unsigned, DhPublicKey, EntityId, Error, Hepk,
-    HybridBox, Result, Role, SecretBox, Value, ENTITY_HOST, ENTITY_PASSPHRASE_KEY, ENTITY_USER,
+    array, encode, entity, fixed_blob, role, unsigned, unsigned_rpc_fields, DhPublicKey, EntityId,
+    Error, Hepk, HybridBox, Result, Role, SecretBox, Value, ENTITY_HOST, ENTITY_PASSPHRASE_KEY,
+    ENTITY_USER,
 };
 use zeroize::Zeroize;
 
@@ -386,9 +387,11 @@ fn optional_puk_box(value: &Value) -> Result<Option<PpePukBox>> {
 }
 
 impl PassphraseLoginResult {
+    /// An unsigned result the client only reads; appended fields are accepted
+    /// and discarded. Both boxes stay exact.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = crate::decode(bytes)?;
-        let fields = array(&value, 3)?;
+        let fields = unsigned_rpc_fields(&value, 3)?;
         let generation = unsigned(&fields[0])?;
         let skmwk_box = crate::kv::secret_box(&fields[1])?;
         let passphrase_box = PpePassphraseBox::decode(&encode(&fields[2])?)?;

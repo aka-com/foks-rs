@@ -1,8 +1,8 @@
 //! Pinned invitation values. A certificate preview is not a membership proof.
 use crate::{
-    array, binary, decode, encode, entity, fixed_blob, list, option, text, unsigned, variant,
-    EntityId, Error, FqTeam, Hepk, Result, Role, Signature, UserSharedKey, Value, ENTITY_HOST,
-    ENTITY_PTK_VERIFY,
+    array, binary, decode, encode, entity, fixed_blob, list, option, text, unsigned,
+    unsigned_rpc_fields, variant, EntityId, Error, FqTeam, Hepk, Result, Role, Signature,
+    UserSharedKey, Value, ENTITY_HOST, ENTITY_PTK_VERIFY,
 };
 pub const TEAM_CERT_TYPE_ID: u64 = 0xbfde7f0ac7a3b707;
 pub const TEAM_CERT_SIGNED_TYPE_ID: u64 = 0xd7e2d164a441663b;
@@ -228,9 +228,11 @@ pub struct TeamCertificateAndMetadata {
     pub index_range: crate::RationalRange,
 }
 impl TeamCertificateAndMetadata {
+    /// An unsigned result around an exact certificate; the client only reads
+    /// it, so appended fields are accepted and discarded.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let v = bounded(bytes)?;
-        let f = array(&v, 2)?;
+        let f = unsigned_rpc_fields(&v, 2)?;
         Ok(Self {
             certificate: TeamCertificate::decode(&encode(&f[0])?)?,
             index_range: crate::RationalRange::decode(&encode(&f[1])?)?,
@@ -379,9 +381,11 @@ pub struct InboxPagination {
     pub limit: u64,
 }
 impl InboxPagination {
+    /// An unsigned argument the server only reads; appended fields are
+    /// accepted and discarded.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let v = bounded(bytes)?;
-        let f = array(&v, 3)?;
+        let f = unsigned_rpc_fields(&v, 3)?;
         Ok(Self {
             start: unsigned(&f[0])?,
             end: unsigned(&f[1])?,
@@ -413,8 +417,11 @@ pub struct RawInboxRow {
     pub request: RawInboxRequest,
 }
 impl RawInboxRow {
+    /// Inbox rows are unsigned results the admin's client only reads, so the
+    /// row and its local and remote arms accept appended fields and discard
+    /// them. The remote join request inside an arm stays exact.
     fn from_value(v: &Value) -> Result<Self> {
-        let f = array(v, 3)?;
+        let f = unsigned_rpc_fields(v, 3)?;
         let state = match unsigned(&f[1])? {
             0 => JoinRequestState::Pending,
             1 => JoinRequestState::Approved,
@@ -426,7 +433,7 @@ impl RawInboxRow {
         let tag = unsigned(&row[0])?;
         let (rsvp, request) = match tag {
             1 => {
-                let x = array(variant(&row[1], "1")?, 4)?;
+                let x = unsigned_rpc_fields(variant(&row[1], "1")?, 4)?;
                 let r = TeamRsvp::decode(&encode(&x[0])?)?;
                 if r.is_remote() {
                     return Err(Error::IntegerRange("local RSVP"));
@@ -445,7 +452,7 @@ impl RawInboxRow {
                 )
             }
             2 => {
-                let x = array(variant(&row[1], "2")?, 2)?;
+                let x = unsigned_rpc_fields(variant(&row[1], "2")?, 2)?;
                 let r = TeamRsvp::decode(&encode(&x[0])?)?;
                 if !r.is_remote() {
                     return Err(Error::IntegerRange("remote RSVP"));
@@ -497,7 +504,7 @@ pub fn decode_team_inbox(bytes: &[u8]) -> Result<Vec<RawInboxRow>> {
         return Err(Error::IntegerRange("inbox byte limit"));
     }
     let v = decode(bytes)?;
-    let f = array(&v, 1)?;
+    let f = unsigned_rpc_fields(&v, 1)?;
     if matches!(&f[0],Value::Array(rows) if rows.len()>2000) {
         return Err(Error::IntegerRange("inbox row limit"));
     }

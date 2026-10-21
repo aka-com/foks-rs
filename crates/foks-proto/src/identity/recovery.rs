@@ -95,7 +95,8 @@ impl LookupUserResult {
 
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let wire = decode(bytes)?;
-        let fields = array(&wire, 5)?;
+        // An unsigned result the client only reads.
+        let fields = crate::unsigned_rpc_fields(&wire, 5)?;
         let fqu = array(&fields[0], 2)?;
         Ok(Self {
             uid: entity(&fqu[0])?.require_type(ENTITY_USER)?,

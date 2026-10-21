@@ -91,7 +91,10 @@ fn list_value(values: Vec<Value>) -> Value {
 impl UserChain {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let wire = decode(bytes)?;
-        let fields = array(&wire, 8)?;
+        // The response wrapper is unsigned; appended fields are accepted and
+        // retained in `exact_bytes`. Links, paths and HEPKs inside it keep
+        // their own exact decoders.
+        let fields = crate::array_at_least(&wire, 8)?;
         let links = list(&fields[0], user_link)?;
         let locations = list(&fields[1], |value| fixed_blob(value, "tree location"))?;
         let usernames = list(&fields[2], name_commitment_and_key)?;

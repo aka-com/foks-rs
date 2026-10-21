@@ -278,6 +278,69 @@ Behaviour adopted from main so far:
   without an owner, while `foks_verify` refuses such a link in replay as
   well, so a team that go-foks stranded does not load in a Rust client.
 
+## Decoding structs that upstream grows
+
+go-foks extends positional structs by appending fields, and its generated
+code tolerates both directions: go-codec ignores array elements beyond the
+fields a struct declares and decodes missing trailing fields as zero values.
+Upstream documents the convention in the field comments of `wasReplay` and
+`noPush` ("old servers omit the field"). A Rust decoder that insists on an
+exact field count turns each such addition into an interoperability break,
+as the realtime results in go-foks main showed. The Rust decoders therefore
+follow one rule, stated in `crates/foks-proto/src/trailing.rs`:
+
+- **Canonical objects decode exactly.** A struct that is signed, hashed,
+  MAC'd, used as a key-derivation or nonce input, sealed as a box plaintext,
+  or digested by a server keeps its exact field count, as does every struct
+  nested inside one. Rust-only extensions that carry their own version number
+  and are specified to fail closed (`RtChatCapabilities`) are also exact.
+  Where a canonical object is already designed to grow (the Merkle root and
+  public zone inside their signed blobs, the optional certificate name), its
+  decoder accepts the documented lengths and the verifier checks signatures
+  over the bytes it received.
+- **Unsigned RPC arguments and results accept a trailing tail.** They require
+  their known fields and accept any number after them.
+- **The tail is retained wherever the receiver encodes the value again**:
+  when it stores it, re-serves it, forwards it or compares it as bytes.
+  Types that keep their decoded bytes (`KvListResponse`, `KvGetResponse`,
+  `KvDirectoryPair`, `UserChain`, `TeamChain`) retain it in those bytes;
+  `RtChannelMetadata` and `ChatSendReceipt` retain it in a `TrailingFields`
+  value. A value that is only read may discard the tail; those decoders call
+  `unsigned_rpc_fields`.
+
+Encoders do not change: a value the Rust code constructs encodes exactly the
+fields the pinned release defines, so v0.1.9 peers receive the same bytes as
+before. `crates/foks-proto/tests/forward_tolerance.rs` checks, for v0.1.9
+fixtures and constructed values, that each converted decoder still
+re-encodes the original bytes, accepts appended fields and (where required)
+retains them, and still refuses a missing field, and that canonical objects
+refuse an appended field.
+
+The audit applied this rule to every typed decoder in `foks-proto`:
+
+| Area | Tolerant (unsigned RPC) | Exact |
+| --- | --- | --- |
+| Realtime | channel set, inbox key, delta, channel and poll result, thread query and range, message list, thread page, last-message record, every method argument wrapper; `RTSendRes` and `RTChannelMetadata` with retained optional fields | message metadata, noncer, message, message box, body, wrapper, ciphertext (hashed or nonce inputs); `RtSend` (the server compares it for replay); name box and role pair inside re-served metadata; chat capabilities (versioned extension) |
+| KV | get, list and directory-pair responses (retained), extended dirent, usage, encrypted chunk, path version vector | root, directory, dirent, small-file box, large-file metadata (MAC'd or stored and compared); upload chunk (digested by the server); small-file plaintext |
+| Teams, invitations, federation | certificate lookup result, inbox pagination, inbox rows, remote view-token set, chain responses (retained), team edit result, team configuration, activated view | certificates, invites, permission payloads, view tokens, removal MACs and boxes, challenges, join-request payloads; the stored remote join request |
+| Users, SSO, KEX, configuration | login result, username change, client version, version info, device nag, SSO configuration, token set, poll result, session and login arguments, KEX relay arguments, registration and host configuration, user lookup, Merkle lookup and historical-root results | chain links, HEPKs, reservations, invite codes, OAuth2 bindings, PPE boxes and parcels, key boxes, KEX wrapper and cleartext, YubiKey values, identity-status proofs |
+
+Mutation arguments that carry signed links and canonical zero fields (signup,
+provisioning, team creation and edits, revocation, passphrase updates), the
+hand-written server argument decoders in `foks-rpc`, and the realtime send
+argument are still exact; converting them requires deciding how the server
+treats a tail it would store or compare.
+
+The drift extractor records the positional layout of every generated go-foks
+struct in a separate artifact, `upstream-v0.1.9-structs.json`, so that the
+pinned protocol artifact and its digest (which hosted compatibility
+artifacts commit to) are unaffected. `diff` reports fields appended to an
+unchanged prefix as `struct_grown`: additive when the policy lists the struct
+in a `[[tolerant_struct]]` table, review-required otherwise. A removed,
+renamed, retyped or reordered field is `struct_changed`. Against go-foks main
+(`35dc037`) the two grown structs, `RTSendRes` and `RTChannelMetadata`, are
+classified as tolerated growth.
+
 ## Quirks preserved bug-for-bug
 
 Differential testing finds the places where the reference implementation

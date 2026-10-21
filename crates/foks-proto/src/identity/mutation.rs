@@ -1157,7 +1157,7 @@ impl TeamConfig {
 
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = decode(bytes)?;
-        let fields = array(&value, 1)?;
+        let fields = crate::unsigned_rpc_fields(&value, 1)?;
         let maximum_roles = unsigned(&fields[0])?;
         if maximum_roles == 0 {
             return Err(Error::IntegerRange("team maximum roles"));
@@ -1169,9 +1169,9 @@ impl TeamConfig {
 impl TeamEditResult {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = decode(bytes)?;
-        let fields = array(&value, 1)?;
+        let fields = crate::unsigned_rpc_fields(&value, 1)?;
         let invitees = crate::list(&fields[0], |value| {
-            let fields = array(value, 2)?;
+            let fields = crate::unsigned_rpc_fields(value, 2)?;
             Ok((entity(&fields[0])?, role(&fields[1])?))
         })?;
         Ok(Self {
@@ -1263,9 +1263,9 @@ impl RegServerConfig {
 
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let wire = decode(bytes)?;
-        let fields = array(&wire, 4)?;
+        let fields = crate::unsigned_rpc_fields(&wire, 4)?;
         let host_type = unsigned(&fields[1])?;
-        let viewership = array(&fields[2], 2)?;
+        let viewership = crate::unsigned_rpc_fields(&fields[2], 2)?;
         let invite_code_regime = unsigned(&fields[3])?;
         if host_type > 4 || invite_code_regime > 3 {
             return Err(Error::IntegerRange(
@@ -1301,9 +1301,9 @@ impl HostConfig {
 
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let wire = decode(bytes)?;
-        let fields = array(&wire, 4)?;
-        let metering = array(&fields[0], 3)?;
-        let viewership = array(&fields[1], 2)?;
+        let fields = crate::unsigned_rpc_fields(&wire, 4)?;
+        let metering = crate::unsigned_rpc_fields(&fields[0], 3)?;
+        let viewership = crate::unsigned_rpc_fields(&fields[1], 2)?;
         let host_type = unsigned(&fields[2])?;
         let invite_code_regime = unsigned(&fields[3])?;
         if host_type > 4 || invite_code_regime > 3 {

@@ -199,7 +199,9 @@ impl MerklePathCompressed {
 impl MerkleLookupResponse {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = decode(bytes)?;
-        let fields = array(&value, 3)?;
+        // Unsigned response wrappers around a signed root and hashed paths:
+        // appended fields are accepted and discarded, the contents stay exact.
+        let fields = crate::unsigned_rpc_fields(&value, 3)?;
         Ok(Self {
             root: MerkleRoot::decode(&encode(&fields[0])?)?,
             path: merkle_path(&Value::Array(vec![fields[1].clone(), fields[2].clone()]))?,
@@ -221,7 +223,7 @@ impl MerkleLookupResponse {
 impl MerkleMultiLookupResponse {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = decode(bytes)?;
-        let fields = array(&value, 2)?;
+        let fields = crate::unsigned_rpc_fields(&value, 2)?;
         Ok(Self {
             root: MerkleRoot::decode(&encode(&fields[0])?)?,
             paths: list(&fields[1], merkle_path)?,
@@ -249,7 +251,7 @@ impl MerkleMultiLookupResponse {
 impl MerkleExistsResponse {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = decode(bytes)?;
-        let fields = array(&value, 2)?;
+        let fields = crate::unsigned_rpc_fields(&value, 2)?;
         let Value::Bool(signed) = fields[1] else {
             return Err(type_error("boolean", &fields[1]));
         };
@@ -314,7 +316,7 @@ impl UserMerklePaths {
 }
 
 pub(crate) fn user_merkle_paths(value: &Value) -> Result<UserMerklePaths> {
-    let fields = array(value, 2)?;
+    let fields = crate::unsigned_rpc_fields(value, 2)?;
     let exact_root = encode(&fields[0])?;
     let root = MerkleRoot::decode(&exact_root)?;
     let paths = list(&fields[1], merkle_path)?;

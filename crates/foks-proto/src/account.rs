@@ -1,6 +1,7 @@
 //! Account wire forms. Shape validation is separate from authenticated rename policy.
 use crate::{
-    array, decode, encode, fixed_blob, option, text, Result, UserLink, UsernameReservation, Value,
+    decode, encode, fixed_blob, option, text, unsigned_rpc_fields, Result, UserLink,
+    UsernameReservation, Value,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -16,11 +17,14 @@ pub struct ChangeUsernameArgument {
     pub full: Option<ChangedUsernameFullUpdate>,
 }
 impl ChangeUsernameArgument {
+    /// An unsigned argument the server only reads, so it and its full-update
+    /// struct accept appended fields and discard them. The signed link and
+    /// the username reservation stay exact.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let v = decode(bytes)?;
-        let f = array(&v, 2)?;
+        let f = unsigned_rpc_fields(&v, 2)?;
         let full = option(&f[1], |v| {
-            let f = array(v, 4)?;
+            let f = unsigned_rpc_fields(v, 4)?;
             Ok(ChangedUsernameFullUpdate {
                 link: UserLink::decode(&encode(&f[0])?)?,
                 commitment_key: fixed_blob(&f[1], "username commitment key")?,

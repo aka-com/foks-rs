@@ -28,7 +28,10 @@ pub struct TeamChain {
 impl TeamChain {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let wire = decode(bytes)?;
-        let fields = array(&wire, 10)?;
+        // The response wrapper is unsigned; appended fields are accepted and
+        // retained in `exact_bytes`. Links, paths, boxes and tokens inside it
+        // keep their own exact decoders.
+        let fields = crate::array_at_least(&wire, 10)?;
         let links = list(&fields[0], user_link)?;
         let locations = list(&fields[1], |value| fixed_blob(value, "tree location"))?;
         let team_names = list(&fields[2], name_commitment_and_key)?;
@@ -278,7 +281,8 @@ impl ActivatedTeamView {
 
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let wire = decode(bytes)?;
-        let fields = array(&wire, 2)?;
+        // An unsigned result the client only reads.
+        let fields = crate::unsigned_rpc_fields(&wire, 2)?;
         Ok(Self {
             token: fixed_blob(&fields[0], "activated team view token")?,
             team: entity(&fields[1])?,

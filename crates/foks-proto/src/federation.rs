@@ -3,8 +3,9 @@
 use zeroize::Zeroize as _;
 
 use crate::{
-    array, decode, encode, entity, fixed_blob, text, unsigned, EntityId, Error, Result, Role,
-    SecretBox, Value, ENTITY_AD_HOC_TEAM, ENTITY_HOST, ENTITY_NAMED_TEAM, ENTITY_USER,
+    array, decode, encode, entity, fixed_blob, text, unsigned, unsigned_rpc_fields, EntityId,
+    Error, Result, Role, SecretBox, Value, ENTITY_AD_HOC_TEAM, ENTITY_HOST, ENTITY_NAMED_TEAM,
+    ENTITY_USER,
 };
 
 pub const TEAM_REMOTE_MEMBER_VIEW_TOKEN_BOX_PAYLOAD_TYPE_ID: u64 = 0xb869_945e_21b2_d379;
@@ -294,9 +295,11 @@ pub struct TeamRemoteViewTokenSet {
 }
 
 impl TeamRemoteViewTokenSet {
+    /// The result wrapper is unsigned and only read, so appended fields are
+    /// accepted and discarded; each token stays exact.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let value = decode(bytes)?;
-        let fields = array(&value, 1)?;
+        let fields = unsigned_rpc_fields(&value, 1)?;
         let tokens = match &fields[0] {
             Value::Null => Vec::new(),
             Value::Array(values) => values

@@ -2,8 +2,8 @@
 
 use super::{role, user_link, user_merkle_paths, UserLink, UserMerklePaths};
 use crate::{
-    array, decode, encode, fixed_blob, list, option, EntityId, Error, MerklePathCompressed, Result,
-    Role, Value,
+    decode, encode, fixed_blob, list, option, EntityId, Error, MerklePathCompressed, Result, Role,
+    Value,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -17,7 +17,8 @@ pub struct GenericChain {
 impl GenericChain {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let wire = decode(bytes)?;
-        let fields = array(&wire, 4)?;
+        // An unsigned response wrapper the client only reads.
+        let fields = crate::unsigned_rpc_fields(&wire, 4)?;
         let links = list(&fields[0], user_link)?;
         let locations = list(&fields[1], |value| {
             fixed_blob(value, "generic tree location")
@@ -121,7 +122,7 @@ pub fn encode_local_team_list(entries: &[LocalTeamListEntry]) -> Result<Vec<u8>>
 
 pub fn decode_local_team_list(bytes: &[u8]) -> Result<Vec<LocalTeamListEntry>> {
     list(&decode(bytes)?, |value| {
-        let fields = array(value, 5)?;
+        let fields = crate::unsigned_rpc_fields(value, 5)?;
         Ok(LocalTeamListEntry {
             team: crate::entity(&fields[0])?,
             source_role: role(&fields[1])?,

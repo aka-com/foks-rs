@@ -350,7 +350,8 @@ pub struct HistoricalMerkleRoots {
 impl HistoricalMerkleRoots {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let wire = decode(bytes)?;
-        let fields = array(&wire, 2)?;
+        // An unsigned result around signed roots; the client only reads it.
+        let fields = crate::unsigned_rpc_fields(&wire, 2)?;
         Ok(Self {
             roots: list(&fields[0], |value| MerkleRoot::decode(&encode(value)?))?,
             hashes: list(&fields[1], |value| fixed_blob(value, "Merkle root hash"))?,

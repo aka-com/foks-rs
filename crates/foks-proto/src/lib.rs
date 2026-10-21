@@ -120,8 +120,8 @@ pub use role::*;
 pub use service::*;
 pub use sso::*;
 pub use submission::{InvalidSubmissionHandle, SubmissionHandle};
-pub(crate) use trailing::decode_grown;
 pub use trailing::TrailingFields;
+pub(crate) use trailing::{decode_grown, unsigned_rpc_fields};
 pub use upload::{InvalidUploadHandle, UploadHandle};
 pub use yubi::*;
 
