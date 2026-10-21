@@ -43,13 +43,15 @@ git -C "$temporary_root/upstream" fetch --quiet --depth=1 origin "$revision"
 git -C "$temporary_root/upstream" checkout --quiet --detach FETCH_HEAD
 
 candidate="$temporary_root/candidate.json"
+candidate_structs="$temporary_root/candidate-structs.json"
 (
     cd "$repository_root/tools/foks-protocol-sync"
     GOCACHE="$protocol_go_cache" go run . extract \
         --module-dir "$temporary_root/upstream" \
         --version mainline \
         --commit "$revision" \
-        --out "$candidate"
+        --out "$candidate" \
+        --structs-out "$candidate_structs"
 )
 
 mkdir -p "$output_directory"
@@ -59,6 +61,8 @@ printf '%s\n' "$revision" >"$output_directory/resolved-commit.txt"
     GOCACHE="$protocol_go_cache" go run . diff \
         --baseline "$repository_root/crates/foks-server/protocol/upstream-v0.1.9.json" \
         --candidate "$candidate" \
+        --baseline-structs "$repository_root/crates/foks-server/protocol/upstream-v0.1.9-structs.json" \
+        --candidate-structs "$candidate_structs" \
         --policy "$repository_root/crates/foks-server/protocol/policy-v1.toml" \
         --json "$output_directory/mainline-diff.json" \
         --markdown "$output_directory/mainline-diff.md" \

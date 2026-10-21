@@ -288,3 +288,45 @@ fn post_baseline_statuses_cannot_shadow_or_reuse_the_baseline() {
     policy.post_baseline_statuses[0].source = "a\nb".into();
     assert!(merge(&artifact, &policy).is_err());
 }
+
+fn tolerant_policy(entries: &str) -> foks_protocol_metadata::Policy {
+    parse_policy(&POLICY.replacen("[[protocol]]", &format!("{entries}\n[[protocol]]"), 1)).unwrap()
+}
+
+#[test]
+fn tolerant_structs_are_validated_and_render_nothing() {
+    let artifact = parse_artifact(ARTIFACT).unwrap();
+    let plain_policy = parse_policy(POLICY).unwrap();
+    let plain = merge(&artifact, &plain_policy).unwrap();
+    let policy = tolerant_policy(
+        "[[tolerant_struct]]\nupstream = \"rem.RTSendRes\"\nrust = \"ChatSendReceipt\"\ndecoding = \"retained\"\n\n\
+         [[tolerant_struct]]\nupstream = \"lib.KVUsage\"\nrust = \"KvUsage\"\ndecoding = \"read_only\"\n",
+    );
+    assert_eq!(
+        policy.tolerant_structs[1].decoding,
+        foks_protocol_metadata::StructDecoding::ReadOnly
+    );
+    let merged = merge(&artifact, &policy).unwrap();
+    assert_eq!(
+        foks_protocol_metadata::render_contract(&merged),
+        foks_protocol_metadata::render_contract(&plain)
+    );
+
+    for bad in [
+        "upstream = \"proto.RTSendRes\"\nrust = \"X\"\ndecoding = \"retained\"",
+        "upstream = \"rem.\"\nrust = \"X\"\ndecoding = \"retained\"",
+        "upstream = \"rem.RTSendRes\"\nrust = \" \"\ndecoding = \"retained\"",
+    ] {
+        let policy = tolerant_policy(&format!("[[tolerant_struct]]\n{bad}\n"));
+        assert!(merge(&artifact, &policy).is_err(), "{bad}");
+    }
+    let entry = "[[tolerant_struct]]\nupstream = \"rem.RTSendRes\"\nrust = \"X\"\ndecoding = \"retained\"\n";
+    assert!(merge(&artifact, &tolerant_policy(&format!("{entry}\n{entry}"))).is_err());
+    // The decoding mode is a closed set.
+    assert!(parse_policy(&POLICY.replacen(
+        "[[protocol]]",
+        "[[tolerant_struct]]\nupstream = \"rem.RTSendRes\"\nrust = \"X\"\ndecoding = \"exact\"\n\n[[protocol]]",
+        1
+    ))
+    .is_err());
+}

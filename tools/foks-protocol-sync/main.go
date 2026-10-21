@@ -53,6 +53,7 @@ func pinned(arguments []string) error {
 	flags := flag.NewFlagSet("pinned", flag.ContinueOnError)
 	oracle := flags.String("oracle", "tools/foks-v019-oracle", "directory containing the pinned oracle go.mod")
 	out := flags.String("out", "", "output artifact")
+	structsOut := flags.String("structs-out", "", "optional struct-shape artifact output")
 	offline := flags.Bool("offline", false, "disable module network access")
 	if err := flags.Parse(arguments); err != nil {
 		return err
@@ -81,7 +82,22 @@ func pinned(arguments []string) error {
 	if err != nil {
 		return err
 	}
+	if err := writeShapes(*structsOut, downloaded.Dir, identity); err != nil {
+		return err
+	}
 	return model.WriteArtifact(*out, artifact)
+}
+
+// writeShapes writes the struct-shape artifact when a path is given.
+func writeShapes(path, moduleDir string, identity model.SourceIdentity) error {
+	if path == "" {
+		return nil
+	}
+	shapes, err := extract.Shapes(moduleDir, identity)
+	if err != nil {
+		return err
+	}
+	return model.WriteShapeArtifact(path, shapes)
 }
 
 func extractLocal(arguments []string) error {
@@ -90,14 +106,19 @@ func extractLocal(arguments []string) error {
 	version := flags.String("version", "mainline", "source version label")
 	commit := flags.String("commit", "", "resolved source commit")
 	out := flags.String("out", "", "output artifact")
+	structsOut := flags.String("structs-out", "", "optional struct-shape artifact output")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
 	if *dir == "" || *out == "" {
 		return errors.New("--module-dir and --out are required")
 	}
-	artifact, err := extract.Module(*dir, model.SourceIdentity{Module: modulePath, Version: *version, Commit: *commit})
+	identity := model.SourceIdentity{Module: modulePath, Version: *version, Commit: *commit}
+	artifact, err := extract.Module(*dir, identity)
 	if err != nil {
+		return err
+	}
+	if err := writeShapes(*structsOut, *dir, identity); err != nil {
 		return err
 	}
 	return model.WriteArtifact(*out, artifact)
@@ -108,6 +129,8 @@ func compare(arguments []string) error {
 	baselinePath := flags.String("baseline", "", "baseline metadata JSON")
 	candidatePath := flags.String("candidate", "", "candidate metadata JSON")
 	policyPath := flags.String("policy", "", "local policy TOML")
+	baselineShapesPath := flags.String("baseline-structs", "", "optional baseline struct-shape JSON")
+	candidateShapesPath := flags.String("candidate-structs", "", "optional candidate struct-shape JSON")
 	jsonPath := flags.String("json", "", "JSON report output")
 	markdownPath := flags.String("markdown", "", "Markdown report output")
 	fail := flags.Bool("fail-on-review", false, "return failure for breaking or review-required drift")
@@ -129,7 +152,22 @@ func compare(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	report := drift.Compare(baseline, candidate, policy)
+	if (*baselineShapesPath == "") != (*candidateShapesPath == "") {
+		return errors.New("--baseline-structs and --candidate-structs must be given together")
+	}
+	var shapes *drift.ShapePair
+	if *baselineShapesPath != "" {
+		baselineShapes, err := model.ReadShapeArtifact(*baselineShapesPath)
+		if err != nil {
+			return err
+		}
+		candidateShapes, err := model.ReadShapeArtifact(*candidateShapesPath)
+		if err != nil {
+			return err
+		}
+		shapes = &drift.ShapePair{Baseline: baselineShapes, Candidate: candidateShapes}
+	}
+	report := drift.CompareWithShapes(baseline, candidate, shapes, policy)
 	if *jsonPath == "" {
 		*jsonPath = filepath.Join(os.TempDir(), "foks-protocol-drift.json")
 	}

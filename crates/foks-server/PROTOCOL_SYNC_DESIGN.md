@@ -82,6 +82,7 @@ crates/foks-server/protocol/
   upstream-v0.1.9.json           # generated, sorted, checked in
   policy-v1.toml                 # handwritten local policy only
   upstream-v0.1.9.sha256         # artifact digest + module/sum/source digests
+  upstream-v0.1.9-structs.json   # generated positional struct layouts (drift only)
   mainline-diff.schema.json      # versioned report contract
 
 crates/foks-rpc/src/generated/
@@ -153,6 +154,13 @@ The report groups changes as:
 - **additive:** new protocol, method, status, field, or service value;
 - **outside local slice:** change with no dependency path from local policy;
 - **source-only:** comments/formatting changed and normalized metadata did not.
+
+Struct layouts are compared when both struct-shape artifacts are supplied.
+Fields appended to an unchanged prefix are `struct_grown`: additive
+(`struct_grown_tolerated`) for a struct listed in the policy's
+`[[tolerant_struct]]` tables, whose Rust decoder accepts appended fields, and
+review-required otherwise. A removed, renamed, retyped or reordered field is
+`struct_changed` (wire breaking for a locally relevant source).
 
 For every locally supported method the report includes its policy and test
 coverage IDs. A changed dependency hash with no available structural detail is

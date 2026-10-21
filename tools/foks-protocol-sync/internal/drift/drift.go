@@ -47,6 +47,17 @@ type Policy struct {
 	// upstream release that the Rust client and server already handle
 	// (`accepted_upstream_results` in the policy).
 	Accepted map[string][]string
+	// Tolerant maps an upstream struct (`rem.RTSendRes`) to how the Rust
+	// decoder treats fields appended to it (`retained` or `read_only`), from
+	// the policy's `[[tolerant_struct]]` tables. Growth of a listed struct is
+	// additive; growth of any other struct needs review.
+	Tolerant map[string]string
+}
+
+// ShapePair holds the struct-shape artifacts of the baseline and candidate.
+type ShapePair struct {
+	Baseline  model.ShapeArtifact
+	Candidate model.ShapeArtifact
 }
 
 func ReadPolicy(path string) (Policy, error) {
@@ -62,9 +73,11 @@ func ReadPolicy(path string) (Policy, error) {
 		Services:  make(map[string]bool),
 		Coverage:  make(map[string][]string),
 		Accepted:  make(map[string][]string),
+		Tolerant:  make(map[string]string),
 	}
 	type block struct {
 		kind, name, upstream, protocol, method string
+		decoding                               string
 		supported                              bool
 		hasSupported                           bool
 		coverage                               []string
@@ -98,13 +111,17 @@ func ReadPolicy(path string) (Policy, error) {
 			if current.upstream != "" {
 				policy.Statuses[current.upstream] = true
 			}
+		case "tolerant_struct":
+			if current.upstream != "" {
+				policy.Tolerant[current.upstream] = current.decoding
+			}
 		}
 		current = block{}
 	}
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(strings.SplitN(scanner.Text(), "#", 2)[0])
-		if line == "[status_aliases]" || line == "[[protocol]]" || line == "[[service]]" || line == "[[route]]" || line == "[[post_baseline_status]]" {
+		if line == "[status_aliases]" || line == "[[protocol]]" || line == "[[service]]" || line == "[[route]]" || line == "[[post_baseline_status]]" || line == "[[tolerant_struct]]" {
 			flush()
 			current.kind = strings.Trim(line, "[]")
 			continue
@@ -138,6 +155,8 @@ func ReadPolicy(path string) (Policy, error) {
 			current.coverage = stringArray(value)
 		case "accepted_upstream_results":
 			current.accepted = stringArray(value)
+		case "decoding":
+			current.decoding = unquote(value)
 		}
 	}
 	flush()
@@ -152,10 +171,21 @@ func ReadPolicy(path string) (Policy, error) {
 			return Policy{}, fmt.Errorf("supported route %s has no coverage ID", route)
 		}
 	}
+	for name, decoding := range policy.Tolerant {
+		if decoding != "retained" && decoding != "read_only" {
+			return Policy{}, fmt.Errorf("tolerant struct %s has decoding %q, want retained or read_only", name, decoding)
+		}
+	}
 	return policy, nil
 }
 
 func Compare(baseline, candidate model.Artifact, policy Policy) Report {
+	return CompareWithShapes(baseline, candidate, nil, policy)
+}
+
+// CompareWithShapes is Compare plus, when shapes is non-nil, a per-struct
+// comparison of positional field layouts.
+func CompareWithShapes(baseline, candidate model.Artifact, shapes *ShapePair, policy Policy) Report {
 	report := Report{
 		SchemaVersion: 1, Baseline: baseline.Source, Candidate: candidate.Source,
 		Changes: make([]Change, 0),
@@ -232,6 +262,9 @@ func Compare(baseline, candidate model.Artifact, policy Policy) Report {
 	compareNamed("service", baseline.Services, candidate.Services, policy.Services, add)
 	sourceOwners := protocolSourceOwners(baseline.Protocols, candidate.Protocols)
 	compareSources(baseline.Sources, candidate.Sources, policy, supportedProtocols, sourceOwners, add)
+	if shapes != nil {
+		compareShapes(shapes.Baseline, shapes.Candidate, policy, supportedProtocols, sourceOwners, add)
+	}
 	sort.Slice(report.Changes, func(i, j int) bool {
 		if report.Changes[i].Class != report.Changes[j].Class {
 			return report.Changes[i].Class < report.Changes[j].Class
@@ -369,6 +402,90 @@ func compareSources(old, candidate []model.SourceFile, policy Policy, supported 
 			add(class, "source_added", path, detail)
 		}
 	}
+}
+
+// compareShapes classifies changes to positional struct layouts:
+//
+//   - struct_grown: the candidate appends fields to an unchanged prefix. go-foks
+//     peers ignore unknown trailing fields; Rust decoders follow the policy in
+//     crates/foks-proto/src/trailing.rs. Growth is additive for a struct the
+//     policy lists in [[tolerant_struct]] and needs review otherwise, because
+//     an exact Rust decoder rejects the longer form.
+//   - struct_changed: an existing field was removed, renamed, retyped or
+//     moved. That changes the meaning of positions already on the wire.
+//   - struct_removed and struct_added: the type itself disappeared or appeared.
+//
+// A policy entry naming a struct the baseline does not define is reported so
+// that a misspelt name cannot silently leave growth unclassified.
+func compareShapes(old, candidate model.ShapeArtifact, policy Policy, supported map[string]bool, owners map[string]map[string]bool, add func(Class, string, string, string)) {
+	oldShapes, newShapes := old.Shapes(), candidate.Shapes()
+	relevant := func(shape model.StructShape) bool {
+		return sourceRelevant(shapeSource(shape.GoFile), supported, owners)
+	}
+	for name, shape := range oldShapes {
+		newShape, ok := newShapes[name]
+		if !ok {
+			class := OutsideLocalSlice
+			if relevant(shape) {
+				class = BehaviorReviewRequired
+			}
+			add(class, "struct_removed", name, fmt.Sprintf("%d fields; type is absent from candidate", len(shape.Fields)))
+			continue
+		}
+		prefix := len(newShape.Fields) >= len(shape.Fields)
+		for i := 0; prefix && i < len(shape.Fields); i++ {
+			prefix = shape.Fields[i] == newShape.Fields[i]
+		}
+		switch {
+		case prefix && len(newShape.Fields) == len(shape.Fields):
+		case prefix:
+			var appended []string
+			for _, field := range newShape.Fields[len(shape.Fields):] {
+				appended = append(appended, field.Name)
+			}
+			detail := fmt.Sprintf("%d -> %d fields; appended %s", len(shape.Fields), len(newShape.Fields), strings.Join(appended, ", "))
+			if decoding, ok := policy.Tolerant[name]; ok {
+				add(Additive, "struct_grown_tolerated", name, detail+"; Rust decoder is tolerant ("+decoding+")")
+			} else {
+				class := OutsideLocalSlice
+				if relevant(shape) {
+					class = BehaviorReviewRequired
+				}
+				add(class, "struct_grown", name, detail)
+			}
+		default:
+			class := OutsideLocalSlice
+			if relevant(shape) {
+				class = WireBreaking
+			}
+			add(class, "struct_changed", name, fmt.Sprintf("%s -> %s", fieldList(shape.Fields), fieldList(newShape.Fields)))
+		}
+	}
+	for name, shape := range newShapes {
+		if _, ok := oldShapes[name]; !ok {
+			add(Additive, "struct_added", name, fmt.Sprintf("%d fields", len(shape.Fields)))
+		}
+	}
+	for name := range policy.Tolerant {
+		if _, ok := oldShapes[name]; !ok {
+			add(BehaviorReviewRequired, "tolerant_struct_unknown", name, "listed in [[tolerant_struct]] but absent from the baseline shapes")
+		}
+	}
+}
+
+// shapeSource maps a generated Go file to the Snowpack source it came from.
+func shapeSource(goFile string) string {
+	path := strings.TrimSuffix(goFile, ".go") + ".snowp"
+	path = strings.Replace(path, "proto/lib/", "proto-src/lib/", 1)
+	return strings.Replace(path, "proto/rem/", "proto-src/rem/", 1)
+}
+
+func fieldList(fields []model.StructField) string {
+	names := make([]string, len(fields))
+	for i, field := range fields {
+		names[i] = field.Name + " " + field.Type
+	}
+	return "(" + strings.Join(names, ", ") + ")"
 }
 
 func sourceRelevant(path string, supported map[string]bool, owners map[string]map[string]bool) bool {

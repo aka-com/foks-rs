@@ -1,0 +1,6812 @@
+{
+  "schema_version": 1,
+  "source": {
+    "module": "github.com/foks-proj/go-foks",
+    "version": "v0.1.9",
+    "sum": "h1:esVU4H00tL7kwyZXbPxfgTDJSBeqGRa5xPFv5xb/Ph0=",
+    "go_mod_sum": "h1:x2wPw159s6fYDrvdpTCqqML392rkjqAniUCdkRIkudY=",
+    "commit": "f07a5816f54120f5fb4985cf980a7c45d74449b1"
+  },
+  "structs": [
+    {
+      "name": "lib.BaseChainer",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "Seqno",
+          "type": "*SeqnoInternal__"
+        },
+        {
+          "name": "Prev",
+          "type": "*LinkHashInternal__"
+        },
+        {
+          "name": "Root",
+          "type": "*TreeRootInternal__"
+        },
+        {
+          "name": "Time",
+          "type": "*TimeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.BoxHybridV1",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "KemCtext",
+          "type": "*KemCiphertextInternal__"
+        },
+        {
+          "name": "DhType",
+          "type": "*DHTypeInternal__"
+        },
+        {
+          "name": "Sender",
+          "type": "*DHPublicKeyInternal__"
+        },
+        {
+          "name": "Sbox",
+          "type": "*SecretBoxInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.CKSBox",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "Key",
+          "type": "*CKSKeyIDInternal__"
+        },
+        {
+          "name": "Box",
+          "type": "*SecretBoxInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.CKSCertChain",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "Certs",
+          "type": "*[]([]byte)"
+        }
+      ]
+    },
+    {
+      "name": "lib.CSRFPayload",
+      "go_file": "proto/lib/web.go",
+      "fields": [
+        {
+          "name": "Uid",
+          "type": "*UIDInternal__"
+        },
+        {
+          "name": "Etime",
+          "type": "*TimeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.CSRFTokenV1",
+      "go_file": "proto/lib/web.go",
+      "fields": [
+        {
+          "name": "KeyID",
+          "type": "*HMACKeyIDInternal__"
+        },
+        {
+          "name": "Etime",
+          "type": "*TimeInternal__"
+        },
+        {
+          "name": "Hmac",
+          "type": "*HMACInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.ChainLoaderError",
+      "go_file": "proto/lib/status.go",
+      "fields": [
+        {
+          "name": "Err",
+          "type": "*StatusInternal__"
+        },
+        {
+          "name": "Race",
+          "type": "*bool"
+        }
+      ]
+    },
+    {
+      "name": "lib.ClientVersionExt",
+      "go_file": "proto/lib/compat.go",
+      "fields": [
+        {
+          "name": "Vers",
+          "type": "*SemVerInternal__"
+        },
+        {
+          "name": "LinkerVersion",
+          "type": "*string"
+        },
+        {
+          "name": "LinkerPackaging",
+          "type": "*string"
+        }
+      ]
+    },
+    {
+      "name": "lib.ConnectError",
+      "go_file": "proto/lib/status.go",
+      "fields": [
+        {
+          "name": "Err",
+          "type": "*StatusInternal__"
+        },
+        {
+          "name": "Desc",
+          "type": "*string"
+        }
+      ]
+    },
+    {
+      "name": "lib.DNSError",
+      "go_file": "proto/lib/status.go",
+      "fields": [
+        {
+          "name": "Stage",
+          "type": "*string"
+        },
+        {
+          "name": "Err",
+          "type": "*StatusInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.Date",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "Year",
+          "type": "*uint64"
+        },
+        {
+          "name": "Month",
+          "type": "*uint64"
+        },
+        {
+          "name": "Day",
+          "type": "*uint64"
+        }
+      ]
+    },
+    {
+      "name": "lib.DeviceInfo",
+      "go_file": "proto/lib/device.go",
+      "fields": [
+        {
+          "name": "Status",
+          "type": "*DeviceStatusInternal__"
+        },
+        {
+          "name": "Dn",
+          "type": "*DeviceLabelAndNameInternal__"
+        },
+        {
+          "name": "Key",
+          "type": "*MemberRoleInternal__"
+        },
+        {
+          "name": "Ctime",
+          "type": "*TimeInternal__"
+        },
+        {
+          "name": "Provisioned",
+          "type": "*ProvisionInfoInternal__"
+        },
+        {
+          "name": "Revoked",
+          "type": "*RevokeInfoInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.DeviceLabel",
+      "go_file": "proto/lib/device.go",
+      "fields": [
+        {
+          "name": "DeviceType",
+          "type": "*DeviceTypeInternal__"
+        },
+        {
+          "name": "Name",
+          "type": "*DeviceNameNormalizedInternal__"
+        },
+        {
+          "name": "Serial",
+          "type": "*DeviceSerialInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.DeviceLabelAndName",
+      "go_file": "proto/lib/device.go",
+      "fields": [
+        {
+          "name": "Label",
+          "type": "*DeviceLabelInternal__"
+        },
+        {
+          "name": "Nv",
+          "type": "*NormalizationVersionInternal__"
+        },
+        {
+          "name": "Name",
+          "type": "*DeviceNameInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.DeviceNagInfo",
+      "go_file": "proto/lib/device.go",
+      "fields": [
+        {
+          "name": "NumDevices",
+          "type": "*uint64"
+        },
+        {
+          "name": "Cleared",
+          "type": "*bool"
+        }
+      ]
+    },
+    {
+      "name": "lib.DeviceNameNormalizationPreimage",
+      "go_file": "proto/lib/device.go",
+      "fields": [
+        {
+          "name": "Nv",
+          "type": "*NormalizationVersionInternal__"
+        },
+        {
+          "name": "Name",
+          "type": "*DeviceNameInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.DirVersion",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "Id",
+          "type": "*DirIDInternal__"
+        },
+        {
+          "name": "Vers",
+          "type": "*KVVersionInternal__"
+        },
+        {
+          "name": "De",
+          "type": "*[](*DirentVersionInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "lib.DirentVersion",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "Id",
+          "type": "*DirentIDInternal__"
+        },
+        {
+          "name": "Vers",
+          "type": "*KVVersionInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.EldestMetadata",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "SubchainTreeLocationSeedCommitment",
+          "type": "*TreeLocationCommitmentInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.FQAdHocTeamParsed",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "Team",
+          "type": "*AdHocTeamParsedInternal__"
+        },
+        {
+          "name": "Host",
+          "type": "*ParsedHostnameInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.FQEntity",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "Entity",
+          "type": "*EntityIDInternal__"
+        },
+        {
+          "name": "Host",
+          "type": "*HostIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.FQEntityFixed",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "Entity",
+          "type": "*FixedEntityIDInternal__"
+        },
+        {
+          "name": "Host",
+          "type": "*HostIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.FQEntityInHostScope",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "Entity",
+          "type": "*EntityIDInternal__"
+        },
+        {
+          "name": "Host",
+          "type": "*HostIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.FQParty",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "Party",
+          "type": "*PartyIDInternal__"
+        },
+        {
+          "name": "Host",
+          "type": "*HostIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.FQPartyParsed",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "Party",
+          "type": "*ParsedPartyInternal__"
+        },
+        {
+          "name": "Host",
+          "type": "*ParsedHostnameInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.FQTeam",
+      "go_file": "proto/lib/team.go",
+      "fields": [
+        {
+          "name": "Team",
+          "type": "*TeamIDInternal__"
+        },
+        {
+          "name": "Host",
+          "type": "*HostIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.FQTeamIDOrName",
+      "go_file": "proto/lib/team.go",
+      "fields": [
+        {
+          "name": "Host",
+          "type": "*HostIDInternal__"
+        },
+        {
+          "name": "IdOrName",
+          "type": "*TeamIDOrNameInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.FQTeamParsed",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "Team",
+          "type": "*ParsedTeamInternal__"
+        },
+        {
+          "name": "Host",
+          "type": "*ParsedHostnameInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.FQUser",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "Uid",
+          "type": "*UIDInternal__"
+        },
+        {
+          "name": "HostID",
+          "type": "*HostIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.FQUserAndRole",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "Fqu",
+          "type": "*FQUserInternal__"
+        },
+        {
+          "name": "Role",
+          "type": "*RoleInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.FQUserParsed",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "User",
+          "type": "*ParsedUserInternal__"
+        },
+        {
+          "name": "Host",
+          "type": "*ParsedHostnameInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.GenericLink",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "Chainer",
+          "type": "*HidingChainerInternal__"
+        },
+        {
+          "name": "Entity",
+          "type": "*FQEntityInternal__"
+        },
+        {
+          "name": "Signer",
+          "type": "*FQEntityInHostScopeInternal__"
+        },
+        {
+          "name": "Payload",
+          "type": "*GenericLinkPayloadInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.GitRef",
+      "go_file": "proto/lib/git.go",
+      "fields": [
+        {
+          "name": "Name",
+          "type": "*KVPathInternal__"
+        },
+        {
+          "name": "Value",
+          "type": "*string"
+        }
+      ]
+    },
+    {
+      "name": "lib.GitRefBoxed",
+      "go_file": "proto/lib/git.go",
+      "fields": [
+        {
+          "name": "De",
+          "type": "*KVDirentInternal__"
+        },
+        {
+          "name": "Sfb",
+          "type": "*SmallFileBoxInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.GitRefBoxedSet",
+      "go_file": "proto/lib/git.go",
+      "fields": [
+        {
+          "name": "DirVersion",
+          "type": "*KVVersionInternal__"
+        },
+        {
+          "name": "Refs",
+          "type": "*[](*GitRefBoxedInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "lib.GitRemoteRepoID",
+      "go_file": "proto/lib/git.go",
+      "fields": [
+        {
+          "name": "Host",
+          "type": "*HostIDInternal__"
+        },
+        {
+          "name": "Dir",
+          "type": "*DirIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.GitURL",
+      "go_file": "proto/lib/git.go",
+      "fields": [
+        {
+          "name": "Proto",
+          "type": "*GitProtoTypeInternal__"
+        },
+        {
+          "name": "Fqp",
+          "type": "*FQPartyParsedInternal__"
+        },
+        {
+          "name": "Repo",
+          "type": "*GitRepoInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.GroupChange",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "Chainer",
+          "type": "*HidingChainerInternal__"
+        },
+        {
+          "name": "Entity",
+          "type": "*FQEntityInternal__"
+        },
+        {
+          "name": "Signer",
+          "type": "*GroupChangeSignerInternal__"
+        },
+        {
+          "name": "Changes",
+          "type": "*[](*MemberRoleInternal__)"
+        },
+        {
+          "name": "Deprecated4",
+          "type": "*struct{}"
+        },
+        {
+          "name": "SharedKeys",
+          "type": "*[](*SharedKeyInternal__)"
+        },
+        {
+          "name": "Metadata",
+          "type": "*[](*ChangeMetadataInternal__)"
+        },
+        {
+          "name": "LocationVRFID",
+          "type": "*LocationVRFIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.GroupChangeSigner",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "Key",
+          "type": "*EntityIDInternal__"
+        },
+        {
+          "name": "KeyOwner",
+          "type": "*KeyOwnerInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.HEPKSet",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "V",
+          "type": "*[](*HEPKInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "lib.HEPKv1",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "Classical",
+          "type": "*DHPublicKeyInternal__"
+        },
+        {
+          "name": "Pqkem",
+          "type": "*KemEncapKeyInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.HeaderV1",
+      "go_file": "proto/lib/compat.go",
+      "fields": [
+        {
+          "name": "Vers",
+          "type": "*CompatibilityVersionInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.HidingChainer",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "Base",
+          "type": "*BaseChainerInternal__"
+        },
+        {
+          "name": "NextLocationCommitment",
+          "type": "*TreeLocationCommitmentInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.HostConfig",
+      "go_file": "proto/lib/config.go",
+      "fields": [
+        {
+          "name": "Metering",
+          "type": "*MeteringInternal__"
+        },
+        {
+          "name": "Viewership",
+          "type": "*HostViewershipInternal__"
+        },
+        {
+          "name": "Typ",
+          "type": "*HostTypeInternal__"
+        },
+        {
+          "name": "Icr",
+          "type": "*InviteCodeRegimeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.HostKeyPrivateStorageV1",
+      "go_file": "proto/lib/hostchain.go",
+      "fields": [
+        {
+          "name": "Type",
+          "type": "*EntityTypeInternal__"
+        },
+        {
+          "name": "Time",
+          "type": "*TimeInternal__"
+        },
+        {
+          "name": "Seed",
+          "type": "*Ed25519SecretKeyInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.HostPinError",
+      "go_file": "proto/lib/status.go",
+      "fields": [
+        {
+          "name": "Host",
+          "type": "*HostnameInternal__"
+        },
+        {
+          "name": "Old",
+          "type": "*HostIDInternal__"
+        },
+        {
+          "name": "New",
+          "type": "*HostIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.HostTLSCA",
+      "go_file": "proto/lib/hostchain.go",
+      "fields": [
+        {
+          "name": "Id",
+          "type": "*HostTLSCAIDInternal__"
+        },
+        {
+          "name": "Cert",
+          "type": "*[]byte"
+        }
+      ]
+    },
+    {
+      "name": "lib.HostTLSCAAtSeqno",
+      "go_file": "proto/lib/hostchain.go",
+      "fields": [
+        {
+          "name": "Seqno",
+          "type": "*SeqnoInternal__"
+        },
+        {
+          "name": "Ca",
+          "type": "*HostTLSCAInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.HostViewership",
+      "go_file": "proto/lib/config.go",
+      "fields": [
+        {
+          "name": "User",
+          "type": "*ViewershipModeInternal__"
+        },
+        {
+          "name": "Team",
+          "type": "*ViewershipModeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.HostchainChange",
+      "go_file": "proto/lib/hostchain.go",
+      "fields": [
+        {
+          "name": "Chainer",
+          "type": "*BaseChainerInternal__"
+        },
+        {
+          "name": "Host",
+          "type": "*HostIDInternal__"
+        },
+        {
+          "name": "Signer",
+          "type": "*HostIDInternal__"
+        },
+        {
+          "name": "Changes",
+          "type": "*[](*HostchainChangeItemInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "lib.HostchainLinkOuterV1",
+      "go_file": "proto/lib/hostchain.go",
+      "fields": [
+        {
+          "name": "Inner",
+          "type": "*[]byte"
+        },
+        {
+          "name": "Signatures",
+          "type": "*[](*SignatureInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "lib.HostchainState",
+      "go_file": "proto/lib/hostchain.go",
+      "fields": [
+        {
+          "name": "Seqno",
+          "type": "*SeqnoInternal__"
+        },
+        {
+          "name": "Host",
+          "type": "*HostIDInternal__"
+        },
+        {
+          "name": "Time",
+          "type": "*TimeInternal__"
+        },
+        {
+          "name": "Tail",
+          "type": "*LinkHashInternal__"
+        },
+        {
+          "name": "Keys",
+          "type": "*[](*KeyAtSeqnoInternal__)"
+        },
+        {
+          "name": "Cas",
+          "type": "*[](*HostTLSCAAtSeqnoInternal__)"
+        },
+        {
+          "name": "Addr",
+          "type": "*TCPAddrInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.HostchainTail",
+      "go_file": "proto/lib/hostchain.go",
+      "fields": [
+        {
+          "name": "Seqno",
+          "type": "*SeqnoInternal__"
+        },
+        {
+          "name": "Hash",
+          "type": "*LinkHashInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.HttpError",
+      "go_file": "proto/lib/status.go",
+      "fields": [
+        {
+          "name": "Code",
+          "type": "*uint64"
+        },
+        {
+          "name": "Err",
+          "type": "*StatusInternal__"
+        },
+        {
+          "name": "Desc",
+          "type": "*string"
+        }
+      ]
+    },
+    {
+      "name": "lib.HybridSecretKeySHA3Payload",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "Version",
+          "type": "*BoxHybridVersionInternal__"
+        },
+        {
+          "name": "PqKemKey",
+          "type": "*KemSharedKeyInternal__"
+        },
+        {
+          "name": "DhSharedKey",
+          "type": "*DHSharedKeyInternal__"
+        },
+        {
+          "name": "Rcvr",
+          "type": "*HEPKInternal__"
+        },
+        {
+          "name": "Sndr",
+          "type": "*DHPublicKeyInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.KVDir",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "Id",
+          "type": "*DirIDInternal__"
+        },
+        {
+          "name": "Version",
+          "type": "*KVVersionInternal__"
+        },
+        {
+          "name": "Box",
+          "type": "*SeedBoxExternalNonceInternal__"
+        },
+        {
+          "name": "WriteRole",
+          "type": "*RoleInternal__"
+        },
+        {
+          "name": "Status",
+          "type": "*KVDirStatusInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.KVDirPair",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "Active",
+          "type": "*KVDirInternal__"
+        },
+        {
+          "name": "Encrypting",
+          "type": "*KVDirInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.KVDirent",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "ParentDir",
+          "type": "*DirIDInternal__"
+        },
+        {
+          "name": "Id",
+          "type": "*DirentIDInternal__"
+        },
+        {
+          "name": "Value",
+          "type": "*KVNodeIDInternal__"
+        },
+        {
+          "name": "Version",
+          "type": "*KVVersionInternal__"
+        },
+        {
+          "name": "DirVersion",
+          "type": "*KVVersionInternal__"
+        },
+        {
+          "name": "WriteRole",
+          "type": "*RoleInternal__"
+        },
+        {
+          "name": "NameMac",
+          "type": "*HMACInternal__"
+        },
+        {
+          "name": "NameBox",
+          "type": "*SecretBoxInternal__"
+        },
+        {
+          "name": "DirStatus",
+          "type": "*KVDirStatusInternal__"
+        },
+        {
+          "name": "BindingMac",
+          "type": "*HMACInternal__"
+        },
+        {
+          "name": "Ctime",
+          "type": "*TimeMicroInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.KVDirentBindingPayload",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "ParentDir",
+          "type": "*DirIDInternal__"
+        },
+        {
+          "name": "Id",
+          "type": "*DirentIDInternal__"
+        },
+        {
+          "name": "Value",
+          "type": "*KVNodeIDInternal__"
+        },
+        {
+          "name": "Version",
+          "type": "*KVVersionInternal__"
+        },
+        {
+          "name": "DirVersion",
+          "type": "*KVVersionInternal__"
+        },
+        {
+          "name": "WriteRole",
+          "type": "*RoleInternal__"
+        },
+        {
+          "name": "NameMac",
+          "type": "*HMACInternal__"
+        },
+        {
+          "name": "NameBox",
+          "type": "*SecretBoxInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.KVDirentIDPair",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "ParentDirID",
+          "type": "*DirIDInternal__"
+        },
+        {
+          "name": "DirentID",
+          "type": "*DirentIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.KVExtendedDirent",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "Pos",
+          "type": "*uint64"
+        },
+        {
+          "name": "Sfb",
+          "type": "*SmallFileBoxInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.KVNameNonceInput",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "ParentDir",
+          "type": "*DirIDInternal__"
+        },
+        {
+          "name": "Name",
+          "type": "*KVNamePlaintextInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.KVPermError",
+      "go_file": "proto/lib/status.go",
+      "fields": [
+        {
+          "name": "Op",
+          "type": "*KVOpInternal__"
+        },
+        {
+          "name": "Resource",
+          "type": "*KVNodeTypeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.KVRoot",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "Root",
+          "type": "*DirIDInternal__"
+        },
+        {
+          "name": "Vers",
+          "type": "*KVVersionInternal__"
+        },
+        {
+          "name": "Rg",
+          "type": "*RoleAndGenInternal__"
+        },
+        {
+          "name": "BindingMac",
+          "type": "*HMACInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.KVRootBindingPayload",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "Party",
+          "type": "*FQPartyInternal__"
+        },
+        {
+          "name": "Rg",
+          "type": "*RoleAndGenInternal__"
+        },
+        {
+          "name": "Root",
+          "type": "*DirIDInternal__"
+        },
+        {
+          "name": "Vers",
+          "type": "*KVVersionInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.KVUsage",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "Small",
+          "type": "*KVUsageStatsInternal__"
+        },
+        {
+          "name": "Large",
+          "type": "*KVUsageStatsChunkedInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.KVUsageStats",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "Num",
+          "type": "*uint64"
+        },
+        {
+          "name": "Sum",
+          "type": "*SizeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.KVUsageStatsChunked",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "Base",
+          "type": "*KVUsageStatsInternal__"
+        },
+        {
+          "name": "NumChunks",
+          "type": "*uint64"
+        }
+      ]
+    },
+    {
+      "name": "lib.KeyAtSeqno",
+      "go_file": "proto/lib/hostchain.go",
+      "fields": [
+        {
+          "name": "Seqno",
+          "type": "*SeqnoInternal__"
+        },
+        {
+          "name": "Eid",
+          "type": "*EntityIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.KeyOwner",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "Party",
+          "type": "*PartyIDInternal__"
+        },
+        {
+          "name": "SrcRole",
+          "type": "*RoleInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.KeySuite",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "Entity",
+          "type": "*EntityIDInternal__"
+        },
+        {
+          "name": "Hepk",
+          "type": "*HEPKInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.LargeFileMetadata",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "Rg",
+          "type": "*RoleAndGenInternal__"
+        },
+        {
+          "name": "KeySeed",
+          "type": "*SecretBoxInternal__"
+        },
+        {
+          "name": "Vers",
+          "type": "*KVVersionInternal__"
+        },
+        {
+          "name": "CustomMetadata",
+          "type": "*SecretBoxInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.LinkOuterV1",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "Inner",
+          "type": "*LinkInnerBlobInternal__"
+        },
+        {
+          "name": "Signatures",
+          "type": "*[](*SignatureInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "lib.LocalUserIndex",
+      "go_file": "proto/lib/user.go",
+      "fields": [
+        {
+          "name": "Host",
+          "type": "*HostIDInternal__"
+        },
+        {
+          "name": "Rest",
+          "type": "*LocalUserIndexAtHostInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.LocalUserIndexAtHost",
+      "go_file": "proto/lib/user.go",
+      "fields": [
+        {
+          "name": "Uid",
+          "type": "*UIDInternal__"
+        },
+        {
+          "name": "Keyid",
+          "type": "*EntityIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.LookupUserRes",
+      "go_file": "proto/lib/user.go",
+      "fields": [
+        {
+          "name": "Fqu",
+          "type": "*FQUserInternal__"
+        },
+        {
+          "name": "Username",
+          "type": "*NameInternal__"
+        },
+        {
+          "name": "UsernameUtf8",
+          "type": "*NameUtf8Internal__"
+        },
+        {
+          "name": "Role",
+          "type": "*RoleInternal__"
+        },
+        {
+          "name": "YubiPQHint",
+          "type": "*YubiSlotAndPQKeyIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.Member",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "Id",
+          "type": "*FQEntityInHostScopeInternal__"
+        },
+        {
+          "name": "SrcRole",
+          "type": "*RoleInternal__"
+        },
+        {
+          "name": "Keys",
+          "type": "*MemberKeysInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.MemberRole",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "DstRole",
+          "type": "*RoleInternal__"
+        },
+        {
+          "name": "Member",
+          "type": "*MemberInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.MemberRoleSeqno",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "Mr",
+          "type": "*MemberRoleInternal__"
+        },
+        {
+          "name": "Seqno",
+          "type": "*SeqnoInternal__"
+        },
+        {
+          "name": "Time",
+          "type": "*TimeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.MerkleBackPointer",
+      "go_file": "proto/lib/merkle.go",
+      "fields": [
+        {
+          "name": "Epno",
+          "type": "*MerkleEpnoInternal__"
+        },
+        {
+          "name": "Hash",
+          "type": "*MerkleRootHashInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.MerkleBatch",
+      "go_file": "proto/lib/merkle.go",
+      "fields": [
+        {
+          "name": "Batchno",
+          "type": "*MerkleBatchNoInternal__"
+        },
+        {
+          "name": "Time",
+          "type": "*TimeInternal__"
+        },
+        {
+          "name": "Leaves",
+          "type": "*[](*MerkleLeafInternal__)"
+        },
+        {
+          "name": "Hostchain",
+          "type": "*HostchainTailInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.MerkleBatcherState",
+      "go_file": "proto/lib/merkle.go",
+      "fields": [
+        {
+          "name": "Next",
+          "type": "*MerkleBatchNoInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.MerkleInteriorNode",
+      "go_file": "proto/lib/merkle.go",
+      "fields": [
+        {
+          "name": "PrefixBitStart",
+          "type": "*uint64"
+        },
+        {
+          "name": "PrefixBitCount",
+          "type": "*uint64"
+        },
+        {
+          "name": "Prefix",
+          "type": "*[]byte"
+        },
+        {
+          "name": "Left",
+          "type": "*MerkleNodeHashInternal__"
+        },
+        {
+          "name": "Right",
+          "type": "*MerkleNodeHashInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.MerkleLeaf",
+      "go_file": "proto/lib/merkle.go",
+      "fields": [
+        {
+          "name": "Key",
+          "type": "*MerkleTreeRFOutputInternal__"
+        },
+        {
+          "name": "Value",
+          "type": "*StdHashInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.MerkleLeafUID",
+      "go_file": "proto/lib/merkle.go",
+      "fields": [
+        {
+          "name": "Uid",
+          "type": "*UIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.MerkleNameInput",
+      "go_file": "proto/lib/merkle.go",
+      "fields": [
+        {
+          "name": "Name",
+          "type": "*NameInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.MerklePathCompressed",
+      "go_file": "proto/lib/merkle.go",
+      "fields": [
+        {
+          "name": "Root",
+          "type": "*MerkleRootInternal__"
+        },
+        {
+          "name": "Path",
+          "type": "*MerklePathCompressedBlobInternal__"
+        },
+        {
+          "name": "Terminal",
+          "type": "*MerklePathTerminalInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.MerklePathCompressedPair",
+      "go_file": "proto/lib/merkle.go",
+      "fields": [
+        {
+          "name": "Path",
+          "type": "*MerklePathCompressedBlobInternal__"
+        },
+        {
+          "name": "Terminal",
+          "type": "*MerklePathTerminalInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.MerklePathIncomplete",
+      "go_file": "proto/lib/merkle.go",
+      "fields": [
+        {
+          "name": "NodeAtPrefixMiss",
+          "type": "*MerkleInteriorNodeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.MerklePathToLeaf",
+      "go_file": "proto/lib/merkle.go",
+      "fields": [
+        {
+          "name": "Leaf",
+          "type": "*StdHashInternal__"
+        },
+        {
+          "name": "FoundKey",
+          "type": "*MerkleTreeRFOutputInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.MerklePathsCompressed",
+      "go_file": "proto/lib/merkle.go",
+      "fields": [
+        {
+          "name": "Root",
+          "type": "*MerkleRootInternal__"
+        },
+        {
+          "name": "Paths",
+          "type": "*[](*MerklePathCompressedPairInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "lib.MerkleRootV1",
+      "go_file": "proto/lib/merkle.go",
+      "fields": [
+        {
+          "name": "Epno",
+          "type": "*MerkleEpnoInternal__"
+        },
+        {
+          "name": "Time",
+          "type": "*TimeInternal__"
+        },
+        {
+          "name": "BackPointers",
+          "type": "*MerkleBackPointerHashInternal__"
+        },
+        {
+          "name": "RootNode",
+          "type": "*MerkleNodeHashInternal__"
+        },
+        {
+          "name": "Hostchain",
+          "type": "*HostchainTailInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.MerkleSegment",
+      "go_file": "proto/lib/merkle.go",
+      "fields": [
+        {
+          "name": "PrefixBitCount",
+          "type": "*uint64"
+        },
+        {
+          "name": "Prefix",
+          "type": "*[]byte"
+        }
+      ]
+    },
+    {
+      "name": "lib.MerkleTreeRFInput",
+      "go_file": "proto/lib/merkle.go",
+      "fields": [
+        {
+          "name": "Ct",
+          "type": "*ChainTypeInternal__"
+        },
+        {
+          "name": "Entity",
+          "type": "*EntityIDInternal__"
+        },
+        {
+          "name": "Seqno",
+          "type": "*SeqnoInternal__"
+        },
+        {
+          "name": "Location",
+          "type": "*TreeLocationInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.MerkleUpdateBatch",
+      "go_file": "proto/lib/merkle.go",
+      "fields": [
+        {
+          "name": "Epno",
+          "type": "*MerkleEpnoInternal__"
+        },
+        {
+          "name": "Leaves",
+          "type": "*[](*MerkleLeafInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "lib.Metering",
+      "go_file": "proto/lib/config.go",
+      "fields": [
+        {
+          "name": "Users",
+          "type": "*bool"
+        },
+        {
+          "name": "VHosts",
+          "type": "*bool"
+        },
+        {
+          "name": "PerVHostDisk",
+          "type": "*bool"
+        }
+      ]
+    },
+    {
+      "name": "lib.MethodV2",
+      "go_file": "proto/lib/status.go",
+      "fields": [
+        {
+          "name": "Proto",
+          "type": "*uint64"
+        },
+        {
+          "name": "Method",
+          "type": "*uint64"
+        },
+        {
+          "name": "Name",
+          "type": "*string"
+        }
+      ]
+    },
+    {
+      "name": "lib.NaclBox",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "Pk",
+          "type": "*Curve25519PublicKeyInternal__"
+        },
+        {
+          "name": "Nonce",
+          "type": "*NaclNonceInternal__"
+        },
+        {
+          "name": "Ciphertext",
+          "type": "*NaclCiphertextInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.NaclSecretBox",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "Nonce",
+          "type": "*NaclNonceInternal__"
+        },
+        {
+          "name": "Ciphertext",
+          "type": "*NaclCiphertextInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.NameAndSeqnoBundle",
+      "go_file": "proto/lib/names.go",
+      "fields": [
+        {
+          "name": "B",
+          "type": "*NameBundleInternal__"
+        },
+        {
+          "name": "S",
+          "type": "*NameSeqnoInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.NameBundle",
+      "go_file": "proto/lib/names.go",
+      "fields": [
+        {
+          "name": "Name",
+          "type": "*NameInternal__"
+        },
+        {
+          "name": "NameUtf8",
+          "type": "*NameUtf8Internal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.NameHashPreimage",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "Name",
+          "type": "*NameInternal__"
+        },
+        {
+          "name": "HostId",
+          "type": "*HostIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.OAuth2Binding",
+      "go_file": "proto/lib/sso.go",
+      "fields": [
+        {
+          "name": "Fqu",
+          "type": "*FQUserInternal__"
+        },
+        {
+          "name": "Root",
+          "type": "*TreeRootInternal__"
+        },
+        {
+          "name": "Rand",
+          "type": "*OAuth2RandomInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.OAuth2Config",
+      "go_file": "proto/lib/sso.go",
+      "fields": [
+        {
+          "name": "Id",
+          "type": "*SSOConfigIDInternal__"
+        },
+        {
+          "name": "ConfigURI",
+          "type": "*URLStringInternal__"
+        },
+        {
+          "name": "ClientID",
+          "type": "*OAuth2ClientIDInternal__"
+        },
+        {
+          "name": "ClientSecret",
+          "type": "*OAuth2ClientSecretInternal__"
+        },
+        {
+          "name": "RedirectURI",
+          "type": "*URLStringInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.OAuth2IDTokenBinding",
+      "go_file": "proto/lib/sso.go",
+      "fields": [
+        {
+          "name": "Inner",
+          "type": "*OAuth2IDTokenBindingBlobInternal__"
+        },
+        {
+          "name": "Sig",
+          "type": "*SignatureInternal__"
+        },
+        {
+          "name": "Key",
+          "type": "*EntityIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.OAuth2IDTokenBindingPayload",
+      "go_file": "proto/lib/sso.go",
+      "fields": [
+        {
+          "name": "IdToken",
+          "type": "*OAuth2IDTokenInternal__"
+        },
+        {
+          "name": "Binding",
+          "type": "*OAuth2BindingInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.OAuth2IdPError",
+      "go_file": "proto/lib/status.go",
+      "fields": [
+        {
+          "name": "Code",
+          "type": "*uint64"
+        },
+        {
+          "name": "Err",
+          "type": "*string"
+        },
+        {
+          "name": "Desc",
+          "type": "*string"
+        }
+      ]
+    },
+    {
+      "name": "lib.OAuth2ParsedIDToken",
+      "go_file": "proto/lib/sso.go",
+      "fields": [
+        {
+          "name": "Raw",
+          "type": "*OAuth2IDTokenInternal__"
+        },
+        {
+          "name": "Issuer",
+          "type": "*URLStringInternal__"
+        },
+        {
+          "name": "Username",
+          "type": "*NameUtf8Internal__"
+        },
+        {
+          "name": "Email",
+          "type": "*EmailInternal__"
+        },
+        {
+          "name": "Issued",
+          "type": "*TimeInternal__"
+        },
+        {
+          "name": "Expires",
+          "type": "*TimeInternal__"
+        },
+        {
+          "name": "DisplayName",
+          "type": "*NameUtf8Internal__"
+        },
+        {
+          "name": "Subject",
+          "type": "*OAuth2SubjectInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.OAuth2Session",
+      "go_file": "proto/lib/sso.go",
+      "fields": [
+        {
+          "name": "Id",
+          "type": "*OAuth2SessionIDInternal__"
+        },
+        {
+          "name": "Binding",
+          "type": "*OAuth2BindingInternal__"
+        },
+        {
+          "name": "Nonce",
+          "type": "*OAuth2NonceInternal__"
+        },
+        {
+          "name": "ChallengeCode",
+          "type": "*OAuth2PKCEChallengeCodeInternal__"
+        },
+        {
+          "name": "Verifier",
+          "type": "*OAuth2PKCEVerifierInternal__"
+        },
+        {
+          "name": "AuthURI",
+          "type": "*URLStringInternal__"
+        },
+        {
+          "name": "Idtok",
+          "type": "*OAuth2ParsedIDTokenInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.OAuth2TokenError",
+      "go_file": "proto/lib/status.go",
+      "fields": [
+        {
+          "name": "Err",
+          "type": "*StatusInternal__"
+        },
+        {
+          "name": "Which",
+          "type": "*string"
+        }
+      ]
+    },
+    {
+      "name": "lib.OAuth2TokenSet",
+      "go_file": "proto/lib/sso.go",
+      "fields": [
+        {
+          "name": "AccessToken",
+          "type": "*OAuth2AccessTokenInternal__"
+        },
+        {
+          "name": "IdToken",
+          "type": "*OAuth2IDTokenInternal__"
+        },
+        {
+          "name": "Expires",
+          "type": "*TimeInternal__"
+        },
+        {
+          "name": "Username",
+          "type": "*NameUtf8Internal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.PartyName",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "Name",
+          "type": "*NameUtf8Internal__"
+        },
+        {
+          "name": "IsTeam",
+          "type": "*bool"
+        }
+      ]
+    },
+    {
+      "name": "lib.PassphraseInfo",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "Gen",
+          "type": "*PassphraseGenerationInternal__"
+        },
+        {
+          "name": "Salt",
+          "type": "*PassphraseSaltInternal__"
+        },
+        {
+          "name": "Sv",
+          "type": "*StretchVersionInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.PathVersionVector",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "Root",
+          "type": "*KVVersionInternal__"
+        },
+        {
+          "name": "Path",
+          "type": "*[](*DirVersionInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "lib.PpePUKBox",
+      "go_file": "proto/lib/ppe.go",
+      "fields": [
+        {
+          "name": "Box",
+          "type": "*SecretBoxInternal__"
+        },
+        {
+          "name": "PukGen",
+          "type": "*GenerationInternal__"
+        },
+        {
+          "name": "PukRole",
+          "type": "*RoleInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.PpeParcel",
+      "go_file": "proto/lib/ppe.go",
+      "fields": [
+        {
+          "name": "SkwkBox",
+          "type": "*SecretBoxInternal__"
+        },
+        {
+          "name": "PpGen",
+          "type": "*PassphraseGenerationInternal__"
+        },
+        {
+          "name": "PassphraseBox",
+          "type": "*PpePassphraseBoxInternal__"
+        },
+        {
+          "name": "PukBox",
+          "type": "*PpePUKBoxInternal__"
+        },
+        {
+          "name": "Salt",
+          "type": "*PassphraseSaltInternal__"
+        },
+        {
+          "name": "Sv",
+          "type": "*StretchVersionInternal__"
+        },
+        {
+          "name": "VerifyKey",
+          "type": "*EntityIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.PpePassphraseBox",
+      "go_file": "proto/lib/ppe.go",
+      "fields": [
+        {
+          "name": "Box",
+          "type": "*BoxInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.ProvisionInfo",
+      "go_file": "proto/lib/device.go",
+      "fields": [
+        {
+          "name": "Signer",
+          "type": "*EntityIDInternal__"
+        },
+        {
+          "name": "Chain",
+          "type": "*BaseChainerInternal__"
+        },
+        {
+          "name": "Leaf",
+          "type": "*MerkleLeafInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.PublicServices",
+      "go_file": "proto/lib/probe.go",
+      "fields": [
+        {
+          "name": "Probe",
+          "type": "*TCPAddrInternal__"
+        },
+        {
+          "name": "Reg",
+          "type": "*TCPAddrInternal__"
+        },
+        {
+          "name": "User",
+          "type": "*TCPAddrInternal__"
+        },
+        {
+          "name": "MerkleQuery",
+          "type": "*TCPAddrInternal__"
+        },
+        {
+          "name": "KvStore",
+          "type": "*TCPAddrInternal__"
+        },
+        {
+          "name": "Realtime",
+          "type": "*TCPAddrInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.PublicZone",
+      "go_file": "proto/lib/probe.go",
+      "fields": [
+        {
+          "name": "Ttl",
+          "type": "*DurationSecsInternal__"
+        },
+        {
+          "name": "Services",
+          "type": "*PublicServicesInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.RSAPub",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "N",
+          "type": "*[]byte"
+        },
+        {
+          "name": "E",
+          "type": "*uint64"
+        }
+      ]
+    },
+    {
+      "name": "lib.RTBoxRG",
+      "go_file": "proto/lib/realtime.go",
+      "fields": [
+        {
+          "name": "Rg",
+          "type": "*RoleAndGenInternal__"
+        },
+        {
+          "name": "Box",
+          "type": "*SecretBoxInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.RTInboxPollRes",
+      "go_file": "proto/lib/realtime.go",
+      "fields": [
+        {
+          "name": "Bumped",
+          "type": "*bool"
+        },
+        {
+          "name": "InboxVersion",
+          "type": "*RTInboxVersionInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.RTKeyDerivation",
+      "go_file": "proto/lib/realtime.go",
+      "fields": [
+        {
+          "name": "App",
+          "type": "*RTAppIDInternal__"
+        },
+        {
+          "name": "Var",
+          "type": "*RTKeyVarInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.RTMsgBox",
+      "go_file": "proto/lib/realtime.go",
+      "fields": [
+        {
+          "name": "Ctext",
+          "type": "*RTMsgCiphertextInternal__"
+        },
+        {
+          "name": "Rg",
+          "type": "*RoleAndGenInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.RTMsgCached",
+      "go_file": "proto/lib/realtime.go",
+      "fields": [
+        {
+          "name": "Md",
+          "type": "*RTMsgNoncerInternal__"
+        },
+        {
+          "name": "Mw",
+          "type": "*RTMsgWrapperInternal__"
+        },
+        {
+          "name": "Sit",
+          "type": "*TimeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.RTMsgCachedWithSeq",
+      "go_file": "proto/lib/realtime.go",
+      "fields": [
+        {
+          "name": "Cm",
+          "type": "*RTMsgCachedInternal__"
+        },
+        {
+          "name": "Seq",
+          "type": "*RTMsgSeqInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.RTMsgMetadata",
+      "go_file": "proto/lib/realtime.go",
+      "fields": [
+        {
+          "name": "MsgID",
+          "type": "*RTMsgIDInternal__"
+        },
+        {
+          "name": "PrevID",
+          "type": "*RTMsgIDInternal__"
+        },
+        {
+          "name": "PrevSeq",
+          "type": "*RTMsgSeqInternal__"
+        },
+        {
+          "name": "SendTime",
+          "type": "*TimeInternal__"
+        },
+        {
+          "name": "Typ",
+          "type": "*RTMsgTypeInternal__"
+        },
+        {
+          "name": "FurtherUserAttribution",
+          "type": "*UIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.RTMsgNoncer",
+      "go_file": "proto/lib/realtime.go",
+      "fields": [
+        {
+          "name": "Md",
+          "type": "*RTMsgMetadataInternal__"
+        },
+        {
+          "name": "Sender",
+          "type": "*FQPartyInternal__"
+        },
+        {
+          "name": "AppID",
+          "type": "*RTAppIDInternal__"
+        },
+        {
+          "name": "Team",
+          "type": "*FQPartyInternal__"
+        },
+        {
+          "name": "Chid",
+          "type": "*RTChannelIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.RTMsgPlaintext",
+      "go_file": "proto/lib/realtime.go",
+      "fields": [
+        {
+          "name": "Md",
+          "type": "*RTMsgMetadataInternal__"
+        },
+        {
+          "name": "Body",
+          "type": "*RTMsgBodyInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.RTMsgPlaintextPegged",
+      "go_file": "proto/lib/realtime.go",
+      "fields": [
+        {
+          "name": "Basic",
+          "type": "*RTMsgPlaintextBasicInternal__"
+        },
+        {
+          "name": "ReplyTo",
+          "type": "*RTMsgIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.Rational",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "Infinity",
+          "type": "*bool"
+        },
+        {
+          "name": "Base",
+          "type": "*[]byte"
+        },
+        {
+          "name": "Exp",
+          "type": "*int64"
+        }
+      ]
+    },
+    {
+      "name": "lib.RationalRange",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "Low",
+          "type": "*RationalInternal__"
+        },
+        {
+          "name": "High",
+          "type": "*RationalInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.RegServerConfig",
+      "go_file": "proto/lib/user.go",
+      "fields": [
+        {
+          "name": "Sso",
+          "type": "*SSOConfigInternal__"
+        },
+        {
+          "name": "Typ",
+          "type": "*HostTypeInternal__"
+        },
+        {
+          "name": "View",
+          "type": "*HostViewershipInternal__"
+        },
+        {
+          "name": "Icr",
+          "type": "*InviteCodeRegimeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.RevokeInfo",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "Revoker",
+          "type": "*EntityIDInternal__"
+        },
+        {
+          "name": "Chain",
+          "type": "*BaseChainerInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.RoleAndGen",
+      "go_file": "proto/lib/keys.go",
+      "fields": [
+        {
+          "name": "Role",
+          "type": "*RoleInternal__"
+        },
+        {
+          "name": "Gen",
+          "type": "*GenerationInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.RoleAndSeqno",
+      "go_file": "proto/lib/team.go",
+      "fields": [
+        {
+          "name": "Role",
+          "type": "*RoleInternal__"
+        },
+        {
+          "name": "Seqno",
+          "type": "*SeqnoInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.RolePair",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "Read",
+          "type": "*RoleInternal__"
+        },
+        {
+          "name": "Write",
+          "type": "*RoleInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.RolePairOpt",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "Read",
+          "type": "*RoleInternal__"
+        },
+        {
+          "name": "Write",
+          "type": "*RoleInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.SSOConfig",
+      "go_file": "proto/lib/sso.go",
+      "fields": [
+        {
+          "name": "Active",
+          "type": "*SSOProtocolTypeInternal__"
+        },
+        {
+          "name": "Oauth2",
+          "type": "*OAuth2ConfigInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.SSOLoginRes",
+      "go_file": "proto/lib/sso.go",
+      "fields": [
+        {
+          "name": "Username",
+          "type": "*NameUtf8Internal__"
+        },
+        {
+          "name": "Email",
+          "type": "*EmailInternal__"
+        },
+        {
+          "name": "Issuer",
+          "type": "*URLStringInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.SeedBox",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "Rg",
+          "type": "*RoleAndGenInternal__"
+        },
+        {
+          "name": "Box",
+          "type": "*SecretBoxInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.SeedBoxExternalNonce",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "Rg",
+          "type": "*RoleAndGenInternal__"
+        },
+        {
+          "name": "Ctext",
+          "type": "*NaclCiphertextInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.SeedChainBox",
+      "go_file": "proto/lib/keys.go",
+      "fields": [
+        {
+          "name": "Gen",
+          "type": "*GenerationInternal__"
+        },
+        {
+          "name": "Role",
+          "type": "*RoleInternal__"
+        },
+        {
+          "name": "Box",
+          "type": "*SecretBoxInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.SemVer",
+      "go_file": "proto/lib/compat.go",
+      "fields": [
+        {
+          "name": "Major",
+          "type": "*uint64"
+        },
+        {
+          "name": "Minor",
+          "type": "*uint64"
+        },
+        {
+          "name": "Patch",
+          "type": "*uint64"
+        }
+      ]
+    },
+    {
+      "name": "lib.SenderPair",
+      "go_file": "proto/lib/team.go",
+      "fields": [
+        {
+          "name": "VerifyKey",
+          "type": "*EntityIDInternal__"
+        },
+        {
+          "name": "HepkFp",
+          "type": "*HEPKFingerprintInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.ServerClientVersionInfo",
+      "go_file": "proto/lib/compat.go",
+      "fields": [
+        {
+          "name": "Min",
+          "type": "*SemVerInternal__"
+        },
+        {
+          "name": "Newest",
+          "type": "*SemVerInternal__"
+        },
+        {
+          "name": "Msg",
+          "type": "*string"
+        }
+      ]
+    },
+    {
+      "name": "lib.SharedKey",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "Gen",
+          "type": "*GenerationInternal__"
+        },
+        {
+          "name": "Role",
+          "type": "*RoleInternal__"
+        },
+        {
+          "name": "VerifyKey",
+          "type": "*EntityIDInternal__"
+        },
+        {
+          "name": "HepkFp",
+          "type": "*HEPKFingerprintInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.SharedKeyAndHEPK",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "Sk",
+          "type": "*SharedKeyInternal__"
+        },
+        {
+          "name": "Hepk",
+          "type": "*HEPKInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.SharedKeyBox",
+      "go_file": "proto/lib/keys.go",
+      "fields": [
+        {
+          "name": "Gen",
+          "type": "*GenerationInternal__"
+        },
+        {
+          "name": "Role",
+          "type": "*RoleInternal__"
+        },
+        {
+          "name": "Box",
+          "type": "*BoxInternal__"
+        },
+        {
+          "name": "Targ",
+          "type": "*SharedKeyBoxTargetInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.SharedKeyBoxSet",
+      "go_file": "proto/lib/keys.go",
+      "fields": [
+        {
+          "name": "Id",
+          "type": "*BoxSetIDInternal__"
+        },
+        {
+          "name": "Boxes",
+          "type": "*[](*SharedKeyBoxInternal__)"
+        },
+        {
+          "name": "TempDHKeySigned",
+          "type": "*TempDHKeySignedInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.SharedKeyBoxTarget",
+      "go_file": "proto/lib/keys.go",
+      "fields": [
+        {
+          "name": "Eid",
+          "type": "*EntityIDInternal__"
+        },
+        {
+          "name": "Host",
+          "type": "*HostIDInternal__"
+        },
+        {
+          "name": "Role",
+          "type": "*RoleInternal__"
+        },
+        {
+          "name": "Gen",
+          "type": "*GenerationInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.SharedKeyGen",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "Role",
+          "type": "*RoleInternal__"
+        },
+        {
+          "name": "Gen",
+          "type": "*GenerationInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.SharedKeyNotFound",
+      "go_file": "proto/lib/status.go",
+      "fields": [
+        {
+          "name": "Gen",
+          "type": "*GenerationInternal__"
+        },
+        {
+          "name": "Role",
+          "type": "*RoleInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.SharedKeyParcel",
+      "go_file": "proto/lib/keys.go",
+      "fields": [
+        {
+          "name": "Box",
+          "type": "*SharedKeyBoxInternal__"
+        },
+        {
+          "name": "Sender",
+          "type": "*EntityIDInternal__"
+        },
+        {
+          "name": "BoxId",
+          "type": "*BoxSetIDInternal__"
+        },
+        {
+          "name": "TempDHKeySigned",
+          "type": "*TempDHKeySignedInternal__"
+        },
+        {
+          "name": "SeedChain",
+          "type": "*[](*SeedChainBoxInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "lib.SharedKeySeed",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "Fqe",
+          "type": "*FQEntityInternal__"
+        },
+        {
+          "name": "Gen",
+          "type": "*GenerationInternal__"
+        },
+        {
+          "name": "Role",
+          "type": "*RoleInternal__"
+        },
+        {
+          "name": "Seed",
+          "type": "*SecretSeed32Internal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.SignedBoxSet",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "Id",
+          "type": "*BoxSetIDInternal__"
+        },
+        {
+          "name": "Boxes",
+          "type": "*[](*BoxInternal__)"
+        },
+        {
+          "name": "TempDHKeySigned",
+          "type": "*TempDHKeySignedInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.SignedMerkleRoot",
+      "go_file": "proto/lib/merkle.go",
+      "fields": [
+        {
+          "name": "Inner",
+          "type": "*MerkleRootBlobInternal__"
+        },
+        {
+          "name": "Sig",
+          "type": "*SignatureInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.SignedPublicZone",
+      "go_file": "proto/lib/probe.go",
+      "fields": [
+        {
+          "name": "Inner",
+          "type": "*PublicZoneBlobInternal__"
+        },
+        {
+          "name": "Sig",
+          "type": "*SignatureInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.SmallFileBox",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "Rg",
+          "type": "*RoleAndGenInternal__"
+        },
+        {
+          "name": "DataBox",
+          "type": "*NaclCiphertextInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.SocketError",
+      "go_file": "proto/lib/status.go",
+      "fields": [
+        {
+          "name": "Path",
+          "type": "*string"
+        },
+        {
+          "name": "Msg",
+          "type": "*string"
+        }
+      ]
+    },
+    {
+      "name": "lib.SubjectKeyID",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "Fqu",
+          "type": "*FQUserInternal__"
+        },
+        {
+          "name": "KeyType",
+          "type": "*EntityTypeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.SubkeySeed",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "Parent",
+          "type": "*EntityIDInternal__"
+        },
+        {
+          "name": "Subkey",
+          "type": "*EntityIDInternal__"
+        },
+        {
+          "name": "Seed",
+          "type": "*SecretSeed32Internal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.TeamCycleError",
+      "go_file": "proto/lib/status.go",
+      "fields": [
+        {
+          "name": "Joiner",
+          "type": "*RationalRangeInternal__"
+        },
+        {
+          "name": "Joinee",
+          "type": "*RationalRangeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.TeamInviteV1",
+      "go_file": "proto/lib/team.go",
+      "fields": [
+        {
+          "name": "Hsh",
+          "type": "*TeamCertHashInternal__"
+        },
+        {
+          "name": "Host",
+          "type": "*HostIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.TeamMemberKeys",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "VerifyKey",
+          "type": "*EntityIDInternal__"
+        },
+        {
+          "name": "HepkFp",
+          "type": "*HEPKFingerprintInternal__"
+        },
+        {
+          "name": "Gen",
+          "type": "*GenerationInternal__"
+        },
+        {
+          "name": "Trkc",
+          "type": "*KeyCommitmentInternal__"
+        },
+        {
+          "name": "Tir",
+          "type": "*RationalRangeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.TeamMembershipApprovedDetails",
+      "go_file": "proto/lib/team.go",
+      "fields": [
+        {
+          "name": "Dst",
+          "type": "*RoleAndSeqnoInternal__"
+        },
+        {
+          "name": "KeyComm",
+          "type": "*KeyCommitmentInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.TeamMembershipLink",
+      "go_file": "proto/lib/team.go",
+      "fields": [
+        {
+          "name": "Team",
+          "type": "*FQTeamInternal__"
+        },
+        {
+          "name": "SrcRole",
+          "type": "*RoleInternal__"
+        },
+        {
+          "name": "State",
+          "type": "*TeamMembershipDetailsInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.TeamRemoteMemberViewToken",
+      "go_file": "proto/lib/team.go",
+      "fields": [
+        {
+          "name": "Team",
+          "type": "*TeamIDInternal__"
+        },
+        {
+          "name": "Inner",
+          "type": "*TeamRemoteMemberViewTokenInnerInternal__"
+        },
+        {
+          "name": "Jrt",
+          "type": "*TeamRSVPRemoteInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.TeamRemoteMemberViewTokenBoxPayload",
+      "go_file": "proto/lib/team.go",
+      "fields": [
+        {
+          "name": "Tok",
+          "type": "*PermissionTokenInternal__"
+        },
+        {
+          "name": "Party",
+          "type": "*FQPartyInternal__"
+        },
+        {
+          "name": "Tm",
+          "type": "*TimeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.TeamRemoteMemberViewTokenInner",
+      "go_file": "proto/lib/team.go",
+      "fields": [
+        {
+          "name": "Member",
+          "type": "*FQPartyInternal__"
+        },
+        {
+          "name": "PtkGen",
+          "type": "*GenerationInternal__"
+        },
+        {
+          "name": "SecretBox",
+          "type": "*SecretBoxInternal__"
+        },
+        {
+          "name": "PtkRole",
+          "type": "*RoleInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.TeamRemovalKeyBox",
+      "go_file": "proto/lib/keys.go",
+      "fields": [
+        {
+          "name": "Box",
+          "type": "*BoxInternal__"
+        },
+        {
+          "name": "EncKey",
+          "type": "*RoleAndGenInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.TempDHKey",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "Key",
+          "type": "*DHPublicKeyInternal__"
+        },
+        {
+          "name": "Time",
+          "type": "*TimeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.TempDHKeySigTemplate",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "BoxSetId",
+          "type": "*BoxSetIDInternal__"
+        },
+        {
+          "name": "TempDHKey",
+          "type": "*TempDHKeyInternal__"
+        },
+        {
+          "name": "Signer",
+          "type": "*FQEntityInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.TempDHKeySigned",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "TempDHKey",
+          "type": "*TempDHKeyInternal__"
+        },
+        {
+          "name": "Sig",
+          "type": "*SignatureInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.TestLinkOuterV1",
+      "go_file": "proto/lib/test.go",
+      "fields": [
+        {
+          "name": "Inner",
+          "type": "*[]byte"
+        },
+        {
+          "name": "Signatures",
+          "type": "*[](*SignatureInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "lib.TooBigError",
+      "go_file": "proto/lib/status.go",
+      "fields": [
+        {
+          "name": "Actual",
+          "type": "*uint64"
+        },
+        {
+          "name": "Limit",
+          "type": "*uint64"
+        },
+        {
+          "name": "Desc",
+          "type": "*string"
+        }
+      ]
+    },
+    {
+      "name": "lib.TreeRoot",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "Epno",
+          "type": "*MerkleEpnoInternal__"
+        },
+        {
+          "name": "Hash",
+          "type": "*MerkleRootHashInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.UISessionID",
+      "go_file": "proto/lib/ui.go",
+      "fields": [
+        {
+          "name": "Type",
+          "type": "*UISessionTypeInternal__"
+        },
+        {
+          "name": "Ctr",
+          "type": "*UISessionCtrInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.UpdateTriggerProvision",
+      "go_file": "proto/lib/merkle.go",
+      "fields": [
+        {
+          "name": "Eid",
+          "type": "*EntityIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.UpdateTriggerRevoke",
+      "go_file": "proto/lib/merkle.go",
+      "fields": [
+        {
+          "name": "PartyID",
+          "type": "*PartyIDInternal__"
+        },
+        {
+          "name": "VerifyKeyID",
+          "type": "*EntityIDInternal__"
+        },
+        {
+          "name": "Epno",
+          "type": "*MerkleEpnoInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.UpdateTriggerTeamChange",
+      "go_file": "proto/lib/merkle.go",
+      "fields": [
+        {
+          "name": "Team",
+          "type": "*TeamIDInternal__"
+        },
+        {
+          "name": "Seqno",
+          "type": "*SeqnoInternal__"
+        },
+        {
+          "name": "Changes",
+          "type": "*[](*MemberRoleInternal__)"
+        },
+        {
+          "name": "NewKeys",
+          "type": "*[](*SharedKeyInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "lib.UploadChunk",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "Data",
+          "type": "*NaclCiphertextInternal__"
+        },
+        {
+          "name": "Offset",
+          "type": "*OffsetInternal__"
+        },
+        {
+          "name": "Final",
+          "type": "*UploadFinalInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.UploadFinal",
+      "go_file": "proto/lib/kv.go",
+      "fields": [
+        {
+          "name": "Sz",
+          "type": "*SizeInternal__"
+        },
+        {
+          "name": "ChunkSum",
+          "type": "*StdHashInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.UserContext",
+      "go_file": "proto/lib/user.go",
+      "fields": [
+        {
+          "name": "Info",
+          "type": "*UserInfoInternal__"
+        },
+        {
+          "name": "Key",
+          "type": "*EntityIDInternal__"
+        },
+        {
+          "name": "Puks",
+          "type": "*[](*SharedKeyInternal__)"
+        },
+        {
+          "name": "Mtime",
+          "type": "*TimeInternal__"
+        },
+        {
+          "name": "Devname",
+          "type": "*DeviceNameInternal__"
+        },
+        {
+          "name": "LockStatus",
+          "type": "*StatusInternal__"
+        },
+        {
+          "name": "NetworkStatus",
+          "type": "*StatusInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.UserInfo",
+      "go_file": "proto/lib/user.go",
+      "fields": [
+        {
+          "name": "Fqu",
+          "type": "*FQUserInternal__"
+        },
+        {
+          "name": "Username",
+          "type": "*NameBundleInternal__"
+        },
+        {
+          "name": "HostAddr",
+          "type": "*TCPAddrInternal__"
+        },
+        {
+          "name": "Active",
+          "type": "*bool"
+        },
+        {
+          "name": "YubiInfo",
+          "type": "*YubiKeyInfoHybridInternal__"
+        },
+        {
+          "name": "Role",
+          "type": "*RoleInternal__"
+        },
+        {
+          "name": "KeyGenus",
+          "type": "*KeyGenusInternal__"
+        },
+        {
+          "name": "ViewToken",
+          "type": "*ViewTokenInternal__"
+        },
+        {
+          "name": "Key",
+          "type": "*EntityIDInternal__"
+        },
+        {
+          "name": "Devname",
+          "type": "*DeviceNameInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.UserInfoAndStatus",
+      "go_file": "proto/lib/user.go",
+      "fields": [
+        {
+          "name": "Info",
+          "type": "*UserInfoInternal__"
+        },
+        {
+          "name": "LockStatus",
+          "type": "*StatusInternal__"
+        },
+        {
+          "name": "NetworkStatus",
+          "type": "*StatusInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.UserMemberKeys",
+      "go_file": "proto/lib/chains.go",
+      "fields": [
+        {
+          "name": "HepkFp",
+          "type": "*HEPKFingerprintInternal__"
+        },
+        {
+          "name": "SubKey",
+          "type": "*EntityIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.VersionBundle",
+      "go_file": "proto/lib/compat.go",
+      "fields": [
+        {
+          "name": "Cli",
+          "type": "*ClientVersionExtInternal__"
+        },
+        {
+          "name": "Agent",
+          "type": "*ClientVersionExtInternal__"
+        },
+        {
+          "name": "Server",
+          "type": "*ServerClientVersionInfoInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.ViewToken",
+      "go_file": "proto/lib/token.go",
+      "fields": [
+        {
+          "name": "IsSelf",
+          "type": "*bool"
+        },
+        {
+          "name": "Token",
+          "type": "*PermissionTokenInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.YubiBox",
+      "go_file": "proto/lib/common.go",
+      "fields": [
+        {
+          "name": "Pk",
+          "type": "*ECDSACompressedPublicKeyInternal__"
+        },
+        {
+          "name": "SecretBox",
+          "type": "*SecretBoxInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.YubiCardID",
+      "go_file": "proto/lib/yubi.go",
+      "fields": [
+        {
+          "name": "Name",
+          "type": "*YubiCardNameInternal__"
+        },
+        {
+          "name": "Serial",
+          "type": "*YubiSerialInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.YubiCardInfo",
+      "go_file": "proto/lib/yubi.go",
+      "fields": [
+        {
+          "name": "Id",
+          "type": "*YubiCardIDInternal__"
+        },
+        {
+          "name": "Keys",
+          "type": "*[](*YubiSlotAndKeyIDInternal__)"
+        },
+        {
+          "name": "EmptySlots",
+          "type": "*[](*YubiSlotInternal__)"
+        },
+        {
+          "name": "Selected",
+          "type": "*[](*YubiSlotAndKeyIDInternal__)"
+        },
+        {
+          "name": "Mks",
+          "type": "*ManagementKeyStateInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.YubiKeyInfo",
+      "go_file": "proto/lib/yubi.go",
+      "fields": [
+        {
+          "name": "Card",
+          "type": "*YubiCardIDInternal__"
+        },
+        {
+          "name": "Key",
+          "type": "*YubiSlotAndKeyIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.YubiKeyInfoHybrid",
+      "go_file": "proto/lib/yubi.go",
+      "fields": [
+        {
+          "name": "Card",
+          "type": "*YubiCardIDInternal__"
+        },
+        {
+          "name": "Key",
+          "type": "*YubiSlotAndKeyIDInternal__"
+        },
+        {
+          "name": "PqKey",
+          "type": "*YubiSlotAndPQKeyIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.YubiKeyInfoPQ",
+      "go_file": "proto/lib/yubi.go",
+      "fields": [
+        {
+          "name": "Card",
+          "type": "*YubiCardIDInternal__"
+        },
+        {
+          "name": "Key",
+          "type": "*YubiSlotAndPQKeyIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.YubiManagementKeyBoxPayload",
+      "go_file": "proto/lib/yubi.go",
+      "fields": [
+        {
+          "name": "Mk",
+          "type": "*YubiManagementKeyInternal__"
+        },
+        {
+          "name": "Card",
+          "type": "*YubiCardIDInternal__"
+        },
+        {
+          "name": "Slot",
+          "type": "*YubiSlotInternal__"
+        },
+        {
+          "name": "Yk",
+          "type": "*YubiIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.YubiSerialSlot",
+      "go_file": "proto/lib/yubi.go",
+      "fields": [
+        {
+          "name": "Serial",
+          "type": "*YubiSerialInternal__"
+        },
+        {
+          "name": "Slot",
+          "type": "*YubiSlotInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.YubiSerialSlotHost",
+      "go_file": "proto/lib/yubi.go",
+      "fields": [
+        {
+          "name": "Serial",
+          "type": "*YubiSerialInternal__"
+        },
+        {
+          "name": "Slot",
+          "type": "*YubiSlotInternal__"
+        },
+        {
+          "name": "Host",
+          "type": "*TCPAddrInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.YubiSlotAndKeyID",
+      "go_file": "proto/lib/yubi.go",
+      "fields": [
+        {
+          "name": "Slot",
+          "type": "*YubiSlotInternal__"
+        },
+        {
+          "name": "Id",
+          "type": "*YubiIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "lib.YubiSlotAndPQKeyID",
+      "go_file": "proto/lib/yubi.go",
+      "fields": [
+        {
+          "name": "Slot",
+          "type": "*YubiSlotInternal__"
+        },
+        {
+          "name": "Id",
+          "type": "*YubiPQKeyIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.AcceptInviteLocalArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "I",
+          "type": "*lib.TeamInviteInternal__"
+        },
+        {
+          "name": "SrcRole",
+          "type": "*lib.RoleInternal__"
+        },
+        {
+          "name": "Tok",
+          "type": "*TeamBearerTokenInternal__"
+        },
+        {
+          "name": "TeamMembershipLink",
+          "type": "*PostGenericLinkArgInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.AcceptInviteRemoteArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "I",
+          "type": "*lib.TeamInviteInternal__"
+        },
+        {
+          "name": "Jr",
+          "type": "*TeamRemoteJoinReqInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.ActivateTeamBearerTokenArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Bl",
+          "type": "*TeamBearerTokenChallengeBlobInternal__"
+        },
+        {
+          "name": "Sig",
+          "type": "*lib.SignatureInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.ActivateTeamVOBearerTokenArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Ch",
+          "type": "*TeamVOBearerTokenChallengeInternal__"
+        },
+        {
+          "name": "Sig",
+          "type": "*lib.SignatureInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.ActivatedVOBearerToken",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Tok",
+          "type": "*TeamVOBearerTokenInternal__"
+        },
+        {
+          "name": "Id",
+          "type": "*lib.TeamIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.AssertPQKeyNotInUseArg",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "PqKey",
+          "type": "*lib.YubiPQKeyIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.BeaconLookupArg",
+      "go_file": "proto/rem/beacon.go",
+      "fields": [
+        {
+          "name": "HostID",
+          "type": "*lib.HostIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.BeaconRegisterArg",
+      "go_file": "proto/rem/beacon.go",
+      "fields": [
+        {
+          "name": "Host",
+          "type": "*lib.HostnameInternal__"
+        },
+        {
+          "name": "Port",
+          "type": "*lib.PortInternal__"
+        },
+        {
+          "name": "HostID",
+          "type": "*lib.HostIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.Challenge",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "Payload",
+          "type": "*ChallengePayloadInternal__"
+        },
+        {
+          "name": "Mac",
+          "type": "*lib.HMACInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.ChallengePayload",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "HmacKeyID",
+          "type": "*lib.HMACKeyIDInternal__"
+        },
+        {
+          "name": "EntityID",
+          "type": "*lib.EntityIDInternal__"
+        },
+        {
+          "name": "HostID",
+          "type": "*lib.HostIDInternal__"
+        },
+        {
+          "name": "Rand",
+          "type": "*lib.Random16Internal__"
+        },
+        {
+          "name": "Time",
+          "type": "*lib.TimeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.ChangePassphraseArg",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Key",
+          "type": "*lib.EntityIDInternal__"
+        },
+        {
+          "name": "SkwkBox",
+          "type": "*lib.SecretBoxInternal__"
+        },
+        {
+          "name": "PassphraseBox",
+          "type": "*lib.PpePassphraseBoxInternal__"
+        },
+        {
+          "name": "PukBox",
+          "type": "*lib.PpePUKBoxInternal__"
+        },
+        {
+          "name": "StretchVersion",
+          "type": "*lib.StretchVersionInternal__"
+        },
+        {
+          "name": "PpGen",
+          "type": "*lib.PassphraseGenerationInternal__"
+        },
+        {
+          "name": "UserSettingsLink",
+          "type": "*PostGenericLinkArgInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.ChangeUsernameArg",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "UsernameUtf8",
+          "type": "*lib.NameUtf8Internal__"
+        },
+        {
+          "name": "Full",
+          "type": "*ChangedUsernameFullUpdateArgInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.ChangedUsernameFullUpdateArg",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Link",
+          "type": "*lib.LinkOuterInternal__"
+        },
+        {
+          "name": "UsernameCommitmentKey",
+          "type": "*lib.RandomCommitmentKeyInternal__"
+        },
+        {
+          "name": "Rur",
+          "type": "*ReserveNameResInternal__"
+        },
+        {
+          "name": "NextTreeLocation",
+          "type": "*lib.TreeLocationInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.CheckInviteCodeArg",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "InviteCode",
+          "type": "*InviteCodeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.CheckKeyExistsArg",
+      "go_file": "proto/rem/merkle.go",
+      "fields": [
+        {
+          "name": "HostID",
+          "type": "*lib.HostIDInternal__"
+        },
+        {
+          "name": "Key",
+          "type": "*lib.MerkleTreeRFOutputInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.CheckNameExistsArg",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "Name",
+          "type": "*lib.NameInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.CheckTeamBearerTokenArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Tok",
+          "type": "*TeamBearerTokenInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.CheckTeamVOBearerTokenArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Host",
+          "type": "*lib.HostIDInternal__"
+        },
+        {
+          "name": "Tok",
+          "type": "*TeamVOBearerTokenInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.CheckURLArg",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Url",
+          "type": "*lib.URLStringInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.ClearDeviceNagArg",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Cleared",
+          "type": "*bool"
+        }
+      ]
+    },
+    {
+      "name": "rem.ConfirmRootArg",
+      "go_file": "proto/rem/merkle.go",
+      "fields": [
+        {
+          "name": "HostID",
+          "type": "*lib.HostIDInternal__"
+        },
+        {
+          "name": "Root",
+          "type": "*lib.TreeRootInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.CreateTeamAdHocArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Carg",
+          "type": "*CreateTeamCommonArgInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.CreateTeamArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "NameUtf8",
+          "type": "*lib.NameUtf8Internal__"
+        },
+        {
+          "name": "TeamnameCommitmentKey",
+          "type": "*lib.RandomCommitmentKeyInternal__"
+        },
+        {
+          "name": "SubchainTreeLocationSeed",
+          "type": "*lib.TreeLocationInternal__"
+        },
+        {
+          "name": "Rnr",
+          "type": "*ReserveNameResInternal__"
+        },
+        {
+          "name": "Eta",
+          "type": "*EditTeamArgInternal__"
+        },
+        {
+          "name": "TeamMembershipLink",
+          "type": "*PostGenericLinkArgInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.CreateTeamCommonArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "SubchainTreeLocationSeed",
+          "type": "*lib.TreeLocationInternal__"
+        },
+        {
+          "name": "Eta",
+          "type": "*EditTeamArgInternal__"
+        },
+        {
+          "name": "TeamMembershipLink",
+          "type": "*PostGenericLinkArgInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.DeviceLabelNameAndCommitmentKey",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Dln",
+          "type": "*lib.DeviceLabelAndNameInternal__"
+        },
+        {
+          "name": "CommitmentKey",
+          "type": "*lib.RandomCommitmentKeyInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.EditTeamArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Link",
+          "type": "*lib.LinkOuterInternal__"
+        },
+        {
+          "name": "NextTreeLocation",
+          "type": "*lib.TreeLocationInternal__"
+        },
+        {
+          "name": "Obd",
+          "type": "*OffchainBoxDataInternal__"
+        },
+        {
+          "name": "Tok",
+          "type": "*TeamBearerTokenInternal__"
+        },
+        {
+          "name": "InsLocalPermsFor",
+          "type": "*[](*lib.PartyIDInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "rem.EditTeamRes",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "LocalInvitees",
+          "type": "*[](*LocalPartyRoleInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "rem.GenericChain",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Links",
+          "type": "*[](*lib.LinkOuterInternal__)"
+        },
+        {
+          "name": "Locations",
+          "type": "*[](*lib.TreeLocationInternal__)"
+        },
+        {
+          "name": "Merkle",
+          "type": "*lib.MerklePathsCompressedInternal__"
+        },
+        {
+          "name": "LocationSeed",
+          "type": "*lib.TreeLocationInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.GetClientCertChainArg",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "Uid",
+          "type": "*lib.UIDInternal__"
+        },
+        {
+          "name": "Key",
+          "type": "*lib.EntityIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.GetClientVersionInfoArg",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "Me",
+          "type": "*lib.ClientVersionExtInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.GetCurrentRootArg",
+      "go_file": "proto/rem/merkle.go",
+      "fields": [
+        {
+          "name": "HostID",
+          "type": "*lib.HostIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.GetCurrentRootHashArg",
+      "go_file": "proto/rem/merkle.go",
+      "fields": [
+        {
+          "name": "HostID",
+          "type": "*lib.HostIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.GetCurrentRootSignedArg",
+      "go_file": "proto/rem/merkle.go",
+      "fields": [
+        {
+          "name": "HostID",
+          "type": "*lib.HostIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.GetCurrentRootSignedEpnoArg",
+      "go_file": "proto/rem/merkle.go",
+      "fields": [
+        {
+          "name": "HostID",
+          "type": "*lib.HostIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.GetCurrentTeamCertsArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Tok",
+          "type": "*TeamBearerTokenInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.GetEncryptedChunkRes",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "Chunk",
+          "type": "*lib.ChunkInternal__"
+        },
+        {
+          "name": "Offset",
+          "type": "*lib.OffsetInternal__"
+        },
+        {
+          "name": "Final",
+          "type": "*bool"
+        }
+      ]
+    },
+    {
+      "name": "rem.GetHistoricalRootsArg",
+      "go_file": "proto/rem/merkle.go",
+      "fields": [
+        {
+          "name": "HostID",
+          "type": "*lib.HostIDInternal__"
+        },
+        {
+          "name": "Full",
+          "type": "*[](*lib.MerkleEpnoInternal__)"
+        },
+        {
+          "name": "Hashes",
+          "type": "*[](*lib.MerkleEpnoInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "rem.GetHistoricalRootsRes",
+      "go_file": "proto/rem/merkle.go",
+      "fields": [
+        {
+          "name": "Roots",
+          "type": "*[](*lib.MerkleRootInternal__)"
+        },
+        {
+          "name": "Hashes",
+          "type": "*[](*lib.MerkleRootHashInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "rem.GetLoginChallengeArg",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "Uid",
+          "type": "*lib.UIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.GetPUKForRoleArg",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Role",
+          "type": "*lib.RoleInternal__"
+        },
+        {
+          "name": "TargetPublicKeyId",
+          "type": "*lib.EntityIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.GetSubkeyBoxChallengeArg",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "Parent",
+          "type": "*lib.EntityIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.GetTeamVOBearerTokenChallengeArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Req",
+          "type": "*TeamVOBearerTokenReqInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.GetTreeLocationArg",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Seqno",
+          "type": "*lib.SeqnoInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.GetUIDLookupChallegeArg",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "EntityID",
+          "type": "*lib.EntityIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.GetYubiManagementKeyArg",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Yk",
+          "type": "*lib.YubiIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.GrantLocalViewPermissionForTeamArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "P",
+          "type": "*GrantLocalViewPermissionPayloadInternal__"
+        },
+        {
+          "name": "Sig",
+          "type": "*SharedKeySigInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.GrantLocalViewPermissionForUserArg",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "P",
+          "type": "*GrantLocalViewPermissionPayloadInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.GrantLocalViewPermissionPayload",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Viewee",
+          "type": "*lib.PartyIDInternal__"
+        },
+        {
+          "name": "Viewer",
+          "type": "*lib.PartyIDInternal__"
+        },
+        {
+          "name": "Tm",
+          "type": "*lib.TimeInternal__"
+        },
+        {
+          "name": "ViewerRole",
+          "type": "*lib.RoleInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.GrantRemoteViewPermissionForTeamArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "P",
+          "type": "*GrantRemoteViewPermissionPayloadInternal__"
+        },
+        {
+          "name": "Sig",
+          "type": "*SharedKeySigInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.GrantRemoteViewPermissionForUserArg",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "P",
+          "type": "*GrantRemoteViewPermissionPayloadInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.GrantRemoteViewPermissionPayload",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Viewee",
+          "type": "*lib.PartyIDInternal__"
+        },
+        {
+          "name": "Viewer",
+          "type": "*lib.FQPartyInternal__"
+        },
+        {
+          "name": "Tm",
+          "type": "*lib.TimeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.InboxPagination",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Start",
+          "type": "*lib.TimeInternal__"
+        },
+        {
+          "name": "End",
+          "type": "*lib.TimeInternal__"
+        },
+        {
+          "name": "Limit",
+          "type": "*uint64"
+        }
+      ]
+    },
+    {
+      "name": "rem.InitOAuth2SessionArg",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "Id",
+          "type": "*lib.OAuth2SessionIDInternal__"
+        },
+        {
+          "name": "PkceVerifier",
+          "type": "*lib.OAuth2PKCEVerifierInternal__"
+        },
+        {
+          "name": "Nonce",
+          "type": "*lib.OAuth2NonceInternal__"
+        },
+        {
+          "name": "Uid",
+          "type": "*lib.UIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.JoinWaitListArg",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "Email",
+          "type": "*lib.EmailInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.KVGetRes",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "De",
+          "type": "*lib.KVDirentInternal__"
+        },
+        {
+          "name": "Data",
+          "type": "*KVGetNodeResInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.KVListOpts",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "Start",
+          "type": "*lib.KVListPaginationInternal__"
+        },
+        {
+          "name": "Num",
+          "type": "*uint64"
+        },
+        {
+          "name": "LoadSmallFiles",
+          "type": "*bool"
+        }
+      ]
+    },
+    {
+      "name": "rem.KVListRes",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "Ents",
+          "type": "*[](*lib.KVDirentInternal__)"
+        },
+        {
+          "name": "Final",
+          "type": "*bool"
+        },
+        {
+          "name": "ExtEnts",
+          "type": "*[](*lib.KVExtendedDirentInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "rem.KVLock",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "Idp",
+          "type": "*lib.KVDirentIDPairInternal__"
+        },
+        {
+          "name": "LockID",
+          "type": "*LockIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.KVNameMACAtDirVersion",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "DirVers",
+          "type": "*lib.KVVersionInternal__"
+        },
+        {
+          "name": "Mac",
+          "type": "*lib.HMACInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.KVNodePathMultiple",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "ParentDir",
+          "type": "*lib.DirIDInternal__"
+        },
+        {
+          "name": "Names",
+          "type": "*[](*KVNameMACAtDirVersionInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "rem.KVReqHeader",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "Auth",
+          "type": "*KVAuthInternal__"
+        },
+        {
+          "name": "Precondition",
+          "type": "*lib.PathVersionVectorInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.KVSelectVhost",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "Host",
+          "type": "*lib.HostIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.KexWrapperMsg",
+      "go_file": "proto/rem/kex.go",
+      "fields": [
+        {
+          "name": "SessionID",
+          "type": "*lib.KexSessionIDInternal__"
+        },
+        {
+          "name": "Sender",
+          "type": "*lib.EntityIDInternal__"
+        },
+        {
+          "name": "Seq",
+          "type": "*lib.KexSeqNoInternal__"
+        },
+        {
+          "name": "Payload",
+          "type": "*lib.SecretBoxInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.KvCacheCheckArg",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "Req",
+          "type": "*KVReqHeaderInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.KvFileUploadChunkArg",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "Auth",
+          "type": "*KVAuthInternal__"
+        },
+        {
+          "name": "FileID",
+          "type": "*lib.FileIDInternal__"
+        },
+        {
+          "name": "Chunk",
+          "type": "*lib.UploadChunkInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.KvFileUploadInitArg",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "Auth",
+          "type": "*KVAuthInternal__"
+        },
+        {
+          "name": "FileID",
+          "type": "*lib.FileIDInternal__"
+        },
+        {
+          "name": "Md",
+          "type": "*lib.LargeFileMetadataInternal__"
+        },
+        {
+          "name": "Chunk",
+          "type": "*lib.UploadChunkInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.KvGetArg",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "Hdr",
+          "type": "*KVReqHeaderInternal__"
+        },
+        {
+          "name": "Path",
+          "type": "*KVNodePathMultipleInternal__"
+        },
+        {
+          "name": "Follow",
+          "type": "*FollowBehaviorInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.KvGetDirArg",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "Auth",
+          "type": "*KVAuthInternal__"
+        },
+        {
+          "name": "Id",
+          "type": "*lib.DirIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.KvGetEncryptedChunkArg",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "Auth",
+          "type": "*KVAuthInternal__"
+        },
+        {
+          "name": "Id",
+          "type": "*lib.FileIDInternal__"
+        },
+        {
+          "name": "Offset",
+          "type": "*lib.OffsetInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.KvGetNodeArg",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "Auth",
+          "type": "*KVAuthInternal__"
+        },
+        {
+          "name": "Id",
+          "type": "*lib.KVNodeIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.KvGetRootArg",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "Auth",
+          "type": "*KVAuthInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.KvListArg",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "Auth",
+          "type": "*KVAuthInternal__"
+        },
+        {
+          "name": "Dir",
+          "type": "*lib.DirIDInternal__"
+        },
+        {
+          "name": "Opts",
+          "type": "*KVListOptsInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.KvLockAcquireArg",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "Auth",
+          "type": "*KVAuthInternal__"
+        },
+        {
+          "name": "Lock",
+          "type": "*KVLockInternal__"
+        },
+        {
+          "name": "Timeout",
+          "type": "*lib.DurationMilliInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.KvLockReleaseArg",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "Auth",
+          "type": "*KVAuthInternal__"
+        },
+        {
+          "name": "Lock",
+          "type": "*KVLockInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.KvMkdirArg",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "Hdr",
+          "type": "*KVReqHeaderInternal__"
+        },
+        {
+          "name": "Dir",
+          "type": "*lib.KVDirInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.KvPutArg",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "Hdr",
+          "type": "*KVReqHeaderInternal__"
+        },
+        {
+          "name": "Dirents",
+          "type": "*[](*lib.KVDirentInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "rem.KvPutRootArg",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "Auth",
+          "type": "*KVAuthInternal__"
+        },
+        {
+          "name": "Root",
+          "type": "*lib.KVRootInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.KvPutSmallFileOrSymlinkArg",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "Auth",
+          "type": "*KVAuthInternal__"
+        },
+        {
+          "name": "Id",
+          "type": "*lib.KVNodeIDInternal__"
+        },
+        {
+          "name": "Sfb",
+          "type": "*lib.SmallFileBoxInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.KvUsageArg",
+      "go_file": "proto/rem/kv.go",
+      "fields": [
+        {
+          "name": "Auth",
+          "type": "*KVAuthInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.LoadGenericChainArg",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Eid",
+          "type": "*lib.EntityIDInternal__"
+        },
+        {
+          "name": "Typ",
+          "type": "*lib.ChainTypeInternal__"
+        },
+        {
+          "name": "Start",
+          "type": "*lib.SeqnoInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.LoadRemovalForMemberArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Team",
+          "type": "*lib.FQTeamInternal__"
+        },
+        {
+          "name": "Comm",
+          "type": "*lib.KeyCommitmentInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.LoadRemovalKeyBoxForTeamAdminArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Tok",
+          "type": "*TeamBearerTokenInternal__"
+        },
+        {
+          "name": "Member",
+          "type": "*lib.FQPartyInternal__"
+        },
+        {
+          "name": "SrcRole",
+          "type": "*lib.RoleInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.LoadSubkeyBoxArg",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "Parent",
+          "type": "*lib.EntityIDInternal__"
+        },
+        {
+          "name": "Challenge",
+          "type": "*ChallengeInternal__"
+        },
+        {
+          "name": "Signature",
+          "type": "*lib.SignatureInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.LoadTeamChainArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Team",
+          "type": "*lib.FQTeamInternal__"
+        },
+        {
+          "name": "Tok",
+          "type": "*TokenVariantInternal__"
+        },
+        {
+          "name": "Start",
+          "type": "*lib.SeqnoInternal__"
+        },
+        {
+          "name": "HavePtkGens",
+          "type": "*[](*lib.SharedKeyGenInternal__)"
+        },
+        {
+          "name": "Name",
+          "type": "*NameSeqnoPairInternal__"
+        },
+        {
+          "name": "LoadRemovalKey",
+          "type": "*bool"
+        },
+        {
+          "name": "LoadRemoteViewTokens",
+          "type": "*bool"
+        }
+      ]
+    },
+    {
+      "name": "rem.LoadTeamMembershipChainArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Team",
+          "type": "*lib.FQTeamInternal__"
+        },
+        {
+          "name": "Tok",
+          "type": "*TeamVOBearerTokenInternal__"
+        },
+        {
+          "name": "Start",
+          "type": "*lib.SeqnoInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.LoadTeamRawInboxArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Tok",
+          "type": "*TeamBearerTokenInternal__"
+        },
+        {
+          "name": "Pagination",
+          "type": "*InboxPaginationInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.LoadTeamRemoteJoinReqArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Tok",
+          "type": "*TeamBearerTokenInternal__"
+        },
+        {
+          "name": "Jrt",
+          "type": "*lib.TeamRSVPRemoteInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.LoadTeamRemoteViewTokensArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Team",
+          "type": "*lib.FQTeamInternal__"
+        },
+        {
+          "name": "Tok",
+          "type": "*TeamVOBearerTokenInternal__"
+        },
+        {
+          "name": "Members",
+          "type": "*[](*lib.FQPartyInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "rem.LoadUserChainArg",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Uid",
+          "type": "*lib.UIDInternal__"
+        },
+        {
+          "name": "Start",
+          "type": "*lib.SeqnoInternal__"
+        },
+        {
+          "name": "Username",
+          "type": "*NameSeqnoPairInternal__"
+        },
+        {
+          "name": "Auth",
+          "type": "*LoadUserChainAuthInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.LocalPartyRole",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Party",
+          "type": "*lib.PartyIDInternal__"
+        },
+        {
+          "name": "Role",
+          "type": "*lib.RoleInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.LocalTeamListEntry",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Id",
+          "type": "*lib.TeamIDInternal__"
+        },
+        {
+          "name": "SrcRole",
+          "type": "*lib.RoleInternal__"
+        },
+        {
+          "name": "DstRole",
+          "type": "*lib.RoleInternal__"
+        },
+        {
+          "name": "Seqno",
+          "type": "*lib.SeqnoInternal__"
+        },
+        {
+          "name": "KeyGen",
+          "type": "*lib.GenerationInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.LogSendInitFileArg",
+      "go_file": "proto/rem/logsend.go",
+      "fields": [
+        {
+          "name": "Id",
+          "type": "*lib.LogSendIDInternal__"
+        },
+        {
+          "name": "FileID",
+          "type": "*LogSendFileIDInternal__"
+        },
+        {
+          "name": "Name",
+          "type": "*lib.LocalFSPathInternal__"
+        },
+        {
+          "name": "Len",
+          "type": "*lib.SizeInternal__"
+        },
+        {
+          "name": "Hash",
+          "type": "*lib.StdHashInternal__"
+        },
+        {
+          "name": "NBlocks",
+          "type": "*uint64"
+        }
+      ]
+    },
+    {
+      "name": "rem.LogSendUploadBlockArg",
+      "go_file": "proto/rem/logsend.go",
+      "fields": [
+        {
+          "name": "Id",
+          "type": "*lib.LogSendIDInternal__"
+        },
+        {
+          "name": "FileID",
+          "type": "*LogSendFileIDInternal__"
+        },
+        {
+          "name": "BlockNo",
+          "type": "*uint64"
+        },
+        {
+          "name": "Block",
+          "type": "*LogSendBlobInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.LoginArg",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "Uid",
+          "type": "*lib.UIDInternal__"
+        },
+        {
+          "name": "Challenge",
+          "type": "*ChallengeInternal__"
+        },
+        {
+          "name": "Signature",
+          "type": "*lib.SignatureInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.LoginRes",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "PpGen",
+          "type": "*lib.PassphraseGenerationInternal__"
+        },
+        {
+          "name": "SkwkBox",
+          "type": "*lib.SecretBoxInternal__"
+        },
+        {
+          "name": "PassphraseBox",
+          "type": "*lib.PpePassphraseBoxInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.LookupTeamCertByHashArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "I",
+          "type": "*lib.TeamInviteInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.LookupUIDByDeviceArg",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "EntityID",
+          "type": "*lib.EntityIDInternal__"
+        },
+        {
+          "name": "Challenge",
+          "type": "*ChallengeInternal__"
+        },
+        {
+          "name": "Signature",
+          "type": "*lib.SignatureInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.LookupUserRes",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "Fqu",
+          "type": "*lib.FQUserInternal__"
+        },
+        {
+          "name": "Username",
+          "type": "*lib.NameInternal__"
+        },
+        {
+          "name": "UsernameUtf8",
+          "type": "*lib.NameUtf8Internal__"
+        },
+        {
+          "name": "Role",
+          "type": "*lib.RoleInternal__"
+        },
+        {
+          "name": "YubiPQHint",
+          "type": "*lib.YubiSlotAndPQKeyIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.MakeInertTeamBearerTokenArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Team",
+          "type": "*lib.TeamIDInternal__"
+        },
+        {
+          "name": "Role",
+          "type": "*lib.RoleInternal__"
+        },
+        {
+          "name": "Gen",
+          "type": "*lib.GenerationInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.MerkleExistsRes",
+      "go_file": "proto/rem/merkle.go",
+      "fields": [
+        {
+          "name": "Epno",
+          "type": "*lib.MerkleEpnoInternal__"
+        },
+        {
+          "name": "Signed",
+          "type": "*bool"
+        }
+      ]
+    },
+    {
+      "name": "rem.MerkleLookupArg",
+      "go_file": "proto/rem/merkle.go",
+      "fields": [
+        {
+          "name": "HostID",
+          "type": "*lib.HostIDInternal__"
+        },
+        {
+          "name": "Key",
+          "type": "*lib.MerkleTreeRFOutputInternal__"
+        },
+        {
+          "name": "Signed",
+          "type": "*bool"
+        },
+        {
+          "name": "Root",
+          "type": "*lib.MerkleEpnoInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.MerkleMLookupArg",
+      "go_file": "proto/rem/merkle.go",
+      "fields": [
+        {
+          "name": "HostID",
+          "type": "*lib.HostIDInternal__"
+        },
+        {
+          "name": "Keys",
+          "type": "*[](*lib.MerkleTreeRFOutputInternal__)"
+        },
+        {
+          "name": "Signed",
+          "type": "*bool"
+        },
+        {
+          "name": "Root",
+          "type": "*lib.MerkleEpnoInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.MerkleSelectVHostArg",
+      "go_file": "proto/rem/merkle.go",
+      "fields": [
+        {
+          "name": "Host",
+          "type": "*lib.HostIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.NameCommitment",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "Name",
+          "type": "*lib.NameInternal__"
+        },
+        {
+          "name": "Seq",
+          "type": "*lib.NameSeqnoInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.NameCommitmentAndKey",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Unc",
+          "type": "*NameCommitmentInternal__"
+        },
+        {
+          "name": "Key",
+          "type": "*lib.RandomCommitmentKeyInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.NameSeqnoPair",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "N",
+          "type": "*lib.NameInternal__"
+        },
+        {
+          "name": "S",
+          "type": "*lib.NameSeqnoInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.NamedLocalTeamListEntry",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Te",
+          "type": "*LocalTeamListEntryInternal__"
+        },
+        {
+          "name": "Name",
+          "type": "*lib.NameUtf8Internal__"
+        },
+        {
+          "name": "QuotaMaster",
+          "type": "*lib.UIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.OAuth2PollRes",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "Toks",
+          "type": "*lib.OAuth2TokenSetInternal__"
+        },
+        {
+          "name": "Res",
+          "type": "*ReserveNameResInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.OffchainBoxData",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "PtkBoxes",
+          "type": "*lib.SharedKeyBoxSetInternal__"
+        },
+        {
+          "name": "SeedChain",
+          "type": "*[](*lib.SeedChainBoxInternal__)"
+        },
+        {
+          "name": "RemoteMemberViewTokens",
+          "type": "*[](*lib.TeamRemoteMemberViewTokenInternal__)"
+        },
+        {
+          "name": "RemovalKeys",
+          "type": "*[](*TeamRemovalBoxDataInternal__)"
+        },
+        {
+          "name": "Removals",
+          "type": "*[](*TeamRemovalAndCommInternal__)"
+        },
+        {
+          "name": "Hepks",
+          "type": "*lib.HEPKSetInternal__"
+        },
+        {
+          "name": "NewKeyOnRotate",
+          "type": "*lib.EntityIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.PollOAuth2SessionCompletionArg",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "Id",
+          "type": "*lib.OAuth2SessionIDInternal__"
+        },
+        {
+          "name": "Wait",
+          "type": "*lib.DurationMilliInternal__"
+        },
+        {
+          "name": "ForLogin",
+          "type": "*bool"
+        }
+      ]
+    },
+    {
+      "name": "rem.PostGenericLinkArg",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Link",
+          "type": "*lib.LinkOuterInternal__"
+        },
+        {
+          "name": "NextTreeLocation",
+          "type": "*lib.TreeLocationInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.PostTeamMembershipLinkArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Tok",
+          "type": "*TeamBearerTokenInternal__"
+        },
+        {
+          "name": "Link",
+          "type": "*PostGenericLinkArgInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.PostTeamRemovalArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Tok",
+          "type": "*TeamBearerTokenInternal__"
+        },
+        {
+          "name": "Rm",
+          "type": "*TeamRemovalAndCommInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.ProbeArg",
+      "go_file": "proto/rem/probe.go",
+      "fields": [
+        {
+          "name": "Hostname",
+          "type": "*lib.HostnameInternal__"
+        },
+        {
+          "name": "HostchainLastSeqno",
+          "type": "*lib.SeqnoInternal__"
+        },
+        {
+          "name": "HostID",
+          "type": "*lib.HostIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.ProbeKeyExistsArg",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "Uid",
+          "type": "*lib.UIDInternal__"
+        },
+        {
+          "name": "DevID",
+          "type": "*lib.DeviceIDInternal__"
+        },
+        {
+          "name": "SelfTok",
+          "type": "*lib.PermissionTokenInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.ProbeRes",
+      "go_file": "proto/rem/probe.go",
+      "fields": [
+        {
+          "name": "MerkleRoot",
+          "type": "*lib.SignedMerkleRootInternal__"
+        },
+        {
+          "name": "Zone",
+          "type": "*lib.SignedPublicZoneInternal__"
+        },
+        {
+          "name": "Hostchain",
+          "type": "*[](*lib.HostchainLinkOuterInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "rem.ProvisionDeviceArg",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Link",
+          "type": "*lib.LinkOuterInternal__"
+        },
+        {
+          "name": "PukBoxes",
+          "type": "*lib.SharedKeyBoxSetInternal__"
+        },
+        {
+          "name": "Dlnc",
+          "type": "*DeviceLabelNameAndCommitmentKeyInternal__"
+        },
+        {
+          "name": "NextTreeLocation",
+          "type": "*lib.TreeLocationInternal__"
+        },
+        {
+          "name": "SubkeyBox",
+          "type": "*lib.BoxInternal__"
+        },
+        {
+          "name": "SelfToken",
+          "type": "*lib.PermissionTokenInternal__"
+        },
+        {
+          "name": "Hepks",
+          "type": "*lib.HEPKSetInternal__"
+        },
+        {
+          "name": "Deprecated7",
+          "type": "*struct{}"
+        },
+        {
+          "name": "Deprecated8",
+          "type": "*struct{}"
+        },
+        {
+          "name": "Deprecated9",
+          "type": "*struct{}"
+        },
+        {
+          "name": "Deprecated10",
+          "type": "*struct{}"
+        },
+        {
+          "name": "Deprecated11",
+          "type": "*struct{}"
+        },
+        {
+          "name": "Deprecated12",
+          "type": "*struct{}"
+        },
+        {
+          "name": "Deprecated13",
+          "type": "*struct{}"
+        },
+        {
+          "name": "YubiPQhint",
+          "type": "*lib.YubiSlotAndPQKeyIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.PutTeamCertArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Tok",
+          "type": "*TeamBearerTokenInternal__"
+        },
+        {
+          "name": "Cert",
+          "type": "*TeamCertInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.PutYubiManagementKeyArg",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Ymk",
+          "type": "*YubiEncryptedManagementKeyInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.QueueMsg",
+      "go_file": "proto/rem/kex.go",
+      "fields": [
+        {
+          "name": "Seneder",
+          "type": "*lib.EntityIDInternal__"
+        },
+        {
+          "name": "Seqno",
+          "type": "*lib.KexSeqNoInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RTChannelMetadata",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "Id",
+          "type": "*lib.RTChannelIDInternal__"
+        },
+        {
+          "name": "ParentTeam",
+          "type": "*lib.TeamIDInternal__"
+        },
+        {
+          "name": "AppID",
+          "type": "*lib.RTAppIDInternal__"
+        },
+        {
+          "name": "Seqno",
+          "type": "*lib.RTChannelSeqnoInternal__"
+        },
+        {
+          "name": "NameBox",
+          "type": "*lib.RTBoxRGInternal__"
+        },
+        {
+          "name": "DescBox",
+          "type": "*lib.RTBoxRGInternal__"
+        },
+        {
+          "name": "Roles",
+          "type": "*lib.RolePairInternal__"
+        },
+        {
+          "name": "LastMsg",
+          "type": "*RTLastMsgInternal__"
+        },
+        {
+          "name": "Ctime",
+          "type": "*lib.TimeInternal__"
+        },
+        {
+          "name": "Mtime",
+          "type": "*lib.TimeInternal__"
+        },
+        {
+          "name": "UpdatedAt",
+          "type": "*lib.RTChannelSetVersionInternal__"
+        },
+        {
+          "name": "Tier",
+          "type": "*lib.RTChannelTierInternal__"
+        },
+        {
+          "name": "Unreadable",
+          "type": "*bool"
+        }
+      ]
+    },
+    {
+      "name": "rem.RTChannelSet",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "Vers",
+          "type": "*lib.RTChannelSetVersionInternal__"
+        },
+        {
+          "name": "Lst",
+          "type": "*[](*RTChannelMetadataInternal__)"
+        },
+        {
+          "name": "Mtime",
+          "type": "*lib.TimeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RTGetChangedThreadsArg",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "AppID",
+          "type": "*lib.RTAppIDInternal__"
+        },
+        {
+          "name": "Since",
+          "type": "*lib.RTInboxVersionInternal__"
+        },
+        {
+          "name": "Max",
+          "type": "*uint64"
+        }
+      ]
+    },
+    {
+      "name": "rem.RTInboxChannel",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "Md",
+          "type": "*RTChannelMetadataInternal__"
+        },
+        {
+          "name": "InboxVersion",
+          "type": "*lib.RTInboxVersionInternal__"
+        },
+        {
+          "name": "ReadThrough",
+          "type": "*lib.RTMsgSeqInternal__"
+        },
+        {
+          "name": "Hidden",
+          "type": "*bool"
+        },
+        {
+          "name": "Muted",
+          "type": "*bool"
+        }
+      ]
+    },
+    {
+      "name": "rem.RTInboxDelta",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "InboxVersion",
+          "type": "*lib.RTInboxVersionInternal__"
+        },
+        {
+          "name": "AppID",
+          "type": "*lib.RTAppIDInternal__"
+        },
+        {
+          "name": "Channels",
+          "type": "*[](*RTInboxChannelInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "rem.RTInboxKey",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "AppID",
+          "type": "*lib.RTAppIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RTLastMsg",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "Seq",
+          "type": "*lib.RTMsgSeqInternal__"
+        },
+        {
+          "name": "Typ",
+          "type": "*lib.RTMsgTypeInternal__"
+        },
+        {
+          "name": "InsertTime",
+          "type": "*lib.TimeInternal__"
+        },
+        {
+          "name": "Sender",
+          "type": "*lib.PartyIDInternal__"
+        },
+        {
+          "name": "FurtherUserAttribution",
+          "type": "*lib.UIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RTMsg",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "Md",
+          "type": "*lib.RTMsgMetadataInternal__"
+        },
+        {
+          "name": "Mw",
+          "type": "*lib.RTMsgWrapperInternal__"
+        },
+        {
+          "name": "Seq",
+          "type": "*lib.RTMsgSeqInternal__"
+        },
+        {
+          "name": "Sender",
+          "type": "*lib.PartyIDInternal__"
+        },
+        {
+          "name": "InsertTime",
+          "type": "*lib.TimeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RTMsgList",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "Lst",
+          "type": "*[](*RTMsgInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "rem.RTPollInboxArg",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "AppID",
+          "type": "*lib.RTAppIDInternal__"
+        },
+        {
+          "name": "Since",
+          "type": "*lib.RTInboxVersionInternal__"
+        },
+        {
+          "name": "Timeout",
+          "type": "*lib.DurationMilliInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RTReadThroughArg",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "ChannelID",
+          "type": "*lib.RTChannelIDInternal__"
+        },
+        {
+          "name": "Seq",
+          "type": "*lib.RTMsgSeqInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RTSelectVhost",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "Host",
+          "type": "*lib.HostIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RTSendArg",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "Md",
+          "type": "*lib.RTMsgMetadataInternal__"
+        },
+        {
+          "name": "Chid",
+          "type": "*lib.RTChannelIDShortInternal__"
+        },
+        {
+          "name": "Mw",
+          "type": "*lib.RTMsgWrapperInternal__"
+        },
+        {
+          "name": "ExpectedPrevSeq",
+          "type": "*lib.RTMsgSeqInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RTSendRes",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "Seq",
+          "type": "*lib.RTMsgSeqInternal__"
+        },
+        {
+          "name": "InsertTime",
+          "type": "*lib.TimeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RTThreadPage",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "RangeMsgs",
+          "type": "*[](*RTMsgListInternal__)"
+        },
+        {
+          "name": "SeqMsgs",
+          "type": "*[](*RTMsgInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "rem.RTThreadQuery",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "ChannelID",
+          "type": "*lib.RTChannelIDInternal__"
+        },
+        {
+          "name": "Bookends",
+          "type": "*[](*RTThreadRangeBookendsInternal__)"
+        },
+        {
+          "name": "Seqs",
+          "type": "*[](*lib.RTMsgSeqInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "rem.RTThreadRangeBookends",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "Start",
+          "type": "*lib.RTMsgSeqInternal__"
+        },
+        {
+          "name": "End",
+          "type": "*lib.RTMsgSeqInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.ReceiveArg",
+      "go_file": "proto/rem/kex.go",
+      "fields": [
+        {
+          "name": "SessionID",
+          "type": "*lib.KexSessionIDInternal__"
+        },
+        {
+          "name": "Receiver",
+          "type": "*lib.EntityIDInternal__"
+        },
+        {
+          "name": "Seq",
+          "type": "*lib.KexSeqNoInternal__"
+        },
+        {
+          "name": "PollWait",
+          "type": "*lib.DurationMilliInternal__"
+        },
+        {
+          "name": "Actor",
+          "type": "*KexActorTypeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RegLoadUserChainArg",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "A",
+          "type": "*LoadUserChainArgInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RegResolveUsernameArg",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "A",
+          "type": "*ResolveUsernameArgInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RegSSOArgsOAuth2",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "Id",
+          "type": "*lib.OAuth2SessionIDInternal__"
+        },
+        {
+          "name": "Sig",
+          "type": "*lib.OAuth2IDTokenBindingInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RegSelectVhost",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "Host",
+          "type": "*lib.HostIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RejectJoinReqArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Tok",
+          "type": "*TeamBearerTokenInternal__"
+        },
+        {
+          "name": "Req",
+          "type": "*lib.TeamRSVPInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.ReserveNameRes",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "Tok",
+          "type": "*lib.ReservationTokenInternal__"
+        },
+        {
+          "name": "Seq",
+          "type": "*lib.NameSeqnoInternal__"
+        },
+        {
+          "name": "Etime",
+          "type": "*lib.TimeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.ReserveTeamnameArg",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "N",
+          "type": "*lib.NameInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.ReserveUsernameArg",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "N",
+          "type": "*lib.NameInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.ReserveUsernameForChangeArg",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Un",
+          "type": "*lib.NameInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.ResolveUsernameArg",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "N",
+          "type": "*lib.NameInternal__"
+        },
+        {
+          "name": "Auth",
+          "type": "*LoadUserChainAuthInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RevokeDeviceArg",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Link",
+          "type": "*lib.LinkOuterInternal__"
+        },
+        {
+          "name": "PukBoxes",
+          "type": "*lib.SharedKeyBoxSetInternal__"
+        },
+        {
+          "name": "SeedChain",
+          "type": "*[](*lib.SeedChainBoxInternal__)"
+        },
+        {
+          "name": "NextTreeLocation",
+          "type": "*lib.TreeLocationInternal__"
+        },
+        {
+          "name": "Ppa",
+          "type": "*SetPassphraseAnnexInternal__"
+        },
+        {
+          "name": "Hepks",
+          "type": "*lib.HEPKSetInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RtGetChangedThreadsArg",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "Rtarg",
+          "type": "*RTGetChangedThreadsArgInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RtGetChannelArg",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "ChannelID",
+          "type": "*lib.RTChannelIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RtGetInboxVersionArg",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "Key",
+          "type": "*RTInboxKeyInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RtGetThreadArg",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "Q",
+          "type": "*RTThreadQueryInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RtGetThreadRecentsArg",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "Ch",
+          "type": "*lib.RTChannelIDInternal__"
+        },
+        {
+          "name": "StopAt",
+          "type": "*lib.RTMsgSeqInternal__"
+        },
+        {
+          "name": "Lim",
+          "type": "*uint64"
+        }
+      ]
+    },
+    {
+      "name": "rem.RtListAllChannelsForTeamArg",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "Team",
+          "type": "*lib.TeamIDInternal__"
+        },
+        {
+          "name": "AppID",
+          "type": "*lib.RTAppIDInternal__"
+        },
+        {
+          "name": "Last",
+          "type": "*lib.RTChannelSetVersionInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RtNewChannelArg",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "Md",
+          "type": "*RTChannelMetadataInternal__"
+        },
+        {
+          "name": "SetVers",
+          "type": "*lib.RTChannelSetVersionInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RtPollInboxArg",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "Rtarg",
+          "type": "*RTPollInboxArgInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RtReadThroughArg",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "Rtarg",
+          "type": "*RTReadThroughArgInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.RtSendArg",
+      "go_file": "proto/rem/realtime.go",
+      "fields": [
+        {
+          "name": "Rtarg",
+          "type": "*RTSendArgInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.SendArg",
+      "go_file": "proto/rem/kex.go",
+      "fields": [
+        {
+          "name": "Msg",
+          "type": "*KexWrapperMsgInternal__"
+        },
+        {
+          "name": "Sig",
+          "type": "*lib.SignatureInternal__"
+        },
+        {
+          "name": "Actor",
+          "type": "*KexActorTypeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.SetPassphraseAnnex",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Arg",
+          "type": "*ChangePassphraseArgInternal__"
+        },
+        {
+          "name": "Link",
+          "type": "*PostGenericLinkArgInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.SetPassphraseArg",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Key",
+          "type": "*lib.EntityIDInternal__"
+        },
+        {
+          "name": "Salt",
+          "type": "*lib.PassphraseSaltInternal__"
+        },
+        {
+          "name": "SkwkBox",
+          "type": "*lib.SecretBoxInternal__"
+        },
+        {
+          "name": "PassphraseBox",
+          "type": "*lib.PpePassphraseBoxInternal__"
+        },
+        {
+          "name": "PukBox",
+          "type": "*lib.PpePUKBoxInternal__"
+        },
+        {
+          "name": "StretchVersion",
+          "type": "*lib.StretchVersionInternal__"
+        },
+        {
+          "name": "Link",
+          "type": "*lib.LinkOuterInternal__"
+        },
+        {
+          "name": "NextTreeLocation",
+          "type": "*lib.TreeLocationInternal__"
+        },
+        {
+          "name": "UserSettingsLink",
+          "type": "*PostGenericLinkArgInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.SharedKeySig",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Sig",
+          "type": "*lib.SignatureInternal__"
+        },
+        {
+          "name": "Gen",
+          "type": "*lib.GenerationInternal__"
+        },
+        {
+          "name": "Role",
+          "type": "*lib.RoleInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.SignupArg",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "UsernameUtf8",
+          "type": "*lib.NameUtf8Internal__"
+        },
+        {
+          "name": "Rur",
+          "type": "*ReserveNameResInternal__"
+        },
+        {
+          "name": "Link",
+          "type": "*lib.LinkOuterInternal__"
+        },
+        {
+          "name": "PukBox",
+          "type": "*lib.SharedKeyBoxSetInternal__"
+        },
+        {
+          "name": "UsernameCommitmentKey",
+          "type": "*lib.RandomCommitmentKeyInternal__"
+        },
+        {
+          "name": "Dlnck",
+          "type": "*DeviceLabelNameAndCommitmentKeyInternal__"
+        },
+        {
+          "name": "NextTreeLocation",
+          "type": "*lib.TreeLocationInternal__"
+        },
+        {
+          "name": "InviteCode",
+          "type": "*InviteCodeInternal__"
+        },
+        {
+          "name": "Email",
+          "type": "*lib.EmailInternal__"
+        },
+        {
+          "name": "SubkeyBox",
+          "type": "*lib.BoxInternal__"
+        },
+        {
+          "name": "Passphrase",
+          "type": "*SetPassphraseArgInternal__"
+        },
+        {
+          "name": "SubchainTreeLocationSeed",
+          "type": "*lib.TreeLocationInternal__"
+        },
+        {
+          "name": "SelfToken",
+          "type": "*lib.PermissionTokenInternal__"
+        },
+        {
+          "name": "Hepks",
+          "type": "*lib.HEPKSetInternal__"
+        },
+        {
+          "name": "YubiPQhint",
+          "type": "*lib.YubiSlotAndPQKeyIDInternal__"
+        },
+        {
+          "name": "Sso",
+          "type": "*RegSSOArgsInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.SsoLoginArg",
+      "go_file": "proto/rem/reg.go",
+      "fields": [
+        {
+          "name": "Uid",
+          "type": "*lib.UIDInternal__"
+        },
+        {
+          "name": "Args",
+          "type": "*RegSSOArgsInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamBearerTokenChallengePayload",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "User",
+          "type": "*lib.FQUserInternal__"
+        },
+        {
+          "name": "Team",
+          "type": "*lib.TeamIDInternal__"
+        },
+        {
+          "name": "Role",
+          "type": "*lib.RoleInternal__"
+        },
+        {
+          "name": "Gen",
+          "type": "*lib.GenerationInternal__"
+        },
+        {
+          "name": "Tok",
+          "type": "*TeamBearerTokenInternal__"
+        },
+        {
+          "name": "Tm",
+          "type": "*lib.TimeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamCertAndMetadata",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Cert",
+          "type": "*TeamCertInternal__"
+        },
+        {
+          "name": "Tir",
+          "type": "*lib.RationalRangeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamCertV1Payload",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Team",
+          "type": "*lib.FQTeamInternal__"
+        },
+        {
+          "name": "Ptk",
+          "type": "*lib.SharedKeyInternal__"
+        },
+        {
+          "name": "Tm",
+          "type": "*lib.TimeInternal__"
+        },
+        {
+          "name": "Hepk",
+          "type": "*lib.HEPKInternal__"
+        },
+        {
+          "name": "Name",
+          "type": "*lib.NameUtf8Internal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamCertV1Signed",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Payload",
+          "type": "*TeamCertV1BlobInternal__"
+        },
+        {
+          "name": "Signatures",
+          "type": "*[](*lib.SignatureInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamChain",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Links",
+          "type": "*[](*lib.LinkOuterInternal__)"
+        },
+        {
+          "name": "Locations",
+          "type": "*[](*lib.TreeLocationInternal__)"
+        },
+        {
+          "name": "Teamnames",
+          "type": "*[](*NameCommitmentAndKeyInternal__)"
+        },
+        {
+          "name": "Merkle",
+          "type": "*lib.MerklePathsCompressedInternal__"
+        },
+        {
+          "name": "TeamnameUtf8",
+          "type": "*lib.NameUtf8Internal__"
+        },
+        {
+          "name": "NumTeamnameLinks",
+          "type": "*uint64"
+        },
+        {
+          "name": "Boxes",
+          "type": "*[](*lib.SharedKeyParcelInternal__)"
+        },
+        {
+          "name": "RemovalKey",
+          "type": "*lib.TeamRemovalKeyBoxInternal__"
+        },
+        {
+          "name": "RemoteViewTokens",
+          "type": "*[](*lib.TeamRemoteMemberViewTokenInnerInternal__)"
+        },
+        {
+          "name": "Hepks",
+          "type": "*lib.HEPKSetInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamConfig",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "MaxRoles",
+          "type": "*uint64"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamRawInbox",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Rows",
+          "type": "*[](*TeamRawInboxRowInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamRawInboxRow",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Time",
+          "type": "*lib.TimeInternal__"
+        },
+        {
+          "name": "State",
+          "type": "*JoinreqStateInternal__"
+        },
+        {
+          "name": "Row",
+          "type": "*TeamRawInboxRowVarInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamRawInboxRowLocal",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Tok",
+          "type": "*lib.TeamRSVPLocalInternal__"
+        },
+        {
+          "name": "Joiner",
+          "type": "*lib.PartyIDInternal__"
+        },
+        {
+          "name": "SrcRole",
+          "type": "*lib.RoleInternal__"
+        },
+        {
+          "name": "Perm",
+          "type": "*lib.PermissionTokenInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamRawInboxRowRemote",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Tok",
+          "type": "*lib.TeamRSVPRemoteInternal__"
+        },
+        {
+          "name": "Req",
+          "type": "*TeamRemoteJoinReqInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamRemoteJoinReq",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "HepkFp",
+          "type": "*lib.HEPKFingerprintInternal__"
+        },
+        {
+          "name": "Box",
+          "type": "*lib.BoxInternal__"
+        },
+        {
+          "name": "Vd",
+          "type": "*TeamRemoteJoinReqVisibleDataInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamRemoteJoinReqPayload",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Joiner",
+          "type": "*lib.FQPartyInternal__"
+        },
+        {
+          "name": "Tok",
+          "type": "*lib.PermissionTokenInternal__"
+        },
+        {
+          "name": "Tm",
+          "type": "*lib.TimeInternal__"
+        },
+        {
+          "name": "SrcRole",
+          "type": "*lib.RoleInternal__"
+        },
+        {
+          "name": "Vd",
+          "type": "*TeamRemoteJoinReqVisibleDataInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamRemoteJoinReqVisibleData",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Tir",
+          "type": "*lib.RationalRangeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamRemoteViewTokenSet",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Tokens",
+          "type": "*[](*lib.TeamRemoteMemberViewTokenInnerInternal__)"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamRemoval",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Mac",
+          "type": "*lib.HMACInternal__"
+        },
+        {
+          "name": "Payload",
+          "type": "*TeamRemovalMACPayloadInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamRemovalAndComm",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Rm",
+          "type": "*TeamRemovalInternal__"
+        },
+        {
+          "name": "Comm",
+          "type": "*lib.KeyCommitmentInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamRemovalAndKeyBox",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "KeyBox",
+          "type": "*lib.TeamRemovalKeyBoxInternal__"
+        },
+        {
+          "name": "Removal",
+          "type": "*TeamRemovalInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamRemovalBoxData",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Comm",
+          "type": "*lib.KeyCommitmentInternal__"
+        },
+        {
+          "name": "Team",
+          "type": "*lib.TeamRemovalKeyBoxInternal__"
+        },
+        {
+          "name": "Member",
+          "type": "*lib.TeamRemovalKeyBoxInternal__"
+        },
+        {
+          "name": "Md",
+          "type": "*TeamRemovalKeyMetadataInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamRemovalKeyBoxPayload",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Key",
+          "type": "*TeamRemovalKeyInternal__"
+        },
+        {
+          "name": "Md",
+          "type": "*TeamRemovalKeyMetadataInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamRemovalKeyMetadata",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Tm",
+          "type": "*lib.FQTeamInternal__"
+        },
+        {
+          "name": "Member",
+          "type": "*lib.FQPartyInternal__"
+        },
+        {
+          "name": "SrcRole",
+          "type": "*lib.RoleInternal__"
+        },
+        {
+          "name": "Dst",
+          "type": "*lib.RoleAndSeqnoInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamRemovalMACPayload",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Team",
+          "type": "*lib.FQTeamInternal__"
+        },
+        {
+          "name": "Member",
+          "type": "*lib.FQPartyInternal__"
+        },
+        {
+          "name": "SrcRole",
+          "type": "*lib.RoleInternal__"
+        },
+        {
+          "name": "Admin",
+          "type": "*lib.FQPartyInternal__"
+        },
+        {
+          "name": "Root",
+          "type": "*lib.TreeRootInternal__"
+        },
+        {
+          "name": "Tm",
+          "type": "*lib.TimeInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamVOBearerTokenChallenge",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Payload",
+          "type": "*TeamVOBearerTokenChallengePayloadInternal__"
+        },
+        {
+          "name": "Mac",
+          "type": "*lib.HMACInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamVOBearerTokenChallengePayload",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Req",
+          "type": "*TeamVOBearerTokenReqInternal__"
+        },
+        {
+          "name": "Tm",
+          "type": "*lib.TimeInternal__"
+        },
+        {
+          "name": "Tok",
+          "type": "*TeamVOBearerTokenInternal__"
+        },
+        {
+          "name": "Id",
+          "type": "*lib.HMACKeyIDInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamVOBearerTokenReq",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Team",
+          "type": "*lib.FQTeamIDOrNameInternal__"
+        },
+        {
+          "name": "Member",
+          "type": "*lib.FQPartyInternal__"
+        },
+        {
+          "name": "SrcRole",
+          "type": "*lib.RoleInternal__"
+        },
+        {
+          "name": "Gen",
+          "type": "*lib.GenerationInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.TeamVOBearerTokenReqAndRole",
+      "go_file": "proto/rem/team.go",
+      "fields": [
+        {
+          "name": "Req",
+          "type": "*TeamVOBearerTokenReqInternal__"
+        },
+        {
+          "name": "Role",
+          "type": "*lib.RoleInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.TreeLocationPair",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Seqno",
+          "type": "*lib.SeqnoInternal__"
+        },
+        {
+          "name": "Loc",
+          "type": "*lib.TreeLocationInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.UserChain",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Links",
+          "type": "*[](*lib.LinkOuterInternal__)"
+        },
+        {
+          "name": "Locations",
+          "type": "*[](*lib.TreeLocationInternal__)"
+        },
+        {
+          "name": "Usernames",
+          "type": "*[](*NameCommitmentAndKeyInternal__)"
+        },
+        {
+          "name": "Merkle",
+          "type": "*lib.MerklePathsCompressedInternal__"
+        },
+        {
+          "name": "DeviceNames",
+          "type": "*[](*DeviceLabelNameAndCommitmentKeyInternal__)"
+        },
+        {
+          "name": "UsernameUtf8",
+          "type": "*lib.NameUtf8Internal__"
+        },
+        {
+          "name": "NumUsernameLinks",
+          "type": "*uint64"
+        },
+        {
+          "name": "Hepks",
+          "type": "*lib.HEPKSetInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.UserLoadUserChainArg",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "A",
+          "type": "*LoadUserChainArgInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.UserResolveUsernameArg",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "A",
+          "type": "*ResolveUsernameArgInternal__"
+        }
+      ]
+    },
+    {
+      "name": "rem.YubiEncryptedManagementKey",
+      "go_file": "proto/rem/user.go",
+      "fields": [
+        {
+          "name": "Yk",
+          "type": "*lib.YubiIDInternal__"
+        },
+        {
+          "name": "Box",
+          "type": "*lib.SecretBoxInternal__"
+        },
+        {
+          "name": "Gen",
+          "type": "*lib.GenerationInternal__"
+        },
+        {
+          "name": "Role",
+          "type": "*lib.RoleInternal__"
+        }
+      ]
+    }
+  ]
+}

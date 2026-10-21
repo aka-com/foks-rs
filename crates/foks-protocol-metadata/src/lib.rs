@@ -82,6 +82,10 @@ pub struct Policy {
     /// value explicitly because the pinned artifact cannot supply it.
     #[serde(default, rename = "post_baseline_status")]
     pub post_baseline_statuses: Vec<PostBaselineStatus>,
+    /// Upstream structs whose Rust decoders accept appended fields. Only the
+    /// drift extractor reads these; they render into no generated output.
+    #[serde(default, rename = "tolerant_struct")]
+    pub tolerant_structs: Vec<TolerantStruct>,
     #[serde(rename = "protocol")]
     pub protocols: Vec<ProtocolPolicy>,
     #[serde(rename = "service")]
@@ -103,6 +107,27 @@ pub struct PostBaselineStatus {
     pub value: u64,
     /// Upstream revision and file that define the status.
     pub source: String,
+}
+
+/// An unsigned upstream RPC struct, named `<package>.<Go type>` as in the
+/// drift extractor's struct-shape artifact, whose Rust decoder accepts fields
+/// a later release appends (`crates/foks-proto/src/trailing.rs`).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct TolerantStruct {
+    pub upstream: String,
+    /// The Rust type or decoder that handles the struct.
+    pub rust: String,
+    pub decoding: StructDecoding,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum StructDecoding {
+    /// Appended fields are kept and re-encoded with the value.
+    Retained,
+    /// Appended fields are discarded; the value is never encoded again.
+    ReadOnly,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -399,6 +424,28 @@ pub fn merge<'a>(artifact: &'a Artifact, policy: &'a Policy) -> Result<Merged<'a
             return invalid(format!(
                 "invalid, colliding or baseline post-baseline status {}",
                 status.alias
+            ));
+        }
+    }
+
+    let mut tolerant_names = BTreeSet::new();
+    for tolerant in &policy.tolerant_structs {
+        let well_formed = tolerant
+            .upstream
+            .split_once('.')
+            .is_some_and(|(package, name)| {
+                matches!(package, "lib" | "rem")
+                    && name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                    && name.chars().all(|c| c.is_ascii_alphanumeric())
+            });
+        if !well_formed
+            || tolerant.rust.trim().is_empty()
+            || tolerant.rust.chars().any(char::is_control)
+            || !tolerant_names.insert(tolerant.upstream.as_str())
+        {
+            return invalid(format!(
+                "invalid or duplicate tolerant struct {}",
+                tolerant.upstream
             ));
         }
     }

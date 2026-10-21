@@ -76,6 +76,397 @@ upstream = "RT_MSG_REPLAY_MISMATCH"
 value = 12007
 source = "go-foks b41b354 proto-src/lib/status.snowp"
 
+# Unsigned RPC structs whose Rust decoders accept fields appended by a later
+# upstream release (crates/foks-proto/src/trailing.rs). `retained` keeps the
+# appended fields for re-encoding; `read_only` discards them because the value
+# is never encoded again. The drift extractor reports growth of a listed
+# struct as additive and growth of any other struct as review-required.
+# Names are `<package>.<Go type>` as in the struct-shape artifact.
+[[tolerant_struct]]
+upstream = "rem.RTSendRes"
+rust = "ChatSendReceipt"
+decoding = "retained"
+
+[[tolerant_struct]]
+upstream = "rem.RTChannelMetadata"
+rust = "RtChannelMetadata"
+decoding = "retained"
+
+[[tolerant_struct]]
+upstream = "rem.RTChannelSet"
+rust = "RtChannelSet"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.RTInboxKey"
+rust = "RtInboxKey"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.RTGetChangedThreadsArg"
+rust = "RtChangedThreads"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.RTReadThroughArg"
+rust = "RtReadThrough"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.RTPollInboxArg"
+rust = "RtPollInbox"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "lib.RTInboxPollRes"
+rust = "RtInboxPollResult"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.RTInboxChannel"
+rust = "RtInboxChannel"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.RTInboxDelta"
+rust = "RtInboxDelta"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.RTThreadRangeBookends"
+rust = "RtThreadRange"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.RTThreadQuery"
+rust = "RtThreadQuery"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.RTMsgList"
+rust = "RtMessageList"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.RTThreadPage"
+rust = "RtThreadPage"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.RTLastMsg"
+rust = "RtLastMessage"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.RtNewChannelArg"
+rust = "RtCreateChannelArgument"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.RtListAllChannelsForTeamArg"
+rust = "RtListChannelsArgument"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.RtSendArg"
+rust = "RtSendArgument"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.RtGetThreadArg"
+rust = "RtGetThreadArgument"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.RtGetInboxVersionArg"
+rust = "RtGetInboxVersionArgument"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.RtGetChangedThreadsArg"
+rust = "RtGetChangedThreadsArgument"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.RtReadThroughArg"
+rust = "RtReadThroughArgument"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.RtPollInboxArg"
+rust = "RtPollInboxArgument"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.RTSelectVhost"
+rust = "RtSelectVhostArgument"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.RtGetThreadRecentsArg"
+rust = "RtRecentsArgument"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.KVGetRes"
+rust = "KvGetResponse"
+decoding = "retained"
+
+[[tolerant_struct]]
+upstream = "rem.KVListRes"
+rust = "KvListResponse"
+decoding = "retained"
+
+[[tolerant_struct]]
+upstream = "lib.KVExtendedDirent"
+rust = "KvExtendedDirent"
+decoding = "retained"
+
+[[tolerant_struct]]
+upstream = "lib.KVDirPair"
+rust = "KvDirectoryPair"
+decoding = "retained"
+
+[[tolerant_struct]]
+upstream = "lib.KVUsage"
+rust = "KvUsage"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "lib.KVUsageStats"
+rust = "KvUsageStats"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "lib.KVUsageStatsChunked"
+rust = "KvChunkedUsageStats"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.GetEncryptedChunkRes"
+rust = "KvEncryptedChunk"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "lib.PathVersionVector"
+rust = "KvPathVersionVector"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "lib.DirVersion"
+rust = "KvDirectoryVersion"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "lib.DirentVersion"
+rust = "KvDirentVersion"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.TeamCertAndMetadata"
+rust = "TeamCertificateAndMetadata"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.InboxPagination"
+rust = "InboxPagination"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.TeamRawInbox"
+rust = "decode_team_inbox"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.TeamRawInboxRow"
+rust = "RawInboxRow"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.TeamRawInboxRowLocal"
+rust = "RawInboxRequest::Local"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.TeamRawInboxRowRemote"
+rust = "RawInboxRequest::Remote"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.TeamRemoteViewTokenSet"
+rust = "TeamRemoteViewTokenSet"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "lib.SemVer"
+rust = "SemVer"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "lib.ClientVersionExt"
+rust = "ClientVersionExt"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "lib.ServerClientVersionInfo"
+rust = "ServerClientVersionInfo"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "lib.DeviceNagInfo"
+rust = "DeviceNagInfo"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.LoginRes"
+rust = "PassphraseLoginResult"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.ChangeUsernameArg"
+rust = "ChangeUsernameArgument"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.ChangedUsernameFullUpdateArg"
+rust = "ChangedUsernameFullUpdate"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "lib.SSOConfig"
+rust = "SsoConfig"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "lib.OAuth2Config"
+rust = "OAuth2Config"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "lib.OAuth2TokenSet"
+rust = "OAuth2TokenSet"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.OAuth2PollRes"
+rust = "OAuth2PollResult"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.InitOAuth2SessionArg"
+rust = "InitOAuth2SessionArgument"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.PollOAuth2SessionCompletionArg"
+rust = "PollOAuth2SessionArgument"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.SsoLoginArg"
+rust = "SsoLoginArgument"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.RegSSOArgsOAuth2"
+rust = "RegSsoArgs::Oauth2"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.SendArg"
+rust = "KexSendArgument"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.ReceiveArg"
+rust = "KexReceiveArgument"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "lib.RegServerConfig"
+rust = "RegServerConfig"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "lib.HostConfig"
+rust = "HostConfig"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "lib.Metering"
+rust = "HostConfig metering"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "lib.HostViewership"
+rust = "RegServerConfig and HostConfig viewership"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.TeamConfig"
+rust = "TeamConfig"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.UserChain"
+rust = "UserChain"
+decoding = "retained"
+
+[[tolerant_struct]]
+upstream = "rem.TeamChain"
+rust = "TeamChain"
+decoding = "retained"
+
+[[tolerant_struct]]
+upstream = "rem.GenericChain"
+rust = "GenericChain"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "lib.MerklePathsCompressed"
+rust = "UserMerklePaths and MerkleMultiLookupResponse"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "lib.MerklePathCompressed"
+rust = "MerkleLookupResponse"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.MerkleExistsRes"
+rust = "MerkleExistsResponse"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.LookupUserRes"
+rust = "LookupUserResult"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.EditTeamRes"
+rust = "TeamEditResult"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.LocalPartyRole"
+rust = "TeamEditResult invitee"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.LocalTeamListEntry"
+rust = "LocalTeamListEntry"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.ActivatedVOBearerToken"
+rust = "ActivatedTeamView"
+decoding = "read_only"
+
+[[tolerant_struct]]
+upstream = "rem.GetHistoricalRootsRes"
+rust = "HistoricalMerkleRoots"
+decoding = "read_only"
+
 [[protocol]]
 name = "Probe"
 upstream = "Probe"

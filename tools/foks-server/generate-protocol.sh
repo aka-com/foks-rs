@@ -21,20 +21,25 @@ protocol_go_cache=${FOKS_PROTOCOL_GOCACHE:-"$temporary_root/go-build"}
 
 extract() {
     destination=$1
+    structs=$2
     (
         cd "$repository_root/tools/foks-protocol-sync"
         GOCACHE="$protocol_go_cache" go run . pinned \
             --oracle "$repository_root/tools/foks-v019-oracle" \
             ${offline:+"$offline"} \
-            --out "$destination"
+            --out "$destination" \
+            --structs-out "$structs"
     )
 }
 
 first="$temporary_root/first.json"
 second="$temporary_root/second.json"
-extract "$first"
-extract "$second"
+first_structs="$temporary_root/first-structs.json"
+second_structs="$temporary_root/second-structs.json"
+extract "$first" "$first_structs"
+extract "$second" "$second_structs"
 cmp "$first" "$second"
+cmp "$first_structs" "$second_structs"
 
 upstream="$repository_root/crates/foks-server/protocol/upstream-v0.1.9.json"
 policy="$repository_root/crates/foks-server/protocol/policy-v1.toml"
@@ -43,11 +48,16 @@ status_codes="$repository_root/crates/foks-rpc/src/generated/status_codes.rs"
 routes="$repository_root/crates/foks-server/src/rpc/generated/routes.rs"
 contract="$repository_root/crates/foks-server/protocol-v1.toml"
 digest="$repository_root/crates/foks-server/protocol/upstream-v0.1.9.sha256"
+# Positional struct layouts for the drift report. Kept apart from the pinned
+# artifact so that its bytes and digest do not depend on them.
+structs="$repository_root/crates/foks-server/protocol/upstream-v0.1.9-structs.json"
 
 if [ "$mode" = write ]; then
     cp "$first" "$upstream"
+    cp "$first_structs" "$structs"
 else
     cmp "$first" "$upstream"
+    cmp "$first_structs" "$structs"
 fi
 
 cargo run --quiet --manifest-path "$repository_root/Cargo.toml" \
