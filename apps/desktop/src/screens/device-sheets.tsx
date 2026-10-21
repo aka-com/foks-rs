@@ -31,6 +31,8 @@ import type { WorkflowOperation } from '../model/workflow-availability';
 
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import type { FoksIconName } from '../icons';
+import { RecoveryPhraseSheet } from './recovery-phrase-sheet';
 import { useConcealOnInactive } from '../use-conceal-on-inactive';
 import {
   removeDevice,
@@ -217,6 +219,7 @@ function DeviceSheetFrame({
   onClose,
   danger = false,
   dismissible = true,
+  glyph,
 }: {
   title: string;
   children: ReactNode;
@@ -224,6 +227,8 @@ function DeviceSheetFrame({
   onClose: () => void;
   danger?: boolean;
   dismissible?: boolean;
+  /** The mark's icon, when not the default settings or trash glyph. */
+  glyph?: FoksIconName;
 }): ReactNode {
   return (
     <SheetDialog
@@ -235,7 +240,7 @@ function DeviceSheetFrame({
       footer={footer}
       glyph={
         <span className={`server-mark ${danger ? 'danger' : ''}`}>
-          <Icon name={danger ? 'trash' : 'settings'} />
+          <Icon name={glyph ?? (danger ? 'trash' : 'settings')} />
         </span>
       }
     >
@@ -249,6 +254,7 @@ export function PhraseSheet({
   profile,
   accountAlias,
   seedPhrase,
+  subtitle,
   onClose,
   onDone,
   onError,
@@ -257,6 +263,8 @@ export function PhraseSheet({
   profile: string;
   accountAlias: string;
   seedPhrase?: string;
+  /** Whose account the phrase recovers: "For satoshi on Personal server". */
+  subtitle?: string;
   onClose: () => void;
   onDone: () => Promise<void>;
   onError: (error: unknown) => void;
@@ -271,7 +279,6 @@ export function PhraseSheet({
   const [alias, setAlias] = useState('paper-backup');
   const [written, setWritten] = useState(false);
   const [busy, setBusy] = useState(false);
-  const words = phrase?.split(/\s+/) ?? [];
   const mounted = useRef(false);
   useEffect(() => {
     mounted.current = true;
@@ -287,110 +294,93 @@ export function PhraseSheet({
   // Navigation requires saving or explicitly dismissing the displayed key.
   useSheetGuard(
     phrase
-      ? { verdict: 'refuse', reason: 'Save or dismiss the recovery phrase first.' }
+      ? {
+          verdict: 'refuse',
+          reason: 'Save or dismiss the recovery phrase first.',
+        }
       : busy
-        ? { verdict: 'refuse', reason: 'Wait for the recovery phrase to finish.' }
+        ? {
+            verdict: 'refuse',
+            reason: 'Wait for the recovery phrase to finish.',
+          }
         : null,
   );
+  const save = (): void => {
+    if (!phrase) return;
+    setBusy(true);
+    const once = phrase;
+    setPhrase(null);
+    void controller
+      .run(
+        () =>
+          access.run('backup-create', target, () =>
+            bridge.commitOwnerBackup(profile, accountAlias, alias, once),
+          ),
+        onDone,
+        onError,
+      )
+      .finally(controller.settled(() => setBusy(false)));
+  };
+  // The phrase itself is revealed in the sheet first run uses.
+  if (phrase)
+    return (
+      <RecoveryPhraseSheet
+        phrase={phrase}
+        subtitle={subtitle}
+        oneTime
+        written={written}
+        onWrittenChange={setWritten}
+        busy={busy}
+        dismissible={!busy}
+        onClose={discard}
+        saveTitle={eligibility.title}
+        saveDisabled={eligibility.disabled}
+        onSave={save}
+      />
+    );
   return (
     <DeviceSheetFrame
-      title={phrase ? 'Save recovery phrase' : 'Create recovery phrase'}
+      title="Create Recovery Phrase"
+      glyph="fileText"
       onClose={discard}
       dismissible={!busy}
       footer={
         <>
-          {phrase ? (
-            <>
-              <Button disabled={busy} onClick={discard}>
-                Cancel
-              </Button>
-              <Button
-                variant="primary"
-                title={eligibility.title}
-                disabled={!written || busy || eligibility.disabled}
-                onClick={() => {
-                  setBusy(true);
-                  const once = phrase;
-                  setPhrase(null);
-                  void controller
-                    .run(
-                      () =>
-                        access.run('backup-create', target, () =>
-                          bridge.commitOwnerBackup(
-                            profile,
-                            accountAlias,
-                            alias,
-                            once,
-                          ),
-                        ),
-                      onDone,
-                      onError,
-                    )
-                    .finally(controller.settled(() => setBusy(false)));
-                }}
-              >
-                Save Recovery Phrase
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button onClick={discard}>Cancel</Button>
-              <Button
-                variant="primary"
-                title={eligibility.title}
-                disabled={!alias.trim() || busy || eligibility.disabled}
-                onClick={() => {
-                  setBusy(true);
-                  void access
-                    .run('backup-create', target, () =>
-                      bridge.prepareOwnerBackup(
-                        profile,
-                        accountAlias,
-                        alias.trim(),
-                      ),
-                    )
-                    .then((result) => {
-                      if (mounted.current) setPhrase(result.phrase);
-                    })
-                    .catch(onError)
-                    .finally(() => setBusy(false));
-                }}
-              >
-                Generate Phrase
-              </Button>
-            </>
-          )}
+          <Button onClick={discard}>Cancel</Button>
+          <Button
+            variant="primary"
+            title={eligibility.title}
+            disabled={!alias.trim() || busy || eligibility.disabled}
+            onClick={() => {
+              setBusy(true);
+              void access
+                .run('backup-create', target, () =>
+                  bridge.prepareOwnerBackup(
+                    profile,
+                    accountAlias,
+                    alias.trim(),
+                  ),
+                )
+                .then((result) => {
+                  if (mounted.current) setPhrase(result.phrase);
+                })
+                .catch(onError)
+                .finally(() => setBusy(false));
+            }}
+          >
+            Generate Phrase
+          </Button>
         </>
       }
     >
-      {phrase ? (
-        <>
-          <p>
-            Write these {words.length} words down now. The phrase cannot be
-            shown again after you close this.
-          </p>
-          <div className="words">
-            {words.map((word, index) => (
-              <span className="word" key={`${index}-${word}`}>
-                <i>{index + 1}</i>
-                {word}
-              </span>
-            ))}
-          </div>
-          <label className="checkline">
-            <input
-              type="checkbox"
-              checked={written}
-              onChange={(event) => setWritten(event.target.checked)}
-            />
-            I have written down these words
-          </label>
-        </>
-      ) : (
-        <Inset>
-          <Field label="Recovery phrase name" value={alias} onChange={setAlias} />
-        </Inset>
-      )}
+      <Inset>
+        <Field
+          label="Recovery phrase name"
+          value={alias}
+          autoFocus
+          onChange={setAlias}
+        />
+      </Inset>
     </DeviceSheetFrame>
   );
 }
@@ -1467,7 +1457,13 @@ export function RevokeBackupSheet({
               void controller
                 .run(
                   () =>
-                    revokeRecoveryPhrase(bridge, access, store, backup, confirmation),
+                    revokeRecoveryPhrase(
+                      bridge,
+                      access,
+                      store,
+                      backup,
+                      confirmation,
+                    ),
                   onDone,
                   onError,
                 )
@@ -1480,8 +1476,8 @@ export function RevokeBackupSheet({
       }
     >
       <p>
-        This recovery phrase can no longer recover the account, and the account keys
-        are rotated. Type its name to confirm.
+        This recovery phrase can no longer recover the account, and the account
+        keys are rotated. Type its name to confirm.
       </p>
       <Inset>
         <InsetRow label="Confirm">

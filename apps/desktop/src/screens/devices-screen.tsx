@@ -1011,6 +1011,7 @@ export function DevicesScreen({
           bridge={bridge}
           profile={selected.server}
           accountAlias={selected.account}
+          subtitle={`For ${usernameOf(snapshot, selected) ?? selected.account} on ${serverDisplayLabelForStore(snapshot, selected)}`}
           seedPhrase={
             enteredScene === 'settings-phrase'
               ? bridge.firstRunFixture?.recoveryPhrase

@@ -523,7 +523,7 @@ test('the recovery-phrase scene opens the one-time reveal', async () => {
   const dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
   assert.equal(
     ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
-    'Save recovery phrase',
+    'Save Recovery Phrase',
   );
   // The `section=` anchor must not pull focus out of the open sheet.
   await ui.waitFor(() => {
@@ -561,12 +561,12 @@ async function recoveryPhrase(): Promise<{
   return { rendered, dialog, committed };
 }
 
-test('Cancel discards a revealed recovery phrase rather than committing it', async () => {
+test('Not Now discards a revealed recovery phrase rather than committing it', async () => {
   const { rendered, dialog, committed } = await recoveryPhrase();
 
   await ui.act(async () => {
     ui.fireEvent.click(
-      ui.within(dialog).getByRole('button', { name: 'Cancel' }),
+      ui.within(dialog).getByRole('button', { name: 'Not Now' }),
     );
   });
 
@@ -577,10 +577,10 @@ test('Cancel discards a revealed recovery phrase rather than committing it', asy
   assert.deepEqual(committed, []);
 });
 
-test('Esc leaves the revealed recovery phrase the same way Cancel does', async () => {
+test('Esc leaves the revealed recovery phrase the same way Not Now does', async () => {
   const { rendered, dialog, committed } = await recoveryPhrase();
 
-  // Escape discards a revealed phrase, matching Cancel.
+  // Escape discards a revealed phrase, matching Not Now.
   await ui.act(async () => {
     ui.fireEvent.keyDown(dialog, { key: 'Escape' });
   });
@@ -598,7 +598,7 @@ test('the chooser leads into the recovery-phrase and provisioning sheets too', a
   const paper = await choose(rendered, 'Create a new recovery phrase');
   assert.equal(
     ui.within(paper).getByRole('heading', { level: 2 }).textContent,
-    'Create recovery phrase',
+    'Create Recovery Phrase',
   );
   assert.ok(ui.within(paper).getByLabelText('Recovery phrase name'));
   await ui.act(async () => {
@@ -1462,7 +1462,7 @@ test('an account with no recovery phrase gets its own band without publishing sh
     );
   });
   assert.ok(document.querySelector('.sheet'));
-  assert.ok(page.getByRole('heading', { name: 'Create recovery phrase' }));
+  assert.ok(page.getByRole('heading', { name: 'Create Recovery Phrase' }));
 });
 
 test('an account with a recovery phrase draws no band without publishing shell alerts', async () => {

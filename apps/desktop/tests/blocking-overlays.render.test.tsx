@@ -873,7 +873,7 @@ test('a conceal does not reopen the sheet a scene opened with the page', async (
   window.history.replaceState(null, '', '/?state=settings-phrase');
   const rendered = ui.render(createElement(App, { bridge }));
   await ui.waitFor(() => {
-    assert.match(document.body.textContent ?? '', /Save recovery phrase/);
+    assert.match(document.body.textContent ?? '', /Save Recovery Phrase/);
   });
 
   // The conceal remounts the tabs to take the phrase off the screen. The scene
@@ -893,7 +893,7 @@ test('a conceal does not reopen the sheet a scene opened with the page', async (
   await ui.waitFor(() => {
     assert.doesNotMatch(
       document.body.textContent ?? '',
-      /Save recovery phrase/,
+      /Save Recovery Phrase/,
     );
   });
   // The page itself is back, so the phrase is gone rather than the whole tab.

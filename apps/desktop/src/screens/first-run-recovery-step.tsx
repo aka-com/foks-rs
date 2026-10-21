@@ -1,14 +1,11 @@
 import type { ReactNode, Dispatch, SetStateAction } from 'react';
-import {
-  Icon,
-  Button,
-  Chip,
-  Inset,
-  InsetRow,
-  SheetDialog,
-} from '../components';
+import { Button, Chip, Inset, InsetRow } from '../components';
 import type { FirstRunCheckpoint, FirstRunStateName } from '../first-run-state';
 import { Pane, Foot, StepIntro } from './first-run-view';
+import {
+  RecoveryPhraseSheet,
+  RecoveryPhraseWords,
+} from './recovery-phrase-sheet';
 interface Props {
   state: 'protect' | 'phrase';
   checkpoint: FirstRunCheckpoint;
@@ -51,7 +48,6 @@ export function RecoveryStep({
   mutationBusy,
   commitBackup,
 }: Props): ReactNode {
-  const phraseWords = recoveryPhrase?.trim().split(/\s+/).length ?? 0;
   let content: ReactNode;
   if ((state === 'protect' || state === 'phrase') && checkpoint.managedLocal)
     content = (
@@ -101,7 +97,7 @@ export function RecoveryStep({
           </p>
           {state === 'phrase' ? (
             <>
-              <RecoveryPhrase
+              <RecoveryPhraseWords
                 phrase={recoveryPhrase}
                 concealed={phraseConcealed}
                 onReveal={revealPhrase}
@@ -213,99 +209,25 @@ export function RecoveryStep({
         </div>
         {message ? <p className="crit">{message}</p> : null}
         {state === 'phrase' ? (
-          <SheetDialog
-            width="wide"
-            dismissible={!mutationBusy}
-            onClose={() => go('protect')}
-            glyph={
-              <span className="kic Store" aria-hidden="true">
-                <Icon name="fileText" />
-              </span>
-            }
-            title="Save your recovery phrase"
+          <RecoveryPhraseSheet
+            phrase={recoveryPhrase}
+            concealed={phraseConcealed}
+            onReveal={revealPhrase}
             subtitle={
               checkpoint.account?.username
                 ? `For ${checkpoint.account.username} on ${checkpoint.profile?.canonicalName ?? 'this server'}`
                 : undefined
             }
-            footer={
-              <>
-                <Button disabled={mutationBusy} onClick={() => go('protect')}>
-                  Not Now
-                </Button>
-                <Button
-                  variant="primary"
-                  disabled={!recoveryPhrase || !phraseWritten || busy}
-                  onClick={() => void commitBackup()}
-                >
-                  {busy ? 'Saving...' : 'Done'}
-                </Button>
-              </>
-            }
-          >
-            <>
-              <p>
-                Anyone with these words can access your account. Store them
-                somewhere safe, like an offline vault, or another password
-                manager.
-              </p>
-              <RecoveryPhrase
-                phrase={recoveryPhrase}
-                concealed={phraseConcealed}
-                onReveal={revealPhrase}
-              />
-              <label className="local-confirm">
-                <input
-                  type="checkbox"
-                  checked={phraseWritten}
-                  onChange={(event) => setPhraseWritten(event.target.checked)}
-                />
-                <span>
-                  {phraseWords > 1
-                    ? `I have written down all ${phraseWords} words.`
-                    : 'I have written down the phrase.'}
-                </span>
-              </label>
-            </>
-          </SheetDialog>
+            written={phraseWritten}
+            onWrittenChange={setPhraseWritten}
+            busy={busy}
+            dismissible={!mutationBusy}
+            onClose={() => go('protect')}
+            onSave={() => void commitBackup()}
+          />
         ) : null}
       </Pane>
     );
 
   return content;
-}
-
-function RecoveryPhrase({
-  phrase,
-  concealed,
-  onReveal,
-}: {
-  phrase: string | null;
-  concealed: boolean;
-  onReveal: () => void;
-}): ReactNode {
-  if (!phrase) return <p>Preparing your phrase…</p>;
-  const words = phrase.split(/\s+/);
-  return (
-    <>
-      <div
-        className="words"
-        aria-label={concealed ? 'Recovery phrase hidden' : undefined}
-      >
-        {words.map((word, index) => (
-          <div
-            className="word"
-            key={`${index}-${concealed ? 'hidden' : word}`}
-            aria-hidden={concealed || undefined}
-          >
-            <i>{index + 1}</i>
-            {concealed ? '••••••' : word}
-          </div>
-        ))}
-      </div>
-      {concealed ? (
-        <Button onClick={onReveal}>Show Recovery Phrase</Button>
-      ) : null}
-    </>
-  );
 }
