@@ -14,7 +14,7 @@ import type {
   FirstRunStateName,
 } from '../../first-run-state';
 import type { TeamDiscoveryOutcome } from './use-team-discovery';
-import { Foot, Pane } from '../first-run-view';
+import { Foot, Pane, StepIntro } from '../first-run-view';
 
 const PERSONAL_FIXED =
   'Your Personal vault is private to your account. To share items with others, use a team.';
@@ -61,14 +61,16 @@ export function WaitingForTeamStep({
           </Foot>
         }
       >
-        <h1>{checkpoint.selectedGroup.name}</h1>
-        <p className="lead">
-          {/* Reached either from a vault that could not be opened or from a
-              team the catalog no longer binds, which the checkpoint does not
-              tell apart; the retry below finds out which. */}
-          {message ||
-            'This team’s vault could not be opened. Retry to check your membership again, or choose another team.'}
-        </p>
+        <StepIntro>
+          <h1>{checkpoint.selectedGroup.name}</h1>
+          <p className="lead">
+            {/* Reached either from a vault that could not be opened or from a
+                team the catalog no longer binds, which the checkpoint does not
+                tell apart; the retry below finds out which. */}
+            {message ||
+              'This team’s vault could not be opened. Retry to check your membership again, or choose another team.'}
+          </p>
+        </StepIntro>
         <div className="setup-actions">
           <Button
             variant="primary"
@@ -99,15 +101,17 @@ export function WaitingForTeamStep({
         </Foot>
       }
     >
-      <h1>
-        Waiting for {admin} to add {checkpoint.account?.username}
-      </h1>
-      <p className="lead">
-        Your account ({checkpoint.account?.username}) on{' '}
-        {profile?.canonicalName} is ready. {adminShort} must add you to{' '}
-        <b>{group}</b>. Once they have added you, select Check now to finish
-        joining.
-      </p>
+      <StepIntro>
+        <h1>
+          Waiting for {admin} to add {checkpoint.account?.username}
+        </h1>
+        <p className="lead">
+          Your account ({checkpoint.account?.username}) on{' '}
+          {profile?.canonicalName} is ready. {adminShort} must add you to{' '}
+          <b>{group}</b>. Once they have added you, select Check now to finish
+          joining.
+        </p>
+      </StepIntro>
       {discoveredGroups.length > 1 ? (
         <div className="pcard">
           <h3>Choose an existing team</h3>
