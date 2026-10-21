@@ -5,17 +5,26 @@ import {
 } from '../model';
 import { CollectionStatus } from '../components/collection-status';
 import { useEffect, useRef, type ReactNode } from 'react';
-import { Button } from '../components';
+import {
+  Button,
+  Chip,
+  Mark,
+  PropertyGroup,
+  PropertyRow,
+  StoreMark,
+} from '../components';
 import { inPopup } from '/kit/overlay-primitives';
 import type { Bridge } from '../bridge';
 import type { Location, GroupSettingsTab } from '../location';
 import {
   groupDetailFailure,
+  hue,
   isMachine,
   partiesOf,
   partyName,
   parseRole,
   plural,
+  roleChipLabel,
   roleName,
   roleRank,
   serverDisplayLabelForStore,
@@ -23,19 +32,45 @@ import {
   storeDescription,
   storeOperationAvailability,
 } from '../model';
-import type { AgentSnapshot, TeamStore } from '../model';
+import type { AgentSnapshot, Party, TeamStore } from '../model';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import { channelTitle, listChannels } from '../chat/presentation';
 import { federatedTeamMembers, memberCountOf } from './team-members';
 import { itemCountOf } from './group-tabs';
 import { manageReason } from './group-model';
-import { GroupMark } from './group-mark';
-import './team-info.css';
+import { AccountMark } from './account-switcher';
+
+/** A member row, as the details column's Sharing roster draws one. */
+function MemberRow({ party }: { party: Party }): ReactNode {
+  const name = partyName(party);
+  const role = parseRole(party.destination_role);
+  const team = party.party_kind !== 'user' && !isMachine(party);
+  return (
+    <div className="party">
+      {party.party_kind === 'user' ? (
+        <AccountMark name={name} />
+      ) : (
+        <Mark hue={hue(name)} size="md">
+          {name.slice(0, 1).toUpperCase()}
+        </Mark>
+      )}
+      <span className="nm">
+        <span className="t">{name}</span>
+        {party.label === 'you' ? <Chip tone="you">you</Chip> : null}
+        {isMachine(party) ? <Chip>Machine</Chip> : null}
+        {team ? <Chip>Team</Chip> : null}
+      </span>
+      <Chip>{role ? roleChipLabel(role) : 'Role unavailable'}</Chip>
+    </div>
+  );
+}
 
 /**
  * A read-only summary of a team, drawn in the Files details column (opened
- * from a folder's or store's Team Info); membership changes keep their
- * existing guarded pages.
+ * from a folder's or store's Team Info) with the column's own parts: the
+ * hero, property rows with their actions at the trailing edge, and the
+ * Sharing roster's member rows. Membership changes keep their existing
+ * guarded pages.
  */
 export function TeamInfoPanel({
   snapshot,
@@ -150,7 +185,7 @@ export function TeamInfoPanel({
       }}
     >
       <div className="bar" data-tauri-drag-region="">
-        <b className="team-info-title">Team Info</b>
+        <b className="bar-title">Team Info</b>
         <span className="sp" />
         <Button
           variant="quiet"
@@ -159,145 +194,177 @@ export function TeamInfoPanel({
           onClick={() => onClose()}
         />
       </div>
-      <div className="scroll team-info-body">
-        <section>
-          <div className="team-info-identity">
-            <GroupMark store={store} />
-            <div>
-              <h2>{store.name}</h2>
-              <p>{store.team_kind === 'adhoc' ? 'Shared folder' : 'Team'}</p>
-            </div>
+      <div className="scroll">
+        <div className="hero">
+          <StoreMark snapshot={snapshot} store={store} size="lg" />
+          <div className="t">
+            <h2 title={store.name}>{store.name}</h2>
+            <p>
+              {store.team_kind === 'adhoc' ? 'Shared folder' : 'Team'} ·{' '}
+              {serverDisplayLabelForStore(snapshot, store)}
+            </p>
           </div>
-          <dl>
-            <dt>Server</dt>
-            <dd>{serverDisplayLabelForStore(snapshot, store)}</dd>
-            <dt>Your account</dt>
-            <dd>
-              {account?.username ?? store.account}
-              {role ? ` · ${roleName(role)}` : ''}
-            </dd>
-            {readable && !rosterFailure ? (
-              <>
-                <dt>{owners.length === 1 ? 'Owner' : 'Owners'}</dt>
-                <dd>
-                  {owners.length
-                    ? owners.map(partyName).join(', ')
-                    : rosterReadiness === 'loading'
-                      ? 'Loading owner…'
-                      : rosterReadiness === 'unavailable'
-                        ? 'Owner unavailable'
-                        : 'No owner designated'}
-                </dd>
-              </>
-            ) : null}
-          </dl>
-          {!readable ? (
-            <p role="status">
-              {storeDescription(snapshot, store, { operation: 'teams' })}
-            </p>
-          ) : (
-            <p className="team-info-quiet">
+          <div className="hero-acts">
+            <Button onClick={() => teamTab('settings')}>Team Settings</Button>
+          </div>
+        </div>
+        {!readable ? (
+          <p className="note" role="status">
+            {storeDescription(snapshot, store, { operation: 'teams' })}
+          </p>
+        ) : null}
+        <PropertyGroup>
+          <PropertyRow label="Server">
+            {serverDisplayLabelForStore(snapshot, store)}
+          </PropertyRow>
+          <PropertyRow label="Your account">
+            <span>{account?.username ?? store.account}</span>
+            {role ? <Chip>{roleName(role)}</Chip> : null}
+          </PropertyRow>
+          {readable && !rosterFailure ? (
+            <PropertyRow label={owners.length === 1 ? 'Owner' : 'Owners'}>
+              {owners.length
+                ? owners.map(partyName).join(', ')
+                : rosterReadiness === 'loading'
+                  ? 'Loading owner…'
+                  : rosterReadiness === 'unavailable'
+                    ? 'Owner unavailable'
+                    : 'No owner designated'}
+            </PropertyRow>
+          ) : null}
+          {readable ? (
+            <PropertyRow label="Joining">
               {store.team_kind === 'adhoc'
-                ? 'An ad-hoc team has fixed membership.'
+                ? 'Fixed membership'
                 : 'Invite only. An administrator adds members or approves requests.'}
-            </p>
-          )}
-        </section>
+            </PropertyRow>
+          ) : null}
+          <PropertyRow
+            label="Team ID"
+            mono
+            actions={
+              <Button
+                size="sm"
+                aria-label="Copy Team ID"
+                title="Copy Team ID"
+                onClick={() => {
+                  void bridge.copyText(store.team_id_hex).catch(onError);
+                }}
+              >
+                Copy
+              </Button>
+            }
+          >
+            <span title={store.team_id_hex}>{shortId(store.team_id_hex)}</span>
+          </PropertyRow>
+        </PropertyGroup>
         {readable ? (
           <>
-            <section>
-              <h3>
-                Members
-                {!rosterFailure &&
-                !federationFailure &&
-                memberReadiness === 'ready'
-                  ? ` · ${memberCountOf(snapshot, store)}`
-                  : ''}
-              </h3>
+            <PropertyGroup
+              className="titled"
+              label={
+                <>
+                  <h3>
+                    Members
+                    {!rosterFailure &&
+                    !federationFailure &&
+                    memberReadiness === 'ready'
+                      ? ` · ${memberCountOf(snapshot, store)}`
+                      : ''}
+                  </h3>
+                  <Button
+                    size="sm"
+                    aria-label="Manage Members"
+                    onClick={() => teamTab('people')}
+                  >
+                    Manage…
+                  </Button>
+                </>
+              }
+            >
               {!rosterFailure && !federationFailure ? (
                 <CollectionStatus state={memberReadiness} label="members" />
               ) : null}
               {rosterFailure ? (
-                <p role="alert">{rosterFailure.message}</p>
+                <p className="note" role="alert">
+                  {rosterFailure.message}
+                </p>
               ) : (
-                <>
-                  {memberRows.map((party) => {
-                    const memberRole = parseRole(party.destination_role);
-                    return (
-                      <div
-                        className="team-info-member"
-                        key={party.party_id_hex}
-                      >
-                        <span>
-                          {partyName(party)}
-                          {party.label === 'you' ? ' · You' : ''}
-                          {isMachine(party) ? (
-                            <small>Machine</small>
-                          ) : party.party_kind !== 'user' ? (
-                            <small>Team</small>
-                          ) : null}
-                        </span>
-                        <small>
-                          {memberRole
-                            ? roleName(memberRole)
-                            : 'Role unavailable'}
-                        </small>
-                      </div>
-                    );
-                  })}
+                <div className="roster">
+                  {memberRows.map((party) => (
+                    <MemberRow key={party.party_id_hex} party={party} />
+                  ))}
                   {!federationFailure &&
                     federated.entries.map((entry) => {
                       const memberRole = parseRole(entry.destination);
                       return (
                         <div
-                          className="team-info-member"
+                          className="party"
                           key={`${entry.remote_host_id_hex}:${entry.remote_team_id_hex}`}
                         >
-                          <span>
-                            {entry.remote_team_alias}
-                            <small>Team on {entry.remote_profile}</small>
+                          <Mark hue={hue(entry.remote_team_alias)} size="md">
+                            {entry.remote_team_alias.slice(0, 1).toUpperCase()}
+                          </Mark>
+                          <span className="nm">
+                            <span className="t">{entry.remote_team_alias}</span>
+                            <Chip>Team on {entry.remote_profile}</Chip>
                           </span>
-                          <small>
-                            {entry.active
-                              ? memberRole
-                                ? roleName(memberRole)
-                                : 'Role unavailable'
-                              : 'Inactive'}
-                          </small>
+                          <Chip>
+                            {!entry.active
+                              ? 'Inactive'
+                              : memberRole
+                                ? roleChipLabel(memberRole)
+                                : 'Role unavailable'}
+                          </Chip>
                         </div>
                       );
                     })}
-                  {!memberRows.length &&
-                  !federated.entries.length &&
-                  !federationFailure &&
-                  memberReadiness === 'ready' ? (
-                    <p>No members yet.</p>
-                  ) : null}
-                </>
+                </div>
               )}
+              {!rosterFailure &&
+              !memberRows.length &&
+              !federated.entries.length &&
+              !federationFailure &&
+              memberReadiness === 'ready' ? (
+                <p className="note">No members yet.</p>
+              ) : null}
               {federationFailure &&
               federationFailure.message !== rosterFailure?.message ? (
-                <p role="alert">{federationFailure.message}</p>
+                <p className="note" role="alert">
+                  {federationFailure.message}
+                </p>
               ) : null}
-              <Button icon="users" onClick={() => teamTab('people')}>
-                Manage Members
-              </Button>
-            </section>
-            <section>
-              <h3>Channels{channels ? ` · ${channels.length}` : ''}</h3>
+            </PropertyGroup>
+            <PropertyGroup
+              className="titled"
+              label={
+                <>
+                  <h3>Channels{channels ? ` · ${channels.length}` : ''}</h3>
+                  <Button
+                    size="sm"
+                    aria-label="View Channels"
+                    onClick={() => teamTab('channels')}
+                  >
+                    View…
+                  </Button>
+                </>
+              }
+            >
               {store.team_kind === 'adhoc' ? (
-                <p>Chat is not available in shared folders.</p>
+                <p className="note">Chat is not available in shared folders.</p>
               ) : !chatReadable ? (
-                <p>
+                <p className="note">
                   {storeDescription(snapshot, store, { operation: 'chat' })}
                 </p>
               ) : (
                 <>
                   {entry?.error || entry?.note ? (
-                    <p role="status">{entry.error || entry.note}</p>
+                    <p className="note" role="status">
+                      {entry.error || entry.note}
+                    </p>
                   ) : null}
                   {!channels ? (
-                    <p>
+                    <p className="note">
                       {entry?.state === 'blocked' ||
                       entry?.state === 'unavailable'
                         ? 'Channels unavailable.'
@@ -305,36 +372,50 @@ export function TeamInfoPanel({
                     </p>
                   ) : channels.length ? (
                     channels.map(({ channel }) => (
-                      <button
-                        className="team-info-channel"
-                        type="button"
+                      <PropertyRow
                         key={channel.id}
-                        onClick={() =>
-                          navigate({
-                            kind: 'chat',
-                            ref: store.id,
-                            channel: channel.id,
-                          })
+                        label={
+                          <button
+                            type="button"
+                            className="link"
+                            onClick={() =>
+                              navigate({
+                                kind: 'chat',
+                                ref: store.id,
+                                channel: channel.id,
+                              })
+                            }
+                          >
+                            {channelTitle(channel)}
+                          </button>
                         }
                       >
-                        {channelTitle(channel)}
-                        <small>
+                        <span className="muted">
                           {channel.admin
                             ? 'Admins and owners'
                             : channel.description}
-                        </small>
-                      </button>
+                        </span>
+                      </PropertyRow>
                     ))
                   ) : (
-                    <p>No channels yet.</p>
+                    <p className="note">No channels yet.</p>
                   )}
                 </>
               )}
-              <Button onClick={() => teamTab('channels')}>View Channels</Button>
-            </section>
-            <section>
-              <h3>Files</h3>
-              <p>
+            </PropertyGroup>
+            <PropertyGroup>
+              <PropertyRow
+                label="Files"
+                actions={
+                  <Button
+                    size="sm"
+                    aria-label="Open Team Files"
+                    onClick={() => navigate({ kind: 'store', ref: store.id })}
+                  >
+                    Open
+                  </Button>
+                }
+              >
                 {fileReadiness === 'loading'
                   ? 'Loading files…'
                   : storeOperationAvailability(
@@ -345,45 +426,29 @@ export function TeamInfoPanel({
                       ).available
                     ? plural(itemCountOf(snapshot, store), 'item')
                     : 'Files unavailable.'}
-              </p>
-              <Button
-                icon="folder"
-                onClick={() => navigate({ kind: 'store', ref: store.id })}
-              >
-                Open Team Files
-              </Button>
-            </section>
-            {store.team_kind === 'named' &&
-            manageReason(snapshot, store, 'roster') === undefined ? (
-              <section>
-                <h3>Requests</h3>
-                <p>
+              </PropertyRow>
+              {store.team_kind === 'named' &&
+              manageReason(snapshot, store, 'roster') === undefined ? (
+                <PropertyRow
+                  label="Requests"
+                  actions={
+                    <Button
+                      size="sm"
+                      aria-label="Review Requests"
+                      onClick={() => teamTab('requests')}
+                    >
+                      Review…
+                    </Button>
+                  }
+                >
                   {requestCount === undefined
                     ? 'Request count unavailable.'
                     : `${requestCount} pending ${requestCount === 1 ? 'request' : 'requests'}`}
-                </p>
-                <Button onClick={() => teamTab('requests')}>
-                  Review Requests
-                </Button>
-              </section>
-            ) : null}
+                </PropertyRow>
+              ) : null}
+            </PropertyGroup>
           </>
         ) : null}
-        <section>
-          <h3>Team ID</h3>
-          <code title={store.team_id_hex}>{shortId(store.team_id_hex)}</code>
-          <Button
-            icon="copy"
-            onClick={() => {
-              void bridge.copyText(store.team_id_hex).catch(onError);
-            }}
-          >
-            Copy Team ID
-          </Button>
-          <Button icon="settings" onClick={() => teamTab('settings')}>
-            Team Settings
-          </Button>
-        </section>
       </div>
     </aside>
   );

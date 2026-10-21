@@ -3,13 +3,14 @@ import type { ReactNode } from 'react';
 import { Button, Field, Inset, SectionLabel, SheetDialog } from '../components';
 import type { Bridge } from '../bridge';
 import { normalizeCommandError } from '../bridge';
-import { nameOf, storeOf } from '../model';
+import { displayPathComponent, kindOf, nameOf, storeOf } from '../model';
 import type { AgentSnapshot, Item } from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { useSheetGuard } from '../navigation-guard';
 import { BigTile, itemTile } from './item-tile';
 import { itemActionProblem } from './store-access';
-import type { WriteWorkflow } from './write-workflows';
+import { parentPath } from './scope';
+import type { Landing, NewKind, WriteWorkflow } from './write-workflows';
 
 export function MoveSheet({
   snapshot,
@@ -17,6 +18,7 @@ export function MoveSheet({
   item,
   setWorkflow,
   onApplied,
+  onLanded,
   onMutationError,
   accessNow,
 }: {
@@ -25,6 +27,7 @@ export function MoveSheet({
   item: Item;
   setWorkflow: (workflow: WriteWorkflow) => void;
   onApplied: (message: string, profile?: string) => Promise<void>;
+  onLanded?: (landing: Landing) => void;
   onMutationError: MutationFailureHandler;
   accessNow: () => number;
 }): ReactNode {
@@ -33,6 +36,13 @@ export function MoveSheet({
   const [error, setError] = useState<string | null>(null);
   const [uncertain, setUncertain] = useState(false);
   const problem = itemActionProblem(snapshot, item, true, accessNow());
+  // A destination in the same folder is a rename: the button, its progress
+  // label and the toast say so.
+  const renaming = parentPath(destination) === parentPath(item.path);
+  const folderName = (path: string): string =>
+    path === '/'
+      ? (storeOf(snapshot, item.store)?.name ?? item.store)
+      : displayPathComponent(nameOf(path));
   const valid =
     destination.startsWith('/') &&
     destination !== '/' &&
@@ -81,9 +91,17 @@ export function MoveSheet({
     setWorkflow(null);
     try {
       await onApplied(
-        `Moved ${nameOf(item.path)}`,
+        renaming
+          ? `Renamed ${displayPathComponent(nameOf(item.path))} to ${displayPathComponent(nameOf(destination))}`
+          : `Moved ${displayPathComponent(nameOf(item.path))} to ${folderName(parentPath(destination))}`,
         storeOf(snapshot, item.store)?.server,
       );
+      onLanded?.({
+        type: 'item',
+        store: item.store,
+        path: destination,
+        kind: kindOf({ ...item, path: destination }) as NewKind,
+      });
     } catch (failure) {
       await onMutationError(failure, { report: false });
     }
@@ -109,7 +127,13 @@ export function MoveSheet({
               void submit();
             }}
           >
-            {saving ? 'Moving…' : 'Move'}
+            {saving
+              ? renaming
+                ? 'Renaming…'
+                : 'Moving…'
+              : renaming
+                ? 'Rename'
+                : 'Move'}
           </Button>
         </>
       }
@@ -122,6 +146,7 @@ export function MoveSheet({
           autoFocus
           value={destination}
           disabled={saving || uncertain}
+          error={error ?? undefined}
           onChange={(value) => {
             setDestination(value);
             setError(null);
@@ -132,9 +157,18 @@ export function MoveSheet({
         Enter the full path, including the new name, in an existing folder of{' '}
         {storeName}. An item already at that path is never overwritten.
       </p>
-      {problem || error ? (
+      {valid && kindOf({ ...item, path: destination }) !== kindOf(item) ? (
+        <p className="hint">
+          {kindOf(item) === 'Password'
+            ? 'Outside /logins, this item is listed with Documents.'
+            : 'Under /logins, this item is listed with Passwords.'}
+        </p>
+      ) : null}
+      {/* A refused destination is stated on the field itself; this is the
+          account's access to the item, which no path can change. */}
+      {problem ? (
         <p className="action-error" role="alert">
-          {problem ?? error}
+          {problem}
         </p>
       ) : null}
     </SheetDialog>

@@ -342,6 +342,11 @@
   gap: 8px;
   padding: 0 10px 0 16px;
 }
+/* The inline editor's bar follows the fields in the document, for the Tab
+   order, and is drawn on top. */
+.details > .bar.after {
+  order: -1;
+}
 .details .pathbar {
   display: flex;
   align-items: center;
@@ -369,9 +374,26 @@
   background: var(--hover);
   color: var(--ink);
 }
+/* Narrow first: the folders between the store and the item's folder, then
+   the item's folder, and the store mark and name last. */
+.details .pathbar > :not(:first-child, :last-child, .sep) {
+  flex-shrink: 100;
+}
+.details .pathbar > :last-child:not(:first-child) {
+  flex-shrink: 20;
+}
 .details .pathbar > :last-child {
-  flex: none;
   color: var(--ink-2);
+}
+/* With Cancel and Save Changes in a narrow column, the bar keeps the store
+   alone (the Path row below names the folders) rather than cutting both. */
+@container (max-width: 439px) {
+  .details > .bar.after .pathbar > :not(:first-child) {
+    display: none;
+  }
+  .details > .bar.after .pathbar > :first-child {
+    color: var(--ink-2);
+  }
 }
 .details .pathbar .t {
   min-width: 0;
@@ -523,6 +545,46 @@
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-wash-2);
   outline: 0;
+}
+
+/* Team Info: the details column's parts for a team. A titled group's label
+   is a heading with the group's action at the trailing edge. */
+.details .bar-title {
+  font-size: 13px;
+  font-weight: var(--weight-label);
+}
+.details .bar > .btn.icon:last-child {
+  margin-right: -6px;
+}
+.details .prop-group.titled > .prop-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.details .prop-label h3 {
+  margin: 0;
+  font: inherit;
+  color: inherit;
+}
+.details .prop-group > .note {
+  margin: 4px 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.details .prop-row .link {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent-ink);
+  font-size: 12.5px;
+  text-align: left;
+}
+.details .prop-row .link:hover {
+  text-decoration: underline;
 }
 
 /* Sharing: one muted note and the readers. */

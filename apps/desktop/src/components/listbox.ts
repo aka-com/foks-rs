@@ -10,6 +10,12 @@
  * `data-option-key` anywhere under the container, so section labels and
  * `role="group"` wrappers can sit between them.
  *
+ * PageUp and PageDown move a page of rows (as many as the scrolling area
+ * shows, less one) and the row reached scrolls to the edge. With `columns`
+ * the rows are cards in a grid: Left and Right step one card, Up and Down
+ * one line of cards (the card drawn above or below, or `columns` cards
+ * along when nothing is drawn there).
+ *
  * Interactive content inside a row (hover actions) should carry
  * `tabIndex={-1}`: it is reached with the pointer or through the row's
  * context menu, not with Tab.
@@ -19,7 +25,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FocusEvent, KeyboardEvent, RefObject } from 'react';
 
 /** How the keyboard reached a row. */
-export type ListboxMove = 'arrow' | 'home' | 'end' | 'type';
+export type ListboxMove = 'arrow' | 'page' | 'home' | 'end' | 'type';
 
 export interface ListboxOptions {
   /** Every row's key, in the order the list draws them. */
@@ -36,6 +42,10 @@ export interface ListboxOptions {
    * list stays reachable.
    */
   renderedKeys?: readonly string[];
+  /**
+   * Cards per line, for rows drawn as a grid; leave out (or 1) for a list.
+   */
+  columns?: number;
 }
 
 export interface ListboxProps<E extends HTMLElement> {
@@ -74,6 +84,52 @@ function optionKey(
   return option.dataset.optionKey ?? null;
 }
 
+/** The nearest ancestor that scrolls vertically, or null. */
+function scroller(element: HTMLElement | null): HTMLElement | null {
+  for (let node = element; node; node = node.parentElement) {
+    const overflow = getComputedStyle(node).overflowY;
+    if (overflow === 'auto' || overflow === 'scroll') return node;
+  }
+  return null;
+}
+
+/**
+ * The option drawn on the next line of a grid in `direction` (1 down, -1
+ * up), nearest the current option's horizontal centre, or null when the
+ * layout gives no answer (nothing drawn there, or no layout at all).
+ */
+function gridNeighbour(
+  container: HTMLElement | null,
+  current: HTMLElement | undefined,
+  direction: 1 | -1,
+): string | null {
+  if (!container || !current) return null;
+  const from = current.getBoundingClientRect();
+  if (!from.height) return null;
+  const centre = from.left + from.width / 2;
+  let best: { key: string; line: number; distance: number } | null = null;
+  for (const option of container.querySelectorAll<HTMLElement>(
+    '[data-option-key]',
+  )) {
+    const rect = option.getBoundingClientRect();
+    const line = direction * (rect.top - from.top);
+    if (line < from.height / 2 || !option.dataset.optionKey) continue;
+    // Closest line first, then the closest card on it; a full-width section
+    // label measures from its own left edge.
+    const distance =
+      rect.width > from.width * 2
+        ? Math.abs(rect.left - from.left)
+        : Math.abs(rect.left + rect.width / 2 - centre);
+    if (
+      !best ||
+      line < best.line - 1 ||
+      (Math.abs(line - best.line) <= 1 && distance < best.distance)
+    )
+      best = { key: option.dataset.optionKey, line, distance };
+  }
+  return best?.key ?? null;
+}
+
 function findOption(
   container: HTMLElement | null,
   key: string,
@@ -89,6 +145,7 @@ export function useListbox<E extends HTMLElement = HTMLDivElement>({
   onMove,
   labelOf,
   renderedKeys,
+  columns = 1,
 }: ListboxOptions): Listbox<E> {
   const ref = useRef<E | null>(null);
   // The row focus last rested on, when it is not the selected one (a folder
@@ -156,12 +213,51 @@ export function useListbox<E extends HTMLElement = HTMLDivElement>({
       move(key, how);
     };
     if (event.ctrlKey) return;
+    const grid = columns > 1;
+    /** Up or Down: the next row, or the next line of cards. */
+    const line = (direction: 1 | -1): void => {
+      if (index < 0) return step(0, 'arrow');
+      if (!grid) return step(index + direction, 'arrow');
+      const drawn = gridNeighbour(
+        ref.current,
+        current ? findOption(ref.current, current) : undefined,
+        direction,
+      );
+      const to =
+        drawn === null ? index + direction * columns : keys.indexOf(drawn);
+      // Down from the last line stays put rather than wrapping.
+      if (to < 0 || to >= keys.length) {
+        event.preventDefault();
+        return;
+      }
+      step(to, 'arrow');
+    };
+    /** Rows (or cards) in one page of the scrolling area, less one line. */
+    const page = (): number => {
+      const option = current ? findOption(ref.current, current) : undefined;
+      const height = option?.getBoundingClientRect().height ?? 0;
+      const area = scroller(ref.current)?.clientHeight ?? 0;
+      const lines = height && area ? Math.floor(area / height) - 1 : 9;
+      return Math.max(1, lines) * columns;
+    };
     switch (event.key) {
       case 'ArrowDown':
-        step(index < 0 ? 0 : index + 1, 'arrow');
+        line(1);
         return;
       case 'ArrowUp':
-        step(index < 0 ? 0 : index - 1, 'arrow');
+        line(-1);
+        return;
+      case 'ArrowRight':
+        if (grid) step(index < 0 ? 0 : index + 1, 'arrow');
+        return;
+      case 'ArrowLeft':
+        if (grid) step(index < 0 ? 0 : index - 1, 'arrow');
+        return;
+      case 'PageDown':
+        step(index < 0 ? 0 : index + page(), 'page');
+        return;
+      case 'PageUp':
+        step(index < 0 ? 0 : index - page(), 'page');
         return;
       case 'Home':
         step(0, 'home');

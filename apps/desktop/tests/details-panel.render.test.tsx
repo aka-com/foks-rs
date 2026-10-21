@@ -1000,3 +1000,116 @@ test('clicks outside the panel leave it open; Escape in it closes it', async () 
   ui.fireEvent.keyDown(panel, { key: 'Escape' });
   assert.equal(closed, 1);
 });
+
+test('Return in a login field, Command-S and Command-Return save the inline edit', async () => {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+  );
+  const saved: string[] = [];
+  p.bridge.editTextItem = async (request) => {
+    saved.push(request.value);
+    return { applied: true };
+  };
+  const rendered = ui.render(p.draw());
+  const keys: Parameters<typeof ui.fireEvent.keyDown>[1][] = [
+    { key: 'Enter' },
+    { key: 's', metaKey: true },
+    { key: 'Enter', metaKey: true },
+  ];
+  for (const [index, key] of keys.entries()) {
+    ui.fireEvent.click(await rendered.findByRole('button', { name: 'Edit' }));
+    const username = await rendered.findByLabelText('User name');
+    ui.fireEvent.change(username, { target: { value: `satoshi-${index}` } });
+    ui.fireEvent.keyDown(username, key);
+    await ui.waitFor(() => assert.equal(saved.length, index + 1));
+    assert.match(saved[index] ?? '', new RegExp(`username: satoshi-${index}`));
+  }
+});
+
+test('Return in a value area is a newline; Command-Return saves it', async () => {
+  const p = await setup();
+  const saved: string[] = [];
+  p.bridge.editTextItem = async (request) => {
+    saved.push(request.value);
+    return { applied: true };
+  };
+  const rendered = ui.render(p.draw());
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
+  const value = await rendered.findByLabelText('Value');
+  ui.fireEvent.keyDown(value, { key: 'Enter' });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(saved.length, 0);
+  ui.fireEvent.keyDown(value, { key: 'Enter', metaKey: true });
+  await ui.waitFor(() => assert.equal(saved.length, 1));
+});
+
+test('the inline editor puts Cancel and Save Changes after its fields in the Tab order', async () => {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+  );
+  const rendered = ui.render(p.draw());
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
+  const website = await rendered.findByLabelText('Website');
+  const save = rendered.getByRole('button', { name: 'Save Changes' });
+  const cancel = rendered.getByRole('button', { name: 'Cancel' });
+  assert.ok(
+    website.compareDocumentPosition(cancel) & Node.DOCUMENT_POSITION_FOLLOWING,
+  );
+  assert.ok(
+    cancel.compareDocumentPosition(save) & Node.DOCUMENT_POSITION_FOLLOWING,
+  );
+  // The location steps are not links while editing.
+  assert.equal(
+    rendered
+      .getByRole('navigation', { name: 'Location' })
+      .querySelector('button'),
+    null,
+  );
+});
+
+test('after a save the panel draws the saved fields, masked, for the new version only', async () => {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+  );
+  p.bridge.editTextItem = async () => ({ applied: true });
+  const rendered = ui.render(p.draw());
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
+  const username = await rendered.findByLabelText('User name');
+  ui.fireEvent.change(username, { target: { value: 'satoshi-next' } });
+  ui.fireEvent.change(rendered.getByLabelText('Password'), {
+    target: { value: 'correct horse' },
+  });
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Save Changes' }));
+  await rendered.findByRole('button', { name: 'Edit' });
+  // The refresh brings the next version, whose catalog entry carries no
+  // fields (as the native catalog never does).
+  const next = {
+    ...p.subject,
+    version: p.subject.version + 1,
+    value: undefined,
+  };
+  p.props.snapshot = {
+    ...p.props.snapshot,
+    items: p.props.snapshot.items.map((item) =>
+      item === p.subject ? next : item,
+    ),
+  };
+  rendered.rerender(p.draw());
+  await ui.waitFor(() => assert.ok(rendered.getByText('satoshi-next')));
+  assert.ok(rendered.getByText('••••••••••••'));
+  assert.equal(document.body.textContent?.includes('correct horse'), false);
+  // A later version is not described by what this panel wrote.
+  p.props.snapshot = {
+    ...p.props.snapshot,
+    items: p.props.snapshot.items.map((item) =>
+      item === next ? { ...next, version: next.version + 1 } : item,
+    ),
+  };
+  rendered.rerender(p.draw());
+  await ui.waitFor(() =>
+    assert.equal(rendered.queryByText('satoshi-next'), null),
+  );
+});

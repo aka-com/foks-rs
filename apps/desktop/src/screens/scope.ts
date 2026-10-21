@@ -5,6 +5,7 @@
 import {
   KIND_LIST,
   catalog,
+  catalogFolders,
   displayPathComponent,
   kindOf,
   nameOf,
@@ -63,8 +64,15 @@ interface MutableFolderNode extends Omit<FolderNode, 'folders'> {
   children: Map<string, MutableFolderNode>;
 }
 
-/** Build a folders-only tree from item paths. Folder nodes are derived catalog views. */
-export function folderTree(items: readonly Item[]): FolderNode {
+/**
+ * Build a folders-only tree from item paths, plus the catalog's own folder
+ * entries (`catalogFolders`), so a folder with nothing in it yet is a node
+ * too.
+ */
+export function folderTree(
+  items: readonly Item[],
+  folders: readonly Pick<Item, 'path'>[] = [],
+): FolderNode {
   const root: MutableFolderNode = {
     name: '',
     path: '/',
@@ -72,10 +80,9 @@ export function folderTree(items: readonly Item[]): FolderNode {
     items: [],
     count: 0,
   };
-  for (const item of items) {
-    const parts = item.path.split('/').filter(Boolean);
+  const nodeAt = (parts: readonly string[]): MutableFolderNode => {
     let node = root;
-    for (const part of parts.slice(0, -1)) {
+    for (const part of parts) {
       let child = node.children.get(part);
       if (!child) {
         child = {
@@ -89,8 +96,11 @@ export function folderTree(items: readonly Item[]): FolderNode {
       }
       node = child;
     }
-    node.items.push(item);
-  }
+    return node;
+  };
+  for (const folder of folders) nodeAt(folder.path.split('/').filter(Boolean));
+  for (const item of items)
+    nodeAt(item.path.split('/').filter(Boolean).slice(0, -1)).items.push(item);
   const finish = (node: MutableFolderNode): FolderNode => {
     const folders = [...node.children.values()]
       .sort((a, b) =>
@@ -201,6 +211,7 @@ export function filesFolderCrumb(
   const storePage = location.kind === 'store';
   const root = folderTree(
     catalog(snapshot).filter((item) => item.store === store.id),
+    catalogFolders(snapshot).filter((item) => item.store === store.id),
   );
   const node = folderAt(root, selected.path) ?? root;
   const parts = node.path === '/' ? [] : node.path.split('/').filter(Boolean);
@@ -245,4 +256,45 @@ export function scopedItems(
   const compare = SORTS[sort](snapshot);
   const direction = state.sortDirection === 'desc' ? -1 : 1;
   return [...items].sort((a, b) => direction * compare(a, b));
+}
+
+/** The folder holding `path` (`/` for an item at a store's root). */
+export function parentPath(path: string): string {
+  return path.slice(0, path.lastIndexOf('/')) || '/';
+}
+
+/**
+ * Whether the Files list for `state` draws a row for an item of `kind` at
+ * `store`/`path`, by the rules `ItemsScreen` lists with: All Items and a
+ * search list every match in their scope; a store's root lists its own items
+ * and those of each first-level folder's section; a folder lists its direct
+ * items. Used to decide whether a write can land on the item where the user
+ * is, or has to open the item's folder.
+ */
+export function filesListShows(
+  state: Pick<LocationState, 'location' | 'folder' | 'kind' | 'query'>,
+  item: { store: string; path: string; kind: string; storeName?: string },
+): boolean {
+  if (!listsItems(state.location)) return false;
+  if (state.kind !== 'All' && state.kind !== item.kind) return false;
+  if (state.location.kind === 'store' && state.location.ref !== item.store)
+    return false;
+  if (state.query) {
+    const needle = state.query.toLowerCase();
+    if (
+      !item.path.toLowerCase().includes(needle) &&
+      !(item.storeName ?? '').toLowerCase().includes(needle)
+    )
+      return false;
+  }
+  const selected = folderSelection(state.location, state.folder);
+  if (selected.store === ALL_ITEMS) return true;
+  if (selected.store !== item.store) return false;
+  const under =
+    selected.path === '/' || item.path.startsWith(`${selected.path}/`);
+  if (state.query) return under;
+  const parent = parentPath(item.path);
+  if (selected.path === '/')
+    return parent === '/' || parent.lastIndexOf('/') === 0;
+  return parent === selected.path;
 }

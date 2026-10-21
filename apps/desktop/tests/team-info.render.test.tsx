@@ -81,9 +81,22 @@ test('Team info consolidates identity, membership, files and requests with exist
   const mounted = await mount();
   const panel = ui.screen.getByRole('complementary', { name: 'Team info' });
   assert.ok(document.activeElement === panel, 'Panel receives focus');
-  for (const name of ['Channels', 'Files', 'Requests', 'Team ID'])
-    assert.ok(ui.within(panel).getByRole('heading', { name }));
+  // Members and Channels are titled groups; the rest are property rows.
+  assert.ok(ui.within(panel).getByRole('heading', { name: /^Channels/ }));
   assert.ok(ui.within(panel).getByRole('heading', { name: /^Members ·/ }));
+  for (const label of [
+    'Server',
+    'Your account',
+    'Files',
+    'Requests',
+    'Team ID',
+  ])
+    assert.ok(
+      [...panel.querySelectorAll('.prop-row > .k')].some(
+        (key) => key.textContent === label,
+      ),
+      `a ${label} row`,
+    );
   assert.ok(ui.screen.getByText('2 pending requests'));
   assert.ok(ui.screen.getByText('Machine'));
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Manage Members' }));
@@ -121,7 +134,7 @@ test('ordinary members see no request administration', async () => {
         : party,
     ),
   }));
-  assert.equal(ui.screen.queryByRole('heading', { name: 'Requests' }), null);
+  assert.equal(ui.screen.queryByText('2 pending requests'), null);
   assert.equal(
     ui.screen.queryByRole('button', { name: 'Review Requests' }),
     null,
@@ -157,7 +170,7 @@ test('roster read failures withhold counts and cached member rows', async () => 
   assert.ok(ui.screen.getByRole('heading', { name: 'Members' }));
   assert.ok(ui.screen.getByRole('alert'));
   assert.ok(!ui.screen.queryByText('sam.ortiz'));
-  assert.ok(!ui.screen.queryByRole('heading', { name: 'Requests' }));
+  assert.ok(!ui.screen.queryByRole('button', { name: 'Review Requests' }));
 });
 
 test('team info waits for roster enrichment after the item catalog is complete', async () => {

@@ -304,3 +304,81 @@ test('Team Info opens in the details column beside the list', async () => {
   assert.ok(document.querySelector('.app.with-details'));
   assert.equal(document.querySelector('.details-empty'), null);
 });
+
+test('PageDown and PageUp move a page of rows, stopping at the ends', async () => {
+  const { store } = await mount({ kind: 'all' });
+  const options = [
+    ...listbox().querySelectorAll<HTMLElement>('[role="option"]'),
+  ];
+  assert.ok(options.length > 10);
+  const first = options[0];
+  first.focus();
+  // Without a layout (jsdom) a page is nine rows.
+  ui.fireEvent.keyDown(first, { key: 'PageDown' });
+  await ui.waitFor(() => assert.ok(document.activeElement === options[9]));
+  assert.equal(options[9].getAttribute('aria-selected'), 'true');
+  ui.fireEvent.keyDown(options[9], { key: 'PageDown' });
+  await ui.waitFor(() => assert.ok(document.activeElement === options.at(-1)));
+  ui.fireEvent.keyDown(options.at(-1)!, { key: 'PageUp' });
+  ui.fireEvent.keyDown(document.activeElement!, { key: 'PageUp' });
+  await ui.waitFor(() => assert.ok(document.activeElement === first));
+  assert.ok(store.getSnapshot().selection);
+});
+
+test('in cards, Left and Right step a card and Up and Down a line of cards', async () => {
+  window.localStorage.setItem('filesView', 'grid');
+  await mount({ kind: 'all' });
+  const grid = document.querySelector<HTMLElement>('.lpane .files-grid');
+  assert.ok(grid);
+  const columns = Number(
+    /repeat\((\d+)/.exec(grid.style.gridTemplateColumns)?.[1],
+  );
+  assert.ok(columns > 1, `the grid has ${columns} columns`);
+  const options = [
+    ...listbox().querySelectorAll<HTMLElement>('[role="option"]'),
+  ];
+  const at = (index: number) => options[index];
+  at(0).focus();
+  ui.fireEvent.keyDown(at(0), { key: 'ArrowRight' });
+  await ui.waitFor(() => assert.ok(document.activeElement === at(1)));
+  ui.fireEvent.keyDown(at(1), { key: 'ArrowDown' });
+  await ui.waitFor(() => assert.ok(document.activeElement === at(1 + columns)));
+  ui.fireEvent.keyDown(at(1 + columns), { key: 'ArrowLeft' });
+  await ui.waitFor(() => assert.ok(document.activeElement === at(columns)));
+  ui.fireEvent.keyDown(at(columns), { key: 'ArrowUp' });
+  await ui.waitFor(() => assert.ok(document.activeElement === at(0)));
+  // Up from the first line stays put.
+  ui.fireEvent.keyDown(at(0), { key: 'ArrowUp' });
+  assert.ok(document.activeElement === at(0));
+});
+
+test('the list search field: Return selects the first result, Down moves to it, Escape when empty returns to the list', async () => {
+  const { store } = await mount({ kind: 'all' });
+  const field = document.querySelector<HTMLInputElement>('.topsearch input');
+  assert.ok(field);
+  await ui.act(async () => {
+    store.search('fast');
+  });
+  await ui.waitFor(() =>
+    assert.equal(
+      listbox().querySelectorAll('[role="option"]').length,
+      1,
+      'one result',
+    ),
+  );
+  field.focus();
+  ui.fireEvent.keyDown(field, { key: 'Enter' });
+  await ui.waitFor(() =>
+    assert.equal(store.getSnapshot().selection?.path, '/logins/fastmail.com'),
+  );
+  assert.ok(document.activeElement === field, 'Return keeps the field');
+  ui.fireEvent.keyDown(field, { key: 'ArrowDown' });
+  assert.equal(focusedName(), 'fastmail.com');
+  await ui.act(async () => {
+    store.search('');
+  });
+  field.focus();
+  ui.fireEvent.keyDown(field, { key: 'Escape' });
+  assert.equal(focusedName(), 'fastmail.com');
+  assert.equal(store.getSnapshot().selection?.path, '/logins/fastmail.com');
+});
