@@ -257,6 +257,11 @@ export interface SidebarProps {
   attention?: number;
   /** All Teams' count: pending membership requests this session knows about. */
   teamRequests?: { label: string; description: string } | null;
+  /**
+   * Activity's count: the membership requests above plus the notices the
+   * Activity page lists (`activityBadge`).
+   */
+  activity?: { label: string; description: string } | null;
   /** The Devices dot: an open pairing offer, or an account with no recovery phrase. */
   devicesAlert?: { description: string } | null;
   /**
@@ -723,6 +728,7 @@ export function Sidebar({
   account,
   attention = 0,
   teamRequests = null,
+  activity = null,
   devicesAlert = null,
   settingsAlert = null,
   onNavigate,
@@ -905,6 +911,13 @@ export function Sidebar({
             glyph={<Icon name="activity" />}
             name="Activity"
             disabled={blocked}
+            tail={
+              activity ? (
+                <NavTail kind="count" description={activity.description}>
+                  {activity.label}
+                </NavTail>
+              ) : undefined
+            }
             onSelect={() => go('activity')}
           />
         </div>

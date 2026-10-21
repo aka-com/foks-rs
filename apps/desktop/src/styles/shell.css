@@ -267,6 +267,9 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .topbar .topsearch input::placeholder{color:var(--faint)}
 .topbar .topsearch kbd{position:static;flex:none;margin-left:auto;padding:0 4px;border:1px solid var(--line-mid);border-radius:4px;font:12px/16px var(--sans);color:var(--faint);white-space:nowrap}
 .topbar .menuwrap{flex:none;display:inline-flex}
+/* A page's own commands, portalled from the screen (`shell/page-slots.tsx`). */
+.topbar .bar-acts{display:flex;flex:none;align-items:center;gap:6px;min-width:0}
+.topbar .bar-acts:empty{display:none}
 .topbar .side-expand{margin-right:4px}
 /* With the sidebar hidden the bar leads with the traffic lights (drawn by
    macOS over the native window, by the bar in the web mock). */

@@ -15,6 +15,7 @@ const STYLES = [
   '../src/screens/files.css',
   '../src/screens/chat.css',
   '../src/screens/chat-picker.css',
+  '../src/screens/teams.css',
   '../src/shell/search-palette.css',
 ];
 const TOKEN_ONLY_COLORS = STYLES;

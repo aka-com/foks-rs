@@ -63,6 +63,8 @@ import {
 import { useSearchShortcut } from '../shell/search-palette';
 import { Sidebar } from '../shell/sidebar';
 import { Topbar } from '../shell/topbar';
+import { BarActionsSlot, DetailsSlot } from '../shell/page-slots';
+import { activityBadge } from '../activity';
 import { FilesViewMenu } from '../shell/files-view-menu';
 import { PlainSyncStatus, SyncControls } from '../shell/sync-status';
 import { requestNewChat } from '../screens/chat-tab';
@@ -368,6 +370,10 @@ export function VaultShell({
 
   const pendingFirstRun = incompleteFirstRunCheckpoint();
   const [setupLater, setSetupLater] = useState(false);
+  // The elements a page portals its bar commands and its details column
+  // into (`shell/page-slots.tsx`).
+  const [barSlot, setBarSlot] = useState<HTMLElement | null>(null);
+  const [detailsSlot, setDetailsSlot] = useState<HTMLElement | null>(null);
   const detailsShown =
     state.details &&
     listsItems(here) &&
@@ -588,12 +594,9 @@ export function VaultShell({
     here.kind === 'store' &&
     (() => {
       const pageStore = storeOf(shown, here.ref);
-      return (
-        !pageStore || storeDescriptionState(shown, pageStore) !== 'normal'
-      );
+      return !pageStore || storeDescriptionState(shown, pageStore) !== 'normal';
     })();
-  const splitEmpty =
-    filesHere && !herePage && !detailsShown && !teamInfoShown;
+  const splitEmpty = filesHere && !herePage && !detailsShown && !teamInfoShown;
   const shell = (
     <div
       className={[
@@ -609,6 +612,7 @@ export function VaultShell({
           'app',
           detailsShown ||
           splitEmpty ||
+          here.kind === 'activity' ||
           (here.kind === 'first-run' && here.step === 'added')
             ? 'with-details'
             : '',
@@ -674,6 +678,7 @@ export function VaultShell({
                 account={locations.getAccount()}
                 attention={unroutedNotices(shown).length}
                 teamRequests={teamRequestsBadge(shown, teamRequestCounts)}
+                activity={activityBadge(shown, teamRequestCounts)}
                 devicesAlert={devicesAlertSummary(shown, deviceAlerts)}
                 settingsAlert={settingsAlertSummary(shown)}
                 onTabNavigate={(tab) => locations.navigateTab(tab)}
@@ -769,7 +774,10 @@ export function VaultShell({
                   onSetFolder={(folder) => locations.setFolder(folder)}
                   // One field for the shell: on the views that list items it
                   // drives the same query the browser reads.
-                  {...(filesHere || here.kind === 'chat'
+                  actionsSlot={setBarSlot}
+                  {...(filesHere ||
+                  here.kind === 'chat' ||
+                  here.kind === 'activity'
                     ? {
                         query: state.query,
                         onQuery: (query: string) => locations.search(query),
@@ -823,34 +831,38 @@ export function VaultShell({
                   key={screenBoundaryKey(here)}
                   identity={screenIdentity(here)}
                 >
-                  <ScreenRouter
-                    shown={shown}
-                    bridge={bridge}
-                    state={state}
-                    locations={locations}
-                    enteredScene={enteredScene}
-                    namedState={namedState}
-                    concealSignal={concealSignal}
-                    hardwareRefresh={hardwareRefresh}
-                    setDeviceLabel={setDeviceLabel}
-                    setRevealRequest={setRevealRequest}
-                    workflow={workflow}
-                    setWorkflow={setWorkflow}
-                    refresh={refresh}
-                    refreshSnapshot={refreshSnapshot}
-                    commandError={commandError}
-                    mutationError={mutationError}
-                    onLock={onLock}
-                    agentLifecycle={agentLifecycle}
-                    recoverAgentReadiness={recoverAgentReadiness}
-                    uploadDroppedFile={uploadDroppedFile}
-                    accessNow={accessNow}
-                    accessGenerations={accessGenerations}
-                    onTeamInfo={(storeId, trigger) => {
-                      locations.setDetails(false);
-                      setTeamInfo({ storeId, trigger });
-                    }}
-                  />
+                  <BarActionsSlot.Provider value={barSlot}>
+                    <DetailsSlot.Provider value={detailsSlot}>
+                      <ScreenRouter
+                        shown={shown}
+                        bridge={bridge}
+                        state={state}
+                        locations={locations}
+                        enteredScene={enteredScene}
+                        namedState={namedState}
+                        concealSignal={concealSignal}
+                        hardwareRefresh={hardwareRefresh}
+                        setDeviceLabel={setDeviceLabel}
+                        setRevealRequest={setRevealRequest}
+                        workflow={workflow}
+                        setWorkflow={setWorkflow}
+                        refresh={refresh}
+                        refreshSnapshot={refreshSnapshot}
+                        commandError={commandError}
+                        mutationError={mutationError}
+                        onLock={onLock}
+                        agentLifecycle={agentLifecycle}
+                        recoverAgentReadiness={recoverAgentReadiness}
+                        uploadDroppedFile={uploadDroppedFile}
+                        accessNow={accessNow}
+                        accessGenerations={accessGenerations}
+                        onTeamInfo={(storeId, trigger) => {
+                          locations.setDetails(false);
+                          setTeamInfo({ storeId, trigger });
+                        }}
+                      />
+                    </DetailsSlot.Provider>
+                  </BarActionsSlot.Provider>
                 </ScreenErrorBoundary>
               </main>
             </>
@@ -885,6 +897,15 @@ export function VaultShell({
                 </>
               )}
             </section>
+          ) : null}
+          {here.kind === 'activity' ? (
+            // Activity's details column: the page portals the selected
+            // entry's details here.
+            <section
+              ref={setDetailsSlot}
+              className="details activity-details"
+              aria-label="Details"
+            />
           ) : null}
           {here.kind !== 'first-run' && detailsShown ? (
             <DetailsPanel
