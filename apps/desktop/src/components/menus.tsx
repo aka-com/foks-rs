@@ -6,6 +6,7 @@
 
 import { useId, useRef, useState } from 'react';
 import type { MouseEvent, ReactNode, RefObject } from 'react';
+import { isMac, shortcutLabel } from '/kit/keys';
 import { Menu, Popover } from '/kit/overlay-primitives';
 import { Button } from './button';
 import type { ButtonSize, ButtonVariant } from './button';
@@ -31,9 +32,10 @@ export interface MenuItemProps {
   /** What the item says when it applies. */
   title?: string;
   /**
-   * The key equivalent, drawn at the trailing edge in macOS notation
-   * ("⌘N", "⇧⌘N", "⌘⌫"). It states a binding that exists elsewhere — the
-   * native menu or a shell handler — and binds nothing itself.
+   * The key equivalent in macOS notation ("⌘N", "⇧⌘N", "⌘⌫"), drawn at the
+   * trailing edge in the running platform's notation (`shortcutLabel`). It
+   * states a binding that exists elsewhere — the native menu or a shell
+   * handler — and binds nothing itself.
    */
   shortcut?: string;
   onClick?: () => void;
@@ -49,11 +51,16 @@ const SHORTCUT_KEYS: Readonly<Record<string, string>> = {
   '↩': 'Enter',
 };
 
-/** "⇧⌘N" as `aria-keyshortcuts` spells it: "Shift+Meta+N". */
+/**
+ * "⇧⌘N" as `aria-keyshortcuts` spells it: "Shift+Meta+N" on a Mac, with
+ * Control for ⌘ elsewhere (`kit/keys.ts`).
+ */
 export function ariaShortcut(shortcut: string): string {
-  return [...shortcut]
-    .map((key) => SHORTCUT_KEYS[key] ?? key.toUpperCase())
-    .join('+');
+  const mac = isMac();
+  const keys = [...shortcut].map((key) =>
+    key === '⌘' && !mac ? 'Control' : (SHORTCUT_KEYS[key] ?? key.toUpperCase()),
+  );
+  return [...new Set(keys)].join('+');
 }
 
 export function MenuItem({
@@ -83,7 +90,7 @@ export function MenuItem({
         {children}
         {shortcut ? (
           <span className="sc" aria-hidden="true">
-            {shortcut}
+            {shortcutLabel(shortcut)}
           </span>
         ) : null}
       </button>
