@@ -665,7 +665,7 @@ function SetupCard({
         <i aria-hidden="true" />
         {next}
       </span>
-      <span className="acts">
+      <span className="setup-acts">
         <button
           type="button"
           className="lnk"

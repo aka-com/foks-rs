@@ -367,6 +367,7 @@ export function VaultShell({
   }, [infoStore, teamInfo]);
 
   const pendingFirstRun = incompleteFirstRunCheckpoint();
+  const [setupLater, setSetupLater] = useState(false);
   const detailsShown =
     state.details &&
     listsItems(here) &&
@@ -512,6 +513,35 @@ export function VaultShell({
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [openNewItem]);
+  // ⌘⌫ deletes the selected item, through the same alert the item's menu
+  // opens, and only while nothing else holds the keyboard: a text field, a
+  // menu or a dialog.
+  const selectedItem =
+    filesHere && state.selection
+      ? shown.items.find(
+          (item) =>
+            item.store === state.selection?.store &&
+            item.path === state.selection.path &&
+            item.kind !== 'Folder',
+        )
+      : undefined;
+  useEffect(() => {
+    if (!selectedItem || chrome.blocked) return;
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Backspace' || !event.metaKey || event.altKey) return;
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest('input, textarea, select, [contenteditable="true"]')
+      )
+        return;
+      if (anyDialogOpen() || document.querySelector('[role="menu"]')) return;
+      event.preventDefault();
+      setWorkflow({ kind: 'delete', item: selectedItem });
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [chrome.blocked, selectedItem, setWorkflow]);
   useEffect(() => {
     if (!bridge.native) return;
     let disposed = false;
@@ -655,6 +685,7 @@ export function VaultShell({
                 // names what comes next and continues where setup stopped.
                 setup={
                   pendingFirstRun &&
+                  !setupLater &&
                   completedFirstRunSteps(pendingFirstRun) <
                     firstRunStepCount(pendingFirstRun)
                     ? {
@@ -667,6 +698,9 @@ export function VaultShell({
                             step: pendingFirstRun.state,
                             path: pendingFirstRun.path,
                           }),
+                        // Later puts the card away for this session; the
+                        // checkpoint, and the card at the next launch, stay.
+                        onLater: () => setSetupLater(true),
                       }
                     : undefined
                 }

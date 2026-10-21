@@ -22,7 +22,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .app{flex:1;min-height:0;display:grid;position:relative;grid-template-columns:var(--side-w) minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
 .app.with-details{grid-template-columns:var(--side-w) var(--list-w) minmax(0,1fr)}
 .app.no-side{grid-template-columns:minmax(0,1fr)}
-.app.no-side.with-details{grid-template-columns:var(--list-w) minmax(0,1fr)}
+.app.no-side.with-details{grid-template-columns:calc(var(--list-w) + 72px) minmax(0,1fr)}
 .window:has(>.app.no-side){--side-w:0px}
 /* The raised panel is the columns' own margin and outline, not a wrapper:
    the sidebar keeps the window's full height, and the seam between the
@@ -32,7 +32,8 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .app:not(.with-details)>.main{margin-right:var(--panel-inset);border-radius:var(--radius-panel)}
 .app>.details{margin-right:var(--panel-inset);border-radius:0 var(--radius-panel) var(--radius-panel) 0}
 /* Without the sidebar the panel fills the window and its first bar takes
-   the strip's 52px, so the lights keep their place over it. */
+   the strip's 52px, so the lights keep their place over it; the list column
+   widens by the lights' room. */
 .app.no-side>.main,.app.no-side>.details{margin:0;border-radius:0;box-shadow:none}
 .app.no-side>.details{border-left:1px solid var(--line)}
 .app.no-side .bar{height:52px;padding-top:8px}
@@ -106,7 +107,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
 .side .setup-card .h:hover .lbl{text-decoration:underline}
 .side .setup-card .step{grid-column:1/-1;display:flex;align-items:center;gap:8px;padding-left:2px;font-size:12px;color:var(--side-muted)}
 .side .setup-card .step i{width:7px;height:7px;flex:none;border:1px solid currentColor;border-radius:50%}
-.side .setup-card .acts{grid-column:1/-1;display:flex;gap:12px;padding-top:2px}
+.side .setup-card .setup-acts{grid-column:1/-1;display:flex;gap:12px;padding-top:2px}
 .side .setup-card .x{display:none;width:20px;height:20px}
 .side .setup-card .x .ic{font-size:12px}
 .lnk{padding:0;border:0;background:none;color:var(--accent-ink);font-size:12.5px;font-weight:var(--weight-label);text-align:left}
@@ -138,7 +139,7 @@ svg{width:1em;height:1em;display:inline-block;vertical-align:-.15em;fill:none;st
   .side .setup-card{grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;min-height:28px;margin-bottom:2px;padding:2px 4px 2px 8px}
   .side .setup-card .h{grid-column:auto;white-space:nowrap}
   .side .setup-card .step{display:none}
-  .side .setup-card .acts{display:none}
+  .side .setup-card .setup-acts{display:none}
   .side .setup-card .x{display:inline-grid}
 }
 /* First run's step list (`SetupSidebar`): the same source list, its rows
@@ -978,14 +979,15 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
   .prop-row{grid-template-columns:minmax(0,1fr) auto}
   .prop-row>.k{grid-column:1/-1;padding-top:4px}
 }
-/* A page or details hero: the 48px tile or mark, an 18px title at 600, and
-   the muted line under it; actions at the trailing edge. */
+/* A page or details hero (`.hero` > `.bigtile` or `.store-mark.lg`, `.t` >
+   `h2` + `p`, `.hero-acts`): the 48px tile or mark, an 18px title at 600,
+   the muted line under it, and actions at the trailing edge. */
 .hero{display:flex;align-items:center;gap:14px;padding-bottom:14px}
 .hero .bigtile{width:48px;height:48px;flex:none;display:grid;place-items:center;border-radius:var(--radius-lg);background:var(--chip-bg);color:var(--ink-3);font-size:24px}
 .hero .t{flex:1;min-width:0}
 .hero h2{margin:0;font-size:18px;font-weight:var(--weight-title);letter-spacing:-.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hero p{margin:2px 0 0;display:flex;flex-wrap:wrap;align-items:center;gap:6px;color:var(--muted)}
-.hero .acts{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px;opacity:1}
+.hero .hero-acts{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px}
 /* Settings-style groups: a card one step above the panel with rules inset
    16px between rows, under a 15px heading in the body ink. */
 .sec-h{display:flex;align-items:center;gap:8px;min-height:26px;margin:26px 0 10px;font-size:15px;font-weight:var(--weight-label);color:var(--ink)}

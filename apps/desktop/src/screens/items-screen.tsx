@@ -591,9 +591,10 @@ export function ItemsScreen({
   useEffect(() => {
     const key = pendingFocus.current;
     if (!key) return;
-    const row = bodyRef.current?.querySelector<HTMLElement>(
-      `[data-row-key="${CSS.escape(key)}"]`,
-    );
+    const row = [
+      ...(bodyRef.current?.querySelectorAll<HTMLElement>('[data-row-key]') ??
+        []),
+    ].find((candidate) => candidate.dataset.rowKey === key);
     if (!row) return;
     pendingFocus.current = null;
     row.focus({ preventScroll: true });

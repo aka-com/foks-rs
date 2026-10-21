@@ -545,6 +545,42 @@ test('ambiguous move keeps the draft visible and cannot be submitted twice', asy
   assert.equal(calls, 1);
 });
 
+test('Command-Backspace asks to delete the selected item, and Return keeps it', async () => {
+  const removed: unknown[] = [];
+  const { rendered, store } = await mount({
+    removeItem: async (next) => {
+      removed.push(next);
+      return { applied: true };
+    },
+  });
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const item = FIXTURE.items.find(
+    (item) => item.store === 'acct:personal' && item.kind === 'File',
+  )!;
+  await ui.act(async () => {
+    store.select({ store: item.store, path: item.path });
+  });
+  await rendered.findByRole('button', { name: 'Delete' });
+  // A text field keeps the key for itself.
+  const search = document.querySelector<HTMLInputElement>('.topbar input')!;
+  ui.fireEvent.keyDown(search, { key: 'Backspace', metaKey: true });
+  assert.equal(rendered.queryByRole('alertdialog'), null);
+  ui.fireEvent.keyDown(document.body, { key: 'Backspace', metaKey: true });
+  const dialog = await rendered.findByRole('alertdialog');
+  // Cancel is the default: Return closes the alert and deletes nothing.
+  assert.equal(
+    document.activeElement,
+    ui.within(dialog).getByRole('button', { name: 'Cancel' }),
+  );
+  ui.fireEvent.keyDown(dialog, { key: 'Enter' });
+  await ui.waitFor(() =>
+    assert.equal(rendered.queryByRole('alertdialog'), null),
+  );
+  assert.deepEqual(removed, []);
+});
+
 test('file deletion uses its selected version and blocks Escape while pending', async () => {
   let request: unknown;
   let finish!: () => void;

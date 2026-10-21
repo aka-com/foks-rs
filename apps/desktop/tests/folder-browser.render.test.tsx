@@ -301,6 +301,26 @@ test('nested folders use explicit tree navigation', async () => {
   assert.equal(folder.querySelector('.r')?.textContent, '1 item');
 });
 
+test('a clicked row keeps the focus, and the arrow keys move the selection with it', async () => {
+  const { store } = await mount({ kind: 'all' });
+  const first = listRow('bundle.tar');
+  ui.fireEvent.click(first);
+  first.focus();
+  await ui.waitFor(() =>
+    assert.equal(store.getSnapshot().selection?.path, '/release/bundle.tar'),
+  );
+  assert.ok(first.classList.contains('sel'));
+  ui.fireEvent.keyDown(first, { key: 'ArrowDown' });
+  await ui.waitFor(() =>
+    assert.equal(document.activeElement, listRow('DATABASE_URL')),
+  );
+  assert.equal(store.getSnapshot().selection?.path, '/env/prod/DATABASE_URL');
+  ui.fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' });
+  await ui.waitFor(() =>
+    assert.equal(document.activeElement, listRow('bundle.tar')),
+  );
+});
+
 test('the view menu is the sort control', async () => {
   const { store } = await mount({ kind: 'all' });
   assert.equal(await checked('Name'), true);

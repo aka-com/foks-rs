@@ -72,6 +72,13 @@ export function anyDialogOpen(): boolean {
   return mountedDialogs.size > 0;
 }
 
+/**
+ * The control a menu returns the focus to, while one of its items is being
+ * chosen. A dialog the item opens takes it as its own opener, so the focus
+ * goes back to the menu's trigger once every overlay has closed.
+ */
+let menuOpener: HTMLElement | null = null;
+
 const OverlayContext = createContext<OverlayEnvironment | null>(null);
 const OverlayBlockingContext = createContext(false);
 
@@ -179,15 +186,23 @@ export function Dialog({
   const environment = useOverlayEnvironment();
   const { dialogs } = environment;
   const dialogRef = useRef<HTMLDivElement>(null);
+  // The control the dialog returns the focus to. It is kept across a
+  // remount of the effect (React's development double-mount), when the
+  // focus is already on the dialog's own first control.
+  const openerRef = useRef<HTMLElement | null>(null);
 
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
-    const opener =
+    if (
       document.activeElement instanceof HTMLElement &&
-      document.activeElement !== document.body
-        ? document.activeElement
-        : null;
+      document.activeElement !== document.body &&
+      !dialog.contains(document.activeElement)
+    )
+      openerRef.current = document.activeElement;
+    else if (!openerRef.current && menuOpener?.isConnected)
+      openerRef.current = menuOpener;
+    const opener = openerRef.current;
     const releases = [
       ...(environment.backgroundRef.current
         ? [isolate(environment.backgroundRef.current)]
@@ -419,7 +434,9 @@ function RovingCollection({
     if (!target?.closest(itemSelector)) return;
     const anchor = anchorRef.current;
     const collection = event.currentTarget;
+    menuOpener = anchor;
     queueMicrotask(() => {
+      if (menuOpener === anchor) menuOpener = null;
       if (!collection.isConnected && canRestoreFocus(anchor, dialogs))
         anchor.focus();
     });
