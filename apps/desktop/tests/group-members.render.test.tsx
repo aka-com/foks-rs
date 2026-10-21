@@ -395,7 +395,7 @@ test('a row menu carries actions only, inert with the reason in the title', asyn
 
 test('a federated team is one row: role, membership state and its own actions', async () => {
   const rendered = await group(await fixture());
-  const row = memberRow('homelab');
+  const row = memberRow('Homelab');
   assert.equal(
     row.querySelector('.store-mark')?.getAttribute('aria-hidden'),
     'true',
@@ -414,8 +414,8 @@ test('a federated team is one row: role, membership state and its own actions', 
     rendered.getAllByRole('button', { name: 'Restore Access' }).length,
     2,
   );
-  // The band names the team by the display name this device holds it
-  // under; the row keeps the membership record's alias.
+  // The band and the row both name the team by the display name this device
+  // holds it under, not the membership record's alias.
   assert.ok(
     [...document.querySelectorAll('.band')].some((band) =>
       (band.textContent ?? '').startsWith(
@@ -424,7 +424,7 @@ test('a federated team is one row: role, membership state and its own actions', 
     ),
   );
   ui.fireEvent.click(
-    rendered.getByRole('button', { name: 'Actions for homelab' }),
+    rendered.getByRole('button', { name: 'Actions for Homelab' }),
   );
   const lower = menuItem('Lower Role…');
   assert.equal(inert(lower), true);

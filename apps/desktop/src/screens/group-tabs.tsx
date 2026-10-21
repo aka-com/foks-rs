@@ -42,7 +42,7 @@ import {
   previewTime,
 } from '../chat/presentation';
 import type { Location } from '../location';
-import { accessCopy } from './store-access';
+import { accessCopy, StoreAccessNotice } from './store-access';
 
 /** The items the catalog holds for one store. */
 export function itemCountOf(snapshot: AgentSnapshot, store: TeamStore): number {
@@ -326,21 +326,19 @@ export function IncompleteGroupPage({
     (candidate) =>
       candidate.alias === store.account && candidate.server === store.server,
   );
-  // One sentence for this condition, wherever it is stated: the store page's
-  // takeover reads the same copy, so the two cannot describe it differently.
-  const copy = accessCopy('setup-incomplete', store, serverName);
   return (
     <div className="roster">
-      <Band
-        label={copy.title}
-        action={
-          <Button size="sm" onClick={onFinish} disabled={copy.actionDisabled}>
-            {copy.actionLabel ?? 'Finish Setup'}
-          </Button>
+      {/* The store page's notice for this condition, the same component, so
+          the copy and the action cannot drift apart. */}
+      <StoreAccessNotice
+        snapshot={snapshot}
+        store={store}
+        state="setup-incomplete"
+        onOpenServer={(profile) =>
+          onNavigate({ kind: 'settings', section: 'account', profile })
         }
-      >
-        {copy.detail}
-      </Band>
+        onFinishSetup={onFinish}
+      />
       <SectionLabel>Local details</SectionLabel>
       <div className="group-card">
         <div className="set-row">
