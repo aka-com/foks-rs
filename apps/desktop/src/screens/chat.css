@@ -528,6 +528,23 @@
 .app.no-side .chat-info.overlay {
   top: 52px;
 }
+/* Over the conversation the panel is a dialog (Tab stays in it, a click
+   outside closes it): the thread under it is dimmed rather than cut off
+   mid-line, and the conversation's bar with the ⓘ toggle stays clear. */
+@media (max-width: 1099px) {
+  .chat-screen.with-info > .chat-conversation::after {
+    content: '';
+    position: absolute;
+    inset: var(--bar-h) 0 0;
+    z-index: 1;
+    background: var(--backdrop);
+    pointer-events: none;
+    animation: overlay-fade 180ms ease-out;
+  }
+  .app.no-side .chat-screen.with-info > .chat-conversation::after {
+    top: 52px;
+  }
+}
 
 /* Channel identity. */
 .chat-info-identity {

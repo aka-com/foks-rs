@@ -93,7 +93,11 @@ export function ChannelInfoPanel({
       if (
         panel.current?.contains(target) ||
         toggleRef?.current?.contains(target) ||
-        target.closest('[role="dialog"], [role="menu"], [role="listbox"]')
+        // A popup's options, not the channel column's own listbox: a click
+        // on a channel there closes the panel as any click outside does.
+        target.closest(
+          '[role="dialog"], [role="menu"], [role="listbox"]:not(.chat-channel-options)',
+        )
       )
         return;
       onClose(false);
