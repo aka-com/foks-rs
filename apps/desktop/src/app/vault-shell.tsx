@@ -45,6 +45,7 @@ import {
   storeReadable,
   type AgentSnapshot,
   type DeviceLabel,
+  type TeamStore,
 } from '../model';
 import { NavigationGuardProvider, useTabSheetState } from '../navigation-guard';
 import { MetadataRepositoryContext } from '../query-hooks';
@@ -60,7 +61,11 @@ import { DetailsPanel } from '../screens/details-panel';
 import { FirstRunExperience } from '../screens/first-run-screen';
 import { unroutedNotices } from '../screens/account-section';
 import { ALL_ITEMS, folderSelection, listsItems } from '../screens/scope';
-import { teamRequestsBadge, useTeamRequestCounts } from '../operation-queries';
+import {
+  teamRequestsBadge,
+  useCachedUnfinishedCounts,
+  useTeamRequestCounts,
+} from '../operation-queries';
 import {
   initialWriteWorkflow,
   writeBlockReason,
@@ -466,6 +471,18 @@ export function VaultShell({
     commandError,
     deviceCache.repository,
   );
+  // Unfinished membership work the team pages have already read; the shell
+  // adds no read of its own (see `useCachedUnfinishedCounts`).
+  const teamStores = useMemo(
+    () =>
+      shown.stores.filter((store): store is TeamStore => store.kind === 'team'),
+    [shown.stores],
+  );
+  const unfinishedCounts = useCachedUnfinishedCounts(
+    bridge,
+    teamStores,
+    deviceCache.repository,
+  );
   const deviceAlerts = useSyncExternalStore(
     deviceAlertRegistry(bridge).subscribe,
     deviceAlertRegistry(bridge).getSnapshot,
@@ -751,7 +768,11 @@ export function VaultShell({
                 account={locations.getAccount()}
                 attention={unroutedNotices(shown).length}
                 teamRequests={teamRequestsBadge(shown, teamRequestCounts)}
-                activity={activityBadge(shown, teamRequestCounts)}
+                activity={activityBadge(
+                  shown,
+                  teamRequestCounts,
+                  unfinishedCounts,
+                )}
                 devicesAlert={devicesAlertSummary(shown, deviceAlerts)}
                 settingsAlert={settingsAlertSummary(shown)}
                 onTabNavigate={(tab) => locations.navigateTab(tab)}

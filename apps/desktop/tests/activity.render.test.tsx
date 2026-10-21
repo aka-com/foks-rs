@@ -14,6 +14,7 @@ import { installDom } from './lib/dom-harness';
 import type { Bridge } from '../src/bridge';
 import type { InvitationAction } from '../src/invitation-contract';
 import type { Location } from '../src/location';
+import type { MetadataRepository } from '../src/metadata-repository';
 import type { AgentSnapshot } from '../src/model';
 
 installDom({
@@ -89,23 +90,33 @@ async function activity(
   snapshot: AgentSnapshot,
   bridge: Bridge,
   navigate: (location: Location) => void = () => {},
+  repository?: MetadataRepository,
 ) {
   const { ActivityScreen } = (await vite.ssrLoadModule(
     '/src/screens/activity-screen.tsx',
   )) as typeof import('../src/screens/activity-screen');
+  const { MetadataRepositoryContext } = (await vite.ssrLoadModule(
+    '/src/query-hooks.ts',
+  )) as typeof import('../src/query-hooks');
+  const screen = createElement(ActivityScreen, {
+    snapshot,
+    bridge,
+    query: '',
+    onNavigate: navigate,
+    onApplied: async () => {},
+    onError: (error: unknown) => {
+      throw error;
+    },
+    onMutationError: async () => {},
+  });
   const rendered = ui.render(
     await providers(
-      createElement(ActivityScreen, {
-        snapshot,
-        bridge,
-        query: '',
-        onNavigate: navigate,
-        onApplied: async () => {},
-        onError: (error: unknown) => {
-          throw error;
-        },
-        onMutationError: async () => {},
-      }),
+      repository
+        ? createElement(MetadataRepositoryContext.Provider, {
+            value: repository,
+            children: screen,
+          })
+        : screen,
     ),
   );
   await ui.act(async () => {});
@@ -262,4 +273,90 @@ test('the Activity count adds requests to the snapshot notices', async () => {
     label: '5+',
     description: 'At least 2 requests and 3 notices',
   });
+  // A team with cached unfinished work is one more notice.
+  assert.deepEqual(
+    activityBadge(snapshot, new Map(), new Map([['team:eng', 2]])),
+    { label: '4', description: '4 notices' },
+  );
+});
+
+test('a team’s unfinished changes are listed from the cached journal, never read by Activity', async () => {
+  const snapshot = await fixture();
+  const { bridge: base } = await recordingBridge(snapshot);
+  const { MetadataRepository } = (await vite.ssrLoadModule(
+    '/src/metadata-repository.ts',
+  )) as typeof import('../src/metadata-repository');
+  const { pendingOperationsQuery } = (await vite.ssrLoadModule(
+    '/src/operation-queries.ts',
+  )) as typeof import('../src/operation-queries');
+  const repository = new MetadataRepository();
+  let journalReads = 0;
+  const bridge: Bridge = {
+    ...base,
+    listPendingOperations: async () => {
+      journalReads += 1;
+      return [
+        {
+          kind: 'team-member-addition',
+          alias: 'engineering',
+          target: 'jules.park',
+        },
+      ];
+    },
+  };
+  await activity(snapshot, bridge, () => {}, repository);
+  await ui.waitFor(() =>
+    assert.ok(rowTitles().includes('Homelab is inactive')),
+  );
+  // Nothing has read Engineering's profile journal, so Activity neither
+  // lists it nor reads it.
+  assert.equal(
+    rowTitles().includes('Engineering has unfinished changes'),
+    false,
+  );
+  assert.equal(journalReads, 0);
+
+  // The team page reads it (here, directly through the shared query); the
+  // entry follows without a read of Activity's own.
+  const eng = snapshot.stores.find((store) => store.id === 'team:eng');
+  assert.ok(eng);
+  await ui.act(async () => {
+    await pendingOperationsQuery(repository, bridge, eng.server).load();
+  });
+  assert.equal(journalReads, 1);
+  await ui.waitFor(() =>
+    assert.ok(rowTitles().includes('Engineering has unfinished changes')),
+  );
+  const row = [
+    ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+  ].find(
+    (option) =>
+      option.querySelector('.name b')?.textContent ===
+      'Engineering has unfinished changes',
+  );
+  assert.ok(row);
+  assert.equal(
+    row.querySelector('.name small')?.textContent,
+    '1 incomplete membership change',
+  );
+  await ui.act(async () => ui.fireEvent.click(row));
+  // Its details state what the team page's band states, and Review opens
+  // the same sheet over the team's own operations.
+  await ui.waitFor(() =>
+    assert.ok(
+      ui.screen.getByText(
+        '1 incomplete membership change. It blocks other actions.',
+      ),
+    ),
+  );
+  await ui.act(async () =>
+    ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Review…' })),
+  );
+  const dialog = ui.screen.getByRole('dialog');
+  assert.ok(
+    ui
+      .within(dialog)
+      .getByRole('heading', { name: 'Unfinished activity · Engineering' }),
+  );
+  assert.ok(ui.within(dialog).getByText('Adding jules.park'));
 });

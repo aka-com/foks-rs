@@ -9,10 +9,13 @@
  *
  * "Needs attention" holds the notices `activityNotices` derives from the
  * snapshot: a team whose setup never finished, an inactive federated
- * admission, a server that is unverified or whose check-in lapsed. Each
- * notice's action is the one the place that owns it runs (Finish Setup and
- * Restore Access through the team's operation controller; the server's own
- * page for trust).
+ * admission, a server that is unverified or whose check-in lapsed. It also
+ * lists a team with unfinished membership work, from the counts its page's
+ * reads left in the shared repository (`useCachedUnfinishedCounts`); a team
+ * not read since unlock is not listed. Each notice's action is the one the
+ * place that owns it runs (Finish Setup and Restore Access through the
+ * team's operation controller, the team's Unfinished activity sheet, the
+ * server's own page for trust).
  *
  * Synchronization status is not repeated here; the sidebar's status line
  * owns it.
@@ -54,7 +57,12 @@ import {
 } from '../model';
 import type { AgentSnapshot, TeamStore } from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
-import { useTeamRequestCounts } from '../operation-queries';
+import {
+  useCachedUnfinishedCounts,
+  useTeamRequestCounts,
+} from '../operation-queries';
+import { InvitationActivitySheet } from '../components/invitation-activity-sheet';
+import { unfinishedActivityText } from '../components/unfinished-activity';
 import { DetailsColumn } from '../shell/page-slots';
 import { useToast } from '/kit/toasts';
 import { useGroupOperationController } from './groups/operation-controller';
@@ -237,7 +245,10 @@ function TeamNoticeDetail({
 }: {
   snapshot: AgentSnapshot;
   bridge: Bridge;
-  notice: Exclude<ActivityNotice, { kind: 'server' }>;
+  notice: Extract<
+    ActivityNotice,
+    { kind: 'setup-incomplete' | 'federation-inactive' }
+  >;
   text: { title: string; detail: string };
   onNavigate: (location: Location) => void;
   onApplied: (message: string, profile?: string) => Promise<void>;
@@ -331,6 +342,108 @@ function TeamNoticeDetail({
   );
 }
 
+/**
+ * A team's unfinished membership work: the count its Unfinished activity
+ * band shows, and that band's sheet, opened here over the team's own
+ * operation controller so resuming an operation is the same write.
+ */
+function UnfinishedDetail({
+  snapshot,
+  bridge,
+  notice,
+  text,
+  onNavigate,
+  onApplied,
+  onError,
+  onMutationError,
+}: {
+  snapshot: AgentSnapshot;
+  bridge: Bridge;
+  notice: Extract<ActivityNotice, { kind: 'unfinished' }>;
+  text: { title: string; detail: string };
+  onNavigate: (location: Location) => void;
+  onApplied: (message: string, profile?: string) => Promise<void>;
+  onError: (error: unknown) => void;
+  onMutationError: MutationFailureHandler;
+}): ReactNode {
+  const toasts = useToast();
+  const team = notice.store;
+  const [reviewing, setReviewing] = useState(false);
+  // The journal this entry was counted from is already cached; reading it
+  // here keeps the sheet's membership rows current while it is open.
+  const controller = useGroupOperationController({
+    bridge,
+    store: team,
+    enabled: true,
+    onSnapshotApplied: onApplied,
+    onSnapshotMutationError: onMutationError,
+    onRefreshError: (error) => {
+      toasts.show('Change applied. Refresh pending.');
+      onError(error);
+    },
+    onReadError: onError,
+  });
+  return (
+    <>
+      <div className="hero">
+        <span className="bigtile warn" aria-hidden="true">
+          <Icon name="warning" />
+        </span>
+        <div className="t">
+          <h2>{text.title}</h2>
+          <p>{text.detail}</p>
+        </div>
+      </div>
+      <p className="note">
+        {unfinishedActivityText(notice.count, controller.operations.length)}
+      </p>
+      <PropertyGroup>
+        <PropertyRow
+          label="Team"
+          actions={
+            <Button
+              onClick={() =>
+                onNavigate({
+                  kind: 'group-settings',
+                  ref: team.id,
+                  tab: 'people',
+                })
+              }
+            >
+              Open Team
+            </Button>
+          }
+        >
+          <TeamValue snapshot={snapshot} team={team} />
+        </PropertyRow>
+        <PropertyRow label="Server">
+          <ServerValue snapshot={snapshot} team={team} />
+        </PropertyRow>
+        <PropertyRow
+          label=""
+          actions={
+            <Button variant="primary" onClick={() => setReviewing(true)}>
+              Review…
+            </Button>
+          }
+        />
+      </PropertyGroup>
+      {reviewing ? (
+        <InvitationActivitySheet
+          bridge={bridge}
+          team={team}
+          membership={{
+            operations: controller.operations,
+            onResume: controller.resumeMembership,
+          }}
+          onClose={() => setReviewing(false)}
+          onComplete={() => onApplied('Team requests updated', team.server)}
+        />
+      ) : null}
+    </>
+  );
+}
+
 function ServerNoticeDetail({
   notice,
   text,
@@ -413,6 +526,14 @@ export function ActivityScreen({
       ),
     [snapshot.stores, counts],
   );
+  const teamStores = useMemo(
+    () =>
+      snapshot.stores.filter(
+        (store): store is TeamStore => store.kind === 'team',
+      ),
+    [snapshot.stores],
+  );
+  const unfinished = useCachedUnfinishedCounts(bridge, teamStores);
   const inbox = useMembershipInbox(bridge, requestTeams, {
     onApproved: (team) => onApplied('Team requests updated', team.server),
   });
@@ -427,7 +548,7 @@ export function ActivityScreen({
         detail: `Wants to join ${team.name} · ${serverDisplayLabelForStore(snapshot, team)}`,
       })),
     ),
-    ...activityNotices(snapshot).map((notice): Entry => ({
+    ...activityNotices(snapshot, unfinished).map((notice): Entry => ({
       kind: 'notice',
       id: notice.id,
       notice,
@@ -568,6 +689,17 @@ export function ActivityScreen({
                 notice={selected.notice}
                 text={selected}
                 onNavigate={onNavigate}
+              />
+            ) : selected.notice.kind === 'unfinished' ? (
+              <UnfinishedDetail
+                snapshot={snapshot}
+                bridge={bridge}
+                notice={selected.notice}
+                text={selected}
+                onNavigate={onNavigate}
+                onApplied={onApplied}
+                onError={onError}
+                onMutationError={onMutationError}
               />
             ) : (
               <TeamNoticeDetail
