@@ -179,3 +179,26 @@ test('reduced motion trades travel for fades across every component stylesheet',
   assert.equal(reduced.get('--rise'), '0px');
   assert.equal(reduced.get('--settle-scale'), '1');
 });
+
+test('a first-run step taller than the window scrolls its body and keeps its foot in view', async () => {
+  const firstRun = await readSource(
+    '../src/screens/first-run.css',
+    import.meta.url,
+  );
+  const shell = await readSource(SHELL, import.meta.url);
+  // The card is no taller than the stage, and its one row is no taller than
+  // the card: without the row limit the row grows to the step's content and
+  // the card's overflow clip cuts the foot off at 640px.
+  const card = declarations(blockAfter(firstRun, '\n.fr-card '));
+  assert.equal(card.get('max-height'), '100%');
+  assert.equal(card.get('grid-template-rows'), 'minmax(0, 1fr)');
+  const column = declarations(
+    blockAfter(firstRun, '.fr-card > .main.first-run-main'),
+  );
+  assert.equal(column.get('min-height'), '0');
+  // The step column is the shell's flex column: `.body` scrolls and the
+  // `.pfoot` after it does not shrink.
+  assert.match(shell, /\.main\{[^}]*min-height:0;[^}]*flex-direction:column/);
+  assert.match(shell, /\.body\{flex:1;min-height:0;overflow:auto/);
+  assert.match(shell, /\.pfoot\{flex:none/);
+});
