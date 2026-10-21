@@ -2406,3 +2406,15 @@ test('Chat waits for team inventory after servers and accounts have arrived', as
   assert.ok(ui.screen.getByText('Loading teams…'));
   assert.equal(ui.screen.queryByText('No teams yet'), null);
 });
+
+test('the bar’s add control is New channel, or New team when no team has chat', async () => {
+  const journal = await mount(await snapshotWithChat([]), { kind: 'chat' });
+  assert.equal(ui.screen.queryByRole('button', { name: 'New channel' }), null);
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New team' }));
+  assert.deepEqual(journal.at(-1), { kind: 'teams', open: 'create' });
+  ui.cleanup();
+
+  await mount(await snapshotWithChat(['personal']), { kind: 'chat' });
+  assert.ok(await ui.screen.findByRole('button', { name: 'New channel' }));
+  assert.equal(ui.screen.queryByRole('button', { name: 'New team' }), null);
+});
