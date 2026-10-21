@@ -295,38 +295,7 @@ test('the refresh control reads out the state it shows and stops while it runs',
   assert.equal(button.getAttribute('aria-busy'), 'true');
 });
 
-test('Chat with no team that has chat offers a team and disables the field', () => {
-  const navigations: unknown[] = [];
-  const background = { current: null } as { current: HTMLElement | null };
-  ui.render(
-    createElement(
-      'div',
-      null,
-      createElement(OverlayProvider, {
-        backgroundRef: background,
-        portalRoot: document.body,
-        children: createElement(Topbar, {
-          snapshot: FIXTURE,
-          location: { kind: 'chat' },
-          onNavigate: (location) => navigations.push(location),
-          collapsed: false,
-          query: '',
-          onQuery: () => {},
-          onNewChat: () => {},
-          chatTeamCount: 0,
-        }),
-      }),
-    ),
-  );
-  const field = document.querySelector<HTMLInputElement>('.topsearch input');
-  assert.ok(field);
-  assert.equal(field.disabled, true);
-  assert.equal(ui.screen.queryByRole('button', { name: 'New chat' }), null);
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New team' }));
-  assert.deepEqual(navigations, [{ kind: 'teams', open: 'create' }]);
-});
-
-test('Chat with teams keeps New chat and a live field', () => {
+test('Chat with no team that has chat disables the field and draws no add control of its own', () => {
   const background = { current: null } as { current: HTMLElement | null };
   ui.render(
     createElement(
@@ -342,8 +311,36 @@ test('Chat with teams keeps New chat and a live field', () => {
           collapsed: false,
           query: '',
           onQuery: () => {},
-          onNewChat: () => {},
+          chatTeamCount: 0,
+        }),
+      }),
+    ),
+  );
+  const field = document.querySelector<HTMLInputElement>('.topsearch input');
+  assert.ok(field);
+  assert.equal(field.disabled, true);
+  // The Chat tab passes its own add control (New channel, or New team).
+  assert.equal(ui.screen.queryByRole('button', { name: /^New/ }), null);
+});
+
+test('Chat with teams keeps a live field and draws the add control it is given', () => {
+  const background = { current: null } as { current: HTMLElement | null };
+  ui.render(
+    createElement(
+      'div',
+      null,
+      createElement(OverlayProvider, {
+        backgroundRef: background,
+        portalRoot: document.body,
+        children: createElement(Topbar, {
+          snapshot: FIXTURE,
+          location: { kind: 'chat' },
+          onNavigate: () => {},
+          collapsed: false,
+          query: '',
+          onQuery: () => {},
           chatTeamCount: 2,
+          add: createElement('button', { type: 'button' }, 'New channel'),
         }),
       }),
     ),
@@ -351,13 +348,12 @@ test('Chat with teams keeps New chat and a live field', () => {
   const field = document.querySelector<HTMLInputElement>('.topsearch input');
   assert.ok(field);
   assert.equal(field.disabled, false);
-  assert.ok(ui.screen.getByRole('button', { name: 'New chat' }));
+  assert.ok(ui.screen.getByRole('button', { name: 'New channel' }));
 });
 
-// Chat's bar is its list column's (search and New chat), so the walk is over
-// a page that names itself with crumbs: a server under Settings › Account.
-test('the intermediate settings breadcrumb navigates to its parent', async () => {
-  const navigations: unknown[] = [];
+// Settings names only itself in the bar: the sub-navigation names the
+// section, and a server page carries its own way back to Account.
+test('the settings bar names only Settings, even on a server page', async () => {
   const { ChatInboxProvider } = (await vite.ssrLoadModule(
     '/src/chat/inbox-provider.tsx',
   )) as typeof import('../src/chat/inbox-provider');
@@ -372,16 +368,14 @@ test('the intermediate settings breadcrumb navigates to its parent', async () =>
         snapshot: FIXTURE,
         location: { kind: 'settings', section: 'account', profile: 'acme' },
         collapsed: false,
-        onNavigate: (next) => navigations.push(next),
+        onNavigate: () => {},
       }),
     }),
   );
-  await ui.waitFor(() =>
-    assert.equal(document.querySelectorAll('.crumbs button').length, 3),
-  );
   const crumbs = document.querySelectorAll<HTMLButtonElement>('.crumbs button');
-  ui.fireEvent.click(crumbs[1]);
-  assert.deepEqual(navigations, [{ kind: 'settings', section: 'account' }]);
+  assert.equal(crumbs.length, 1);
+  assert.equal(crumbs[0].textContent, 'Settings');
+  assert.equal(crumbs[0].getAttribute('aria-current'), 'page');
 });
 
 test('an unavailable team retains its settings action in the takeover band', async () => {

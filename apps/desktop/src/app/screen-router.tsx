@@ -16,6 +16,7 @@ import { listsItems } from '../screens/scope';
 import { SettingsScreen } from '../screens/settings-screen';
 import { TeamsScreen } from '../screens/teams-screen';
 import type { WriteWorkflow } from '../screens/write-workflows';
+import type { TopbarProps } from '../shell/topbar';
 import type { CommandErrorHandler } from './catalog-runtime';
 
 export function ScreenRouter({
@@ -42,8 +43,14 @@ export function ScreenRouter({
   accessNow,
   accessGenerations,
   onTeamInfo,
+  renderBar,
 }: {
   onTeamInfo: (storeId: string, trigger?: HTMLElement) => void;
+  /**
+   * The panel's first bar. Chat places it over its own channel column,
+   * passing the column's add control into it.
+   */
+  renderBar?: (extra?: Partial<TopbarProps>) => ReactNode;
   shown: AgentSnapshot;
   bridge: Bridge;
   state: ReturnType<LocationStore['getSnapshot']>;
@@ -141,6 +148,7 @@ export function ScreenRouter({
       accessGenerations={accessGenerations}
       query={state.query}
       onNavigate={(location, options) => locations.navigate(location, options)}
+      renderBar={renderBar}
     />
   ) : here.kind === 'group-settings' ? (
     <GroupSettingsScreen
@@ -187,6 +195,7 @@ export function ScreenRouter({
       onRefreshSnapshot={refreshSnapshot}
       onError={commandError}
       onMutationError={mutationError}
+      query={state.query}
     />
   ) : here.kind === 'settings' ? (
     <SettingsScreen
