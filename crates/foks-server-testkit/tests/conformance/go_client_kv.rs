@@ -310,7 +310,7 @@ pub(crate) fn go_main_kv_creation_replays_match_upstream_frames() {
     );
 }
 
-fn authenticated_stream(
+pub(crate) fn authenticated_stream(
     fixture: &Fixture,
     credential: &DeviceCredential,
 ) -> rustls::StreamOwned<rustls::ClientConnection, std::net::TcpStream> {
