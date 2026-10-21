@@ -194,7 +194,7 @@ test('the account panel keeps every workflow row from the accounts pane', async 
   // six quieter links below the device-wide server inventory.
   for (const name of [
     'Change…',
-    'Server details',
+    'Server Details',
     'Devices',
     'Teams',
     'Passphrase…',
@@ -210,7 +210,7 @@ test('the account panel keeps every workflow row from the accounts pane', async 
       1,
       `expected one "${name}" button`,
     );
-  for (const name of ['Server details', 'Devices', 'Teams'])
+  for (const name of ['Server Details', 'Devices', 'Teams'])
     assert.ok(
       rendered
         .getByRole('button', { name })
@@ -263,7 +263,7 @@ test('account recovery and hardware-key creation open after the existing actions
   let dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
   assert.equal(
     ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
-    'Connect account via recovery key',
+    'Connect Account via Recovery Key',
   );
   await ui.act(async () => {
     ui.fireEvent.click(
@@ -281,7 +281,7 @@ test('account recovery and hardware-key creation open after the existing actions
   dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
   assert.equal(
     ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
-    'Create an account on a hardware key',
+    'Create an Account on a Hardware Key',
   );
 });
 
@@ -549,7 +549,7 @@ test('the header names the account and carries no switcher of its own', async ()
   const panel = rendered.getByRole('tabpanel');
   assert.equal(panel.id, 'settings-sections-panel-account');
   assert.ok(ui.within(panel).getByText('Username'));
-  assert.ok(rendered.getByRole('button', { name: 'Server details' }));
+  assert.ok(rendered.getByRole('button', { name: 'Server Details' }));
 });
 
 test('an unpaired server is hidden until its account inventory loads successfully', async () => {

@@ -2285,7 +2285,7 @@ test('sidebar context menus distinguish background, teams, and channels', async 
       'Delete Channel',
       'Channel Info',
       'Add FOKS User…',
-      'Add FOKS team…',
+      'Add FOKS Team…',
       'Invite New User…',
     ],
   );
@@ -2307,7 +2307,7 @@ test('sidebar context menus distinguish background, teams, and channels', async 
   assert.ok(await ui.screen.findByRole('dialog', { name: 'Channel info' }));
   for (const [label, intent] of [
     ['Add FOKS User…', 'add'],
-    ['Add FOKS team…', 'add-team'],
+    ['Add FOKS Team…', 'add-team'],
     ['Invite New User…', 'invite'],
   ] as const) {
     ui.fireEvent.contextMenu(channel);

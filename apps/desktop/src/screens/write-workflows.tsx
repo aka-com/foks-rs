@@ -1310,11 +1310,11 @@ function ConflictSheet({
     >
       <Sheet
         glyph={<BigTile face={itemTile(workflow.item)} />}
-        title="Item changed elsewhere"
+        title="Item Changed Elsewhere"
         footer={
           <>
             <Button onClick={() => setConfirmingDiscard(true)}>
-              {replacing ? 'Discard replacement' : 'Discard my edit'}
+              {replacing ? 'Discard Replacement' : 'Discard My Edit'}
             </Button>
             <Button
               variant="primary"

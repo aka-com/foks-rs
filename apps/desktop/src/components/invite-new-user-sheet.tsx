@@ -286,7 +286,7 @@ export function InviteNewUserSheet({
     return (
       <PanelSheet
         presentation={{ title: 'Invite a new user', onClose }}
-        title="Share the invitation"
+        title="Share the Invitation"
         step="Step 2 of 2"
         busy={busy}
         glyph={glyph}
@@ -350,7 +350,7 @@ export function InviteNewUserSheet({
   return (
     <PanelSheet
       presentation={{ title: 'Invite a new user', onClose }}
-      title={`Invite a new user to ${team.name}`}
+      title={`Invite a New User to ${team.name}`}
       step="Step 1 of 2"
       busy={busy}
       glyph={glyph}
@@ -369,7 +369,7 @@ export function InviteNewUserSheet({
               ? 'Creating…'
               : operation?.operation_id
                 ? 'Finish Creating'
-                : 'Create invitation'}
+                : 'Create Invitation'}
           </Button>
         </>
       }

@@ -207,7 +207,7 @@ test('a durable invitation creation allows navigation', async () => {
   );
   await ui.act(async () => {
     ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Create invitation' }),
+      rendered.getByRole('button', { name: 'Create Invitation' }),
     );
     await Promise.resolve();
   });

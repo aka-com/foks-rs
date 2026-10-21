@@ -1097,7 +1097,7 @@ function AddServerSheet({
     new TextEncoder().encode(cleanProbe).length <= 2048;
   return (
     <SheetFrame
-      title="Add a server"
+      title="Add a Server"
       onClose={onClose}
       footer={
         <>
@@ -1164,7 +1164,7 @@ function RenameServerSheet({
     new TextEncoder().encode(trimmed).length <= 64;
   return (
     <SheetFrame
-      title="Rename server"
+      title="Rename Server"
       onClose={onClose}
       footer={
         <>

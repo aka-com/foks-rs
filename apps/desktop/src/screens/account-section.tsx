@@ -925,7 +925,7 @@ function AccountPanel({
                 })
               }
             >
-              <span className="offscreen">Server details</span>
+              <span className="offscreen">Server Details</span>
               <Icon name="chevronRight" />
             </Button>
           }

@@ -413,7 +413,7 @@ export function InvitationActivitySheet({
   return (
     <PanelSheet
       presentation={{ title: 'Unfinished activity', onClose }}
-      title={`Unfinished activity · ${team.name}`}
+      title={`Unfinished Activity · ${team.name}`}
       busy={busy}
       glyph={
         <span className="kico invite">

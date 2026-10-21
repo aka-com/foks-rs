@@ -126,7 +126,7 @@ function sectionLabels(): string[] {
 
 /**
  * The header's Add people menu item with this bold label — "Add FOKS user…",
- * "Add FOKS team…" or "Invite new user…" — once the menu is open.
+ * "Add FOKS Team…" or "Invite new user…" — once the menu is open.
  */
 function addPeopleItem(label: string): HTMLButtonElement {
   const node = [
@@ -216,7 +216,7 @@ test('Requests approves at the role chosen on the row, and Invite new user creat
   calls.length = 0;
   ui.fireEvent.click(r.getByRole('tab', { name: /^Requests/ }));
   // Invitation creation and nesting-order controls belong outside Requests.
-  assert.equal(r.queryByRole('button', { name: 'Create invitation' }), null);
+  assert.equal(r.queryByRole('button', { name: 'Create Invitation' }), null);
   assert.equal(ui.screen.queryByText('Team nesting order'), null);
   // Override the default Member role for this request only.
   ui.fireEvent.change(r.getByLabelText('Role for new-member'), {
@@ -261,7 +261,7 @@ test('Requests approves at the role chosen on the row, and Invite new user creat
   await ui.act(async () => {});
   const dialog = r.getByRole('dialog');
   ui.fireEvent.click(
-    ui.within(dialog).getByRole('button', { name: 'Create invitation' }),
+    ui.within(dialog).getByRole('button', { name: 'Create Invitation' }),
   );
   await ui.within(dialog).findByLabelText('Shareable invitation');
   assert.deepEqual(
@@ -272,7 +272,7 @@ test('Requests approves at the role chosen on the row, and Invite new user creat
   );
   assert.ok(ui.within(dialog).getByText('Step 2 of 2'));
   assert.ok(
-    ui.within(dialog).getByRole('heading', { name: 'Share the invitation' }),
+    ui.within(dialog).getByRole('heading', { name: 'Share the Invitation' }),
   );
   assert.ok(
     calls.every(
@@ -570,7 +570,7 @@ test('a pending membership change is counted on one band whose Review lists it',
   assert.ok(
     ui
       .within(dialog)
-      .getByRole('heading', { name: 'Unfinished activity · Engineering' }),
+      .getByRole('heading', { name: 'Unfinished Activity · Engineering' }),
   );
   assert.ok(ui.within(dialog).getByText('Adding jules.park'));
   const resume = ui.within(dialog).getByRole<HTMLButtonElement>('button', {
@@ -840,10 +840,10 @@ test('the add sheet hands off to Invite new user for someone without an account'
   assert.ok(
     ui
       .within(dialog)
-      .getByRole('heading', { name: 'Invite a new user to Engineering' }),
+      .getByRole('heading', { name: 'Invite a New User to Engineering' }),
   );
   ui.fireEvent.click(
-    ui.within(dialog).getByRole('button', { name: 'Create invitation' }),
+    ui.within(dialog).getByRole('button', { name: 'Create Invitation' }),
   );
   await ui.act(async () => {});
   // Expect creation, submission, and a request-count refresh. Ignore the
@@ -896,7 +896,7 @@ test('an invitation prepared after unmount is recovered from the group banner', 
   ui.fireEvent.click(
     ui
       .within(first.getByRole('dialog'))
-      .getByRole('button', { name: 'Create invitation' }),
+      .getByRole('button', { name: 'Create Invitation' }),
   );
   first.unmount();
   await ui.act(async () => {
@@ -924,7 +924,7 @@ test('the link under Accounts names the invitation it opens', async () => {
   assert.ok(
     ui
       .within(r.getByRole('dialog'))
-      .getByRole('heading', { name: 'Invite a new user to Engineering' }),
+      .getByRole('heading', { name: 'Invite a New User to Engineering' }),
   );
 });
 

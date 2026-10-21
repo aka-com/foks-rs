@@ -89,19 +89,19 @@ export type PassphraseMode = 'set' | 'change';
 
 /** The label a YubiKey sheet's title reads, by the action it performs. */
 export const YUBI_ACTION_LABELS: Readonly<Record<SimpleYubiAction, string>> = {
-  sync: 'Sync the key account',
-  'pin-status': 'Card PIN status',
-  'change-pin': 'Change the card PIN',
-  'set-passphrase': 'Set the key passphrase',
-  'change-passphrase': 'Change the key passphrase',
-  'verify-passphrase': 'Verify the key passphrase',
-  unblock: 'Unblock the card PIN',
-  'change-puk': 'Change the unlock code',
-  'recover-management': 'Restore management access',
-  'recover-subkey': 'Restore the signing key',
-  'resume-enrollment': 'Resume enrollment',
-  'resume-rotation': 'Resume key rotation',
-  rotate: 'Rotate the management key',
+  sync: 'Sync the Key Account',
+  'pin-status': 'Card PIN Status',
+  'change-pin': 'Change the Card PIN',
+  'set-passphrase': 'Set the Key Passphrase',
+  'change-passphrase': 'Change the Key Passphrase',
+  'verify-passphrase': 'Verify the Key Passphrase',
+  unblock: 'Unblock the Card PIN',
+  'change-puk': 'Change the Unlock Code',
+  'recover-management': 'Restore Management Access',
+  'recover-subkey': 'Restore the Signing Key',
+  'resume-enrollment': 'Resume Enrollment',
+  'resume-rotation': 'Resume Key Rotation',
+  rotate: 'Rotate the Management Key',
 };
 
 export const YUBI_WORKFLOWS: Readonly<
@@ -151,7 +151,7 @@ export function AddDeviceSheet({
   });
   return (
     <DeviceSheetFrame
-      title="Add a device"
+      title="Add a Device"
       onClose={onClose}
       footer={
         <>
@@ -294,7 +294,7 @@ export function PhraseSheet({
   );
   return (
     <DeviceSheetFrame
-      title={phrase ? 'Save recovery phrase' : 'Create recovery phrase'}
+      title={phrase ? 'Save Recovery Phrase' : 'Create Recovery Phrase'}
       onClose={discard}
       dismissible={!busy}
       footer={
@@ -529,7 +529,7 @@ export function PairSheet({
   );
   return (
     <DeviceSheetFrame
-      title="Pair another device"
+      title="Pair Another Device"
       onClose={() => {
         if (busy) return;
         setOffer(null);
@@ -736,7 +736,7 @@ export function RecoverSheet({
   );
   return (
     <DeviceSheetFrame
-      title="Connect account via recovery key"
+      title="Connect Account via Recovery Key"
       onClose={() => {
         setPhrase('');
         onClose();
@@ -858,7 +858,7 @@ export function EnrollSheet({
   const validAttempts = validEnrollmentAttempts(pinAttempts, pukAttempts);
   return (
     <DeviceSheetFrame
-      title="Create an account on a hardware key"
+      title="Create an Account on a Hardware Key"
       onClose={() => {
         clear();
         onClose();
@@ -1065,7 +1065,7 @@ export function ProvisionSheet({
   );
   return (
     <DeviceSheetFrame
-      title="Connect a hardware key"
+      title="Connect a Hardware Key"
       onClose={() => {
         clear();
         onClose();
@@ -1713,10 +1713,10 @@ export function PassphraseSheet({
     <DeviceSheetFrame
       title={
         mode === null
-          ? 'Account passphrase'
+          ? 'Account Passphrase'
           : mode === 'set'
-            ? 'Set passphrase'
-            : 'Change passphrase'
+            ? 'Set Passphrase'
+            : 'Change Passphrase'
       }
       onClose={() => {
         if (busy) return;

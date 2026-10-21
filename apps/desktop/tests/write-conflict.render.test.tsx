@@ -94,7 +94,7 @@ test('an edit conflict with a deleted item preserves a new-item draft', async ()
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Save Changes' }));
 
   // The sheet does not claim to know whether the item changed or went away.
-  await rendered.findByText('Item changed elsewhere');
+  await rendered.findByText('Item Changed Elsewhere');
   assert.ok(rendered.getByText(/changed or removed while you were editing/));
   await ui.act(async () => {
     ui.fireEvent.click(
@@ -127,7 +127,7 @@ test('an edit conflict with an existing item resumes against the refreshed versi
   const username = await rendered.findByLabelText('User name');
   ui.fireEvent.change(username, { target: { value: 'kept-draft' } });
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Save Changes' }));
-  await rendered.findByText('Item changed elsewhere');
+  await rendered.findByText('Item Changed Elsewhere');
   await ui.act(async () => {
     ui.fireEvent.click(
       rendered.getByRole('button', { name: 'Refresh and Review' }),

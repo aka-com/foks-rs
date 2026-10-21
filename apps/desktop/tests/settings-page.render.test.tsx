@@ -662,7 +662,7 @@ test('the passphrase sheet changes a configured passphrase behind a check', asyn
   await ui.waitFor(() =>
     assert.equal(
       ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
-      'Change passphrase',
+      'Change Passphrase',
     ),
   );
   assert.equal(
@@ -777,7 +777,7 @@ test('the passphrase sheet sets a first passphrase when the account has none', a
   await ui.waitFor(() =>
     assert.equal(
       ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
-      'Set passphrase',
+      'Set Passphrase',
     ),
   );
   // Nothing to check against, so there is no current field to fill.
