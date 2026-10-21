@@ -1,227 +1,356 @@
-/* Shared design tokens */
+/* Shared design tokens.
+
+   The palette follows the Linear skin the desktop redesign is built on
+   (multitool `dev/linear-skin.css`): neutral, slightly cool greys, two
+   hairline weights, flat surfaces and a quiet grey selection. Dark is a
+   graphite ramp: the window ground is the darkest step and the raised panel
+   one step above it. Status colours carry less chroma than the system ones;
+   every status ink stays above 4.5:1 on the panel and on the sidebar ground.
+
+   Radii: 6px controls, 8px cards and groups, 10px the raised panel and
+   floating panels, 12px sheets. Full pills are for small status badges only.
+
+   The accent is the reader's Accent color preference (`data-rail`, see
+   `src/rail-theme.ts`). `--accent` is its hue for rings, links and washes;
+   `--accent-fill` is the solid behind white text and passes 4.5:1 with white
+   in both appearances, so the dark appearance keeps the light fill rather
+   than a dimmer one. */
+
+/* Inter v4.1 (rsms.me/inter), bundled because the webview is offline and
+   its CSP allows only same-origin fonts. One variable file carries every
+   weight and the optical-size axis; licence in fonts/Inter-OFL.txt. */
+@font-face {
+  font-family: 'Inter';
+  src: url('./fonts/InterVariable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
 
 :root {
   color-scheme: light;
   /* text */
-  --ink: #1d1d1f;
-  --ink-2: #2c2c30;
-  --ink-3: #3c3c42;
-  --muted: #66666f;
-  --muted-2: #6d6d76;
-  --faint: #8a8a92;
+  --ink: #1b1c20;
+  --ink-2: #2a2c31;
+  --ink-3: #3b3e45;
+  --muted: #62666e; /* 5.8:1 on white, 5.3:1 on the ground */
+  --muted-2: #676b73;
+  --faint: #6c7078; /* 4.6:1 on the ground */
+  /* Muted ink on the window ground, under the sidebar: 5.6:1, 5.0:1 on a
+     selected row. */
+  --side-muted: #5a5e66;
 
   /* typography */
-  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --sans:
+    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui,
+    sans-serif;
   --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+  --font-features: 'cv11', 'ss01';
+  --weight-label: 500;
+  --weight-title: 600;
 
-  /* accents */
-  --accent: var(--rail);
-  --accent-ink: color-mix(in srgb, var(--rail) 85%, #000);
-  --accent-wash: color-mix(in srgb, var(--rail) 8%, transparent);
-  --accent-wash-2: color-mix(in srgb, var(--rail) 12%, transparent);
-  --accent-border: color-mix(in srgb, var(--rail) 32%, transparent);
-  --accent-hover: color-mix(in srgb, var(--accent) 94%, #000);
-  --accent-hover-border: color-mix(
-    in srgb,
-    color-mix(in srgb, var(--accent) 70%, #fff) 25%,
-    transparent
-  );
+  /* accent (see the header) */
+  --accent-hue: #4c6be1;
+  --accent-fill: #4c6be1; /* 4.7:1 with white */
+  --accent: var(--accent-hue);
+  --accent-ink: color-mix(in srgb, var(--accent-hue) 80%, #000);
+  --accent-wash: color-mix(in srgb, var(--accent-hue) 8%, transparent);
+  --accent-wash-2: color-mix(in srgb, var(--accent-hue) 16%, transparent);
+  --accent-border: color-mix(in srgb, var(--accent-hue) 32%, transparent);
+  --accent-hover: color-mix(in srgb, var(--accent-fill) 88%, #000);
+  --accent-hover-border: transparent;
+  --on-accent: #fff;
   --ink-inverse: #fff;
-  --danger: #ff3b30;
-  --danger-ink: #d70015;
-  --danger-text: #7a1208;
-  --danger-solid: #d70015;
-  --danger-solid-hover: #7a1208;
-  --danger-wash: rgba(255, 59, 48, 0.08);
-  --danger-border: rgba(255, 59, 48, 0.38);
-  --amber-ink: #7a5410;
-  --amber-strong: #b06a00;
-  --amber-wash: rgba(255, 190, 50, 0.16);
-  --amber-border: rgba(200, 140, 20, 0.3);
-  --warning-dot: var(--unread);
-  --ok-ink: #248a3d;
-  --ok-solid: #34c759;
-  --ok-wash: rgba(52, 199, 89, 0.14);
-  --ok-border: rgba(52, 199, 89, 0.38);
+
+  /* status: dots and fills are the solids; text uses the inks */
+  --danger: #e5484d;
+  --danger-ink: #c73a3f;
+  --danger-text: #8f2a2e;
+  --danger-solid: #c73a3f;
+  --danger-solid-hover: #ad3236;
+  --danger-wash: rgba(229, 72, 77, 0.07);
+  --danger-border: rgba(229, 72, 77, 0.32);
+  --amber-ink: #9a6210;
+  --amber-strong: #9a6210;
+  --amber-wash: rgba(217, 164, 40, 0.12);
+  --amber-border: rgba(217, 164, 40, 0.3);
+  --warning-dot: #d9a428;
+  --ok-ink: #22784d;
+  --ok-solid: #4cb782;
+  --ok-wash: rgba(76, 183, 130, 0.1);
+  --ok-border: rgba(76, 183, 130, 0.3);
 
   /* surfaces */
-  --app-ground: #e7e8ee;
-  --surface: #f6f6f9;
-  --main-surface: #fff;
-  --panel: #fbfbfd;
+  --app-ground: #f6f6f7; /* the page behind the web mock's window */
+  --ground: #edeef0; /* the window ground under the sidebar */
+  --surface: #f5f6f8; /* fields, tiles and notices inside the panel */
+  --main-surface: #fff; /* the raised panel */
+  --panel: #fff; /* details column, sheets, menus */
+  --card: #fff; /* settings groups, one step above the panel in dark */
+  --field-bg: #fff;
   --btn-bg: #fff;
-  --btn-hover: #f2f2f5;
-  --hover: rgba(0, 0, 0, 0.05);
-  --chip-bg: rgba(0, 0, 0, 0.06);
-  --chip-ink: #4c4c53;
-  --wash: rgba(0, 0, 0, 0.025);
-  --backdrop: rgba(20, 20, 30, 0.28);
+  --btn-hover: #f3f4f6;
+  --hover: rgba(16, 20, 32, 0.045);
+  --hover-2: rgba(16, 20, 32, 0.065);
+  --press: rgba(16, 20, 32, 0.08);
+  --chip-bg: rgba(16, 20, 32, 0.055);
+  --chip-ink: #4a4d55;
+  --wash: rgba(16, 20, 32, 0.02);
+  --wash-2: rgba(16, 20, 32, 0.035);
+  --seg-bg: rgba(16, 20, 32, 0.055);
+  --seg-on: #fff;
+  --backdrop: rgba(16, 20, 32, 0.12);
 
-  /* unread */
-  --unread: #ff6f21;
+  /* quiet selection: grey whether or not the list has focus */
+  --side-sel: rgba(16, 20, 32, 0.06);
+  --row-sel: #eceef1;
 
-  /* navigation rail */
-  --rail-light: #4c6be1;
-  --rail-dark: #3c4e91;
-  --rail: var(--rail-light);
-  --rail-ink: rgba(255, 255, 255, 0.82);
-  --rail-line: rgba(255, 255, 255, 0.14);
-  --rail-active: rgba(255, 255, 255, 0.16);
+  /* unread counts in chat */
+  --unread: #e07a3f;
+  --unread-ink: #2b1403;
 
   /* lines */
-  --line: rgba(0, 0, 0, 0.08);
-  --line-soft: rgba(0, 0, 0, 0.06);
-  --line-mid: rgba(0, 0, 0, 0.1);
-  --line-field: rgba(0, 0, 0, 0.16);
-  --search-border: var(--line-field);
-  --window-border: rgba(0, 0, 0, 0.16);
-  --scrollbar-thumb: rgba(60, 60, 67, 0.4);
+  --line: rgba(16, 20, 32, 0.075);
+  --line-soft: rgba(16, 20, 32, 0.06);
+  --line-mid: rgba(16, 20, 32, 0.09);
+  --line-strong: rgba(16, 20, 32, 0.11);
+  --line-field: rgba(16, 20, 32, 0.15);
+  /* Bars take the stronger hairline, list rows the fainter one. */
+  --bar-rule: rgba(16, 20, 32, 0.09);
+  --row-rule: rgba(16, 20, 32, 0.05);
+  --search-border: var(--line-mid);
+  --window-border: rgba(16, 20, 32, 0.1);
+  --scrollbar-thumb: rgba(60, 60, 67, 0.36);
 
   /* item kinds */
-  --c-password: #3b82f6;
-  --c-file: #64748b;
-  --c-resource: #d97706;
-  --c-link: #7c3aed;
-  --c-team: #636366;
-  --c-none: #aeaeb2;
+  --c-password: #9a6210;
+  --c-file: #4c6be1;
+  --c-resource: #9a6210;
+  --c-link: #7066b8;
+  --c-team: #62666e;
+  --c-none: #a3a6ad;
+  --c-password-wash: rgba(217, 164, 40, 0.12);
+  --c-file-wash: color-mix(in srgb, var(--accent-hue) 8%, transparent);
+  --c-folder-wash: rgba(217, 164, 40, 0.12);
 
-  /* radius scale */
-  --radius-sm: 7px;
-  --radius-md: 9px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-  --radius-pill: 99px;
-
+  /* Mark hues (`HUES` in src/model/format.ts). Avatars fill with the hue
+     under white initials; store and team marks draw it as ink on a tint of
+     itself (`.store-mark` in shell.css), never as a solid saturated square. The
+     hues are mid-tones in both appearances; dark lightens the mark ink. */
+  --mark-violet: #7066b8;
+  --mark-amber: #a87c30;
+  --mark-teal: #3f8597;
+  --mark-red: #c95b5f;
+  --mark-green: #3f8f68;
+  --mark-purple: #9a5bb0;
+  --mark-blue: #4f6fc7;
+  --mark-brown: #8a6d4c;
+  --mark-tint: 16%;
+  --mark-ink-mix: 100%;
   /* Store mark initials (< 12px type floor exemption) */
   --mark-type: 10px;
+  --store-mark-bg: #62666e;
 
-  /* Item glyphs: the key a password is drawn with, the amber every folder
-     and document mark shares. */
-  --key-gold: #b8860b;
-  --folder-amber: #b45309;
+  /* Item glyphs */
+  --key-gold: #9a6210;
+  --folder-amber: #9a6210;
 
-  /* shadows */
-  --shadow-xs: 0 1px 1px rgba(15, 20, 45, 0.04);
-  --shadow-menu: 0 10px 28px rgba(15, 20, 45, 0.14);
-  --shadow-upload: 0 7px 18px rgba(15, 20, 45, 0.09);
-  --shadow-sheet: 0 14px 34px rgba(15, 20, 45, 0.16);
+  /* radius scale */
+  --radius-sm: 5px;
+  --radius-md: 6px; /* controls */
+  --radius-lg: 8px; /* cards, groups */
+  --radius-panel: 10px; /* the raised panel, menus, popovers */
+  --radius-xl: 12px; /* sheets and alerts */
+  --radius-pill: 99px;
+
+  /* geometry shared by the window's bars and rows */
+  --bar-h: 44px;
+  --row-h: 42px;
+  --prop-row-h: 38px;
+  --control-h: 26px;
+
+  /* motion: keyframes read these, and reduced motion zeroes the distances
+     so the same animations play as fades */
+  --rise: -8px;
+  --settle-scale: 0.97;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* elevation: only floating layers carry a shadow */
+  --shadow-xs: none;
+  --shadow-btn: 0 1px 1px rgba(16, 20, 32, 0.04);
+  --shadow-seg:
+    0 0 0 1px rgba(16, 20, 32, 0.08), 0 1px 1px rgba(16, 20, 32, 0.04);
+  --shadow-raised: 0 0 0 1px var(--line), 0 1px 2px rgba(16, 20, 32, 0.04);
+  --shadow-menu:
+    0 4px 16px rgba(16, 20, 32, 0.1), 0 1px 3px rgba(16, 20, 32, 0.06);
+  --shadow-upload: 0 4px 16px rgba(16, 20, 32, 0.1);
+  --shadow-sheet:
+    0 18px 40px rgba(16, 20, 32, 0.18), 0 0 0 1px rgba(16, 20, 32, 0.08);
   --shadow-window:
-    0 24px 60px rgba(15, 20, 45, 0.26), 0 2px 8px rgba(15, 20, 45, 0.12);
-  /* Shell surfaces and controls. */
-  --radio-border: rgba(0, 0, 0, 0.25);
-  --backdrop-strong: rgba(28, 30, 44, 0.55);
-  --backdrop-exit: rgba(28, 30, 44, 0.38);
-  --shadow-seg: 0 1px 2px rgba(15, 20, 45, 0.12);
-  --shadow-panel: -10px 0 22px -16px rgba(0, 0, 0, 0.14);
-  --c-password-wash: rgba(59, 130, 246, 0.12);
-  --c-file-wash: rgba(100, 116, 139, 0.13);
-  --c-folder-wash: rgba(245, 158, 11, 0.14);
-  --store-mark-bg: #4c4c53;
-  --unread-ink: #2b1403;
+    0 0 0 1px rgba(16, 20, 32, 0.1), 0 20px 50px rgba(16, 20, 32, 0.14);
+  --shadow-panel: -10px 0 22px -16px rgba(16, 20, 32, 0.14);
+  --knob: #fff;
+  --knob-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 
-  /* Foregrounds and washes over the paired sidebar colors. */
-  --rail-fg: #fff;
-  --rail-edge: rgba(0, 0, 0, 0.12);
-  --rail-faint: rgba(255, 255, 255, 0.35);
-  --rail-hover: rgba(255, 255, 255, 0.09);
-  --rail-inactive: rgba(255, 255, 255, 0.62);
-  --rail-outline: rgba(255, 255, 255, 0.55);
-  --rail-outline-muted: rgba(255, 255, 255, 0.4);
-  --rail-secondary: rgba(255, 255, 255, 0.75);
-  --rail-wash: rgba(255, 255, 255, 0.12);
-  --rail-track: rgba(255, 255, 255, 0.22);
-  --rail-dim: rgba(255, 255, 255, 0.65);
-  --rail-account-hover: rgba(255, 255, 255, 0.08);
-  --rail-avatar: rgba(255, 255, 255, 0.175);
-  --rail-muted: rgba(255, 255, 255, 0.7);
-  --rail-badge: rgba(255, 255, 255, 0.2);
-  --rail-focus-ring: rgba(255, 255, 255, 0.18);
-  --rail-resizer: rgba(255, 255, 255, 0.25);
-  --rail-resizer-outline: rgba(255, 255, 255, 0.45);
+  /* Shell surfaces and controls. */
+  --radio-border: rgba(16, 20, 32, 0.25);
+  --backdrop-strong: rgba(16, 20, 32, 0.45);
+  --backdrop-exit: rgba(16, 20, 32, 0.32);
+
+  /* The web mock's drawn traffic lights; macOS draws the native ones. */
+  --light-red: #ff5f57;
+  --light-yellow: #febc2e;
+  --light-green: #28c840;
+  --light-edge: rgba(0, 0, 0, 0.12);
 }
 
-/* Rail theme variants (`data-rail`) */
+/* Accent color options (`data-rail`). Iris and Sky darken their fill so
+   white text on it keeps 4.5:1. */
 :root[data-rail='iris'] {
-  --rail-light: #6a6ff0;
-  --rail-dark: #5a4f96;
+  --accent-hue: #6a6ff0;
+  --accent-fill: #5b62e6;
 }
 :root[data-rail='sky'] {
-  --rail-light: #3b81f6;
-  --rail-dark: #315d99;
+  --accent-hue: #3b81f6;
+  --accent-fill: #2b6fe0;
 }
 :root[data-rail='slate'] {
-  --rail-light: #5468b3;
-  --rail-dark: #46578e;
+  --accent-hue: #5468b3;
+  --accent-fill: #5468b3;
 }
 
-/* Dark appearance follows the Files redesign palette; the rail uses the dark half of its chosen color pair. */
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --rail: var(--rail-dark);
-  --ink: #ecedf1;
-  --ink-2: #dcdde3;
-  --ink-3: #c7c9d2;
-  --muted: #a4a6b0;
-  --muted-2: #a4a6b0;
-  --faint: #92949f;
-  --accent-ink: color-mix(in srgb, var(--rail) 45%, #fff);
-  --accent-wash: color-mix(in srgb, var(--rail) 24%, transparent);
-  --accent-wash-2: color-mix(in srgb, var(--rail) 36%, transparent);
-  --accent-border: color-mix(in srgb, var(--rail) 70%, transparent);
-  --accent-hover: color-mix(in srgb, var(--accent) 94%, #fff);
-  --accent-hover-border: color-mix(in srgb, var(--accent) 25%, transparent);
-  --danger-solid: #b82c26;
-  --danger-solid-hover: #a5221e;
-  --app-ground: #111217;
-  --surface: #1b1d24;
-  --main-surface: #23252e;
-  --panel: #20222a;
-  --btn-bg: #2a2c36;
-  --btn-hover: #32343f;
-  --chip-bg: rgba(255, 255, 255, 0.08);
-  --chip-ink: #c7c9d2;
-  --hover: rgba(255, 255, 255, 0.06);
-  --wash: rgba(255, 255, 255, 0.025);
-  --line: rgba(255, 255, 255, 0.09);
-  --line-soft: rgba(255, 255, 255, 0.07);
-  --line-mid: rgba(255, 255, 255, 0.12);
-  --line-field: rgba(255, 255, 255, 0.22);
-  --search-border: var(--line-mid);
-  --window-border: rgba(255, 255, 255, 0.16);
-  --scrollbar-thumb: rgba(210, 210, 220, 0.4);
-  --amber-ink: #e0b25a;
-  --amber-strong: #e0b25a;
-  --amber-wash: rgba(255, 190, 50, 0.14);
-  --amber-border: rgba(224, 178, 90, 0.32);
-  --ok-ink: #5cd47a;
-  --danger-ink: #ff8a80;
-  --danger-text: #ffaaa2;
-  --danger-wash: rgba(255, 59, 48, 0.14);
-  --backdrop: rgba(0, 0, 0, 0.5);
-  --key-gold: #d5ad42;
-  --folder-amber: #d78b42;
-  --c-resource: #e0a556;
-  --c-link: #b69afa;
-  --c-file: #abb8c8;
-  --shadow-menu: 0 10px 28px rgba(0, 0, 0, 0.4);
-  --shadow-upload: 0 7px 18px rgba(0, 0, 0, 0.26);
-  --shadow-sheet: 0 14px 34px rgba(0, 0, 0, 0.5);
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.2);
-  --shadow-window: 0 24px 60px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+  --ink: #e4e5e9; /* 15:1 on the ground */
+  --ink-2: #d3d5da;
+  --ink-3: #c0c3c9;
+  --muted: #8f939c; /* 5.6:1 on the panel */
+  --muted-2: #8a8e97;
+  --faint: #868a93; /* 4.9:1 on a raised card */
+  --side-muted: #8f939c;
 
-  --radio-border: rgba(255, 255, 255, 0.44);
-  --backdrop-strong: rgba(4, 6, 12, 0.72);
-  --backdrop-exit: rgba(4, 6, 12, 0.62);
-  --shadow-seg: 0 1px 2px rgba(0, 0, 0, 0.5);
-  --shadow-panel: -10px 0 22px -16px rgba(0, 0, 0, 0.7);
-  --c-password-wash: rgba(110, 163, 255, 0.16);
-  --c-file-wash: rgba(154, 168, 186, 0.16);
-  --c-folder-wash: rgba(232, 150, 77, 0.18);
+  --accent: color-mix(in srgb, var(--accent-hue) 82%, #fff);
+  --accent-ink: color-mix(in srgb, var(--accent-hue) 55%, #fff);
+  --accent-wash: color-mix(in srgb, var(--accent-hue) 12%, transparent);
+  --accent-wash-2: color-mix(in srgb, var(--accent-hue) 20%, transparent);
+  --accent-border: color-mix(in srgb, var(--accent-hue) 45%, transparent);
+  --accent-hover: color-mix(in srgb, var(--accent-fill) 90%, #fff);
+
+  --danger-ink: #eb6a6e;
+  --danger-text: #f3a0a3;
+  --danger-solid: #c73a3f;
+  --danger-solid-hover: #d24a4f;
+  --danger-wash: rgba(229, 72, 77, 0.1);
+  --danger-border: rgba(229, 72, 77, 0.35);
+  --amber-ink: #e0b35c;
+  --amber-strong: #e0b35c;
+  --amber-wash: rgba(224, 179, 92, 0.1);
+  --amber-border: rgba(224, 179, 92, 0.3);
+  --warning-dot: #e0b35c;
+  --ok-ink: #5fc694;
+  --ok-wash: rgba(76, 183, 130, 0.1);
+  --ok-border: rgba(76, 183, 130, 0.3);
+
+  --app-ground: #050506;
+  --ground: #0c0c0d;
+  --surface: #0c0c0d;
+  --main-surface: #121314;
+  --panel: #121314;
+  --card: #18191b;
+  --field-bg: #151618;
+  --btn-bg: #202124;
+  --btn-hover: #27282c;
+  --hover: rgba(255, 255, 255, 0.045);
+  --hover-2: rgba(255, 255, 255, 0.07);
+  --press: rgba(255, 255, 255, 0.08);
+  --chip-bg: rgba(255, 255, 255, 0.06);
+  --chip-ink: #c0c3c9;
+  --wash: rgba(255, 255, 255, 0.02);
+  --wash-2: rgba(255, 255, 255, 0.035);
+  --seg-bg: rgba(255, 255, 255, 0.055);
+  --seg-on: #2a2b30;
+  --backdrop: rgba(0, 0, 0, 0.32);
+  --side-sel: rgba(255, 255, 255, 0.055);
+  --row-sel: #1c1d20;
+
+  --line: rgba(255, 255, 255, 0.07);
+  --line-soft: rgba(255, 255, 255, 0.055);
+  --line-mid: rgba(255, 255, 255, 0.085);
+  --line-strong: rgba(255, 255, 255, 0.11);
+  --line-field: rgba(255, 255, 255, 0.12);
+  --bar-rule: rgba(255, 255, 255, 0.06);
+  --row-rule: rgba(255, 255, 255, 0.035);
+  --window-border: rgba(255, 255, 255, 0.1);
+  --scrollbar-thumb: rgba(210, 210, 220, 0.32);
+
+  --c-password: #e0b35c;
+  --c-file: #9aacff;
+  --c-resource: #e0b35c;
+  --c-link: #9a91e0;
+  --c-team: #8f939c;
+  --c-password-wash: rgba(224, 179, 92, 0.1);
+  --c-folder-wash: rgba(224, 179, 92, 0.1);
+
+  --mark-tint: 20%;
+  --mark-ink-mix: 62%;
   --store-mark-bg: #555965;
-  --unread-ink: #2b1403;
-  --rail-fg: #e9edf8;
-  --rail-edge: rgba(0, 0, 0, 0.4);
-  --rail-ink: rgba(255, 255, 255, 0.8);
-  --rail-hover: rgba(255, 255, 255, 0.1);
-  --rail-track: rgba(255, 255, 255, 0.26);
+  --key-gold: #e0b35c;
+  --folder-amber: #e0b35c;
+
+  --shadow-btn: none;
+  --shadow-seg: 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --shadow-raised: 0 0 0 1px var(--line), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-upload: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --shadow-sheet:
+    0 18px 44px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --shadow-window:
+    0 0 0 1px rgba(255, 255, 255, 0.1), 0 20px 50px rgba(0, 0, 0, 0.6);
+  --shadow-panel: -10px 0 22px -16px rgba(0, 0, 0, 0.7);
+  --knob-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+
+  --radio-border: rgba(255, 255, 255, 0.36);
+  --backdrop-strong: rgba(0, 0, 0, 0.62);
+  --backdrop-exit: rgba(0, 0, 0, 0.5);
+  --light-edge: rgba(0, 0, 0, 0.3);
+}
+
+/* Increased contrast: hairlines rise to 0.16-0.24 alpha and the muted inks
+   darken (lighten in dark). */
+@media (prefers-contrast: more) {
+  :root {
+    --line: rgba(16, 20, 32, 0.2);
+    --line-soft: rgba(16, 20, 32, 0.18);
+    --line-mid: rgba(16, 20, 32, 0.24);
+    --line-strong: rgba(16, 20, 32, 0.28);
+    --line-field: rgba(16, 20, 32, 0.4);
+    --bar-rule: rgba(16, 20, 32, 0.24);
+    --row-rule: rgba(16, 20, 32, 0.16);
+    --muted: #4d5058;
+    --muted-2: #4d5058;
+    --faint: #52555c;
+    --side-muted: #46494f;
+  }
+  :root[data-theme='dark'] {
+    --line: rgba(255, 255, 255, 0.2);
+    --line-soft: rgba(255, 255, 255, 0.18);
+    --line-mid: rgba(255, 255, 255, 0.24);
+    --line-strong: rgba(255, 255, 255, 0.28);
+    --line-field: rgba(255, 255, 255, 0.36);
+    --bar-rule: rgba(255, 255, 255, 0.22);
+    --row-rule: rgba(255, 255, 255, 0.14);
+    --muted: #a9adb5;
+    --muted-2: #a9adb5;
+    --faint: #a3a7af;
+    --side-muted: #a9adb5;
+  }
+}
+
+/* Reduced motion keeps the fades and drops the travel: sheets, alerts and
+   menus play the same keyframes without rising or scaling. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --rise: 0px;
+    --settle-scale: 1;
+  }
 }

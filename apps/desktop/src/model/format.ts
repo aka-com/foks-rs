@@ -31,16 +31,20 @@ export function initials(name: string): string {
     .join('');
 }
 
-/** Palette of background colors used for user avatars. */
+/**
+ * The mark palette for avatars and store marks, as references to the
+ * `--mark-*` tokens so each appearance draws its own ink. Avatars fill with
+ * the hue; store and team marks draw it as ink on a tint of itself.
+ */
 export const HUES = [
-  '#5e5ce6',
-  '#ff9f0a',
-  '#30b0c7',
-  '#ff2d55',
-  '#34c759',
-  '#af52de',
-  '#0a7cff',
-  '#a2845e',
+  'var(--mark-violet)',
+  'var(--mark-amber)',
+  'var(--mark-teal)',
+  'var(--mark-red)',
+  'var(--mark-green)',
+  'var(--mark-purple)',
+  'var(--mark-blue)',
+  'var(--mark-brown)',
 ] as const;
 
 /**

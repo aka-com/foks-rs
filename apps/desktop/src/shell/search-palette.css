@@ -119,7 +119,7 @@
 }
 /* Channel tile */
 .pal-hit .kico.pal-channel {
-  background: var(--rail);
+  background: var(--accent-fill);
 }
 .pal-hit .t {
   flex: 1;
