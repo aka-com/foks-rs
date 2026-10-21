@@ -137,6 +137,10 @@ export function NewChatSheet({
     restored?.chosen ?? team,
   );
   const [name, setName] = useState(fieldText(restored?.name ?? ''));
+  // Whether the reader has typed in the name field: before that, an empty
+  // name (the general channel) refused because the team has one is guidance
+  // for what to type, not an error.
+  const [nameEdited, setNameEdited] = useState(false);
   const [description, setDescription] = useState(
     fieldText(restored?.description ?? ''),
   );
@@ -317,6 +321,11 @@ export function NewChatSheet({
       : nameLength > 0 && nameLength < CHAT_NAME_MIN_CHARS
         ? `Must be at least ${CHAT_NAME_MIN_CHARS} characters.`
         : problem;
+  const nameGuidance =
+    !nameEdited && nameLength === 0 && nameError
+      ? 'This team already has #general. Name the new channel.'
+      : null;
+  const shownNameError = nameGuidance ? null : nameError;
   const descriptionError =
     descriptionLength > CHAT_DESCRIPTION_MAX_CHARS
       ? `Cannot be more than ${CHAT_DESCRIPTION_MAX_CHARS} characters.`
@@ -606,13 +615,16 @@ export function NewChatSheet({
                   aria-label="Channel name"
                   ref={nameField}
                   data-sheet-autofocus="true"
-                  className={nameError ? 'over' : undefined}
-                  aria-invalid={Boolean(nameError) || undefined}
-                  aria-describedby={nameError ? nameErrorId : undefined}
+                  className={shownNameError ? 'over' : undefined}
+                  aria-invalid={Boolean(shownNameError) || undefined}
+                  aria-describedby={
+                    shownNameError || nameGuidance ? nameErrorId : undefined
+                  }
                   value={name}
                   disabled={locked}
                   autoCapitalize="none"
                   onChange={(event) => {
+                    setNameEdited(true);
                     if ((event.nativeEvent as InputEvent).isComposing)
                       setName(event.currentTarget.value);
                     else updateField(event.currentTarget, setName);
@@ -627,11 +639,15 @@ export function NewChatSheet({
                       channel, so either is refused when the team already
                       has one. Valid names need no persistent instructional
                       hint beneath the field. */}
-                {nameError && (
+                {shownNameError ? (
                   <small id={nameErrorId} className="action-error">
-                    {nameError}
+                    {shownNameError}
                   </small>
-                )}
+                ) : nameGuidance ? (
+                  <small id={nameErrorId} className="hint">
+                    {nameGuidance}
+                  </small>
+                ) : null}
               </InsetRow>
               <InsetRow label="Description">
                 <input

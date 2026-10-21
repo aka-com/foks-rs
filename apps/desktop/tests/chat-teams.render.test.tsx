@@ -1534,7 +1534,16 @@ test('New chat refuses what the agent would refuse, by the button and by Enter',
   assert.ok(form);
   // Engineering already has a general channel, so an empty name is refused —
   // and the hint that says an empty name creates one does not stand beside it.
-  await ui.screen.findByText('This team already has a general channel.');
+  // Before anything is typed the refusal is guidance, not an error.
+  await ui.screen.findByText(
+    'This team already has #general. Name the new channel.',
+  );
+  assert.equal(name.getAttribute('aria-invalid'), null);
+  assert.equal(name.classList.contains('over'), false);
+  assert.equal(
+    ui.screen.queryByText('This team already has a general channel.'),
+    null,
+  );
   assert.equal(ui.screen.queryByText(/Leave empty to create/), null);
   assert.equal(create().disabled, true);
   // Enter is the button: it sends exactly what the button would send.
@@ -2285,7 +2294,7 @@ test('sidebar context menus distinguish background, teams, and channels', async 
       'Delete Channel',
       'Channel Info',
       'Add FOKS User…',
-      'Add FOKS team…',
+      'Add FOKS Team…',
       'Invite New User…',
     ],
   );
@@ -2307,7 +2316,7 @@ test('sidebar context menus distinguish background, teams, and channels', async 
   assert.ok(await ui.screen.findByRole('dialog', { name: 'Channel info' }));
   for (const [label, intent] of [
     ['Add FOKS User…', 'add'],
-    ['Add FOKS team…', 'add-team'],
+    ['Add FOKS Team…', 'add-team'],
     ['Invite New User…', 'invite'],
   ] as const) {
     ui.fireEvent.contextMenu(channel);
