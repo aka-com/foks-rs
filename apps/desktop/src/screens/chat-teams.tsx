@@ -628,7 +628,7 @@ export function ChatTeamColumn({
                   onNewChat();
                 }}
               >
-                Create channel
+                Create Channel
               </MenuItem>
             )}
             {context.team && onAddPeople ? (
@@ -636,9 +636,9 @@ export function ChatTeamColumn({
                 <div className="menu-separator" role="separator" />
                 {(
                   [
-                    ['add', 'user', 'Add FOKS user…', 'roster'],
+                    ['add', 'user', 'Add FOKS User…', 'roster'],
                     ['add-team', 'users', 'Add FOKS team…', 'federation'],
-                    ['invite', 'door', 'Invite new user…', 'roster'],
+                    ['invite', 'door', 'Invite New User…', 'roster'],
                   ] as const
                 ).map(([intent, icon, label, source]) => (
                   <MenuItem

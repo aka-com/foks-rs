@@ -864,13 +864,25 @@ test('the rail returns to the chat the tab last had open', async () => {
   await ui.waitFor(() => assert.deepEqual(railChat(), { kind: 'chat' }));
 });
 
+test('New channel preselects the open team when it can have channels', async () => {
+  const snapshot = await snapshotWithChat(['personal']);
+  await mount(snapshot, { kind: 'chat', ref: 'team:household' });
+  await ui.waitFor(() => assert.ok(heads().length));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New channel' }));
+  await ui.screen.findByRole('dialog', { name: 'Create Channel' });
+  assert.match(
+    ui.screen.getByRole('button', { name: 'Team' }).textContent ?? '',
+    /Household/,
+  );
+});
+
 test('New chat opens creation directly and the team selector states unavailable reasons', async () => {
   const snapshot = await snapshotWithChat(['personal']);
   const journal = await mount(snapshot, { kind: 'chat' });
   await ui.waitFor(() => assert.ok(heads().length));
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New channel' }));
   const sheet = await ui.screen.findByRole('dialog', {
-    name: 'Create channel',
+    name: 'Create Channel',
   });
   assert.ok(sheet);
   const navigations = journal.length;
@@ -903,7 +915,7 @@ test('New chat creates a channel, refusing a name the agent would refuse', async
   await openCreateForm(/^Engineering/);
   const name = ui.screen.getByRole('textbox', { name: 'Channel name' });
   const create = () =>
-    ui.screen.getByRole('button', { name: /Create channel/ });
+    ui.screen.getByRole('button', { name: /Create Channel/ });
   // A length outside the limits is stated beside the field as well as by
   // its invalid border, without a persistent instructional hint.
   ui.fireEvent.change(name, { target: { value: 'ab' } });
@@ -1207,7 +1219,7 @@ test('an interrupted attempt recovers the same preparation rather than a second'
     ui.screen.getByRole('textbox', { name: 'Channel name' }),
     { target: { value: 'design' } },
   );
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: /Create channel/ }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: /Create Channel/ }));
   // The agent has taken the preparation, so what is offered is a recovery of
   // that one rather than another run at creating the channel.
   const recover = await ui.screen.findByRole('button', {
@@ -1282,7 +1294,7 @@ test('the saved-creation check is announced while it runs and offered again once
   );
   const create = () =>
     ui.screen.getByRole<HTMLButtonElement>('button', {
-      name: 'Create channel',
+      name: 'Create Channel',
     });
   assert.equal(create().disabled, true);
   await ui.act(async () => {
@@ -1436,7 +1448,7 @@ test('New chat waits for a team’s channels before either step can be answered'
   // list arrives the step cannot be answered.
   const step = () =>
     ui.screen.getByRole<HTMLButtonElement>('button', {
-      name: 'Create channel',
+      name: 'Create Channel',
     });
   assert.equal(step().disabled, true);
   ui.fireEvent.change(
@@ -1474,7 +1486,7 @@ test('a team that goes out of reach while step two is open refuses it and says w
   );
   assert.equal(
     ui.screen.getByRole<HTMLButtonElement>('button', {
-      name: /Create channel/,
+      name: /Create Channel/,
     }).disabled,
     true,
   );
@@ -1516,7 +1528,7 @@ test('New chat refuses what the agent would refuse, by the button and by Enter',
   const name = await openCreateForm(/^Engineering/);
   const create = () =>
     ui.screen.getByRole<HTMLButtonElement>('button', {
-      name: /Create channel/,
+      name: /Create Channel/,
     });
   const form = name.closest('form');
   assert.ok(form);
@@ -1614,7 +1626,7 @@ test('a team switch closes the sheet and keeps unresolved creation recoverable',
   // A half-finished New chat belongs to the team it was opened in: a switch
   // closes it rather than rebinding it to the team that arrives.
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New channel' }));
-  await ui.screen.findByRole('dialog', { name: 'Create channel' });
+  await ui.screen.findByRole('dialog', { name: 'Create Channel' });
   ui.fireEvent.click(general('Household'));
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
   // A submission the agent has already been given is the exception: it has to
@@ -1622,16 +1634,16 @@ test('a team switch closes the sheet and keeps unresolved creation recoverable',
   lose = true;
   const name = await openCreateForm(/^Engineering/);
   ui.fireEvent.change(name, { target: { value: 'design' } });
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: /Create channel/ }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: /Create Channel/ }));
   await ui.screen.findByText('Preparation reply lost');
   ui.fireEvent.click(general('Engineering'));
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
+  // Reopened on Engineering, the sheet takes up its unresolved creation.
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New channel' }));
-  ui.fireEvent.click(
-    await ui.screen.findByRole('button', { name: /Engineering · #design/ }),
+  assert.ok(await ui.screen.findByRole('dialog', { name: 'Create Channel' }));
+  assert.ok(
+    await ui.screen.findByRole('button', { name: 'Retry channel creation' }),
   );
-  assert.ok(ui.screen.getByRole('dialog', { name: 'Create channel' }));
-  assert.ok(ui.screen.getByRole('button', { name: 'Retry channel creation' }));
 });
 
 test('changing channels abandons the initiating sheet without redirecting when creation finishes', async () => {
@@ -1651,7 +1663,7 @@ test('changing channels abandons the initiating sheet without redirecting when c
   await ui.waitFor(() => assert.ok(heads().length));
   const name = await openCreateForm(/^Engineering/);
   ui.fireEvent.change(name, { target: { value: 'design' } });
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create channel' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create Channel' }));
   await held.reached;
   await ui.act(async () => {
     shell.setLocation?.({
@@ -1692,7 +1704,7 @@ test('an ambiguous access failure keeps the submission a recovery re-issues', as
   await ui.waitFor(() => assert.ok(heads().length));
   const name = await openCreateForm(/^Engineering/);
   ui.fireEvent.change(name, { target: { value: 'design' } });
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: /Create channel/ }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: /Create Channel/ }));
   // The check-in lapses while the preparation is in flight, so the reply lands
   // on a team this Mac can no longer reach: the agent may hold the submission,
   // and a failure that may have been taken is not one to mint a second id for.
@@ -1749,7 +1761,7 @@ test('a channel is not attempted once the server’s access generation has moved
   await ui.waitFor(() => assert.ok(heads().length));
   const name = await openCreateForm(/^Engineering/);
   ui.fireEvent.change(name, { target: { value: 'design' } });
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: /Create channel/ }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: /Create Channel/ }));
   await held.reached;
   // The shell re-established access on that server while the preparation was
   // in flight. The guard reads the generation the shell is on now, not the one
@@ -1782,9 +1794,9 @@ test('a channel preparation under a changed identity stops chat and frees the sh
   await ui.waitFor(() => assert.ok(heads().length));
   const name = await openCreateForm(/^Engineering/);
   ui.fireEvent.change(name, { target: { value: 'design' } });
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: /Create channel/ }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: /Create Channel/ }));
   const sheet = await ui.screen.findByRole('dialog', {
-    name: 'Create channel',
+    name: 'Create Channel',
   });
   await ui.waitFor(() =>
     assert.ok(
@@ -1820,7 +1832,7 @@ test('a channel created before its synchronization lands reads as loading', asyn
   await ui.waitFor(() => assert.ok(heads().length));
   const name = await openCreateForm(/^Engineering/);
   ui.fireEvent.change(name, { target: { value: 'design' } });
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: /Create channel/ }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: /Create Channel/ }));
   // The channel exists; the team's next synchronization is what lists it. A
   // pane that said it was unavailable would be calling the reader's own work
   // missing.
@@ -2272,9 +2284,9 @@ test('sidebar context menus distinguish background, teams, and channels', async 
       'Edit channel',
       'Delete channel',
       'Channel info',
-      'Add FOKS user…',
+      'Add FOKS User…',
       'Add FOKS team…',
-      'Invite new user…',
+      'Invite New User…',
     ],
   );
   for (const name of ['Edit channel', 'Delete channel']) {
@@ -2294,9 +2306,9 @@ test('sidebar context menus distinguish background, teams, and channels', async 
   assert.equal(journal.at(-1)?.kind, 'chat');
   assert.ok(await ui.screen.findByRole('dialog', { name: 'Channel info' }));
   for (const [label, intent] of [
-    ['Add FOKS user…', 'add'],
+    ['Add FOKS User…', 'add'],
     ['Add FOKS team…', 'add-team'],
-    ['Invite new user…', 'invite'],
+    ['Invite New User…', 'invite'],
   ] as const) {
     ui.fireEvent.contextMenu(channel);
     const menu = ui.screen.getByRole('menu');
@@ -2310,7 +2322,7 @@ test('sidebar context menus distinguish background, teams, and channels', async 
     });
   }
   ui.fireEvent.contextMenu(document.querySelector('.chat-inbox-scroll')!);
-  assert.ok(ui.screen.getByRole('menuitem', { name: 'Create channel' }));
+  assert.ok(ui.screen.getByRole('menuitem', { name: 'Create Channel' }));
   ui.fireEvent.keyDown(document, { key: 'Escape' });
   assert.equal(ui.screen.queryByRole('menu'), null);
 });
@@ -2343,7 +2355,7 @@ test('channel context menu disables opening a channel without read permission', 
   ui.fireEvent.pointerDown(document.body);
   assert.equal(ui.screen.queryByRole('menu'), null);
   ui.fireEvent.contextMenu(document.querySelector('.chat-inbox-scroll')!);
-  const create = ui.screen.getByRole('menuitem', { name: 'Create channel' });
+  const create = ui.screen.getByRole('menuitem', { name: 'Create Channel' });
   assert.equal(create.getAttribute('aria-disabled'), null);
   ui.fireEvent.click(create);
   assert.equal(ui.screen.queryByRole('menu'), null);

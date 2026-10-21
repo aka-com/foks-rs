@@ -139,7 +139,7 @@ async function mount(override?: (base: Bridge) => Bridge, tabbed = false) {
     ),
   );
   if (tabbed) await ui.screen.findByRole('button', { name: 'New channel' });
-  else await ui.screen.findByRole('heading', { name: 'Create channel' });
+  else await ui.screen.findByRole('heading', { name: 'Create Channel' });
   return { opened, team, navigation };
 }
 
@@ -155,7 +155,7 @@ async function form(team: TeamStore) {
   await ui.waitFor(() =>
     assert.equal(
       ui.screen.getByRole<HTMLButtonElement>('button', {
-        name: 'Create channel',
+        name: 'Create Channel',
       }).disabled,
       false,
     ),
@@ -291,8 +291,9 @@ test('creation is one team/name/description/audience form with protocol validati
   const { team, opened } = await mount();
   await form(team);
   const selectedTeam = ui.screen.getByRole('button', { name: 'Team' });
-  assert.ok(selectedTeam.querySelector('.kico.group'));
-  assert.equal(selectedTeam.querySelector('.kico.group')?.textContent, 'H');
+  // The team's mark is the same store mark the sidebar draws for it.
+  assert.ok(selectedTeam.querySelector('.store-mark'));
+  assert.equal(selectedTeam.querySelector('.store-mark')?.textContent, 'H');
   assert.ok(ui.screen.getByRole('textbox', { name: 'Channel description' }));
   assert.ok(ui.screen.getByRole('radiogroup', { name: 'Channel audience' }));
   ui.fireEvent.change(
@@ -300,7 +301,7 @@ test('creation is one team/name/description/audience form with protocol validati
     { target: { value: 'general' } },
   );
   assert.equal(
-    ui.screen.getByRole<HTMLButtonElement>('button', { name: 'Create channel' })
+    ui.screen.getByRole<HTMLButtonElement>('button', { name: 'Create Channel' })
       .disabled,
     true,
   );
@@ -308,7 +309,7 @@ test('creation is one team/name/description/audience form with protocol validati
     ui.screen.getByRole('textbox', { name: 'Channel name' }),
     { target: { value: 'design' } },
   );
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create channel' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create Channel' }));
   await ui.waitFor(() => assert.equal(opened.length, 1));
   assert.equal(opened[0].store, team.id);
 });
@@ -328,7 +329,7 @@ test('closing an in-flight creation keeps application-owned work and never redir
     },
   }));
   await form(team);
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create channel' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create Channel' }));
   await ui.waitFor(() => assert.ok(finish));
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Close' }));
   assert.equal(ui.screen.queryByRole('dialog'), null);
@@ -338,7 +339,7 @@ test('closing an in-flight creation keeps application-owned work and never redir
   await ui.waitFor(() => assert.equal(submitted, 1));
   assert.equal(opened.length, 0);
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Show picker' }));
-  await ui.screen.findByRole('heading', { name: 'Create channel' });
+  await ui.screen.findByRole('heading', { name: 'Create Channel' });
   assert.equal(opened.length, 0);
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Cancel' }));
   const completion = ui.screen.getByRole('region', {
@@ -393,7 +394,7 @@ test('uncertain creation reopens original inputs and Check again does not create
   ui.fireEvent.click(
     ui.screen.getByRole('radio', { name: /Admins and owners/ }),
   );
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create channel' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create Channel' }));
   await ui.screen.findByRole('button', { name: 'Check again' });
   assert.equal(opened.length, 0);
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Close' }));
@@ -481,7 +482,7 @@ test('submitted work never restores a redirect or raw draft after changing rail 
   );
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New channel' }));
   await form(team);
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create channel' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create Channel' }));
   await ui.waitFor(() => assert.ok(finish));
   assert.equal(navigation.getSnapshot().sheet?.['channel.form'], null);
   assert.equal(navigation.getSnapshot().sheet?.['chat.sheet'], null);
@@ -539,7 +540,7 @@ test('Check again only reconciles; Retry creation explicitly delivers a saved pr
     },
   }));
   await form(team);
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create channel' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create Channel' }));
   ui.fireEvent.click(
     await ui.screen.findByRole('button', { name: 'Check again' }),
   );

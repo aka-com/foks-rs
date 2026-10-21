@@ -1155,47 +1155,13 @@
 .chat-create .fr .v small {
   font-size: 12px;
 }
-/* Name and description fill the value column. */
-.chat-create .inset .fr {
-  align-items: flex-start;
-  padding: 9px 12px;
-}
-.chat-create .inset .fr .k {
-  padding-top: 7px;
-}
+/* Name and description fill the value column. The fields, and the team
+   picker as a compact select, use the shared bordered sheet field (26px in
+   a 42px row); only an error under a field adds height. */
 .chat-create .inset .fr .v {
   display: flex;
   flex-direction: column;
   gap: 5px;
-}
-.chat-create .inset .fr input,
-.chat-create .inset .fr textarea {
-  display: block;
-  width: 100%;
-  border: 1px solid var(--line-field);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  padding: 6px 10px;
-  font-size: 13px;
-  line-height: 1.4;
-  outline: 0;
-  resize: none;
-  color: var(--ink);
-}
-.chat-create .card-select-trigger {
-  border: 1px solid var(--line-field);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  padding: 6px 10px;
-  font-size: 13px;
-  line-height: 1.4;
-}
-.chat-create .inset .fr input:focus,
-.chat-create .inset .fr textarea:focus,
-.chat-create .card-select-trigger:focus-visible {
-  border-color: var(--accent-border);
-  background: var(--main-surface);
-  box-shadow: 0 0 0 3px var(--accent-wash);
 }
 .chat-create .inset .fr input.over,
 .chat-create .inset .fr textarea.over {
@@ -1204,10 +1170,6 @@
 .chat-create .inset .fr input.over:focus,
 .chat-create .inset .fr textarea.over:focus {
   box-shadow: 0 0 0 3px var(--danger-wash);
-}
-.chat-create .inset .fr input:disabled,
-.chat-create .inset .fr textarea:disabled {
-  opacity: 0.6;
 }
 .chat-create .inset .fr .v small {
   color: var(--muted);

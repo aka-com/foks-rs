@@ -614,12 +614,12 @@ test('definite preparation errors allow input correction', async () => {
   }));
   const name = await openChannelSheet();
   ui.fireEvent.change(name, { target: { value: 'refused' } });
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create channel' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create Channel' }));
   await ui.screen.findByText('That name is not allowed here.');
   assert.equal((name as HTMLInputElement).disabled, false);
   ui.fireEvent.change(name, { target: { value: 'valid' } });
   assert.equal((name as HTMLInputElement).value, 'valid');
-  assert.ok(ui.screen.getByRole('dialog', { name: 'Create channel' }));
+  assert.ok(ui.screen.getByRole('dialog', { name: 'Create Channel' }));
 });
 
 test('ambiguous channel preparation keeps its submission after the sheet closes', async () => {
@@ -653,7 +653,7 @@ test('ambiguous channel preparation keeps its submission after the sheet closes'
     name: 'Channel description',
   });
   ui.fireEvent.change(description, { target: { value: 'Team Decisions' } });
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create channel' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Create Channel' }));
   await ui.screen.findByText('Preparation reply lost');
   assert.equal((description as HTMLInputElement).disabled, true);
   // The application retains the submission when the sheet is dismissed.
@@ -663,14 +663,11 @@ test('ambiguous channel preparation keeps its submission after the sheet closes'
   );
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Close' }));
   assert.equal(ui.screen.queryByRole('dialog'), null);
+  // Reopened on the open team, the sheet takes up that team's unresolved
+  // creation by itself.
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New channel' }));
   ui.fireEvent.click(
-    await ui.screen.findByRole('button', {
-      name: /Engineering · #recoverable/,
-    }),
-  );
-  ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Retry channel creation' }),
+    await ui.screen.findByRole('button', { name: 'Retry channel creation' }),
   );
   await ui.screen.findByRole('button', { name: /#recoverable/ });
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
