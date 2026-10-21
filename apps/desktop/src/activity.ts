@@ -16,6 +16,7 @@
  */
 
 import {
+  federatedTeamName,
   plural,
   serverAvailability,
   serverDisplayLabel,
@@ -100,7 +101,7 @@ export function activityNoticeText(
       };
     case 'federation-inactive':
       return {
-        title: `${notice.entry.remote_team_alias} cannot access ${notice.store.name}`,
+        title: `${federatedTeamName(snapshot, notice.entry)} cannot access ${notice.store.name}`,
         detail: `Membership in ${notice.store.name} inactive`,
       };
     case 'server':

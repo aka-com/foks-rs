@@ -1,4 +1,8 @@
-import { groupDetailReadiness, combineReadiness } from '../model';
+import {
+  groupDetailReadiness,
+  combineReadiness,
+  federatedTeamName,
+} from '../model';
 import { CollectionStatus } from '../components/collection-status';
 import { federatedTeamMembers, memberCountOf } from './team-members';
 import { useGroupOperationController } from './groups/operation-controller';
@@ -1740,9 +1744,9 @@ export function GroupSettingsScreen({
                         ) : undefined
                       }
                     >
-                      {entry.remote_team_alias}’s membership is inactive.{' '}
-                      {entry.remote_team_alias} members cannot access{' '}
-                      {store.name} until it is restored.
+                      {federatedTeamName(snapshot, entry)}’s membership is
+                      inactive. {federatedTeamName(snapshot, entry)} members
+                      cannot access {store.name} until it is restored.
                     </Band>
                   ))}
               {/* Combine blocking membership operations and invitation activity

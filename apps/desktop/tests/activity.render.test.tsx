@@ -135,10 +135,11 @@ test('Activity lists requests, then the notices the snapshot holds', async () =>
   const titles = rowTitles();
   // Two fixture requests on each manageable team with a pending count.
   assert.equal(titles.filter((title) => title === 'fixture-joiner').length, 2);
-  // The unfinished team, the inactive federated admission and the
+  // The unfinished team, the inactive federated admission (named by the
+  // display name of the team this device holds, not its alias) and the
   // unverified server.
   assert.ok(titles.includes('Homelab is inactive'));
-  assert.ok(titles.includes('homelab cannot access Engineering'));
+  assert.ok(titles.includes('Homelab cannot access Engineering'));
   assert.ok(titles.includes('foks.partner.dev is not verified'));
   // The first entry is selected and its details are drawn.
   assert.equal(
@@ -238,7 +239,7 @@ test('a server notice opens that server, and the list follows the arrow keys', a
   );
   assert.equal(
     now?.querySelector('.name b')?.textContent,
-    'homelab cannot access Engineering',
+    'Homelab cannot access Engineering',
   );
   assert.equal(document.activeElement, now);
 });

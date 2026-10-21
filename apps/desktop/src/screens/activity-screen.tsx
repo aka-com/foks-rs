@@ -44,6 +44,7 @@ import type { ActivityNotice } from '../activity';
 import type { InvitationRow } from '../invitation-contract';
 import type { Location } from '../location';
 import {
+  federatedTeamName,
   parseRole,
   partiesOf,
   roleName,
@@ -279,7 +280,7 @@ function TeamNoticeDetail({
       </div>
       <p className="note">
         {notice.kind === 'federation-inactive'
-          ? `${notice.entry.remote_team_alias}’s membership in ${team.name} is inactive. ${notice.entry.remote_team_alias} members cannot access ${team.name} until it is restored.`
+          ? `${federatedTeamName(snapshot, notice.entry)}’s membership in ${team.name} is inactive. ${federatedTeamName(snapshot, notice.entry)} members cannot access ${team.name} until it is restored.`
           : copy?.detail}
       </p>
       <PropertyGroup>

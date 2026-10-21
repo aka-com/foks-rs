@@ -414,6 +414,15 @@ test('a federated team is one row: role, membership state and its own actions', 
     rendered.getAllByRole('button', { name: 'Restore Access' }).length,
     2,
   );
+  // The band names the team by the display name this device holds it
+  // under; the row keeps the membership record's alias.
+  assert.ok(
+    [...document.querySelectorAll('.band')].some((band) =>
+      (band.textContent ?? '').startsWith(
+        'Homelab’s membership is inactive. Homelab members cannot access Engineering',
+      ),
+    ),
+  );
   ui.fireEvent.click(
     rendered.getByRole('button', { name: 'Actions for homelab' }),
   );
