@@ -568,7 +568,7 @@ test('a section address opens that page, each with the sub-navigation beside it'
   }
 });
 
-test('Preferences holds desktop alert preferences and the rail color', async () => {
+test('Preferences holds desktop alert preferences and the accent color', async () => {
   const rendered = await renderSettings(await fixture(), {
     where: { section: 'preferences' },
   });
@@ -590,6 +590,16 @@ test('Preferences holds desktop alert preferences and the rail color', async () 
       name: 'Enable desktop alerts on this device',
     }),
   );
+  // The choice sets the accent (`data-rail` → `--accent-fill`); the sidebar
+  // is neutral, so the row is named for what it changes.
+  const accent = rendered.getByRole('radiogroup', { name: 'Accent color' });
+  assert.deepEqual(
+    [...accent.querySelectorAll('[role="radio"]')].map((swatch) =>
+      swatch.getAttribute('aria-label'),
+    ),
+    ['Blue', 'Iris', 'Sky', 'Slate'],
+  );
+  assert.equal(rendered.queryByText('Sidebar color'), null);
 });
 
 test('Preferences remains available without an account', async () => {
