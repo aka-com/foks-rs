@@ -241,7 +241,6 @@ export function StoreAccessNotice({
   const action =
     copy.action === 'finish-setup' ? (
       <Button
-        variant="primary"
         onClick={onFinishSetup}
         disabled={copy.actionDisabled}
       >
