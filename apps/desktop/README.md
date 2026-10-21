@@ -165,7 +165,7 @@ cancelled, concealed or unmounted.
   `?store=` parameter the location codec has always encoded.
 
 Items and folders can be renamed or moved within their current vault from their
-context menu; items also expose Rename or move in the details panel. The destination
+context menu; items also expose Rename or Move… in the details panel's More menu. The destination
 is an exact absolute path in an existing folder, never an overwrite. The source
 dirent identity and version remain fixed through concurrent-write retries.
 Deleting and recreating the same path cannot redirect a stale selection to the
@@ -354,6 +354,19 @@ ground, drawn by the columns' own margins and outline (`.app > .main`,
 (260px under 1100px of window width) and the details column takes the rest;
 with nothing selected it says No Selection. Every other place is one page
 filling the panel.
+
+The details column's first bar is the item's location — the store mark and
+name, then each folder, each one opening that folder — and the More menu
+(Show or Hide Value, Copy Password or Value, Download, Copy Path, Rename or
+Move…, Delete… ⌘⌫). Under it the hero (kind tile, name, kind and server, then
+Edit, or Download and Replace… for a file) and property rows in groups divided
+by hairlines: the value rows with Show/Hide and Copy at the trailing edge;
+Vault, Path, Version and Size; Read and Write access; Sharing. Editing a value
+puts Cancel and Save Changes in the bar. A store that cannot be read draws a
+lock notice with Check Status and leaves every action disabled with its reason.
+The list foot holds the drop hint and the store's Uploads… sheet; the item
+sheets (New Password, New Document, New Folder, Rename or Move) carry the kind
+tile and a subtitle saying where they save.
 
 Every bar is 44px with a hairline under it, centred on the lights' line at
 y=30. The panel's first bar (`src/shell/topbar.tsx`) is the list column's on

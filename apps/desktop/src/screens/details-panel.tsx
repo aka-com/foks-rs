@@ -997,7 +997,9 @@ export function DetailsPanel({
                   : undefined
               }
             >
-              {value}
+              <span className="clip" title={value}>
+                {value}
+              </span>
             </PropertyRow>
           );
         },

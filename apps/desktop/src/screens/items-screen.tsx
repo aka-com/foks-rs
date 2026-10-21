@@ -982,7 +982,7 @@ export function ItemsScreen({
           title={`Drop a file to add it to ${dropHint}`}
         >
           <Icon name="upload" />
-          Drop a file to add it to {dropHint}
+          <span className="t">Drop a file to add it here</span>
         </span>
       ) : null}
       <span className="sp" />

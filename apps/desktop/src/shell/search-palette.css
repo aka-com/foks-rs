@@ -187,7 +187,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 400;
+  font-weight: var(--weight-label);
   color: var(--ink);
 }
 .pal-hit .t b em {

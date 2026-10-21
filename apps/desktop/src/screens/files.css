@@ -149,6 +149,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.lpane > .list-foot .drop-hint .t {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .lpane > .list-foot .drop-hint .ic {
   flex: none;
   font-size: 13px;
@@ -432,12 +437,8 @@
   line-height: 1.3;
 }
 .details .hero p {
-  line-height: 1.4;
-  flex-wrap: nowrap;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   display: block;
+  line-height: 1.4;
 }
 .details .hero .bigtile .ic {
   font-size: 24px;
@@ -480,6 +481,12 @@
   margin: 4px 0 8px;
 }
 
+.details .prop-row .clip {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .details .prop-row .muted {
   color: var(--muted);
 }
@@ -580,6 +587,8 @@
   gap: 6px;
 }
 .details .roster .party .nm .t {
+  flex: none;
+  max-width: 100%;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
