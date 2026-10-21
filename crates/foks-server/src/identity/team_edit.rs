@@ -46,6 +46,39 @@ pub(crate) struct Command {
     pub required_local_view_permissions: Vec<Vec<u8>>,
 }
 
+/// The roster message go-foks returns from `teamEditor.openLink` for the same
+/// refusal, kept identical so clients see one error text from either server.
+pub(crate) const OWNERLESS_EDIT_MESSAGE: &str = "edit would leave team without an owner";
+
+/// Refuses a newly posted edit that takes the roster from at least one owner to
+/// none: no remaining member could add an owner again. As in go-foks, only the
+/// transition is refused. It runs on the decoded change before the link is
+/// verified, so the refusal carries go-foks' roster status and message rather
+/// than the generic team error that `foks_verify` (which refuses any link
+/// leaving no owner, in replay as well) would produce; it can only refuse,
+/// never accept.
+pub(crate) fn refuse_ownerless_transition(
+    before: &[foks_verify::VerifiedTeamMemberState],
+    changes: &[foks_proto::TeamMemberChange],
+) -> Result<()> {
+    let changed = |member: &foks_verify::VerifiedTeamMemberState| {
+        changes.iter().any(|change| {
+            change.party == member.party
+                && change.scoped_host == member.scoped_host
+                && change.source_role == member.source_role
+        })
+    };
+    let had_owner = before.iter().any(|member| member.role == Role::OWNER);
+    let keeps_owner = changes.iter().any(|change| change.role == Role::OWNER)
+        || before
+            .iter()
+            .any(|member| member.role == Role::OWNER && !changed(member));
+    if had_owner && !keeps_owner {
+        return Err(Error::TeamRoster(OWNERLESS_EDIT_MESSAGE));
+    }
+    Ok(())
+}
+
 pub(crate) fn validate(
     argument: foks_proto::DecodedTeamEditArgument,
     team: &foks_server_db::TeamSnapshot,
@@ -95,6 +128,7 @@ pub(crate) fn validate(
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let current_index_range = foks_verify::persisted_team_index_range(&persisted_links)?;
     restore_member_index_ranges(&mut current_members, &persisted_links)?;
+    refuse_ownerless_transition(&current_members, &change.changes)?;
     let verified = foks_verify::verify_team_transition(
         &argument.link,
         &argument.hepks,
@@ -588,6 +622,72 @@ mod tests {
         let mut bytes = vec![tag; 33];
         bytes[0] = ENTITY_PUK_VERIFY;
         EntityId::from_bytes(bytes).unwrap()
+    }
+
+    fn roster_member(tag: u8, role: Role) -> foks_verify::VerifiedTeamMemberState {
+        foks_verify::VerifiedTeamMemberState {
+            party: EntityId::from_bytes([vec![foks_proto::ENTITY_USER], vec![tag; 32]].concat())
+                .unwrap(),
+            scoped_host: None,
+            source_role: Role::OWNER,
+            role,
+            generation: 1,
+            verify_key: puk(tag),
+            hepk_fingerprint: [tag; 32],
+            removal_key_commitment: None,
+            index_range: None,
+        }
+    }
+
+    fn change(
+        member: &foks_verify::VerifiedTeamMemberState,
+        role: Role,
+    ) -> foks_proto::TeamMemberChange {
+        foks_proto::TeamMemberChange {
+            role,
+            party: member.party.clone(),
+            scoped_host: member.scoped_host.clone(),
+            source_role: member.source_role,
+            keys: None,
+        }
+    }
+
+    #[test]
+    fn an_edit_cannot_take_the_roster_from_one_owner_to_none() {
+        use super::{refuse_ownerless_transition, OWNERLESS_EDIT_MESSAGE};
+        let owner = roster_member(1, Role::OWNER);
+        let member = roster_member(2, Role::member(0));
+        let second_owner = roster_member(3, Role::OWNER);
+        let roster = [owner.clone(), member.clone()];
+
+        // Sole-owner self-demotion and sole-owner removal are refused with
+        // the go-foks roster message.
+        for destination in [Role::ADMIN, Role::member(-0x4000), Role::NONE] {
+            match refuse_ownerless_transition(&roster, &[change(&owner, destination)]) {
+                Err(crate::Error::TeamRoster(message)) => {
+                    assert_eq!(message, OWNERLESS_EDIT_MESSAGE)
+                }
+                result => panic!("unexpected result {result:?}"),
+            }
+        }
+        // Promoting another member in the same edit keeps an owner.
+        refuse_ownerless_transition(
+            &roster,
+            &[change(&owner, Role::ADMIN), change(&member, Role::OWNER)],
+        )
+        .unwrap();
+        // Demotion is allowed while another owner remains.
+        refuse_ownerless_transition(
+            &[owner.clone(), second_owner.clone()],
+            &[change(&owner, Role::ADMIN)],
+        )
+        .unwrap();
+        // Unrelated edits leave the owner in place.
+        refuse_ownerless_transition(&roster, &[change(&member, Role::NONE)]).unwrap();
+        // Only the transition is this check's concern; an ownerless roster
+        // before the edit is left to chain verification.
+        let ownerless = [roster_member(1, Role::ADMIN), member.clone()];
+        refuse_ownerless_transition(&ownerless, &[change(&member, Role::member(-0x4000))]).unwrap();
     }
 
     #[test]

@@ -56,3 +56,7 @@ pub const STATUS_TIMEOUT_ERROR: u64 = 1009;
 pub const STATUS_NOT_IMPLEMENTED: u64 = 1020;
 pub const STATUS_USER_NOT_FOUND_ERROR: u64 = 1027;
 pub const STATUS_WRONG_USER_ERROR: u64 = 1018;
+// Added upstream after the pinned baseline: go-foks 5a9ff13 proto-src/lib/status.snowp.
+pub const STATUS_TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR: u64 = 7016;
+// Added upstream after the pinned baseline: go-foks b41b354 proto-src/lib/status.snowp.
+pub const STATUS_RT_MSG_REPLAY_MISMATCH: u64 = 12007;

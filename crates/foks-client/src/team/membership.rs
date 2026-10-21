@@ -405,6 +405,18 @@ impl FoksClient {
         removal: &SecretSeed,
     ) -> Result<LocalTeamMemberAdditionPlan> {
         let target = current_owner_public(&remote.user.verified)?;
+        // Admitting an RSVP from a party already in the roster would rewrite
+        // its existing membership (for example, lower an owner's role); role
+        // changes have their own flow. Matches go-foks TeamAdmit.
+        if loaded.verified.members().iter().any(|member| {
+            member.party == *remote.user.verified.uid()
+                && member.scoped_host.as_ref() == Some(remote.user.verified.host())
+                && member.source_role == target.role
+        }) {
+            return Err(Error::TeamRequest(
+                "party is already a member of the team; use role changes",
+            ));
+        }
         let binding = AdditionBinding {
             target_id: remote.user.verified.uid(),
             target_host: Some(remote.user.verified.host()),

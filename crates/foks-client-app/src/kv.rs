@@ -876,6 +876,21 @@ impl CheckedProfileSession<'_> {
             &self.paths.soft_database,
             &mut mutations,
         )?;
+        // The view was activated just above, but a roster change before or
+        // during the operation supersedes it. The session then activates one
+        // replacement through the team loader and replays the refused request.
+        let client = &self.client;
+        let (remint_host, remint_account, remint_user, remint_team) =
+            (&host, &account, &user, &team);
+        session.set_team_view_remint(Box::new(move || {
+            client.remint_team_view(
+                remint_host,
+                &remint_account.credential,
+                &remint_user.verified,
+                &remint_user.puks,
+                remint_team,
+            )
+        }));
         run(&mut session)
     }
 

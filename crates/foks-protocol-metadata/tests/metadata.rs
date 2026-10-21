@@ -238,3 +238,53 @@ fn standalone_local_protocol_has_explicit_id_and_cannot_alias_upstream() {
     policy.protocols[0].upstream = "Probe".into();
     assert!(merge(&artifact, &policy).is_err());
 }
+
+fn post_baseline_policy(upstream: &str, value: u64) -> foks_protocol_metadata::Policy {
+    parse_policy(&POLICY.replace(
+        "[[protocol]]",
+        &format!(
+            "[[post_baseline_status]]\nalias = \"later\"\nupstream = \"{upstream}\"\nvalue = {value}\nsource = \"go-foks abc proto-src/lib/status.snowp\"\n\n[[protocol]]"
+        ),
+    ))
+    .unwrap()
+}
+
+#[test]
+fn post_baseline_statuses_render_with_their_explicit_values() {
+    let artifact = parse_artifact(ARTIFACT).unwrap();
+    let policy = post_baseline_policy("LATER_ERROR", 7016);
+    let merged = merge(&artifact, &policy).unwrap();
+    assert_eq!(merged.status_codes["later"], 7016);
+    let rendered = foks_protocol_metadata::render_status_codes(&merged);
+    assert!(rendered.ends_with(
+        "// Added upstream after the pinned baseline: go-foks abc proto-src/lib/status.snowp.\n\
+         pub const STATUS_LATER_ERROR: u64 = 7016;\n"
+    ));
+    assert!(foks_protocol_metadata::render_contract(&merged).contains("later = 7016\n"));
+}
+
+#[test]
+fn post_baseline_statuses_cannot_shadow_or_reuse_the_baseline() {
+    let artifact = parse_artifact(ARTIFACT).unwrap();
+    // A name the pinned artifact already defines belongs in status_aliases.
+    assert!(merge(&artifact, &post_baseline_policy("NOT_IMPLEMENTED", 7016)).is_err());
+    // A value the pinned artifact already assigns would be reused.
+    assert!(merge(&artifact, &post_baseline_policy("LATER_ERROR", 1020)).is_err());
+    // The alias must not collide with an existing status alias.
+    let mut policy = post_baseline_policy("LATER_ERROR", 7016);
+    policy.post_baseline_statuses[0].alias = "ok".into();
+    assert!(merge(&artifact, &policy).is_err());
+    // Duplicate values within the post-baseline list are refused.
+    let mut policy = post_baseline_policy("LATER_ERROR", 7016);
+    let mut second = policy.post_baseline_statuses[0].clone();
+    second.alias = "later_too".into();
+    second.upstream = "LATER_TOO_ERROR".into();
+    policy.post_baseline_statuses.push(second);
+    assert!(merge(&artifact, &policy).is_err());
+    // Provenance is required and must be a single line.
+    let mut policy = post_baseline_policy("LATER_ERROR", 7016);
+    policy.post_baseline_statuses[0].source = " ".into();
+    assert!(merge(&artifact, &policy).is_err());
+    policy.post_baseline_statuses[0].source = "a\nb".into();
+    assert!(merge(&artifact, &policy).is_err());
+}

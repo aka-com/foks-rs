@@ -4,6 +4,7 @@ use foks_snowpack::{encode, Value};
 use super::{
     encode_text, encode_unsigned, frame, Result, DEFAULT_MAX_FRAME_LENGTH, METHOD_RESPONSE,
     RESPONSE_HEADER, STATUS_BAD_PASSPHRASE_ERROR, STATUS_PASSPHRASE_NOT_FOUND_ERROR,
+    STATUS_TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR,
 };
 
 /// Application errors that a v1 server may place on the v0.1.9 wire.
@@ -55,6 +56,10 @@ pub enum RpcStatus {
     TeamError(String),
     TeamRace(String),
     TeamBearerTokenStale(String),
+    /// The presented team view bearer token has no record on this host. Added
+    /// upstream after v0.1.9; the payload is void, and a v0.1.9 peer decodes it
+    /// as an unknown status.
+    TeamVOBearerTokenNotFound,
     TeamNotFound,
     TeamInviteAlreadyAccepted,
     TeamCertificate(String),
@@ -114,6 +119,7 @@ impl RpcStatus {
             Self::TeamError(_) => 7001,
             Self::TeamRace(_) => 7002,
             Self::TeamBearerTokenStale(_) => 7003,
+            Self::TeamVOBearerTokenNotFound => STATUS_TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR,
             Self::TeamNotFound => 7004,
             Self::TeamInviteAlreadyAccepted => 7015,
             Self::TeamCertificate(_) => 7005,

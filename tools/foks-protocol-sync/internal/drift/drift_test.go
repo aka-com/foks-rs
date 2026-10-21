@@ -211,3 +211,21 @@ func fixtureArtifact() model.Artifact {
 		}},
 	}
 }
+
+func TestReadPolicyRecordsPostBaselineStatusesAsRelevant(t *testing.T) {
+	policy, err := ReadPolicy("../../../../crates/foks-server/protocol/policy-v1.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !policy.Statuses["TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR"] || !policy.Statuses["RT_MSG_REPLAY_MISMATCH"] {
+		t.Fatalf("post-baseline statuses missing: %v", policy.Statuses)
+	}
+	if !policy.Statuses["TEAM_BEARER_TOKEN_STALE_ERROR"] {
+		t.Fatal("baseline status alias missing")
+	}
+	for name := range policy.Statuses {
+		if strings.ContainsAny(name, "{}= ") {
+			t.Fatalf("a table row was parsed as a status name: %q", name)
+		}
+	}
+}

@@ -7,6 +7,9 @@ use foks_proto::{KvNodeId, KvParty, Role, SecretSeed};
 use foks_rpc::KvAuth;
 
 use self::rpc::KvConnection;
+
+#[cfg(test)]
+mod remint_tests;
 use crate::{FoksClient, PinnedHost, ProtectedMutationStore};
 
 #[cfg(test)]
@@ -50,9 +53,47 @@ pub struct KvWriteOptions {
     pub expected_version: Option<u64>,
 }
 
+#[derive(Clone)]
 enum OwnedKvAuth {
     User,
     Team([u8; 16]),
+}
+
+/// Activates a replacement team view for a team KV write session. The session
+/// calls it at most once, after the server refuses the session's view token
+/// (see [`crate::rejects_team_view_token`]), and replays the refused request
+/// with the returned token. It must fail rather than return a token whose
+/// team keys differ from the ones the session encrypts with; see
+/// [`crate::FoksClient::remint_team_view`].
+pub type TeamViewRemint<'a> = Box<dyn FnMut() -> crate::Result<[u8; 16]> + 'a>;
+
+/// Sends one KV request; if the server refuses a team view token and a
+/// re-mint is still available, activates a new view and replays the request
+/// once. The refusal happens in the server's authorization step, before any
+/// part of the request is applied, so the replay cannot apply it twice.
+fn call_with_remint(
+    mut call: impl FnMut(KvAuth<'_>, &rpc::KvRequest) -> crate::Result<Vec<u8>>,
+    auth: &mut OwnedKvAuth,
+    remint: &mut Option<TeamViewRemint<'_>>,
+    request: &rpc::KvRequest,
+) -> crate::Result<Vec<u8>> {
+    let error = match call(auth.borrowed(), request) {
+        Err(error)
+            if matches!(auth, OwnedKvAuth::Team(_)) && crate::rejects_team_view_token(&error) =>
+        {
+            error
+        }
+        result => return result,
+    };
+    let Some(mut activate) = remint.take() else {
+        return Err(error);
+    };
+    // Report the refusal the operation hit, not a failure to recover from it.
+    let Ok(token) = activate() else {
+        return Err(error);
+    };
+    *auth = OwnedKvAuth::Team(token);
+    call(auth.borrowed(), request)
 }
 
 impl OwnedKvAuth {
@@ -76,6 +117,7 @@ pub struct KvWriteSession<'a> {
     host: PinnedHost,
     party: KvParty,
     auth: OwnedKvAuth,
+    team_view_remint: Option<TeamViewRemint<'a>>,
     private_keys: Vec<KvPrivateKeyRef<'a>>,
     protected_store: &'a mut dyn ProtectedMutationStore,
     soft_database_path: PathBuf,

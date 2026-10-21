@@ -1278,6 +1278,7 @@ fn map_edit_error(error: crate::Error) -> RpcStatus {
         crate::Error::Signup("team member PUK is not current") => {
             RpcStatus::TeamRace("team member PUK changed during edit".to_owned())
         }
+        crate::Error::TeamRoster(message) => RpcStatus::TeamRoster(message.to_owned()),
         other => RpcStatus::TeamError(format!("team edit validation failed: {other}")),
     }
 }

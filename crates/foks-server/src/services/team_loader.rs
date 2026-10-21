@@ -199,12 +199,11 @@ pub(crate) fn check_team_view_token(
     let now = clock
         .now_micros()
         .map_err(|_| RpcStatus::TransactionRetry)?;
+    let token_hash = team::token_hash(&request.token);
     let authority = reader
-        .resolve_team_view_token(&team::token_hash(&request.token), now)
+        .resolve_team_view_token(&token_hash, now)
         .map_err(|_| RpcStatus::TransactionRetry)?
-        .ok_or_else(|| {
-            RpcStatus::TeamBearerTokenStale("team-view bearer token is not active".to_owned())
-        })?;
+        .ok_or_else(|| team::view_token_refusal(reader.team_view_token_recorded(&token_hash)))?;
     require_view_transport(
         principal,
         &EntityId::from_bytes(authority.member_host_id.clone())
@@ -232,10 +231,13 @@ pub(crate) fn load_chain(
         .map_err(|_| RpcStatus::TransactionRetry)?;
     let authority = match &request.authorization {
         foks_rpc::arguments::TeamChainAuthorization::LocalView(token) => {
+            let token_hash = team::token_hash(token);
             let authority = reader
-                .resolve_team_view_token(&team::token_hash(token), now)
+                .resolve_team_view_token(&token_hash, now)
                 .map_err(|_| RpcStatus::TransactionRetry)?
-                .ok_or(RpcStatus::Expired)?;
+                .ok_or_else(|| {
+                    team::view_token_refusal(reader.team_view_token_recorded(&token_hash))
+                })?;
             if authority.team_id != request.team.as_bytes() {
                 return Err(permission_denied());
             }
@@ -271,10 +273,13 @@ pub(crate) fn load_chain(
             if request.load_removal_key || request.load_remote_view_tokens {
                 return Err(permission_denied());
             }
+            let token_hash = team::token_hash(token);
             let authority = reader
-                .resolve_team_view_token(&team::token_hash(token), now)
+                .resolve_team_view_token(&token_hash, now)
                 .map_err(|_| RpcStatus::TransactionRetry)?
-                .ok_or(RpcStatus::Expired)?;
+                .ok_or_else(|| {
+                    team::view_token_refusal(reader.team_view_token_recorded(&token_hash))
+                })?;
             let parent = reader
                 .team(&authority.team_id)
                 .map_err(|_| RpcStatus::TransactionRetry)?
@@ -547,10 +552,11 @@ pub(crate) fn load_remote_view_tokens(
     let now = clock
         .now_micros()
         .map_err(|_| RpcStatus::TransactionRetry)?;
+    let token_hash = team::token_hash(&request.token);
     let authority = reader
-        .resolve_team_view_token(&team::token_hash(&request.token), now)
+        .resolve_team_view_token(&token_hash, now)
         .map_err(|_| RpcStatus::TransactionRetry)?
-        .ok_or(RpcStatus::Expired)?;
+        .ok_or_else(|| team::view_token_refusal(reader.team_view_token_recorded(&token_hash)))?;
     if authority.team_id != request.team.team.as_bytes()
         || authority.member_host_id != host.as_bytes()
         || reader
@@ -655,10 +661,11 @@ pub(crate) fn load_team_membership_chain(
     let now = clock
         .now_micros()
         .map_err(|_| RpcStatus::TransactionRetry)?;
+    let token_hash = team::token_hash(&request.token);
     let authority = reader
-        .resolve_team_view_token(&team::token_hash(&request.token), now)
+        .resolve_team_view_token(&token_hash, now)
         .map_err(|_| RpcStatus::TransactionRetry)?
-        .ok_or(RpcStatus::Expired)?;
+        .ok_or_else(|| team::view_token_refusal(reader.team_view_token_recorded(&token_hash)))?;
     if authority.team_id != request.team.team.as_bytes() {
         return Err(permission_denied());
     }

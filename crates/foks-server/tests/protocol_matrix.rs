@@ -284,6 +284,7 @@ fn protocol_contract_is_valid_and_exactly_registered() {
             ("rt_ambiguous_channel".to_owned(), 12004),
             ("rt_not_found".to_owned(), 12005),
             ("rt_msg_order".to_owned(), 12006),
+            ("rt_msg_replay_mismatch".to_owned(), 12007),
             ("ok".to_owned(), 0),
             ("passphrase_not_found".to_owned(), 1043),
             ("permission_denied".to_owned(), 1013),
@@ -307,6 +308,7 @@ fn protocol_contract_is_valid_and_exactly_registered() {
             ("team_adhoc_open_viewership".to_owned(), 7102),
             ("team_adhoc_invalid_change".to_owned(), 7103),
             ("team_adhoc_duplicate".to_owned(), 7104),
+            ("team_vo_bearer_token_not_found".to_owned(), 7016),
             ("unsupported".to_owned(), 1020),
             ("user_not_found".to_owned(), 1027),
         ])

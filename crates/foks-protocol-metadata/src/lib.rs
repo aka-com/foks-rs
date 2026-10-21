@@ -78,12 +78,31 @@ pub struct Policy {
     pub version: u64,
     pub baseline: String,
     pub status_aliases: BTreeMap<String, String>,
+    /// Status codes upstream added after the pinned baseline. Each carries its
+    /// value explicitly because the pinned artifact cannot supply it.
+    #[serde(default, rename = "post_baseline_status")]
+    pub post_baseline_statuses: Vec<PostBaselineStatus>,
     #[serde(rename = "protocol")]
     pub protocols: Vec<ProtocolPolicy>,
     #[serde(rename = "service")]
     pub services: Vec<ServicePolicy>,
     #[serde(rename = "route")]
     pub routes: Vec<RoutePolicy>,
+}
+
+/// A status code that upstream defines in a revision newer than the pinned
+/// artifact. Merging refuses a name or value the pinned artifact already
+/// defines, so an entry can neither shadow nor reuse a baseline status. When
+/// the baseline moves to a release that contains the status, the entry moves
+/// to `status_aliases`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PostBaselineStatus {
+    pub alias: String,
+    pub upstream: String,
+    pub value: u64,
+    /// Upstream revision and file that define the status.
+    pub source: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -357,6 +376,31 @@ pub fn merge<'a>(artifact: &'a Artifact, policy: &'a Policy) -> Result<Merged<'a
             alias.as_str(),
             u64::try_from(*value).expect("nonnegative status"),
         );
+    }
+    let mut post_baseline_names = BTreeSet::new();
+    let mut post_baseline_values = BTreeSet::new();
+    for status in &policy.post_baseline_statuses {
+        validate_policy_key(&status.alias)?;
+        validate_constant(&status.upstream)?;
+        let reuses_baseline = upstream_statuses.contains_key(status.upstream.as_str())
+            || artifact
+                .statuses
+                .iter()
+                .any(|baseline| u64::try_from(baseline.value).ok() == Some(status.value));
+        if reuses_baseline
+            || status.source.trim().is_empty()
+            || status.source.chars().any(char::is_control)
+            || !post_baseline_names.insert(status.upstream.as_str())
+            || !post_baseline_values.insert(status.value)
+            || status_codes
+                .insert(status.alias.as_str(), status.value)
+                .is_some()
+        {
+            return invalid(format!(
+                "invalid, colliding or baseline post-baseline status {}",
+                status.alias
+            ));
+        }
     }
 
     let mut services = Vec::new();
@@ -793,6 +837,14 @@ pub fn render_status_codes(merged: &Merged<'_>) -> String {
             output,
             "pub const STATUS_{upstream}: u64 = {};",
             status.value
+        )
+        .expect("write String");
+    }
+    for status in &merged.policy.post_baseline_statuses {
+        writeln!(
+            output,
+            "// Added upstream after the pinned baseline: {}.\npub const STATUS_{}: u64 = {};",
+            status.source, status.upstream, status.value
         )
         .expect("write String");
     }

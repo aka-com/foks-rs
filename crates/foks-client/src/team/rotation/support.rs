@@ -38,6 +38,37 @@ pub(super) fn unique_target<'a>(
     Ok(member)
 }
 
+/// The local refusal for a member transition that would leave the team
+/// without an owner. The text matches go-foks' client-side roster error.
+pub(crate) const OWNERLESS_CHANGE_MESSAGE: &str = "change would leave team without an owner";
+
+/// Refuses a transition of `target` to `destination_role` that takes the roster
+/// from at least one owner to none, which no remaining member could undo.
+/// This is the counterpart of go-foks `GameplanOpts.RequireOwner`, which its
+/// team editor sets for every new edit; servers enforce the same rule, so the
+/// check only makes the refusal local, before anything is journaled. As in
+/// go-foks, only the transition is refused.
+pub(super) fn require_owner_retained(
+    members: &[VerifiedTeamMemberState],
+    target: &VerifiedTeamMemberState,
+    destination_role: Role,
+) -> Result<()> {
+    let is_target = |member: &VerifiedTeamMemberState| {
+        member.party == target.party
+            && member.scoped_host == target.scoped_host
+            && member.source_role == target.source_role
+    };
+    let had_owner = members.iter().any(|member| member.role == Role::OWNER);
+    let keeps_owner = destination_role == Role::OWNER
+        || members
+            .iter()
+            .any(|member| !is_target(member) && member.role == Role::OWNER);
+    if had_owner && !keeps_owner {
+        return Err(Error::TeamRequest(OWNERLESS_CHANGE_MESSAGE));
+    }
+    Ok(())
+}
+
 pub(super) fn validate_replacement<'a>(
     target: &VerifiedTeamMemberState,
     destination_role: Role,

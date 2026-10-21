@@ -4,10 +4,15 @@ use std::collections::BTreeSet;
 
 use crate::{prefixed_hash_signable, Result};
 
-/// Maximum Merkle epoch supported under canonical array encoding constraints.
+/// The first Merkle epoch that cannot be published under go-foks' canonical
+/// encoding check.
 ///
-/// Epochs at or beyond this threshold require 16 back-pointers, which cannot be
-/// encoded in a 15-element fixarray.
+/// Epoch 65,536 has 16 back pointers, more than a 15-element fixarray holds,
+/// so the list is encoded as `array16`, which go-foks' signable validator
+/// rejects for 16 to 31 elements. Every later multiple of 32,768 also has 16
+/// or more back pointers; other later epochs (65,537 has one) could be hashed,
+/// but roots are sequential and epoch 65,536 must be published first, so no
+/// tree advances past 65,535.
 pub const MAX_CANONICAL_MERKLE_EPOCH: u64 = 65_536;
 
 pub fn back_pointer_sequence(epoch: u64) -> Vec<u64> {

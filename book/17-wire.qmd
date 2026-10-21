@@ -130,16 +130,23 @@ compatibility generation zero as too old.
 
 Five protocols do not use `DataWrap` at all: the four team protocols
 (TeamLoader, TeamAdmin, TeamMember, TeamGuest) and the Kex device-pairing
-protocol. Their arguments and results are bare in the payload slot. This is a
-quirk of how those particular Go source files were generated, and it was not
-documented anywhere. The Rust project discovered it by reading Go's
-*generated client code* with an AST parser: each generated method body
-declares local variables named `warg` and `tmp`, and whether those variables
-are typed as `rpc.DataWrap[...]` reveals whether the method wraps its
-argument and result. The finding is rendered into two generated predicates,
-keyed by protocol ID, and a Go test using Go's own descriptors confirms the
-split. The client selects its response decoder by reading the protocol ID
-back out of the request it is about to send.
+protocol. Their arguments and results are bare in the payload slot. The
+generator is not the cause: go-foks runs `snowpc` once over the whole
+`proto-src/rem` directory with the same flags, and it emits `DataWrap` only
+for protocols declared with the `argHeader` and `resHeader` modifiers.
+`team.snowp` and `kex.snowp` omit those modifiers, so their 31 methods (Kex 2,
+TeamLoader 8, TeamMember 3, TeamAdmin 16, TeamGuest 2) are bare. Eleven
+further protocols are also headerless, but none is a client-to-server
+protocol: the five `infra` protocols, the three Merkle builder, batcher and
+signer protocols in `lib/merkle.snowp`, and the agent-local `Passphrase`,
+`GitHelperLog` and `TestLibs`. None of this was documented upstream. The Rust
+project discovered it by reading Go's *generated client code* with an AST
+parser: each generated method body declares local variables named `warg` and
+`tmp`, and whether those variables are typed as `rpc.DataWrap[...]` reveals
+whether the method wraps its argument and result. The finding is rendered into
+two generated predicates, keyed by protocol ID, and a Go test using Go's own
+descriptors confirms the split. The client selects its response decoder by
+reading the protocol ID back out of the request it is about to send.
 
 Even the encoding of "nothing" differs between the two shapes. A wrapped void
 result is a `DataWrap` carrying only a header; a bare void result is a

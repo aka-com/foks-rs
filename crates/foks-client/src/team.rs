@@ -114,7 +114,34 @@ impl std::fmt::Debug for TeamViewGrant {
     }
 }
 
+/// Whether a server refused a team view bearer token in a way that a newly
+/// activated view cures: `TEAM_BEARER_TOKEN_STALE_ERROR` (the token expired or
+/// its membership was superseded) or `TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR`
+/// (the server holds no record of it). go-foks returns the latter since
+/// `5a9ff13`; its client re-mints on both, as this client does.
+pub fn rejects_team_view_token(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::Rpc(foks_rpc::Error::RemoteStatus {
+            code: foks_rpc::STATUS_TEAM_BEARER_TOKEN_STALE_ERROR
+                | foks_rpc::STATUS_TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR,
+            ..
+        })
+    )
+}
+
 impl AuthenticatedTeamOutcome {
+    /// The roles and generations of the team keys this outcome opened.
+    fn key_generations(&self) -> Vec<(Role, u64)> {
+        let mut keys = self
+            .ptks
+            .iter()
+            .map(|key| (key.role, key.generation))
+            .collect::<Vec<_>>();
+        keys.sort();
+        keys
+    }
+
     /// Converts this locally loaded current-head team into a recursively
     /// freshness-checked PTK recipient witness.
     pub fn verified_recipient(
@@ -2276,6 +2303,32 @@ impl FoksClient {
         Err(last_error.unwrap_or(Error::KeyBinding(
             "no authenticated user private key can open the team",
         )))
+    }
+
+    /// Activates a new view of `previous.verified.team()` through the team
+    /// loader and returns its token, for a caller whose view token the server
+    /// refused. The reload must open exactly the team keys `previous` opened:
+    /// work already prepared with those keys is only replayed under a view of
+    /// the same key state, so a rotation in between is reported as an error
+    /// instead.
+    pub fn remint_team_view(
+        &self,
+        host: &PinnedHost,
+        credential: &DeviceCredential,
+        user: &VerifiedUserState,
+        puks: &[UserPrivateKey],
+        previous: &AuthenticatedTeamOutcome,
+    ) -> Result<[u8; 16]> {
+        let fresh =
+            self.load_and_pin_team(host, credential, user, puks, previous.verified.team())?;
+        if fresh.verified.team() != previous.verified.team()
+            || fresh.key_generations() != previous.key_generations()
+        {
+            return Err(Error::TeamBinding(
+                "team keys changed before the team view could be replaced",
+            ));
+        }
+        Ok(fresh.view_token)
     }
 
     /// Loads a team with a view this client activated earlier. The grant names

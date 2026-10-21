@@ -44,6 +44,7 @@ pub(crate) fn classify(error: &Error) -> SessionErrorClass {
         | Error::Crypto(_)
         | Error::Verify(_)
         | Error::Signup(_)
+        | Error::TeamRoster(_)
         | Error::AuthorizationChanged => SessionErrorClass::Protocol,
         Error::Database(_)
         | Error::Merkle(_)

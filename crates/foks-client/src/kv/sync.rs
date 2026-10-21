@@ -614,6 +614,7 @@ impl FoksClient {
                 host: host.host_id.clone(),
             },
             auth: OwnedKvAuth::User,
+            team_view_remint: None,
             private_keys: keys,
             protected_store,
             adapter_parent: None,
@@ -664,6 +665,7 @@ impl FoksClient {
                 host: host.host_id.clone(),
             },
             auth: OwnedKvAuth::User,
+            team_view_remint: None,
             private_keys: keys,
             protected_store,
             adapter_parent: None,
@@ -739,6 +741,7 @@ impl FoksClient {
                 host: host.host_id.clone(),
             },
             auth: OwnedKvAuth::Team(team.view_token),
+            team_view_remint: None,
             private_keys: team
                 .ptks
                 .iter()

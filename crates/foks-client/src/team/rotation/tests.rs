@@ -260,6 +260,48 @@ fn membership_changes_rotate_the_required_role_keys() {
     );
 }
 
+fn roster_member(tag: u8, role: Role) -> foks_verify::VerifiedTeamMemberState {
+    let entity =
+        |kind, tag| foks_proto::EntityId::from_bytes([vec![kind], vec![tag; 32]].concat()).unwrap();
+    foks_verify::VerifiedTeamMemberState {
+        party: entity(foks_proto::ENTITY_USER, tag),
+        scoped_host: None,
+        source_role: Role::OWNER,
+        role,
+        generation: 1,
+        verify_key: entity(foks_proto::ENTITY_PUK_VERIFY, tag),
+        hepk_fingerprint: [tag; 32],
+        removal_key_commitment: Some([tag; 32]),
+        index_range: None,
+    }
+}
+
+#[test]
+fn a_member_edit_cannot_leave_the_team_without_an_owner() {
+    use super::{require_owner_retained, OWNERLESS_CHANGE_MESSAGE};
+    let owner = roster_member(1, Role::OWNER);
+    let other = roster_member(2, Role::member(0));
+    let roster = [owner.clone(), other.clone()];
+    // Sole-owner self-demotion or removal is refused locally.
+    for destination in [Role::ADMIN, Role::member(0), Role::NONE] {
+        assert!(matches!(
+            require_owner_retained(&roster, &owner, destination),
+            Err(crate::Error::TeamRequest(message)) if message == OWNERLESS_CHANGE_MESSAGE
+        ));
+    }
+    // Promoting another member, or keeping the owner role, is allowed.
+    require_owner_retained(&roster, &other, Role::OWNER).unwrap();
+    require_owner_retained(&roster, &owner, Role::OWNER).unwrap();
+    require_owner_retained(&roster, &other, Role::NONE).unwrap();
+    // With a second owner, the first may step down.
+    let second_owner = roster_member(3, Role::OWNER);
+    let roster = [owner.clone(), second_owner];
+    require_owner_retained(&roster, &owner, Role::ADMIN).unwrap();
+    // Only the transition is refused.
+    let roster = [roster_member(1, Role::ADMIN), other.clone()];
+    require_owner_retained(&roster, &roster[0], Role::member(0)).unwrap();
+}
+
 #[test]
 fn protected_only_team_member_key_refresh_frame_can_be_rebuilt_but_a_journaled_frame_cannot_be_discarded(
 ) {

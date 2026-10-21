@@ -2752,6 +2752,11 @@ fn remote_status_response(id: u64, status: u64, reason: String) -> Option<Respon
             ErrorCode::OperationFailed,
             "This request expired. Start it again.",
         ),
+        foks_rpc::STATUS_TEAM_BEARER_TOKEN_STALE_ERROR
+        | foks_rpc::STATUS_TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR => (
+            ErrorCode::OperationFailed,
+            "The server no longer accepts this team access token. Try again.",
+        ),
         foks_rpc::STATUS_TIMEOUT_ERROR => (
             ErrorCode::OperationFailed,
             "The server timed out. Try again.",
@@ -7132,6 +7137,16 @@ mod tests {
                 foks_rpc::STATUS_OVER_QUOTA_ERROR,
                 ErrorCode::QuotaExceeded,
                 "capacity limit",
+            ),
+            (
+                foks_rpc::STATUS_TEAM_BEARER_TOKEN_STALE_ERROR,
+                ErrorCode::OperationFailed,
+                "team access token",
+            ),
+            (
+                foks_rpc::STATUS_TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR,
+                ErrorCode::OperationFailed,
+                "team access token",
             ),
         ] {
             let response = remote_status_response(8, status, format!("remote status {status}"))

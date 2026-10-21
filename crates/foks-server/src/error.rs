@@ -48,6 +48,8 @@ pub enum Error {
     KeyCrypto,
     #[error("invalid software signup: {0}")]
     Signup(&'static str),
+    #[error("team roster refused: {0}")]
+    TeamRoster(&'static str),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
