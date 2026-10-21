@@ -1,12 +1,15 @@
 import {
   useCallback,
+  useEffect,
+  useRef,
   type Dispatch,
   type ReactNode,
   type SetStateAction,
 } from 'react';
+import { restoreFocusIfLost, rowByKey } from '/kit/focus-keeper';
 import type { ToastController } from '/kit/toasts';
 import { normalizeCommandError, type Bridge } from '../bridge';
-import type { LocationStore } from '../location';
+import type { LocationStore, Selection } from '../location';
 import { nameOf, storeOf, type AgentSnapshot } from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { NavigationPrompt } from '../navigation-guard';
@@ -127,6 +130,15 @@ export function ShellOverlays({
   block: ShellBlock | null;
   recoverAgentReadiness: (reconnect: boolean) => Promise<void>;
 }): ReactNode {
+  // The row a delete hands the selection to, applied once the alert has
+  // closed: while it is open, its guard holds every navigation.
+  const handOff = useRef<Selection | null>(null);
+  useEffect(() => {
+    const next = handOff.current;
+    if (workflow || !next) return;
+    handOff.current = null;
+    locations.select(next);
+  }, [locations, workflow]);
   return (
     <>
       <WriteOverlay
@@ -173,6 +185,9 @@ export function ShellOverlays({
           });
           toasts.show('Catalog refreshed. Review your draft.');
           return null;
+        }}
+        onDeleted={(item) => {
+          handOff.current = neighbourAfterDelete(locations, item);
         }}
         onDeleteConflict={async (item) => {
           const next = await refreshSnapshot(true);
@@ -241,4 +256,34 @@ export function ShellOverlays({
       ) : null}
     </>
   );
+}
+
+/**
+ * After a delete, the row below the deleted one (or above it, when it was the
+ * last) becomes the selection and takes the focus, as in Finder and Mail;
+ * with no row left the focus lands on the list (`kit/focus-keeper.ts`). Read
+ * from the list on screen, before the refresh removes the row. Returns the
+ * selection to move to, when the deleted item was the selection.
+ */
+function neighbourAfterDelete(
+  locations: LocationStore,
+  item: { store: string; path: string },
+): Selection | null {
+  const key = `${item.store}|${item.path}`;
+  const rows = Array.from(
+    document.querySelectorAll<HTMLElement>('.main [data-row-key]'),
+  ).filter((row) => !row.dataset.rowKey?.endsWith('/'));
+  const at = rows.findIndex((row) => row.dataset.rowKey === key);
+  if (at < 0) return null;
+  const next = (rows[at + 1] ?? rows[at - 1])?.dataset.rowKey;
+  if (!next) {
+    restoreFocusIfLost();
+    return null;
+  }
+  restoreFocusIfLost(rowByKey(next));
+  const selected = locations.getSnapshot().selection;
+  if (selected?.store !== item.store || selected.path !== item.path)
+    return null;
+  const split = next.indexOf('|');
+  return { store: next.slice(0, split), path: next.slice(split + 1) };
 }

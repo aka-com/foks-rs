@@ -7,6 +7,7 @@
  * by hairlines.
  */
 
+import { restoreFocusIfLost, rowByKey } from '/kit/focus-keeper';
 import {
   Fragment,
   useCallback,
@@ -872,19 +873,27 @@ export function DetailsPanel({
     );
   };
 
+  // Show and Hide are one control that changes its label, so the keyboard
+  // focus stays on it. While the read runs it is busy rather than disabled
+  // (a disabled button drops the focus) and a second press does nothing.
   const showButton = (
     <Button
+      data-focus-key="reveal"
       aria-label={reading ? 'Reading…' : 'Show'}
-      disabled={reading || Boolean(readProblem)}
+      aria-busy={reading || undefined}
+      aria-disabled={reading || undefined}
+      disabled={Boolean(readProblem)}
       title={readProblem ?? (reading ? 'Reading…' : 'Show')}
       aria-describedby={describedBy(readProblem)}
-      onClick={() => void show()}
+      onClick={() => {
+        if (!reading) void show();
+      }}
     >
       Show
     </Button>
   );
   const hideButton = (
-    <Button title="Hide" onClick={hide}>
+    <Button data-focus-key="reveal" title="Hide" onClick={hide}>
       Hide
     </Button>
   );
@@ -1044,16 +1053,26 @@ export function DetailsPanel({
         className="details"
         aria-label={`Details for ${name}`}
         onKeyDown={(event) => {
-          // Escape from anywhere in the panel clears the selection, as an
-          // outside click does, unless a field or the editor holds it.
-          if (event.key !== 'Escape' || event.defaultPrevented || editing)
+          if (event.key !== 'Escape' || event.defaultPrevented) return;
+          // Escape in the inline editor is its Cancel: the editor closes and
+          // the focus returns to Edit.
+          if (inlineEditing && !saving) {
+            event.preventDefault();
+            focusActionsOnClose.current = true;
+            clearEdit();
             return;
+          }
+          // Escape from anywhere else in the panel clears the selection,
+          // unless a field holds it. The focus goes back to the item's row
+          // in the list (`kit/focus-keeper.ts`).
+          if (editing) return;
           if (
             event.target instanceof Element &&
             event.target.closest('input, textarea, select')
           )
             return;
           event.preventDefault();
+          restoreFocusIfLost(rowByKey(`${item.store}|${item.path}`));
           onClose();
         }}
       >

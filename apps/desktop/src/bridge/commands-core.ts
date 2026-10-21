@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import { chatActionMutates, decodeChatReply } from '../chat-contract';
 import { decodeLocalSession } from '../chat/local-contract';
 import type { Bridge } from './contract';
+import { MENU_COMMANDS } from './core';
 import {
   decodeAgentProcessInfo,
   decodeAgentStatus,
@@ -57,6 +58,7 @@ export const coreCommands: Pick<
   | 'onChatNotification'
   | 'onOpenSettings'
   | 'onNewItem'
+  | 'onMenuCommand'
   | 'onMaintenanceStatus'
   | 'onExitState'
 > = {
@@ -162,6 +164,11 @@ export const coreCommands: Pick<
       throw cause;
     }
   },
+  onMenuCommand: async (listener) =>
+    listen<unknown>('foks://menu-command', (event) => {
+      const command = MENU_COMMANDS.find((known) => known === event.payload);
+      if (command) listener(command);
+    }),
   onMaintenanceStatus: async (listener) =>
     listen<unknown>('foks://maintenance-status', (event) => {
       listener(decodeMaintenanceSnapshot(event.payload));

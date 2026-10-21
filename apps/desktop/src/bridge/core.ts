@@ -156,6 +156,16 @@ export interface AppLockState {
 
 export type Unlisten = () => void;
 
+/** A native menu command the page carries out (`Bridge.onMenuCommand`). */
+export type MenuCommand = 'find' | 'search' | 'toggle-sidebar' | 'new-folder';
+
+export const MENU_COMMANDS: readonly MenuCommand[] = [
+  'find',
+  'search',
+  'toggle-sidebar',
+  'new-folder',
+];
+
 export type ExitState =
   | { state: 'idle' }
   | { state: 'decision'; pid: number | null; unsent: number }

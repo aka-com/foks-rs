@@ -182,7 +182,7 @@ test('leaving the button without reaching the popover closes it', async () => {
   assert.equal(document.querySelector('.sync-popover'), null);
 });
 
-test('announces Syncing while refreshing and Synced when finished', async () => {
+test('announces Syncing while refreshing and Connected when finished', async () => {
   const service = reconciliation();
   const activity = service.activities.begin('Loading catalog');
   const rendered = ui.render(
@@ -206,9 +206,9 @@ test('announces Syncing while refreshing and Synced when finished', async () => 
   assert.equal(button.getAttribute('aria-busy'), null);
   assert.equal(button.classList.contains('busy'), false);
   assert.equal(button.querySelector('svg.ic'), null);
-  // When idle, displays a green status dot alongside the "Synced" label.
+  // When idle, it reads as the agent light: a green dot and "Connected".
   assert.ok(button.querySelector('.dot.ok'));
-  assert.equal(button.querySelector('.t')?.textContent, 'Synced');
+  assert.equal(button.querySelector('.t')?.textContent, 'Connected');
 });
 
 test('remaining work is visible beside healthy jobs and disappears when it settles', async () => {

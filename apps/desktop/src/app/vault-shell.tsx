@@ -14,7 +14,13 @@ import {
   anyPopupOpen,
   OverlayProvider,
 } from '/kit/overlay-primitives';
-import { mountFocusKeeper, setFocusContext } from '/kit/focus-keeper';
+import {
+  focusWhenRendered,
+  mountFocusKeeper,
+  rowByKey,
+  setFocusContext,
+} from '/kit/focus-keeper';
+import { commandKey, isMac } from '/kit/keys';
 import { ToastController, ToastProvider } from '/kit/toasts';
 import type { AgentLifecycleController } from '../agent-lifecycle';
 import type { Bridge } from '../bridge';
@@ -67,8 +73,9 @@ import {
   type WriteWorkflow,
 } from '../screens/write-workflows';
 import { useSearchShortcut } from '../shell/search-palette';
+import { FIND_EVENT } from '../components/search-field';
 import { Sidebar } from '../shell/sidebar';
-import { Topbar, type TopbarProps } from '../shell/topbar';
+import { placeTitle, Topbar, type TopbarProps } from '../shell/topbar';
 import { BarActionsSlot, DetailsSlot } from '../shell/page-slots';
 import { activityBadge } from '../activity';
 import { FilesViewMenu } from '../shell/files-view-menu';
@@ -364,6 +371,23 @@ export function VaultShell({
   useEffect(() => mountFocusKeeper(), []);
   const focusContext = JSON.stringify([here, state.folder, state.kind]);
   useLayoutEffect(() => setFocusContext(focusContext), [focusContext]);
+  // The window title names the place, as the Window menu and VoiceOver read
+  // it ("Engineering — FOKS").
+  const title = placeTitle(here, shown, state.folder, state.kind);
+  useEffect(() => {
+    document.title = title ? `${title} — FOKS` : 'FOKS';
+  }, [title]);
+  // Places whose page draws no heading of its own get one for VoiceOver's
+  // heading navigation; the bar already names them on screen. The team page,
+  // Settings and first run draw their own `h1`.
+  const shellHeading =
+    here.kind === 'all' ||
+    here.kind === 'files' ||
+    here.kind === 'store' ||
+    here.kind === 'activity' ||
+    here.kind === 'devices' ||
+    here.kind === 'chat' ||
+    (here.kind === 'teams' && !here.ref);
   const [teamInfo, setTeamInfo] = useState<{
     storeId: string;
     trigger?: HTMLElement;
@@ -515,21 +539,83 @@ export function VaultShell({
     },
     [chrome.blocked, filesHere, newSelection, newStore, setWorkflow, shown],
   );
+  // ⌘N and ⇧⌘N, and File ▸ New Password / New Document, work from every
+  // place: outside Files they open All Items first, then the sheet for the
+  // default vault. A navigation a guard holds back for a prompt is not
+  // followed by the sheet; the reader asks again once it has settled.
+  const pendingNewItem = useRef<Exclude<KindFilter, 'All'> | null>(null);
+  const requestNewItem = useCallback(
+    (itemKind: Exclude<KindFilter, 'All'>): boolean => {
+      if (filesHere) return openNewItem(itemKind);
+      if (chrome.blocked || anyDialogOpen() || anyPopupOpen()) return false;
+      locations.openFiles('', 'All');
+      if (listsItems(locations.getSnapshot().location))
+        pendingNewItem.current = itemKind;
+      return true;
+    },
+    [chrome.blocked, filesHere, locations, openNewItem],
+  );
+  useEffect(() => {
+    const itemKind = pendingNewItem.current;
+    pendingNewItem.current = null;
+    if (itemKind && filesHere) openNewItem(itemKind);
+  }, [filesHere, openNewItem]);
+  const openNewFolder = useCallback((): boolean => {
+    if (
+      chrome.blocked ||
+      !filesHere ||
+      !newStore ||
+      writeBlockReason(shown, newStore) ||
+      anyDialogOpen()
+    )
+      return false;
+    setWorkflow({
+      kind: 'new-folder',
+      storeId: newStore.id,
+      initialFolder:
+        newSelection && newSelection.store !== ALL_ITEMS
+          ? newSelection.path
+          : '/',
+    });
+    return true;
+  }, [chrome.blocked, filesHere, newSelection, newStore, setWorkflow, shown]);
+  // The window's key equivalents that have no control of their own to bind
+  // them: ⌘N / ⇧⌘N, ⌃⌘S (Toggle Sidebar) and, off a Mac where the native
+  // menu does not exist, Ctrl+, for Settings. ⌘F belongs to the list bar's
+  // search field, ⌘K to the palette, ⌘⌫ to the selection.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (
-        !(event.metaKey || event.ctrlKey) ||
-        event.altKey ||
-        event.key.toLowerCase() !== 'n' ||
-        anyPopupOpen()
-      )
+      if (event.defaultPrevented) return;
+      const key = event.key.toLowerCase();
+      if (commandKey(event) && !event.altKey && key === 'n') {
+        if (anyPopupOpen()) return;
+        if (requestNewItem(event.shiftKey ? 'Document' : 'Password'))
+          event.preventDefault();
         return;
-      if (openNewItem(event.shiftKey ? 'Document' : 'Password'))
+      }
+      const toggleKeys = isMac()
+        ? event.metaKey && event.ctrlKey
+        : event.ctrlKey && event.altKey;
+      if (toggleKeys && key === 's' && !event.shiftKey) {
+        if (chrome.blocked || anyDialogOpen()) return;
         event.preventDefault();
+        toggleSidebar();
+        return;
+      }
+      if (
+        !isMac() &&
+        event.ctrlKey &&
+        !event.altKey &&
+        key === ',' &&
+        !anyDialogOpen()
+      ) {
+        event.preventDefault();
+        locations.navigate({ kind: 'settings' });
+      }
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [openNewItem]);
+  }, [chrome.blocked, locations, requestNewItem, toggleSidebar]);
   // ⌘⌫ deletes the selected item, through the same alert the item's menu
   // opens, and only while nothing else holds the keyboard: a text field, a
   // menu or a dialog.
@@ -546,6 +632,9 @@ export function VaultShell({
     if (!selectedItem || chrome.blocked) return;
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Backspace' || !event.metaKey || event.altKey) return;
+      // The alert's own ⌘⌫ confirms it; by the time the key reaches the
+      // document the alert may be gone and the next row selected.
+      if (event.defaultPrevented) return;
       const target = event.target;
       if (
         target instanceof Element &&
@@ -562,21 +651,41 @@ export function VaultShell({
   useEffect(() => {
     if (!bridge.native) return;
     let disposed = false;
-    let stop: (() => void) | undefined;
+    const stops: (() => void)[] = [];
+    const keep = (unlisten: () => void): void => {
+      if (disposed) unlisten();
+      else stops.push(unlisten);
+    };
     void bridge
       .onNewItem((kind) => {
-        if (!anyPopupOpen()) openNewItem(kind);
+        if (!anyPopupOpen()) requestNewItem(kind);
       })
-      .then((unlisten) => {
-        if (disposed) unlisten();
-        else stop = unlisten;
+      .then(keep)
+      .catch(() => undefined);
+    void bridge
+      .onMenuCommand((command) => {
+        if (anyDialogOpen()) return;
+        switch (command) {
+          case 'find':
+            window.dispatchEvent(new Event(FIND_EVENT));
+            return;
+          case 'search':
+            setSearchOpen(true);
+            return;
+          case 'toggle-sidebar':
+            if (!chrome.blocked) toggleSidebar();
+            return;
+          case 'new-folder':
+            openNewFolder();
+        }
       })
+      .then(keep)
       .catch(() => undefined);
     return () => {
       disposed = true;
-      stop?.();
+      for (const stop of stops) stop();
     };
-  }, [bridge, openNewItem]);
+  }, [bridge, chrome.blocked, openNewFolder, requestNewItem, toggleSidebar]);
   const refreshShell = (): void =>
     refreshAll(() => {
       reconciliation.scheduler.requestAll('manual', [
@@ -638,15 +747,7 @@ export function VaultShell({
         ? {
             onNew: (itemKind: Exclude<KindFilter, 'All'>) =>
               void openNewItem(itemKind),
-            onNewFolder: () =>
-              setWorkflow({
-                kind: 'new-folder',
-                storeId: newStore.id,
-                initialFolder:
-                  newSelection && newSelection.store !== ALL_ITEMS
-                    ? newSelection.path
-                    : '/',
-              }),
+            onNewFolder: () => void openNewFolder(),
             newBlocked: writeBlockReason(shown, newStore),
           }
         : {})}
@@ -837,6 +938,11 @@ export function VaultShell({
                 blocked={chrome.blocked}
               />
               <main className="main" tabIndex={-1}>
+                {shellHeading && title ? (
+                  <h1 className="offscreen" tabIndex={-1}>
+                    {title}
+                  </h1>
+                ) : null}
                 {here.kind === 'chat' ? null : renderTopbar()}
                 {chatMigration.notice}
                 {/* Reset screen failures when the location changes while keeping
@@ -961,12 +1067,16 @@ export function VaultShell({
             open={searchOpen}
             onClose={() => setSearchOpen(false)}
             onNavigate={(location) => locations.navigate(location)}
-            onOpenItem={(storeId, path) =>
-              locations.navigateAndSelect(
-                { kind: 'store', ref: storeId },
-                { store: storeId, path },
-              )
-            }
+            onOpenItem={(storeId, path) => {
+              // The item's folder, with its row selected and focused, so
+              // the item is in view in the list as well as in the details.
+              const folder = path.slice(0, path.lastIndexOf('/')) || '/';
+              locations.openFiles(`${storeId}|${folder}`, 'All', {
+                store: storeId,
+                path,
+              });
+              focusWhenRendered(rowByKey(`${storeId}|${path}`));
+            }}
           />
         </ChatInboxProvider>
       </div>

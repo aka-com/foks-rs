@@ -331,6 +331,10 @@ export function DismissibleDialog({
           event.target !== event.currentTarget
         )
           return;
+        // The press would otherwise move the focus to <body> once the
+        // backdrop it landed on is gone, after the dialog has returned it to
+        // its opener.
+        event.preventDefault();
         onDismiss();
       }}
       onKeyDown={(event) => {
@@ -436,9 +440,35 @@ function RovingCollection({
     if (focusTarget?.isConnected) focusTarget.focus();
   }, [focusTarget]);
 
+  // Type-select, as NSMenu does: typed letters within a second of each
+  // other move to the first item whose label starts with them.
+  const typed = useRef({ text: '', at: 0 });
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     attributes.onKeyDown?.(event);
     if (event.defaultPrevented) return;
+    if (
+      event.key.length === 1 &&
+      event.key !== ' ' &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey
+    ) {
+      const now = Date.now();
+      const text =
+        (now - typed.current.at < 1000 ? typed.current.text : '') +
+        event.key.toLowerCase();
+      typed.current = { text, at: now };
+      const match = Array.from(
+        event.currentTarget.querySelectorAll<HTMLElement>(itemSelector),
+      ).find((item) =>
+        (item.textContent ?? '').trim().toLowerCase().startsWith(text),
+      );
+      if (match) {
+        event.preventDefault();
+        match.focus();
+      }
+      return;
+    }
     if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
       event.preventDefault();
       moveFocus(

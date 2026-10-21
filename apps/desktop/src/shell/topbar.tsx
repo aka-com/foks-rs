@@ -14,6 +14,7 @@ import { Fragment } from 'react';
 import type { ReactNode } from 'react';
 
 import { Icon, SearchField, StoreMark } from '../components';
+import { ariaShortcut } from '../components/menus';
 import { NewItemButton } from './toolbar';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import { channelLabel } from '../chat/presentation';
@@ -154,6 +155,34 @@ export function scopeLabel(
   }
   const labels = filesFolderCrumb(snapshot, location, folder).labels;
   return labels.length ? labels[labels.length - 1] : TAB_LABEL[tab];
+}
+
+/**
+ * The place's name for the window title and the page's heading: the folder
+ * or store on Files (or All Items, Passwords, Documents), the team on a team
+ * page, All Teams, and the last crumb everywhere else.
+ */
+export function placeTitle(
+  location: Location,
+  snapshot?: AgentSnapshot,
+  folder = '',
+  kind: KindFilter = 'All',
+): string {
+  const tab = railTabOf(location);
+  if (!tab) return '';
+  if (tab === 'files') {
+    const labels = filesFolderCrumb(snapshot, location, folder).labels;
+    if (labels.length) return labels[labels.length - 1];
+    if (location.kind === 'store')
+      return (snapshot && storeOf(snapshot, location.ref)?.name) ?? 'Files';
+    return kind === 'Password'
+      ? 'Passwords'
+      : kind === 'Document'
+        ? 'Documents'
+        : 'All Items';
+  }
+  if (location.kind === 'teams' && !location.ref) return 'All Teams';
+  return crumbTrail(location, snapshot).at(-1) ?? TAB_LABEL[tab];
 }
 
 export interface TopbarProps {
@@ -352,6 +381,8 @@ export function Topbar({
         <button
           type="button"
           className="tbtn side-expand"
+          data-focus-key="sidebar-toggle"
+          aria-keyshortcuts={ariaShortcut('⌃⌘S')}
           aria-expanded="false"
           aria-label="Expand sidebar"
           title="Expand sidebar"
@@ -415,8 +446,6 @@ export function Topbar({
           onChange={onQuery ?? (() => undefined)}
           placeholder={tab === 'chat' ? 'Search channels' : 'Search'}
           disabled={!searchable}
-          shortcut={false}
-          kbd
         />
       ) : (
         <span className="grow" data-tauri-drag-region="" />

@@ -55,7 +55,13 @@ interface Lost {
 }
 
 let last: Lost | null = null;
-let requested: Candidate[] = [];
+/**
+ * Targets callers asked for. A request outlives checks that find the focus
+ * where it should be (a dialog returning it to its opener first, a refresh
+ * that removes the row later) and lapses after `REQUEST_MS`.
+ */
+let requested: { candidates: Candidate[]; until: number }[] = [];
+const REQUEST_MS = 4000;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let context = '';
 let contextChanged = false;
@@ -150,11 +156,13 @@ function landing(): HTMLElement | null {
 
 function check(): void {
   timer = null;
-  const asked = requested;
-  requested = [];
+  const now = Date.now();
+  requested = requested.filter((request) => request.until > now);
+  const asked = requested.flatMap((request) => request.candidates);
   const navigated = contextChanged;
   contextChanged = false;
   if (!focusLost()) return;
+  requested = [];
   // A click on blank space leaves a usable control behind; that is the
   // user's choice. Only a control that went away, or a caller's request,
   // moves the focus.
@@ -196,7 +204,7 @@ function schedule(): void {
  * Escape that takes the focused control away.
  */
 export function restoreFocusIfLost(...candidates: Candidate[]): void {
-  requested.push(...candidates);
+  requested.push({ candidates, until: Date.now() + REQUEST_MS });
   schedule();
 }
 
@@ -219,11 +227,19 @@ export function mountFocusKeeper(
   const onFocusIn = (event: FocusEvent): void => {
     const target = event.target;
     if (!(target instanceof HTMLElement) || target === document.body) return;
+    // A pointer press is the user choosing where the focus goes; earlier
+    // requests no longer apply.
+    if (pressing) requested = [];
     const identity = focusIdentity(target);
     last = { element: target, identity };
     // Remember controls in the page's own columns; the sidebar keeps its
     // focus across navigation, and dialogs and popups do not survive it.
     if (target.closest('.main, .details')) remembered.set(context, identity);
+  };
+  let pressing = false;
+  const onPointerDown = (): void => {
+    pressing = true;
+    setTimeout(() => (pressing = false), 0);
   };
   const onFocusOut = (event: FocusEvent): void => {
     if (event.relatedTarget === null) schedule();
@@ -242,10 +258,12 @@ export function mountFocusKeeper(
   });
   document.addEventListener('focusin', onFocusIn);
   document.addEventListener('focusout', onFocusOut);
+  document.addEventListener('pointerdown', onPointerDown, true);
   return () => {
     observer?.disconnect();
     document.removeEventListener('focusin', onFocusIn);
     document.removeEventListener('focusout', onFocusOut);
+    document.removeEventListener('pointerdown', onPointerDown, true);
     if (timer !== null) clearTimeout(timer);
     timer = null;
     last = null;
@@ -254,4 +272,26 @@ export function mountFocusKeeper(
     context = '';
     contextChanged = false;
   };
+}
+
+/**
+ * Moves the focus to `candidate` once it is on screen, whatever has the focus
+ * then: for a command whose whole point is to land somewhere, such as opening
+ * an item from the search palette. Gives up after about half a second.
+ */
+export function focusWhenRendered(candidate: Candidate, tries = 30): void {
+  if (typeof window === 'undefined') return;
+  setTimeout(() => {
+    const target = resolve(candidate);
+    if (target) target.focus();
+    else if (tries > 0) focusWhenRendered(candidate, tries - 1);
+  }, 16);
+}
+
+/** The list row for `key` (`store|path`) in the page, if it is drawn. */
+export function rowByKey(key: string): () => HTMLElement | undefined {
+  return () =>
+    Array.from(
+      document.querySelectorAll<HTMLElement>('.main [data-row-key]'),
+    ).find((row) => row.dataset.rowKey === key);
 }
