@@ -351,3 +351,34 @@ test('in cards, Left and Right step a card and Up and Down a line of cards', asy
   ui.fireEvent.keyDown(at(0), { key: 'ArrowUp' });
   assert.ok(document.activeElement === at(0));
 });
+
+test('the list search field: Return selects the first result, Down moves to it, Escape when empty returns to the list', async () => {
+  const { store } = await mount({ kind: 'all' });
+  const field = document.querySelector<HTMLInputElement>('.topsearch input');
+  assert.ok(field);
+  await ui.act(async () => {
+    store.search('fast');
+  });
+  await ui.waitFor(() =>
+    assert.equal(
+      listbox().querySelectorAll('[role="option"]').length,
+      1,
+      'one result',
+    ),
+  );
+  field.focus();
+  ui.fireEvent.keyDown(field, { key: 'Enter' });
+  await ui.waitFor(() =>
+    assert.equal(store.getSnapshot().selection?.path, '/logins/fastmail.com'),
+  );
+  assert.ok(document.activeElement === field, 'Return keeps the field');
+  ui.fireEvent.keyDown(field, { key: 'ArrowDown' });
+  assert.equal(focusedName(), 'fastmail.com');
+  await ui.act(async () => {
+    store.search('');
+  });
+  field.focus();
+  ui.fireEvent.keyDown(field, { key: 'Escape' });
+  assert.equal(focusedName(), 'fastmail.com');
+  assert.equal(store.getSnapshot().selection?.path, '/logins/fastmail.com');
+});
