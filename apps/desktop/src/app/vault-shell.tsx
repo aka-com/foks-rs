@@ -50,6 +50,7 @@ import {
   storeReadable,
   type AgentSnapshot,
   type DeviceLabel,
+  type Store,
   type TeamStore,
 } from '../model';
 import { NavigationGuardProvider, useTabSheetState } from '../navigation-guard';
@@ -537,16 +538,22 @@ export function VaultShell({
   // same disabled styling as `BlockedShell`.
   const block = shellBlock(agentLifecycle);
   const chrome = shellChrome(block, agentLifecycle.state, shown.agent.state);
+  // A new item or folder the open store cannot take (a lapsed check-in, an
+  // unfinished team, no write role) is refused in words, as ⌘⌫ on a
+  // read-only item is, rather than by a key that does nothing.
+  const refuseWrite = useCallback(
+    (store: Store): boolean => {
+      const reason = writeBlockReason(shown, store);
+      if (reason) toasts.show(reason, { tone: 'warning' });
+      return Boolean(reason);
+    },
+    [shown, toasts],
+  );
   const openNewItem = useCallback(
     (itemKind: Exclude<KindFilter, 'All'>): boolean => {
-      if (
-        chrome.blocked ||
-        !filesHere ||
-        !newStore ||
-        writeBlockReason(shown, newStore) ||
-        anyDialogOpen()
-      )
+      if (chrome.blocked || !filesHere || !newStore || anyDialogOpen())
         return false;
+      if (refuseWrite(newStore)) return true;
       setWorkflow({
         kind: 'new',
         itemKind,
@@ -557,7 +564,14 @@ export function VaultShell({
       });
       return true;
     },
-    [chrome.blocked, filesHere, newSelection, newStore, setWorkflow, shown],
+    [
+      chrome.blocked,
+      filesHere,
+      newSelection,
+      newStore,
+      refuseWrite,
+      setWorkflow,
+    ],
   );
   // ⌘N and ⇧⌘N, and File ▸ New Password / New Document, work from every
   // place: outside Files they open All Items first, then the sheet for the
@@ -581,14 +595,9 @@ export function VaultShell({
     if (itemKind && filesHere) openNewItem(itemKind);
   }, [filesHere, openNewItem]);
   const openNewFolder = useCallback((): boolean => {
-    if (
-      chrome.blocked ||
-      !filesHere ||
-      !newStore ||
-      writeBlockReason(shown, newStore) ||
-      anyDialogOpen()
-    )
+    if (chrome.blocked || !filesHere || !newStore || anyDialogOpen())
       return false;
+    if (refuseWrite(newStore)) return true;
     setWorkflow({
       kind: 'new-folder',
       storeId: newStore.id,
@@ -598,7 +607,14 @@ export function VaultShell({
           : '/',
     });
     return true;
-  }, [chrome.blocked, filesHere, newSelection, newStore, setWorkflow, shown]);
+  }, [
+    chrome.blocked,
+    filesHere,
+    newSelection,
+    newStore,
+    refuseWrite,
+    setWorkflow,
+  ]);
   // The window's key equivalents that have no control of their own to bind
   // them: ⌘N / ⇧⌘N, ⌃⌘S (Toggle Sidebar) and, off a Mac where the native
   // menu does not exist, Ctrl+, for Settings. ⌘F belongs to the list bar's

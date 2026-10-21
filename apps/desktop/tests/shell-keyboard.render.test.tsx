@@ -324,3 +324,19 @@ test('VoiceOver text: rows keep their parts apart, a concealed value reads Hidde
     ),
   );
 });
+
+test('⌘N in a store that cannot take items says why instead of doing nothing', async () => {
+  const { store } = await mount();
+  ui.act(() => store.navigate({ kind: 'store', ref: 'team:homelab' }));
+  await ui.waitFor(() =>
+    assert.equal(store.getSnapshot().location.kind, 'store'),
+  );
+  key(document.body, { key: 'n', ctrlKey: true });
+  await ui.waitFor(() =>
+    assert.match(
+      document.querySelector('.toast')?.textContent ?? '',
+      /Team setup is incomplete/,
+    ),
+  );
+  assert.equal(document.querySelector('.sheet'), null);
+});
