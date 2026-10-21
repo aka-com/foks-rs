@@ -632,7 +632,9 @@ export function NewChatSheet({
                   onCompositionEnd={(event) =>
                     updateField(event.currentTarget, setName)
                   }
-                  placeholder="general"
+                  // Empty means #general; when the team has it, the example
+                  // is a new name instead.
+                  placeholder={nameGuidance ? 'e.g. planning' : 'general'}
                 />
                 {/* Length and duplicate-name errors belong to the field.
                       The general alias and an empty name identify the same
