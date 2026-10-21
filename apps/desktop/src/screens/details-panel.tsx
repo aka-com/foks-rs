@@ -1043,6 +1043,19 @@ export function DetailsPanel({
         ref={panelRef}
         className="details"
         aria-label={`Details for ${name}`}
+        onKeyDown={(event) => {
+          // Escape from anywhere in the panel clears the selection, as an
+          // outside click does, unless a field or the editor holds it.
+          if (event.key !== 'Escape' || event.defaultPrevented || editing)
+            return;
+          if (
+            event.target instanceof Element &&
+            event.target.closest('input, textarea, select')
+          )
+            return;
+          event.preventDefault();
+          onClose();
+        }}
       >
         <div className="bar" data-tauri-drag-region="">
           <nav className="pathbar" aria-label="Location">

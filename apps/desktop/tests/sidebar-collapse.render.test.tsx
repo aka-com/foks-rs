@@ -153,11 +153,8 @@ test('selecting an item and closing its details leave the sidebar shown', async 
   assert.equal(hidden(), false);
   assert.equal(window.localStorage.getItem('sideCollapsed'), stored);
 
-  const close = document.querySelector<HTMLButtonElement>(
-    '.details [aria-label="Close"]',
-  );
-  assert.ok(close);
-  ui.fireEvent.click(close);
+  // An outside click clears the selection and closes the details.
+  ui.fireEvent.pointerDown(document.body, { button: 0 });
   await ui.waitFor(() => {
     assert.equal(document.querySelector('.details:not(.details-empty)'), null);
   });
@@ -179,11 +176,10 @@ test('an explicit collapse while details are open sticks after closing', async (
   await ui.waitFor(() => assert.ok(hidden()));
   assert.equal(window.localStorage.getItem('sideCollapsed'), '1');
 
-  const close = document.querySelector<HTMLButtonElement>(
-    '.details [aria-label="Close"]',
-  );
-  assert.ok(close);
-  ui.fireEvent.click(close);
+  // Escape in the details clears the selection and closes them.
+  const panel = document.querySelector<HTMLElement>('.details');
+  assert.ok(panel);
+  ui.fireEvent.keyDown(panel, { key: 'Escape' });
   await ui.waitFor(() => {
     assert.equal(document.querySelector('.details:not(.details-empty)'), null);
   });
