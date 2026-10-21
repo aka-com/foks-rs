@@ -47,7 +47,7 @@ mod tests {
 
     #[test]
     fn selected_reads_require_identity_and_reject_pre_identity_ipc() {
-        assert_eq!(PROTOCOL_VERSION, 37);
+        assert_eq!(PROTOCOL_VERSION, 38);
         for operation in [
             Operation::ReadKv {
                 store: KvStoreRef::Account(AccountStoreRef {
@@ -721,7 +721,7 @@ mod tests {
 
     #[test]
     fn reconcile_is_a_local_v29_mutation_with_no_initial_trust_inputs() {
-        assert_eq!(PROTOCOL_VERSION, 37);
+        assert_eq!(PROTOCOL_VERSION, 38);
         let operation = Operation::ReconcileProfile {
             profile: "saved".into(),
         };
@@ -738,7 +738,7 @@ mod tests {
 
     #[test]
     fn submit_message_is_a_local_v29_mutation() {
-        assert_eq!(PROTOCOL_VERSION, 37);
+        assert_eq!(PROTOCOL_VERSION, 38);
         let request = test_request(
             20,
             Operation::Chat {

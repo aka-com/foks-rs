@@ -153,3 +153,88 @@ fn metadata_size_boundaries_and_plaintext_failures_are_safe() {
         assert!(!format!("{error:?}").contains("secret"));
     }
 }
+
+fn main_fixture(name: &str) -> Vec<u8> {
+    std::fs::read(format!(
+        "../foks-snowpack/tests/fixtures/foks-main/realtime/{name}"
+    ))
+    .unwrap()
+}
+
+/// Pegged messages sealed as go-foks main's sealMessage seals them.
+#[test]
+fn go_main_pegged_messages_open_with_their_target() {
+    let keys = derive_realtime_keys(&seed(), RtAppId::Chat).unwrap();
+    let base = noncer();
+    let open = |name: &str| {
+        let message = RtMessage::decode(&main_fixture(&format!("pegged-{name}.snowp"))).unwrap();
+        let mut n = base.clone();
+        n.metadata = message.metadata.clone();
+        let RtMessageWrapper::Encrypted(boxed) = &message.wrapper else {
+            panic!("encrypted message")
+        };
+        (
+            message.metadata.kind,
+            keys.open_message(&n, &boxed.ciphertext),
+            n,
+            boxed.ciphertext.clone(),
+        )
+    };
+    for (name, kind, body) in [
+        ("reply", RtMessageType::Reply, b"a reply".as_slice()),
+        (
+            "reactji",
+            RtMessageType::Reaction,
+            "{\"emoji\":\"👍\"}".as_bytes(),
+        ),
+        ("edit", RtMessageType::Edit, b"hello (edited)".as_slice()),
+        ("delete", RtMessageType::Edit, b"".as_slice()),
+    ] {
+        let (claimed, opened, n, ciphertext) = open(name);
+        assert_eq!(claimed, kind);
+        let expected =
+            RtMessageBody::decode(&main_fixture(&format!("pegged-{name}-body.snowp"))).unwrap();
+        let opened = opened.unwrap();
+        assert_eq!(opened, expected);
+        let RtMessageBody::Pegged {
+            kind: opened_kind,
+            body: opened_body,
+            reply_to,
+        } = &opened
+        else {
+            panic!("pegged body")
+        };
+        assert_eq!(*opened_kind, kind);
+        assert_eq!(opened_body.as_slice(), body);
+        assert_eq!(reply_to.0[0], 0x33);
+        // The Basic-only path still refuses pegged messages.
+        assert!(keys.open_basic_message(&n, &ciphertext).is_err());
+    }
+    // Metadata claiming Reactji over an Edit arm is rejected after decryption.
+    let (claimed, opened, _, _) = open("mismatch");
+    assert_eq!(claimed, RtMessageType::Reaction);
+    assert!(opened.is_err());
+    // Sealing a decrypted pegged body again reproduces Go's ciphertext.
+    let (_, opened, n, ciphertext) = open("reactji");
+    assert_eq!(keys.seal_message(&n, &opened.unwrap()).unwrap(), ciphertext);
+    let mismatched = RtMessageBody::Pegged {
+        kind: RtMessageType::Edit,
+        body: b"x".to_vec(),
+        reply_to: RtMessageId([0x33; 16]),
+    };
+    assert!(keys.seal_message(&n, &mismatched).is_err());
+    let mut edit = n.clone();
+    edit.metadata.kind = RtMessageType::Edit;
+    assert!(keys.seal_message(&edit, &mismatched).is_ok());
+    let untargeted = RtMessageBody::Pegged {
+        kind: RtMessageType::Edit,
+        body: Vec::new(),
+        reply_to: RtMessageId([0; 16]),
+    };
+    assert!(keys.seal_message(&edit, &untargeted).is_err());
+    // The Basic fixture opens through the general path too.
+    let basic = keys
+        .open_message(&base, &RtCiphertext(fixture("message-ciphertext.bin")))
+        .unwrap();
+    assert_eq!(basic, RtMessageBody::Basic(b"hello".to_vec()));
+}

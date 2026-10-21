@@ -134,7 +134,7 @@ func TestRealtimeMainFixtures(t *testing.T) {
 		NameBox: p.RTBoxRG{Rg: p.RoleAndGen{Role: p.MinRTRole, Gen: 1}, Box: nameBox},
 		Roles:   p.RolePair{Read: p.DefaultRole, Write: p.DefaultRole},
 		Ctime:   1700000000000, Mtime: 1700000000001, UpdatedAt: 1,
-		Tier:    p.RTChannelTier_Bottom, NoPush: true,
+		Tier: p.RTChannelTier_Bottom, NoPush: true,
 	}
 	emit("channel-no-push", &md)
 	// A Go-main client always writes all fourteen fields, false included.
@@ -160,15 +160,19 @@ func TestRealtimeMainFixtures(t *testing.T) {
 	dataKey := keyFor(p.RTKeyType_Data)
 	sender := p.FQParty{Party: user, Host: host}
 	prev := target
+	// "mismatch" claims Reactji in the metadata but seals an Edit arm, which
+	// upstream's openMessage rejects; sealMessage never produces it.
 	pegged := []struct {
 		name string
 		typ  p.RTMsgType
+		arm  p.RTMsgType
 		body []byte
 	}{
-		{"reply", p.RTMsgType_Reply, []byte("a reply")},
-		{"reactji", p.RTMsgType_Reactji, []byte(`{"emoji":"👍"}`)},
-		{"edit", p.RTMsgType_Edit, []byte("hello (edited)")},
-		{"delete", p.RTMsgType_Edit, []byte{}},
+		{"reply", p.RTMsgType_Reply, p.RTMsgType_Reply, []byte("a reply")},
+		{"reactji", p.RTMsgType_Reactji, p.RTMsgType_Reactji, []byte(`{"emoji":"👍"}`)},
+		{"edit", p.RTMsgType_Edit, p.RTMsgType_Edit, []byte("hello (edited)")},
+		{"delete", p.RTMsgType_Edit, p.RTMsgType_Edit, []byte{}},
+		{"mismatch", p.RTMsgType_Reactji, p.RTMsgType_Edit, []byte("x")},
 	}
 	for i, c := range pegged {
 		var mid p.RTMsgID
@@ -183,7 +187,7 @@ func TestRealtimeMainFixtures(t *testing.T) {
 		nonce := hash.DomainSeparatedNaclNonce()
 		pg := p.RTMsgPlaintextPegged{Basic: p.RTMsgPlaintextBasic(c.body), ReplyTo: target}
 		var body p.RTMsgBody
-		switch c.typ {
+		switch c.arm {
 		case p.RTMsgType_Reply:
 			body = p.NewRTMsgBodyWithReply(pg)
 		case p.RTMsgType_Reactji:

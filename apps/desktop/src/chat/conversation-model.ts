@@ -1,4 +1,4 @@
-import type { ChatMessage } from '../chat-contract';
+import { sameContent, type ChatMessage } from '../chat-contract';
 import type { ConversationEvent } from './conversation-events';
 import { CHAT_HISTORY_BYTES, CHAT_HISTORY_ROWS } from '../chat-limits';
 import { channelIntegrity } from './errors';
@@ -121,8 +121,6 @@ function sameMessage(a: ChatMessage, b: ChatMessage): boolean {
     a.sender === b.sender &&
     a.send_time === b.send_time &&
     a.insert_time === b.insert_time &&
-    a.content.kind === b.content.kind &&
-    (a.content.kind !== 'text' ||
-      (b.content.kind === 'text' && a.content.text === b.content.text))
+    sameContent(a.content, b.content)
   );
 }

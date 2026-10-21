@@ -68,6 +68,18 @@ fn preview_text(text: &str) -> String {
     }
     format!("{}…", &text[..end])
 }
+/// Placeholder content for a pegged message; its body is not forwarded.
+fn pegged(action: foks_client::ChatPeggedAction, target: foks_proto::RtMessageId) -> ChatContent {
+    ChatContent::Pegged {
+        action: match action {
+            foks_client::ChatPeggedAction::Reply => ChatPeggedAction::Reply,
+            foks_client::ChatPeggedAction::Reaction => ChatPeggedAction::Reaction,
+            foks_client::ChatPeggedAction::Edit => ChatPeggedAction::Edit,
+            foks_client::ChatPeggedAction::Delete => ChatPeggedAction::Delete,
+        },
+        target: (target.0 != [0; 16]).then(|| hex(&target.0)),
+    }
+}
 fn preview(value: foks_client::ChatPreview) -> ChatPreview {
     ChatPreview {
         sender: value.sender.map(|sender| hex(sender.entity().as_bytes())),
@@ -77,6 +89,7 @@ fn preview(value: foks_client::ChatPreview) -> ChatPreview {
             foks_client::ChatPreviewContent::Text(text) => ChatContent::Text {
                 text: SecretString::new(preview_text(&text)),
             },
+            foks_client::ChatPreviewContent::Pegged { action, target } => pegged(action, target),
             foks_client::ChatPreviewContent::Unsupported(_) => ChatContent::Unsupported,
         },
     }
@@ -270,7 +283,8 @@ fn bounded_preview(preview: foks_client::ChatPreview) -> foks_client::ChatPrevie
             content: foks_client::ChatPreviewContent::Text(Zeroizing::new(preview_text(&text))),
             ..preview
         },
-        foks_client::ChatPreviewContent::Unsupported(_) => preview,
+        foks_client::ChatPreviewContent::Pegged { .. }
+        | foks_client::ChatPreviewContent::Unsupported(_) => preview,
     }
 }
 
@@ -731,6 +745,9 @@ fn dispatch_with_page_rows(
                                     }
                                 }
                                 foks_client::ChatContent::Text(_) => ChatContent::Oversized,
+                                foks_client::ChatContent::Pegged { action, target } => {
+                                    pegged(action, target)
+                                }
                                 foks_client::ChatContent::Unsupported(_) => {
                                     ChatContent::Unsupported
                                 }
@@ -878,6 +895,42 @@ pub(super) fn contextual_error(error: Box<dyn std::error::Error>) -> Box<dyn std
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pegged_content_names_its_target_and_carries_no_body() {
+        let target = foks_proto::RtMessageId([0xcd; 16]);
+        assert_eq!(
+            pegged(foks_client::ChatPeggedAction::Reaction, target),
+            ChatContent::Pegged {
+                action: ChatPeggedAction::Reaction,
+                target: Some("cd".repeat(16)),
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(pegged(
+                foks_client::ChatPeggedAction::Delete,
+                foks_proto::RtMessageId([0; 16])
+            ))
+            .unwrap(),
+            serde_json::json!({"kind": "pegged", "action": "delete", "target": null})
+        );
+        let cached = bounded_preview(foks_client::ChatPreview {
+            sender: None,
+            send_time: 1,
+            insert_time: 2,
+            content: foks_client::ChatPreviewContent::Pegged {
+                action: foks_client::ChatPeggedAction::Reply,
+                target,
+            },
+        });
+        assert_eq!(
+            super::preview(cached).content,
+            ChatContent::Pegged {
+                action: ChatPeggedAction::Reply,
+                target: Some("cd".repeat(16)),
+            }
+        );
+    }
 
     fn account(tag: u8) -> Vec<u8> {
         drain_key(

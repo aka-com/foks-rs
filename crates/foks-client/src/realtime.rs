@@ -89,7 +89,7 @@ mod inbox;
 mod operations;
 pub(crate) use operations::validate_inventory_request;
 mod session;
-pub use history::{ChatContent, ChatHistory, ChatMessage};
+pub use history::{ChatContent, ChatHistory, ChatMessage, ChatPeggedAction};
 pub use inbox::{
     ChatConversation, ChatInbox, ChatPollResult, ChatPreview, ChatPreviewCache, ChatPreviewContent,
     ChatPreviewKey, ChatSyncResult, NoChatPreviewCache,

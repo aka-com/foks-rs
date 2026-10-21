@@ -2,8 +2,10 @@ import { partiesOf, shortId } from '../model';
 import type { AgentSnapshot, StoreRef } from '../model';
 import type {
   ChatChannel,
+  ChatContent,
   ChatConversation,
   ChatMessage,
+  ChatPeggedAction,
 } from '../chat-contract';
 
 /** Runs use server insertion times, matching the displayed clock and order. */
@@ -231,11 +233,49 @@ export function previewLine(
       : preview.sender
         ? (names?.get(preview.sender) ?? shortId(preview.sender))
         : 'Team member';
-  const text =
-    preview.content.kind === 'text'
-      ? preview.content.text
-      : 'Unsupported message';
-  return `${sender}: ${text}`;
+  return `${sender}: ${contentSummary(preview.content)}`;
+}
+
+const PEGGED_LABELS: Record<ChatPeggedAction, string> = {
+  reply: 'Replied to a message',
+  reaction: 'Reacted to a message',
+  edit: 'Edited a message',
+  delete: 'Deleted a message',
+};
+
+/**
+ * Placeholder for a pegged reply, reaction, edit or deletion. The desktop
+ * shows that one arrived but does not display its body or apply it to the
+ * message it names.
+ */
+export function peggedLabel(action: ChatPeggedAction): string {
+  return PEGGED_LABELS[action];
+}
+
+/** One-line text for an inbox preview or other summary of a message. */
+export function contentSummary(content: ChatContent): string {
+  switch (content.kind) {
+    case 'text':
+      return content.text;
+    case 'pegged':
+      return peggedLabel(content.action);
+    default:
+      return 'Unsupported message';
+  }
+}
+
+/** Notice shown in the thread in place of content the desktop cannot display. */
+export function contentNotice(content: ChatContent): string {
+  switch (content.kind) {
+    case 'text':
+      return content.text;
+    case 'pegged':
+      return `${peggedLabel(content.action)}. This version does not show the change.`;
+    case 'oversized':
+      return 'This message exceeds the desktop display limit.';
+    default:
+      return 'This message type is not supported yet.';
+  }
 }
 
 /**

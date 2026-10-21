@@ -16,6 +16,7 @@ import { useChatHistory } from './use-chat-history';
 import { PendingRow } from './pending-row';
 import {
   channelTitle,
+  contentNotice,
   continuesMessageGroup,
   messageClock,
   messageDate,
@@ -354,10 +355,15 @@ export function ChatThread({
                         {m.content.kind === 'text' ? (
                           <MessageText text={m.content.text} actions={bridge} />
                         ) : (
-                          <p className="chat-unsupported">
-                            {m.content.kind === 'oversized'
-                              ? 'This message exceeds the desktop display limit.'
-                              : 'This message type is not supported yet.'}
+                          <p
+                            className="chat-unsupported"
+                            data-pegged-target={
+                              m.content.kind === 'pegged'
+                                ? (m.content.target ?? undefined)
+                                : undefined
+                            }
+                          >
+                            {contentNotice(m.content)}
                           </p>
                         )}
                       </div>

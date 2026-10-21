@@ -112,21 +112,48 @@ export interface ChatChannel {
   read_role: string;
   write_role: string;
 }
+/**
+ * What a pegged message does to the message it names. Clients built on
+ * go-foks main send replies, reactions and edits this way; an edit with an
+ * empty body is a deletion. This client shows a placeholder and does not
+ * apply the change to the target.
+ */
+export type ChatPeggedAction = 'reply' | 'reaction' | 'edit' | 'delete';
+const PEGGED_ACTIONS: readonly string[] = [
+  'reply',
+  'reaction',
+  'edit',
+  'delete',
+];
+export type ChatContent =
+  | { kind: 'text'; text: string }
+  | { kind: 'pegged'; action: ChatPeggedAction; target: string | null }
+  | { kind: 'unsupported' | 'oversized' };
+export function sameContent(a: ChatContent, b: ChatContent): boolean {
+  switch (a.kind) {
+    case 'text':
+      return b.kind === 'text' && a.text === b.text;
+    case 'pegged':
+      return (
+        b.kind === 'pegged' && a.action === b.action && a.target === b.target
+      );
+    default:
+      return a.kind === b.kind;
+  }
+}
 export interface ChatMessage {
   id: string;
   sequence: string;
   sender: string | null;
   send_time: string;
   insert_time: string;
-  content:
-    { kind: 'text'; text: string } | { kind: 'unsupported' | 'oversized' };
+  content: ChatContent;
 }
 export interface ChatPreview {
   sender: string | null;
   send_time: string;
   insert_time: string;
-  content:
-    { kind: 'text'; text: string } | { kind: 'unsupported' | 'oversized' };
+  content: ChatContent;
 }
 export interface ChatConversation {
   channel: ChatChannel;
@@ -264,9 +291,25 @@ function channel(value: unknown): ChatChannel {
     write_role: text(c.write_role),
   };
 }
-function content(value: unknown, maximum: number): ChatMessage['content'] {
+function content(value: unknown, maximum: number): ChatContent {
   const c = object(value);
-  object(c, c.kind === 'text' ? ['kind', 'text'] : ['kind']);
+  object(
+    c,
+    c.kind === 'text'
+      ? ['kind', 'text']
+      : c.kind === 'pegged'
+        ? ['kind', 'action', 'target']
+        : ['kind'],
+  );
+  if (c.kind === 'pegged')
+    return {
+      kind: 'pegged',
+      action:
+        typeof c.action === 'string' && PEGGED_ACTIONS.includes(c.action)
+          ? (c.action as ChatPeggedAction)
+          : fail(),
+      target: c.target === null ? null : chatId(c.target),
+    };
   return c.kind === 'text'
     ? { kind: 'text', text: text(c.text, maximum) }
     : c.kind === 'unsupported' || c.kind === 'oversized'
