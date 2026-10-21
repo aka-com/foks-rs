@@ -117,12 +117,63 @@ impl RealtimeKeys {
         Ok(RtCiphertext(ciphertext))
     }
 
+    /// Seal a Basic message or a pegged Reply, Reaction or Edit as go-foks
+    /// main's `sealMessage` does (bf9ace5). The body arm must match the
+    /// metadata type, and a pegged body must name a non-zero target.
+    pub fn seal_message(
+        &self,
+        noncer: &RtMessageNoncer,
+        body: &RtMessageBody,
+    ) -> Result<RtCiphertext> {
+        self.check_sender(noncer)?;
+        let (kind, target) = match body {
+            RtMessageBody::Basic(_) => (RtMessageType::Basic, None),
+            RtMessageBody::Pegged { kind, reply_to, .. } => (*kind, Some(reply_to)),
+        };
+        if kind != noncer.metadata.kind || target.is_some_and(|id| id.0 == [0; 16]) {
+            return Err(Error::Realtime);
+        }
+        let plaintext = Zeroizing::new(body.encoded()?);
+        let nonce = realtime_message_nonce(noncer)?;
+        let ciphertext = XSalsa20Poly1305::new((&*self.data).into())
+            .encrypt((&nonce).into(), plaintext.as_ref())
+            .map_err(|_| Error::Realtime)?;
+        Ok(RtCiphertext(ciphertext))
+    }
+
     pub fn open_basic_message(
         &self,
         noncer: &RtMessageNoncer,
         ciphertext: &RtCiphertext,
     ) -> Result<Zeroizing<Vec<u8>>> {
-        self.check_basic(noncer)?;
+        if noncer.metadata.kind != RtMessageType::Basic {
+            return Err(Error::Realtime);
+        }
+        match self.open_message(noncer, ciphertext)? {
+            RtMessageBody::Basic(ref body) => Ok(Zeroizing::new(body.clone())),
+            _ => Err(Error::Realtime),
+        }
+    }
+
+    /// Open a Basic message or a pegged Reply, Reaction or Edit (go-foks
+    /// bf9ace5). The decrypted body arm must match the message type in the
+    /// metadata: the server stores that type unauthenticated, so a mismatch
+    /// would let a sender show readers one type while sealing another.
+    pub fn open_message(
+        &self,
+        noncer: &RtMessageNoncer,
+        ciphertext: &RtCiphertext,
+    ) -> Result<RtMessageBody> {
+        self.check_sender(noncer)?;
+        if !matches!(
+            noncer.metadata.kind,
+            RtMessageType::Basic
+                | RtMessageType::Edit
+                | RtMessageType::Reaction
+                | RtMessageType::Reply
+        ) {
+            return Err(Error::Realtime);
+        }
         if ciphertext.0.len() > RT_MAX_CIPHERTEXT_BYTES {
             return Err(Error::Realtime);
         }
@@ -132,18 +183,26 @@ impl RealtimeKeys {
                 .decrypt((&nonce).into(), ciphertext.0.as_ref())
                 .map_err(|_| Error::Decryption)?,
         );
-        match RtMessageBody::decode(&plaintext)? {
-            RtMessageBody::Basic(ref body) => Ok(Zeroizing::new(body.clone())),
-            _ => Err(Error::Realtime),
+        let body = RtMessageBody::decode(&plaintext)?;
+        let kind = match &body {
+            RtMessageBody::Basic(_) => RtMessageType::Basic,
+            RtMessageBody::Pegged { kind, .. } => *kind,
+        };
+        if kind != noncer.metadata.kind {
+            return Err(Error::Realtime);
         }
+        Ok(body)
     }
 
     fn check_basic(&self, noncer: &RtMessageNoncer) -> Result<()> {
-        if noncer.app != self.app
-            || noncer.metadata.kind != RtMessageType::Basic
-            || noncer.sender.is_none()
-            || noncer.metadata.id.0 == [0; 16]
-        {
+        if noncer.metadata.kind != RtMessageType::Basic {
+            return Err(Error::Realtime);
+        }
+        self.check_sender(noncer)
+    }
+
+    fn check_sender(&self, noncer: &RtMessageNoncer) -> Result<()> {
+        if noncer.app != self.app || noncer.sender.is_none() || noncer.metadata.id.0 == [0; 16] {
             return Err(Error::Realtime);
         }
         Ok(())

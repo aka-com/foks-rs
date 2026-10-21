@@ -3,8 +3,9 @@ use super::session::{ChatSession, ChatTransport};
 use crate::{Error, Result};
 use foks_client_db::ChatAnchor;
 use foks_proto::{
-    RealtimeWire, RtChannelId, RtChannelMetadata, RtGetThreadArgument, RtMessage, RtMessageType,
-    RtMessageWrapper, RtRecentsArgument, RtThreadQuery, RtThreadRange, ENTITY_USER,
+    RealtimeWire, RtChannelId, RtChannelMetadata, RtGetThreadArgument, RtMessage, RtMessageBody,
+    RtMessageId, RtMessageType, RtMessageWrapper, RtRecentsArgument, RtThreadQuery, RtThreadRange,
+    ENTITY_USER,
 };
 use foks_rpc::{RealtimeRequest, RealtimeResponse};
 use std::collections::{BTreeMap, BTreeSet};
@@ -12,7 +13,30 @@ use zeroize::Zeroizing;
 
 pub enum ChatContent {
     Text(Zeroizing<String>),
+    /// An authenticated Reply, Reaction or Edit that names an earlier message
+    /// (sent by go-foks main clients since bf9ace5). Its body is
+    /// application-defined and not retained; readers show a placeholder.
+    Pegged {
+        action: ChatPeggedAction,
+        target: RtMessageId,
+    },
     Unsupported(RtMessageType),
+}
+impl ChatContent {
+    /// Whether the message was decrypted and authenticated, so its sequence
+    /// and predecessor take part in continuity checks.
+    pub fn is_authenticated(&self) -> bool {
+        matches!(self, Self::Text(_) | Self::Pegged { .. })
+    }
+}
+/// What a pegged message does to its target. go-foks has no Delete body arm;
+/// an Edit with an empty body is the deletion marker.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChatPeggedAction {
+    Reply,
+    Reaction,
+    Edit,
+    Delete,
 }
 pub struct ChatMessage {
     pub message: RtMessage,
@@ -187,7 +211,7 @@ impl ChatSession<'_> {
             }
             observed.push(anchor(&m)?);
             let content = self.open_message(md, &m)?;
-            if matches!(content, ChatContent::Text(_)) {
+            if content.is_authenticated() {
                 known.insert(m.sequence, m.metadata.id.0);
                 anchors.push(anchor(&m)?);
             }
@@ -199,7 +223,7 @@ impl ChatSession<'_> {
         let mut need = BTreeSet::new();
         for row in &messages {
             let m = &row.message;
-            if !matches!(row.content, ChatContent::Text(_)) || m.metadata.previous_sequence == 0 {
+            if !row.content.is_authenticated() || m.metadata.previous_sequence == 0 {
                 continue;
             }
             let prev = m.metadata.previous_sequence;
@@ -250,9 +274,9 @@ impl ChatSession<'_> {
                     encoded_bytes += size;
                 }
                 observed.push(anchor(&m)?);
-                if matches!(self.open_message(md, &m)?, ChatContent::Text(_)) {
+                if self.open_message(md, &m)?.is_authenticated() {
                     for row in &messages {
-                        if matches!(row.content, ChatContent::Text(_))
+                        if row.content.is_authenticated()
                             && row.message.metadata.previous_sequence == m.sequence
                             && row.message.metadata.previous_id != m.metadata.id
                         {
@@ -295,10 +319,18 @@ impl ChatSession<'_> {
         if sender.entity().entity_type() != ENTITY_USER {
             return Err(Error::ChatUnsupported("unsupported message sender"));
         }
-        if m.metadata.kind != RtMessageType::Basic {
+        let pegged = matches!(
+            m.metadata.kind,
+            RtMessageType::Edit | RtMessageType::Reaction | RtMessageType::Reply
+        );
+        if m.metadata.kind != RtMessageType::Basic && !pegged {
             return Ok(ChatContent::Unsupported(m.metadata.kind));
         }
         if m.metadata.further_user_attribution.is_some() {
+            // Pegged messages stay readable as before this client opened them.
+            if pegged {
+                return Ok(ChatContent::Unsupported(m.metadata.kind));
+            }
             return Err(Error::ChatUnsupported("unsupported message attribution"));
         }
         let RtMessageWrapper::Encrypted(b) = &m.wrapper else {
@@ -307,15 +339,32 @@ impl ChatSession<'_> {
         if b.key.role != md.roles.read {
             return Err(Error::ChatChannelIntegrity("message read role mismatch"));
         }
-        let bytes = self
+        let body = self
             .keys(b.key)?
-            .open_basic_message(
+            .open_message(
                 &self.noncer(md.id, m.metadata.clone(), sender.entity().clone()),
                 &b.ciphertext,
             )
             .map_err(|_| Error::ChatChannelIntegrity("message authentication failed"))?;
-        let text = std::str::from_utf8(&bytes)
-            .map_err(|_| Error::ChatChannelIntegrity("Basic text is not UTF-8"))?;
-        Ok(ChatContent::Text(Zeroizing::new(text.to_owned())))
+        match &body {
+            RtMessageBody::Basic(bytes) => {
+                let text = std::str::from_utf8(bytes)
+                    .map_err(|_| Error::ChatChannelIntegrity("Basic text is not UTF-8"))?;
+                Ok(ChatContent::Text(Zeroizing::new(text.to_owned())))
+            }
+            RtMessageBody::Pegged {
+                kind,
+                body,
+                reply_to,
+            } => Ok(ChatContent::Pegged {
+                action: match kind {
+                    RtMessageType::Reply => ChatPeggedAction::Reply,
+                    RtMessageType::Reaction => ChatPeggedAction::Reaction,
+                    _ if body.is_empty() => ChatPeggedAction::Delete,
+                    _ => ChatPeggedAction::Edit,
+                },
+                target: *reply_to,
+            }),
+        }
     }
 }

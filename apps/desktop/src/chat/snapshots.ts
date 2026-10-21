@@ -1,8 +1,9 @@
-import type {
-  ChatChannel,
-  ChatConversation,
-  ChatPreview,
-  ChatResult,
+import {
+  sameContent,
+  type ChatChannel,
+  type ChatConversation,
+  type ChatPreview,
+  type ChatResult,
 } from '../chat-contract';
 import type { TeamStore } from '../model';
 
@@ -34,9 +35,7 @@ function samePreview(a: ChatPreview, b: ChatPreview): boolean {
     a.sender === b.sender &&
     a.send_time === b.send_time &&
     a.insert_time === b.insert_time &&
-    a.content.kind === b.content.kind &&
-    (a.content.kind !== 'text' ||
-      (b.content.kind === 'text' && a.content.text === b.content.text))
+    sameContent(a.content, b.content)
   );
 }
 function sameReadAuthority(a: ChatChannel, b: ChatChannel): boolean {

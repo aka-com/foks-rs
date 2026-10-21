@@ -226,6 +226,8 @@ impl Fixture {
                 updated_at: 1,
                 tier: RtChannelTier::Bottom,
                 unreadable: false,
+                no_push: false,
+                trailing: Default::default(),
             },
         };
         Self {
@@ -282,8 +284,11 @@ fn exact_replay_conflict_order_history_and_restart() {
     let first = f.send(2);
     let send_receipt = f.db.rt_send(&f.owner, &first, 1_001_000).unwrap();
     assert_eq!(send_receipt.value.sequence, 1);
+    assert!(!send_receipt.value.was_replay);
     let replay = f.db.rt_send(&f.owner, &first, 1_100_000).unwrap();
-    assert_eq!(send_receipt.value, replay.value);
+    assert_eq!(send_receipt.value.sequence, replay.value.sequence);
+    assert_eq!(send_receipt.value.insert_time, replay.value.insert_time);
+    assert!(replay.value.was_replay);
     assert!(replay.wake.is_empty());
     assert_eq!(f.count("rt_messages"), 1);
     assert!(matches!(
@@ -365,7 +370,10 @@ fn exact_replay_conflict_order_history_and_restart() {
     f.db = Database::open_existing(path, Config::default()).unwrap();
     assert_eq!(
         f.db.rt_send(&f.owner, &first, 1_400_000).unwrap().value,
-        send_receipt.value
+        ChatSendReceipt {
+            was_replay: true,
+            ..send_receipt.value
+        }
     );
     let read: i64 =
         f.db.connection
@@ -737,7 +745,10 @@ fn maximum_channel_metadata_can_accept_a_message_and_replay_ignores_precondition
     send.send.expected_previous_sequence = u64::MAX;
     assert_eq!(
         f.db.rt_send(&f.owner, &send, 3000).unwrap().value,
-        send_receipt
+        ChatSendReceipt {
+            was_replay: true,
+            ..send_receipt
+        }
     );
     let mut too_large = create;
     too_large.metadata.id.0 = [3; 16];
@@ -746,6 +757,123 @@ fn maximum_channel_metadata_can_accept_a_message_and_replay_ignores_precondition
         f.db.rt_create_channel(&f.owner, &too_large, 1000),
         Err(Error::Capacity(_))
     ));
+}
+#[test]
+fn replay_after_later_messages_reports_the_original_delivery() {
+    let mut f = Fixture::new();
+    f.db.rt_create_channel(&f.owner, &f.create, 1_000_000)
+        .unwrap();
+    let mut first = f.send(2);
+    first.send.expected_previous_sequence = 0;
+    let delivered = f.db.rt_send(&f.owner, &first, 1_001_000).unwrap().value;
+    assert!(!delivered.was_replay);
+    let mut second = f.send(3);
+    second.send.metadata.previous_id = first.send.metadata.id;
+    second.send.metadata.previous_sequence = 1;
+    f.db.rt_send(&f.member, &second, 1_002_000).unwrap();
+    // The lost-ack retry's precondition names the head before its own
+    // delivery. Upstream answers it as a replay, not RT_RACE.
+    first.send.expected_previous_sequence = 1;
+    let replay = f.db.rt_send(&f.owner, &first, 1_003_000).unwrap();
+    assert!(replay.wake.is_empty());
+    assert_eq!(replay.value.sequence, delivered.sequence);
+    assert_eq!(replay.value.insert_time, delivered.insert_time);
+    assert!(replay.value.was_replay);
+    // Bytes for a replayed receipt carry the third field; a fresh one keeps
+    // the two-field v0.1.9 form.
+    assert_eq!(
+        foks_snowpack::decode(&replay.value.encoded().unwrap()).unwrap(),
+        foks_snowpack::Value::Array(vec![
+            foks_snowpack::Value::Unsigned(1),
+            foks_snowpack::Value::Unsigned(1_001),
+            foks_snowpack::Value::Bool(true),
+        ])
+    );
+    assert_eq!(
+        foks_snowpack::decode(&delivered.encoded().unwrap()).unwrap(),
+        foks_snowpack::Value::Array(vec![
+            foks_snowpack::Value::Unsigned(1),
+            foks_snowpack::Value::Unsigned(1_001),
+        ])
+    );
+    let mut fresh = f.send(4);
+    fresh.send.expected_previous_sequence = 1;
+    assert!(matches!(
+        f.db.rt_send(&f.owner, &fresh, 1_004_000),
+        Err(Error::RtMessageOrder)
+    ));
+    assert_eq!(f.count("rt_messages"), 2);
+}
+#[test]
+fn channel_no_push_and_unknown_trailing_fields_are_stored_and_served() {
+    let mut f = Fixture::new();
+    // A creation request from a newer client: noPush set, then a field this
+    // server does not know.
+    let mut value = f.create.metadata.to_value();
+    let foks_snowpack::Value::Array(fields) = &mut value else {
+        panic!("positional metadata")
+    };
+    fields.push(foks_snowpack::Value::Bool(true));
+    fields.push(foks_snowpack::Value::Text(b"later".to_vec()));
+    let mut create = f.create.clone();
+    create.metadata = RtChannelMetadata::from_value(&value).unwrap();
+    assert!(create.metadata.no_push);
+    assert_eq!(create.metadata.trailing.unknown().len(), 1);
+    f.db.rt_create_channel(&f.owner, &create, 1_000_000)
+        .unwrap();
+    let stored = channel(&f.db.connection, &create.metadata.id.0).unwrap();
+    assert!(stored.no_push);
+    assert_eq!(stored.trailing, create.metadata.trailing);
+    let mut restricted = f.create.clone();
+    restricted.metadata.id.0 = [2; 16];
+    restricted.set_version = 2;
+    restricted.metadata.updated_at = 2;
+    restricted.metadata.roles = RtRolePair {
+        read: Role::ADMIN,
+        write: Role::ADMIN,
+    };
+    restricted.metadata.description.as_mut().unwrap().key.role = Role::ADMIN;
+    let mut value = restricted.metadata.to_value();
+    let foks_snowpack::Value::Array(fields) = &mut value else {
+        panic!("positional metadata")
+    };
+    fields.push(foks_snowpack::Value::Bool(false));
+    fields.push(foks_snowpack::Value::Unsigned(9));
+    restricted.metadata = RtChannelMetadata::from_value(&value).unwrap();
+    f.db.rt_create_channel(&f.owner, &restricted, 1_000_000)
+        .unwrap();
+    let list = RtListChannelsArgument {
+        team: create.metadata.team.clone(),
+        app: RtAppId::Chat,
+        last: 0,
+    };
+    let read = |actor: &RealtimeActor| {
+        f.reader()
+            .snapshot()
+            .unwrap()
+            .rt_list_channels(actor, &list, 1_000_100)
+            .unwrap()
+            .channels
+    };
+    let owner = read(&f.owner);
+    assert_eq!(owner.len(), 2);
+    assert!(owner[0].no_push);
+    assert_eq!(owner[0].trailing, create.metadata.trailing);
+    let mut expected = create.metadata.clone();
+    expected.ctime = 1_000;
+    expected.mtime = 1_000;
+    assert_eq!(owner[0].encoded().unwrap(), expected.encoded().unwrap());
+    assert_eq!(
+        owner[1].trailing.unknown(),
+        &[foks_snowpack::Value::Unsigned(9)]
+    );
+    // A member below the read role sees the name and noPush, not fields the
+    // server cannot classify.
+    let member = read(&f.member);
+    assert_eq!(member.len(), 2);
+    assert!(member[1].unreadable);
+    assert!(!member[1].no_push);
+    assert!(member[1].trailing.unknown().is_empty());
 }
 #[test]
 fn concurrent_channel_creates_have_one_cas_winner() {

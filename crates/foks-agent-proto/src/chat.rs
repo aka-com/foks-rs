@@ -311,9 +311,27 @@ pub struct ChatChannel {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ChatContent {
-    Text { text: SecretString },
+    Text {
+        text: SecretString,
+    },
+    /// An authenticated reply, reaction, edit or deletion that names an
+    /// earlier message. Shown as a placeholder; its body is not forwarded.
+    /// `target` is the hex message ID, or null when the sender named the
+    /// all-zero ID.
+    Pegged {
+        action: ChatPeggedAction,
+        target: Option<String>,
+    },
     Unsupported,
     Oversized,
+}
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChatPeggedAction {
+    Reply,
+    Reaction,
+    Edit,
+    Delete,
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

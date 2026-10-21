@@ -50,6 +50,10 @@ impl Database {
         identity.expected_previous_sequence = 0;
         let envelope = proto(identity.encoded())?;
         let existing=tx.query_row("SELECT channel_id,sender,envelope,sequence,insert_time FROM rt_messages WHERE message_id=?1",params![send.metadata.id.0.as_slice()],|r|Ok((r.budgeted_get::<_,Vec<u8>>(0)?,r.budgeted_get::<_,Vec<u8>>(1)?,r.budgeted_get::<_,Vec<u8>>(2)?,r.budgeted_get::<_,i64>(3)?,r.budgeted_get::<_,i64>(4)?))).optional()?;
+        // Idempotent on message ID: an identical resend returns the original
+        // delivery. This precedes the expected_previous_sequence check, so a
+        // retry whose own first delivery advanced the channel is answered as a
+        // replay rather than a race.
         if let Some((channel, sender, old, sequence, insert_time)) = existing {
             if channel != id || sender != actor.uid || old != envelope {
                 return Err(Error::OperationConflict);
@@ -58,6 +62,8 @@ impl Database {
                 value: ChatSendReceipt {
                     sequence: crate::error::unsigned(sequence)?,
                     insert_time: crate::error::unsigned(insert_time)?,
+                    was_replay: true,
+                    trailing: Default::default(),
                 },
                 wake: vec![],
             });
@@ -125,6 +131,8 @@ impl Database {
             value: ChatSendReceipt {
                 sequence,
                 insert_time,
+                was_replay: false,
+                trailing: Default::default(),
             },
             wake,
         })

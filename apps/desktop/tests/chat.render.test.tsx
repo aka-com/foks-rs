@@ -839,6 +839,67 @@ test('own messages read as You and unread messages sit under a New divider', asy
   }
 });
 
+test('pegged replies, reactions, edits and deletions render as placeholders in sequence', async () => {
+  const sender = '01' + 'cd'.repeat(32);
+  const target = '01'.repeat(16);
+  await setup((base) => ({
+    ...base,
+    chat: async (store, action, view) => {
+      const reply = await base.chat(store, action, view);
+      if (action.action === 'history' && reply.result.kind === 'history')
+        reply.result.messages = [
+          {
+            id: target,
+            sequence: '1',
+            sender,
+            send_time: '1700000000000',
+            insert_time: '1700000000001',
+            content: { kind: 'text', text: 'Team chat is ready.' },
+          },
+          ...(['reply', 'reaction', 'edit', 'delete'] as const).map(
+            (pegged, index) => ({
+              id: String(index + 2)
+                .padStart(2, '0')
+                .repeat(16),
+              sequence: String(index + 2),
+              sender,
+              send_time: '1700000000000',
+              insert_time: '1700000000001',
+              content: {
+                kind: 'pegged' as const,
+                action: pegged,
+                target: index === 3 ? null : target,
+              },
+            }),
+          ),
+        ];
+      return reply;
+    },
+  }));
+  await ui.screen.findByText(
+    'Deleted a message. This version does not show the change.',
+  );
+  const notices = [
+    ...document.querySelectorAll<HTMLElement>(
+      '.chat-message .chat-unsupported',
+    ),
+  ];
+  assert.deepEqual(
+    notices.map((notice) => notice.textContent),
+    [
+      'Replied to a message. This version does not show the change.',
+      'Reacted to a message. This version does not show the change.',
+      'Edited a message. This version does not show the change.',
+      'Deleted a message. This version does not show the change.',
+    ],
+  );
+  assert.deepEqual(
+    notices.map((notice) => notice.dataset.peggedTarget ?? null),
+    [target, target, target, null],
+  );
+  assert.equal(document.querySelectorAll('.chat-message').length, 5);
+});
+
 test('scrolling away from the newest message displays a Jump to latest button', async () => {
   await setup();
   assert.equal(

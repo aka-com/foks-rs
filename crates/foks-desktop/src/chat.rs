@@ -29,6 +29,7 @@ fn valid_channel(channel: &ChatChannel) -> bool {
 fn valid_content(content: &ChatContent, maximum: usize) -> bool {
     match content {
         ChatContent::Text { text } => text.expose().len() <= maximum,
+        ChatContent::Pegged { target, .. } => target.as_deref().is_none_or(valid_chat_id),
         ChatContent::Unsupported | ChatContent::Oversized => true,
     }
 }

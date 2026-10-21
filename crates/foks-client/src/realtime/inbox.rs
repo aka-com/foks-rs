@@ -1,10 +1,11 @@
+use super::history::ChatPeggedAction;
 use super::policy::ChatLimits;
 use super::session::{ChatChannel, ChatSession, ChatTransport};
 use crate::{Error, Result};
 use foks_client_db::{ChatInboxScope, ChatInboxState, SoftStateStore};
 use foks_proto::{
     RtAppId, RtChangedThreads, RtChannelId, RtGetChangedThreadsArgument, RtGetInboxVersionArgument,
-    RtHostId, RtInboxKey, RtMessageType, RtPartyId, RtPollInbox, RtPollInboxArgument,
+    RtHostId, RtInboxKey, RtMessageId, RtMessageType, RtPartyId, RtPollInbox, RtPollInboxArgument,
     RtReadThrough, RtReadThroughArgument, RtTeamId, RtUserId,
 };
 use foks_rpc::{RealtimeRequest, RealtimeResponse};
@@ -15,12 +16,21 @@ const DEFAULT_PAGE: u64 = 100;
 #[derive(Clone, Eq, PartialEq)]
 pub enum ChatPreviewContent {
     Text(Zeroizing<String>),
+    Pegged {
+        action: ChatPeggedAction,
+        target: RtMessageId,
+    },
     Unsupported(RtMessageType),
 }
 impl std::fmt::Debug for ChatPreviewContent {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Text(_) => formatter.write_str("Text([REDACTED])"),
+            Self::Pegged { action, target } => formatter
+                .debug_struct("Pegged")
+                .field("action", action)
+                .field("target", target)
+                .finish(),
             Self::Unsupported(kind) => formatter.debug_tuple("Unsupported").field(kind).finish(),
         }
     }
@@ -314,6 +324,9 @@ impl ChatSession<'_> {
             insert_time: message.message.insert_time,
             content: match message.content {
                 super::history::ChatContent::Text(text) => ChatPreviewContent::Text(text),
+                super::history::ChatContent::Pegged { action, target } => {
+                    ChatPreviewContent::Pegged { action, target }
+                }
                 super::history::ChatContent::Unsupported(kind) => {
                     ChatPreviewContent::Unsupported(kind)
                 }
@@ -679,6 +692,8 @@ mod drain_tests {
                 updated_at: 1,
                 tier: RtChannelTier::Bottom,
                 unreadable: false,
+                no_push: false,
+                trailing: Default::default(),
             },
             inbox_version: version,
             read_through: 0,
