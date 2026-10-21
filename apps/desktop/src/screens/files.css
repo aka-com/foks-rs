@@ -533,7 +533,6 @@
   white-space: nowrap;
 }
 
-
 .inset .appearance-picker {
   align-self: flex-start;
   padding: 2px;
@@ -554,4 +553,67 @@
 }
 .file-uploads button {
   margin-inline-end: 8px;
+}
+
+/* ---------------------------------------------------------- item sheets
+   New Password / Document / Folder, Rename or Move: a 36px kind tile and a
+   subtitle in the header, grouped bordered fields, the vault as a one-line
+   menu like the other fields. */
+
+.sheet .hd .bigtile {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-lg);
+  background: var(--chip-bg);
+  color: var(--ink-3);
+  font-size: 18px;
+}
+.sheet .sb > .inset.first {
+  margin-top: 8px;
+}
+.sheet .inset .fr select {
+  width: 100%;
+  min-width: 0;
+  font: 13px var(--sans);
+}
+.sheet .inset .fr .card-select.compact .card-select-trigger {
+  height: var(--control-h);
+  gap: 8px;
+  padding: 0 8px;
+  border: 1px solid var(--line-field);
+  border-radius: var(--radius-md);
+  background: var(--field-bg);
+  color: var(--ink);
+}
+.sheet .inset .fr .card-select.compact .card-select-trigger:hover {
+  background: var(--field-bg);
+}
+.sheet .inset .fr .card-select.compact .card-select-trigger:focus-visible,
+.sheet
+  .inset
+  .fr
+  .card-select.compact
+  .card-select-trigger[aria-expanded='true'] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash-2);
+  outline: 0;
+}
+.sheet .inset .fr .card-select.compact .t b {
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sheet .inset .fr .card-select.compact .card-select-trigger .t small {
+  display: none;
+}
+.sheet .inset .fr .card-select.compact .card-select-chevron {
+  font-size: 14px;
+  color: var(--muted);
+}
+.card-select-option .store-mark {
+  flex: none;
 }

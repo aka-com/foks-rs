@@ -30,7 +30,9 @@ import {
   useDismissOnOverlayBlock,
 } from '/kit/overlay-primitives';
 import { Icon } from '../components/icon';
-import { GroupMark } from '../screens/group-mark';
+import { ariaShortcut } from '../components/menus';
+import { StoreMark } from '../components/store-mark';
+import type { FoksIconName } from '../icons';
 import {
   KINDS,
   hue,
@@ -61,7 +63,7 @@ export const SEARCH_SCOPES: readonly {
 }[] = [
   { id: 'all', label: 'All' },
   { id: 'items', label: 'Items' },
-  { id: 'stores', label: 'Vaults & teams' },
+  { id: 'stores', label: 'Vaults and teams' },
   { id: 'people', label: 'People' },
   { id: 'channels', label: 'Channels' },
 ];
@@ -402,6 +404,60 @@ export interface SearchPaletteProps {
 }
 
 /** The keyboard hints along the foot, which never change. */
+/**
+ * The places the empty palette offers before any result, as the sidebar
+ * names them. They are moves, not search results: typing or choosing a
+ * scope replaces them with results.
+ */
+interface PlaceRow {
+  id: string;
+  name: string;
+  icon: FoksIconName;
+  location: Location;
+  /** A key equivalent bound elsewhere (the native menu), drawn at the end. */
+  shortcut?: string;
+}
+
+const PLACES: readonly PlaceRow[] = [
+  {
+    id: 'place:all',
+    name: 'Go to All Items',
+    icon: 'grid',
+    location: { kind: 'all' },
+  },
+  {
+    id: 'place:chat',
+    name: 'Go to Chat',
+    icon: 'chat',
+    location: { kind: 'chat' },
+  },
+  {
+    id: 'place:activity',
+    name: 'Go to Activity',
+    icon: 'activity',
+    location: { kind: 'activity' },
+  },
+  {
+    id: 'place:teams',
+    name: 'Go to Teams',
+    icon: 'users',
+    location: { kind: 'teams' },
+  },
+  {
+    id: 'place:devices',
+    name: 'Go to Devices',
+    icon: 'shield',
+    location: { kind: 'devices' },
+  },
+  {
+    id: 'place:settings',
+    name: 'Open Settings',
+    icon: 'settings',
+    location: { kind: 'settings' },
+    shortcut: '⌘,',
+  },
+];
+
 const FOOT_KEYS: readonly { keys: readonly string[]; label: string }[] = [
   { keys: ['↑', '↓'], label: 'move' },
   { keys: ['↵'], label: 'open' },
@@ -423,23 +479,33 @@ function Marked({ text, query }: { text: string; query: string }): ReactNode {
 }
 
 /**
- * Every row's mark is the `md` one a group's mark draws, so an item, a person
- * and a channel sit on the same square as the vault beside them.
+ * Every row's mark is a 24px tile tinted by kind, the same one a Files row
+ * draws, so an item, a person and a channel line up with the vault beside
+ * them.
  */
-function EntryGlyph({ glyph }: { glyph: SearchEntry['glyph'] }): ReactNode {
+function EntryGlyph({
+  snapshot,
+  glyph,
+}: {
+  snapshot: AgentSnapshot;
+  glyph: SearchEntry['glyph'];
+}): ReactNode {
   switch (glyph.kind) {
     case 'item':
       return (
-        <span className={`kico md ${glyph.itemKind}`} aria-hidden="true">
+        <span
+          className={`tile ${glyph.itemKind === 'Password' ? 'pw' : 'text'}`}
+          aria-hidden="true"
+        >
           <Icon name={KINDS[glyph.itemKind].icon} />
         </span>
       );
     case 'store':
-      return <GroupMark store={glyph.store} />;
+      return <StoreMark snapshot={snapshot} store={glyph.store} size="md" />;
     case 'person':
       return (
         <span
-          className="kico md"
+          className="tile avatar"
           aria-hidden="true"
           style={{ background: hue(glyph.username) }}
         >
@@ -448,8 +514,8 @@ function EntryGlyph({ glyph }: { glyph: SearchEntry['glyph'] }): ReactNode {
       );
     case 'channel':
       return (
-        <span className="kico md pal-channel" aria-hidden="true">
-          #
+        <span className="tile" aria-hidden="true">
+          <Icon name="hash" />
         </span>
       );
   }
@@ -499,9 +565,22 @@ function SearchSheet({
     [index, query, scope],
   );
 
+  // The empty palette leads with the places; any query or scope drops them.
+  const places = query.trim() === '' && scope === 'all' ? PLACES : [];
+  const total = places.length + results.length;
   // A shorter result set can strand the highlight past its end.
-  const selected = results.length ? Math.min(active, results.length - 1) : -1;
+  const selected = total ? Math.min(active, total - 1) : -1;
   const optionId = (position: number): string => `${listId}-option-${position}`;
+
+  const openAt = (position: number): void => {
+    const place = places[position];
+    if (place) {
+      onClose();
+      onNavigate(place.location);
+      return;
+    }
+    open(results[position - places.length]);
+  };
 
   const open = (entry: SearchEntry | undefined): void => {
     if (!entry) return;
@@ -542,7 +621,7 @@ function SearchSheet({
   const onKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
     if (event.key === 'ArrowDown') {
       event.preventDefault();
-      setActive(Math.min(selected + 1, results.length - 1));
+      setActive(Math.min(selected + 1, total - 1));
       return;
     }
     if (event.key === 'ArrowUp') {
@@ -552,7 +631,7 @@ function SearchSheet({
     }
     if (event.key === 'Enter') {
       event.preventDefault();
-      open(results[selected]);
+      if (selected >= 0) openAt(selected);
       return;
     }
     if (event.key === 'Tab') {
@@ -568,7 +647,7 @@ function SearchSheet({
     group,
     label: GROUP_LABELS[group],
     rows: results
-      .map((entry, position) => ({ entry, position }))
+      .map((entry, index) => ({ entry, position: places.length + index }))
       .filter((row) => row.entry.scope === group),
   })).filter((section) => section.rows.length > 0);
 
@@ -608,22 +687,24 @@ function SearchSheet({
           </span>
         </div>
 
-        <div className="pal-scopes" role="group" aria-label="Search scope">
-          {SEARCH_SCOPES.map((chip) => (
-            <button
-              key={chip.id}
-              type="button"
-              className={chip.id === scope ? 'chip on' : 'chip'}
-              aria-pressed={chip.id === scope}
-              tabIndex={-1}
-              onClick={() => {
-                setScope(chip.id);
-                setActive(0);
-              }}
-            >
-              {chip.label}
-            </button>
-          ))}
+        <div className="pal-scopes">
+          <div className="seg" role="group" aria-label="Search scope">
+            {SEARCH_SCOPES.map((chip) => (
+              <button
+                key={chip.id}
+                type="button"
+                className={chip.id === scope ? 'chip on' : 'chip'}
+                aria-pressed={chip.id === scope}
+                tabIndex={-1}
+                onClick={() => {
+                  setScope(chip.id);
+                  setActive(0);
+                }}
+              >
+                {chip.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         <CollectionStatus state={readiness} label="search results" />
@@ -633,6 +714,41 @@ function SearchSheet({
           role="listbox"
           aria-label="Search results"
         >
+          {places.length ? (
+            <div role="group" aria-label="Go to" className="pal-group">
+              <div className="pal-grp">Go to</div>
+              {places.map((place, position) => (
+                <div
+                  key={place.id}
+                  id={optionId(position)}
+                  role="option"
+                  aria-selected={position === selected}
+                  aria-keyshortcuts={
+                    place.shortcut ? ariaShortcut(place.shortcut) : undefined
+                  }
+                  className={
+                    position === selected ? 'pal-hit go sel' : 'pal-hit go'
+                  }
+                  onMouseMove={() => {
+                    setActive(position);
+                  }}
+                  onClick={() => {
+                    openAt(position);
+                  }}
+                >
+                  <span className="tile go" aria-hidden="true">
+                    <Icon name={place.icon} />
+                  </span>
+                  <span className="t">
+                    <b>{place.name}</b>
+                  </span>
+                  {place.shortcut ? (
+                    <kbd className="where">{place.shortcut}</kbd>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
           {groups.length === 0 &&
           readiness !== 'ready' ? null : groups.length === 0 ? (
             <p className="pal-none">
@@ -664,7 +780,7 @@ function SearchSheet({
                       open(entry);
                     }}
                   >
-                    <EntryGlyph glyph={entry.glyph} />
+                    <EntryGlyph snapshot={snapshot} glyph={entry.glyph} />
                     <span className="t">
                       <b>
                         <Marked text={entry.name} query={query} />
@@ -689,7 +805,10 @@ function SearchSheet({
             </span>
           ))}
           <span className="grow" />
-          <span className="pal-count" aria-live="polite">
+          <span
+            className={places.length ? 'pal-count offscreen' : 'pal-count'}
+            aria-live="polite"
+          >
             {results.length === 1 ? '1 result' : `${results.length} results`}
           </span>
         </div>

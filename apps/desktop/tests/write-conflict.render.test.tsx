@@ -104,7 +104,7 @@ test('an edit conflict with a deleted item preserves a new-item draft', async ()
 
   // With nothing left to review, the edit is kept as a new password at the
   // same path, its fields carried over, and the toast says why.
-  await rendered.findByText('New password');
+  await rendered.findByText('New Password');
   await ui.waitFor(() =>
     assert.equal(
       (rendered.getByLabelText('User name') as HTMLInputElement).value,
@@ -134,7 +134,7 @@ test('an edit conflict with an existing item resumes against the refreshed versi
     );
   });
   await ui.waitFor(() => assert.match(toasts(), /Review your draft/));
-  assert.equal(rendered.queryByText('New password'), null);
+  assert.equal(rendered.queryByText('New Password'), null);
   assert.ok(document.querySelector('.details'));
 });
 

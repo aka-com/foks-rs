@@ -104,7 +104,7 @@ async function openFileDocument(
   ui.fireEvent.click(
     await rendered.findByRole('menuitem', { name: 'New Document' }),
   );
-  await rendered.findByRole('dialog', { name: 'New document' });
+  await rendered.findByRole('dialog', { name: 'New Document' });
   ui.fireEvent.click(rendered.getByRole('button', { name: 'File' }));
   ui.fireEvent.change(rendered.getByLabelText('Name'), {
     target: { value: name },
@@ -229,7 +229,7 @@ test('dropping a file onto an existing path displays the conflict resolution ste
   ui.fireEvent.change(rendered.getByLabelText('Name'), {
     target: { value: `copy-${name}` },
   });
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Create item' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Create' }));
   await ui.waitFor(() => assert.equal(uploads.length, 2));
   assert.equal(uploads[0]?.sourcePath, uploads[1]?.sourcePath);
   assert.equal(uploads[1]?.path, `/documents/copy-${name}`);
@@ -295,7 +295,7 @@ test('the new-item sheet keeps the drop while it is open', async () => {
   ui.fireEvent.click(
     await rendered.findByRole('menuitem', { name: 'New Document' }),
   );
-  await ui.waitFor(() => assert.ok(rendered.getByText('New document')));
+  await ui.waitFor(() => assert.ok(rendered.getByText('New Document')));
 
   await driver.hover(true);
   assert.equal(rendered.queryByText(/Drop to upload/), null);
@@ -328,7 +328,7 @@ test('a picker-selected file survives a naming conflict and retries without reop
   await openFileDocument(rendered, 'report.pdf');
 
   ui.fireEvent.click(
-    rendered.getByRole('button', { name: 'Choose file and create' }),
+    rendered.getByRole('button', { name: 'Choose File and Create' }),
   );
   await rendered.findByText('An item already exists at /report.pdf');
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Change path' }));
@@ -336,7 +336,7 @@ test('a picker-selected file survives a naming conflict and retries without reop
   ui.fireEvent.change(rendered.getByLabelText('Name'), {
     target: { value: 'renamed-report.pdf' },
   });
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Create item' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Create' }));
 
   await ui.waitFor(() => assert.equal(uploads.length, 2));
   assert.equal(picks, 1);
@@ -372,10 +372,10 @@ test('a picker-selected file survives an upload error and retry', async () => {
   await openFileDocument(rendered, 'archive.zip');
 
   ui.fireEvent.click(
-    rendered.getByRole('button', { name: 'Choose file and create' }),
+    rendered.getByRole('button', { name: 'Choose File and Create' }),
   );
   await rendered.findByText('archive.zip', { selector: '.mono' });
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Create item' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Create' }));
 
   await ui.waitFor(() => assert.equal(uploads.length, 2));
   assert.equal(picks, 1);
@@ -397,14 +397,14 @@ test('cancelling the file picker leaves the document draft open', async () => {
   await ui.waitFor(() => assert.ok(rendered.getAllByText('Personal').length));
   await openFileDocument(rendered, 'cancelled.pdf');
   ui.fireEvent.click(
-    rendered.getByRole('button', { name: 'Choose file and create' }),
+    rendered.getByRole('button', { name: 'Choose File and Create' }),
   );
 
   await ui.waitFor(() =>
-    assert.ok(rendered.getByRole('button', { name: 'Choose file and create' })),
+    assert.ok(rendered.getByRole('button', { name: 'Choose File and Create' })),
   );
   assert.equal(uploads, 0);
-  assert.ok(rendered.getByRole('dialog', { name: 'New document' }));
+  assert.ok(rendered.getByRole('dialog', { name: 'New Document' }));
 });
 
 test('discarding a selected-file draft releases its native authorization', async () => {
@@ -426,7 +426,7 @@ test('discarding a selected-file draft releases its native authorization', async
   await ui.waitFor(() => assert.ok(rendered.getAllByText('Personal').length));
   await openFileDocument(rendered, 'private.pdf');
   ui.fireEvent.click(
-    rendered.getByRole('button', { name: 'Choose file and create' }),
+    rendered.getByRole('button', { name: 'Choose File and Create' }),
   );
   await rendered.findByText('private.pdf', { selector: '.mono' });
 

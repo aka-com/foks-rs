@@ -161,7 +161,9 @@ test('⌘K does not open the palette while another modal is active', async () =>
 
 test('results are grouped by kind and counted for a screen reader', async () => {
   await palette(true);
+  // The empty palette leads with the places, then a head of every kind.
   assert.deepEqual(headings(), [
+    'Go to',
     'Items',
     'Vaults, teams and shares',
     'People',
@@ -252,7 +254,7 @@ test('each kind of result goes to the tab that owns it', async () => {
     ui.fireEvent.click(rows()[0]);
   };
 
-  openFirst('Household', 'Vaults & teams');
+  openFirst('Household', 'Vaults and teams');
   assert.deepEqual(journal.navigations.at(-1), {
     kind: 'store',
     ref: 'team:household',
@@ -291,7 +293,7 @@ test('Tab cycles the scope chips and never moves focus', async () => {
   assert.deepEqual(labels(), [
     'All',
     'Items',
-    'Vaults & teams',
+    'Vaults and teams',
     'People',
     'Channels',
   ]);
@@ -344,6 +346,7 @@ test('Escape closes the palette, and it reopens empty', async () => {
   // The palette is a sheet, not a place: nothing about the last one survives.
   assert.equal(field().value, '');
   assert.deepEqual(headings(), [
+    'Go to',
     'Items',
     'Vaults, teams and shares',
     'People',
@@ -363,4 +366,21 @@ test('search suppresses no matches while the inventory is incomplete', async () 
   ui.fireEvent.change(field(), { target: { value: 'not-yet-loaded' } });
   assert.ok(rendered.getByText('Loading search results…'));
   assert.equal(rendered.queryByText(/No matches for/), null);
+});
+
+test('the empty palette offers the places first and opens them with Return', async () => {
+  const { journal } = await palette(true);
+  assert.equal(
+    activeRow().querySelector('.t b')?.textContent,
+    'Go to All Items',
+  );
+  ui.fireEvent.keyDown(field(), { key: 'ArrowDown' });
+  ui.fireEvent.keyDown(field(), { key: 'Enter' });
+  assert.deepEqual(journal.navigations.at(-1), { kind: 'chat' });
+  assert.equal(journal.closes, 1);
+  // A query replaces the places with results.
+  ui.fireEvent.keyDown(document, { key: 'k', metaKey: true });
+  await ui.waitFor(() => assert.ok(document.querySelector('.pal')));
+  type('netflix');
+  assert.deepEqual(headings(), ['Items']);
 });

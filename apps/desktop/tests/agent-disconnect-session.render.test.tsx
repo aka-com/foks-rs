@@ -278,7 +278,7 @@ test('an agent quarantine discards the session', async () => {
   const site = (await rendered.findByLabelText('Site')) as HTMLInputElement;
   ui.fireEvent.change(site, { target: { value: 'quarantine.example' } });
   await ui.act(async () => {
-    rendered.getByRole('button', { name: 'Create item' }).click();
+    rendered.getByRole('button', { name: 'Create' }).click();
     await Promise.resolve();
   });
 

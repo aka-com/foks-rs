@@ -81,7 +81,7 @@ async function openSheet(
     await rendered.findByRole('menuitem', { name: `New ${kind}` }),
   );
   await ui.waitFor(() =>
-    assert.ok(rendered.getByText(`New ${kind.toLowerCase()}`)),
+    assert.ok(rendered.getByRole('dialog', { name: `New ${kind}` })),
   );
 }
 
@@ -119,7 +119,7 @@ test('an empty sheet closes behind the navigation without asking', async () => {
   assert.equal(store.getSnapshot().location.kind, 'teams');
   // The sheet does not float over the page the reader landed on.
   await ui.waitFor(() =>
-    assert.equal(rendered.queryByText('New password'), null),
+    assert.equal(rendered.queryByText('New Password'), null),
   );
 });
 
@@ -130,14 +130,14 @@ test('Files shortcuts create passwords and documents without replacing an open s
     false,
   );
   const password = await rendered.findByRole('dialog', {
-    name: 'New password',
+    name: 'New Password',
   });
   ui.fireEvent.keyDown(document, {
     key: 'n',
     metaKey: true,
     shiftKey: true,
   });
-  assert.equal(rendered.queryByRole('dialog', { name: 'New document' }), null);
+  assert.equal(rendered.queryByRole('dialog', { name: 'New Document' }), null);
   ui.fireEvent.click(
     ui.within(password).getByRole('button', { name: 'Cancel' }),
   );
@@ -149,7 +149,7 @@ test('Files shortcuts create passwords and documents without replacing an open s
     }),
     false,
   );
-  await rendered.findByRole('dialog', { name: 'New document' });
+  await rendered.findByRole('dialog', { name: 'New Document' });
 });
 
 test('the native application menu opens the same new-item workflow', async () => {
@@ -163,7 +163,7 @@ test('the native application menu opens the same new-item workflow', async () =>
   });
   await ui.waitFor(() => assert.ok(open));
   ui.act(() => open?.('Document'));
-  await rendered.findByRole('dialog', { name: 'New document' });
+  await rendered.findByRole('dialog', { name: 'New Document' });
 });
 
 test('the Files folder menu creates a folder in its selected vault path', async () => {
@@ -180,11 +180,11 @@ test('the Files folder menu creates a folder in its selected vault path', async 
   assert.ok(root);
   ui.fireEvent.contextMenu(root);
   ui.fireEvent.click(rendered.getByRole('menuitem', { name: 'New folder' }));
-  await rendered.findByRole('dialog', { name: 'New folder' });
+  await rendered.findByRole('dialog', { name: 'New Folder' });
   ui.fireEvent.change(rendered.getByLabelText('Name'), {
     target: { value: 'Projects' },
   });
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Create folder' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Create' }));
   await ui.waitFor(() => assert.ok(request));
   assert.deepEqual(request, {
     storeId: 'acct:personal',
@@ -201,7 +201,7 @@ test('discarding a new folder clears its name before the next sheet', async () =
   const open = async () => {
     ui.fireEvent.contextMenu(root);
     ui.fireEvent.click(rendered.getByRole('menuitem', { name: 'New folder' }));
-    return rendered.findByRole('dialog', { name: 'New folder' });
+    return rendered.findByRole('dialog', { name: 'New Folder' });
   };
   const first = await open();
   ui.fireEvent.change(ui.within(first).getByLabelText('Name'), {
@@ -259,7 +259,7 @@ test('confirming the discard closes the sheet and makes the move', async () => {
   });
   assert.equal(store.getSnapshot().location.kind, 'teams');
   await ui.waitFor(() =>
-    assert.equal(rendered.queryByText('New password'), null),
+    assert.equal(rendered.queryByText('New Password'), null),
   );
 });
 
@@ -293,7 +293,7 @@ test('a save already with the agent refuses the navigation', async () => {
     target: { value: 'example.com' },
   });
   await ui.act(async () => {
-    ui.fireEvent.click(rendered.getByRole('button', { name: 'Create item' }));
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Create' }));
     await Promise.resolve();
   });
 
@@ -349,7 +349,7 @@ test('Escape on a sheet with something in it asks the same question', async () =
     await Promise.resolve();
   });
   await ui.waitFor(() =>
-    assert.equal(rendered.queryByText('New document'), null),
+    assert.equal(rendered.queryByText('New Document'), null),
   );
 });
 
@@ -364,7 +364,7 @@ test('losing focus masks a plaintext document draft without closing it', async (
   const concealed = rendered.getByLabelText('Value') as HTMLInputElement;
   assert.equal(concealed.type, 'password');
   assert.equal(concealed.value, 'private draft token');
-  assert.ok(rendered.getByText('New document'));
+  assert.ok(rendered.getByText('New Document'));
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Show' }));
   assert.equal(
     (rendered.getByLabelText('Value') as HTMLInputElement).type,
@@ -372,27 +372,17 @@ test('losing focus masks a plaintext document draft without closing it', async (
   );
 });
 
-test('Path expands below the vault selector and disappears when no vault is available', async () => {
+test('Path sits under the vault selector and disappears when no vault is available', async () => {
   const { rendered, App, appProps } = await mount();
   await openSheet(rendered, 'Password');
 
   const vault = rendered.getByRole('button', { name: 'Save in vault' });
-  assert.equal(rendered.queryByLabelText('Path'), null);
   assert.equal(rendered.queryByRole('button', { name: 'Advanced' }), null);
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Path' }));
-
   const path = rendered.getByLabelText('Path');
   assert.equal(path.closest('.inset'), vault.closest('.inset'));
-  const hide = rendered.getByRole('button', { name: 'Hide Path' });
-  assert.equal(hide.getAttribute('aria-expanded'), 'true');
-  ui.fireEvent.click(hide);
-  assert.equal(rendered.queryByLabelText('Path'), null);
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Path' }));
 
   appProps.snapshot = { ...appProps.snapshot, stores: [] };
   rendered.rerender(createElement(App, appProps));
-  assert.equal(rendered.queryByRole('button', { name: 'Path' }), null);
-  assert.equal(rendered.queryByRole('button', { name: 'Hide Path' }), null);
   assert.equal(rendered.queryByLabelText('Path'), null);
 });
 
@@ -405,24 +395,22 @@ for (const kind of ['Password', 'Document']) {
       await rendered.findByRole('option', { name: /^Household/ }),
     );
 
-    const sheet = rendered.getByRole('dialog', {
-      name: `New ${kind.toLowerCase()}`,
-    });
+    const sheet = rendered.getByRole('dialog', { name: `New ${kind}` });
     const sections = [...sheet.querySelectorAll('.sec')].map((section) =>
       section.textContent?.trim(),
     );
     const content = sections.findIndex((label) => label?.startsWith(kind));
-    const read = sections.findIndex((label) =>
-      label?.startsWith('Who can read'),
-    );
-    const change = sections.findIndex((label) =>
-      label?.startsWith('Who can change'),
-    );
+    const access = sections.indexOf('Access');
     assert.ok(content >= 0, `${kind} section is present`);
-    assert.ok(read > content, 'read permissions follow the item fields');
-    assert.ok(change > read, 'change permissions follow read permissions');
-    for (const summary of sheet.querySelectorAll('.sec .pv'))
-      assert.equal(summary.querySelector('b'), null);
+    assert.ok(access > content, 'access follows the item fields');
+    // Team items default to member-readable and admin-changeable.
+    const read = ui.within(sheet).getByLabelText<HTMLSelectElement>('Read');
+    const write = ui.within(sheet).getByLabelText<HTMLSelectElement>('Write');
+    assert.equal(read.value, 'Member');
+    assert.equal(write.value, 'Admin');
+    assert.ok(ui.within(sheet).getByLabelText('Read visibility'));
+    ui.fireEvent.change(read, { target: { value: 'Owner' } });
+    assert.equal(ui.within(sheet).queryByLabelText('Read visibility'), null);
   });
 }
 
@@ -436,11 +424,11 @@ test('a new item resumes its typed input after a rail tab switch', async () => {
     store.navigateTab('teams');
   });
   assert.equal(confirmation(), null);
-  assert.equal(rendered.queryByText('New password'), null);
+  assert.equal(rendered.queryByText('New Password'), null);
   await ui.act(async () => {
     store.navigateTab('files');
   });
-  await rendered.findByText('New password');
+  await rendered.findByText('New Password');
   assert.equal(
     (rendered.getByLabelText('Site') as HTMLInputElement).value,
     'draft.example',
@@ -452,7 +440,7 @@ test('a new item resumes its typed input after a rail tab switch', async () => {
   await ui.act(async () => {
     store.navigateTab('files');
   });
-  assert.equal(rendered.queryByText('New password'), null);
+  assert.equal(rendered.queryByText('New Password'), null);
   assert.equal(store.getSnapshot().sheet, undefined);
 });
 
