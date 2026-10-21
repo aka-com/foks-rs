@@ -124,6 +124,7 @@ export function RecoveryStep({
           ) : (
             <Button
               variant="primary"
+              data-dialog-autofocus="true"
               disabled={checkpoint.backupCommitted || busy}
               onClick={() => go('phrase')}
             >
@@ -176,6 +177,7 @@ export function RecoveryStep({
               is lost.
             </p>
             <Button
+              data-dialog-autofocus="true"
               disabled={busy || (checkpoint.backupCommitted && !recoveryPhrase)}
               onClick={() => go('phrase')}
             >

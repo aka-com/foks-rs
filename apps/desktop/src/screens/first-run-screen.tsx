@@ -11,6 +11,8 @@ import {
   Pane,
   StepIntro,
   FirstRunIntroSlot,
+  focusStepStart,
+  pressStepDefault,
 } from './first-run-view';
 export { FirstRunChecklistStatus } from './first-run-view';
 import {
@@ -291,8 +293,9 @@ function FirstRunSession({
   } = useRecoveryBackup();
   // The setup card's left panel, where each step's StepIntro is drawn.
   const [introSlot, setIntroSlot] = useState<HTMLElement | null>(null);
-  // Pending path selection before confirmation.
-  const [pendingPath, setPendingPath] = useState<FirstRunPath | null>(null);
+  // Pending path selection before confirmation. Setting up an own account is
+  // the default choice, so Continue (and Return) works without a selection.
+  const [pendingPath, setPendingPath] = useState<FirstRunPath | null>('own');
   const [otherMutationBusy, setBusy] = useState(false);
   const [personalRefreshing, setPersonalRefreshing] = useState(false);
   const [personalRefreshError, setPersonalRefreshError] = useState<
@@ -1083,6 +1086,39 @@ function FirstRunSession({
       })
       .finally(() => setPersonalRefreshing(false));
   };
+
+  // The setup card's step column. When a step appears, the focus moves to
+  // where it starts (its first field, chosen radio or heading); when a
+  // failure re-renders the step after the controls were inert, the focus
+  // returns to the field in error.
+  const stepColumn = useRef<HTMLElement | null>(null);
+  const focusedStep = useRef<string | null>(null);
+  const setupCardStep = ![
+    'added',
+    'checklist-invited',
+    'checklist-own',
+  ].includes(state);
+  const stepKey = !agentReady && onRetryAgent ? 'service' : state;
+  useEffect(() => {
+    if (!setupCardStep) {
+      focusedStep.current = null;
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      const column = stepColumn.current;
+      if (!column || column.querySelector('[data-setup-controls][inert]'))
+        return;
+      // A sheet over the step (the recovery phrase, Restart setup?) owns
+      // the focus while it is open.
+      if (document.querySelector('[aria-modal="true"]')) return;
+      const active = document.activeElement;
+      const lost = !active || active === document.body;
+      if (focusedStep.current === stepKey && !lost) return;
+      focusedStep.current = stepKey;
+      focusStepStart(column, introSlot);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [setupCardStep, stepKey, busy, message, introSlot]);
 
   let content: ReactNode;
   const reviewServerSettings = (
@@ -1987,6 +2023,10 @@ function FirstRunSession({
     content = (
       // The panel's bar names the team, so the page opens on the notice.
       <Pane title={group} header={false} wide>
+        {/* The bar names the team; the page's heading is for VoiceOver. */}
+        <h1 className="offscreen" tabIndex={-1}>
+          {group}
+        </h1>
         <Notice
           // The pane's title already names the team, so the notice states the
           // condition alone, in the same words the store access takeover uses.
@@ -2136,7 +2176,12 @@ function FirstRunSession({
     </div>
   ) : null;
   const mainColumn = (
-    <main className="main first-run-main" aria-busy={agentReady && busy}>
+    <main
+      ref={stepColumn}
+      className="main first-run-main"
+      aria-busy={agentReady && busy}
+      onKeyDown={appMode ? undefined : pressStepDefault}
+    >
       {appBar}
       {restartError ? (
         <p role="alert" className="crit">
