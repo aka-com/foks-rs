@@ -201,12 +201,13 @@ test('arrow keys move selection across result groups', async () => {
   assert.equal(activeRow(), all[0]);
   assert.equal(all[0].getAttribute('aria-selected'), 'true');
 
-  // Down walks to the end of the Items group and straight into the next one.
-  const items = all.filter(
-    (row) =>
-      row.closest('[role="group"]')?.getAttribute('aria-label') === 'Items',
-  );
-  for (let step = 0; step < items.length; step += 1)
+  // Down walks through the places the query names, to the end of the Items
+  // group and straight into the next one.
+  const groupOf = (row: Element): string | null | undefined =>
+    row.closest('[role="group"]')?.getAttribute('aria-label');
+  const items = all.filter((row) => groupOf(row) === 'Items');
+  const places = all.filter((row) => groupOf(row) === 'Go to');
+  for (let step = 0; step < places.length + items.length; step += 1)
     ui.fireEvent.keyDown(field(), { key: 'ArrowDown' });
   assert.equal(
     activeRow().closest('[role="group"]')?.getAttribute('aria-label'),
@@ -383,4 +384,13 @@ test('the empty palette offers the places first and opens them with Return', asy
   await ui.waitFor(() => assert.ok(document.querySelector('.pal')));
   type('netflix');
   assert.deepEqual(headings(), ['Items']);
+});
+
+test('a query that names a place lists it, and Return opens it', async () => {
+  const { journal } = await palette(true);
+  type('settings');
+  assert.equal(headings()[0], 'Go to');
+  assert.equal(activeRow().querySelector('.t b')?.textContent, 'Open Settings');
+  ui.fireEvent.keyDown(field(), { key: 'Enter' });
+  assert.deepEqual(journal.navigations.at(-1), { kind: 'settings' });
 });
