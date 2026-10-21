@@ -297,3 +297,30 @@ test('Escape belongs to the page: not from the sidebar, and from blank space it 
     ),
   );
 });
+
+test('VoiceOver text: rows keep their parts apart, a concealed value reads Hidden', async () => {
+  await mount(
+    {},
+    {
+      selection: { store: 'acct:personal', path: '/logins/github.com' },
+      details: true,
+    },
+  );
+  const row = document.querySelector<HTMLElement>(
+    '.lpane [data-row-key="acct:personal|/logins/github.com"]',
+  )!;
+  assert.match(row.textContent ?? '', /^github\.com, .+, \d/);
+  await ui.waitFor(() => assert.ok(document.querySelector('.details .masked')));
+  const masked = document.querySelector('.details .masked')!;
+  assert.equal(
+    masked.querySelector('[aria-hidden="true"]')?.textContent?.[0],
+    '•',
+  );
+  assert.equal(masked.querySelector('.offscreen')?.textContent, 'Hidden');
+  // The connection state has a status region of its own.
+  assert.ok(
+    [...document.querySelectorAll('.side [role="status"]')].some(
+      (region) => region.textContent === 'Connected',
+    ),
+  );
+});

@@ -559,12 +559,15 @@ test('a section address opens that page, each with the sub-navigation beside it'
       where: { section },
     });
     // The bar names Settings and the tab names the section, so the page
-    // carries no third title: it is the panel its tab labels.
+    // carries no third visible title: it is the panel its tab labels, with
+    // a heading for VoiceOver's heading navigation only.
     assert.ok(
       rendered.getByRole('tabpanel', { name: heading }),
       `${section} opens on its own page`,
     );
-    assert.equal(rendered.queryByRole('heading', { level: 1 }), null);
+    const h1 = rendered.getByRole('heading', { level: 1 });
+    assert.equal(h1.textContent, heading);
+    assert.equal(h1.className, 'offscreen');
     assert.equal(
       rendered
         .getByRole('navigation', { name: 'Settings sections' })

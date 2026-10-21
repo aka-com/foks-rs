@@ -222,7 +222,8 @@ export function SettingsScreen({
           />
         ) : (
           // The bar names Settings and the sub-navigation names the section,
-          // so the page opens on its first group rather than a third title.
+          // so the page opens on its first group rather than a third title;
+          // the heading is there for VoiceOver's heading navigation only.
           // Fixed IDs associate each tab button with its tabpanel.
           <div
             className="body"
@@ -230,6 +231,9 @@ export function SettingsScreen({
             id={tabPanelId(SETTINGS_TABS, section)}
             aria-labelledby={tabId(SETTINGS_TABS, section)}
           >
+            <h1 className="offscreen" tabIndex={-1}>
+              {SETTINGS_SECTION_LABEL[section]}
+            </h1>
             <div className="settings-main">{page}</div>
           </div>
         )}

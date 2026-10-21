@@ -175,7 +175,7 @@ export function railAgentState(
 export function AgentLight({ state }: { state: RailAgentState }): ReactNode {
   const label = AGENT_LABEL[state];
   return (
-    <div className={`status agent-${state}`} title={label}>
+    <div className={`status agent-${state}`} title={label} role="status">
       <i aria-hidden="true" />
       <span className="t">{label}</span>
     </div>
