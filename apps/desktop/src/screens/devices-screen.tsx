@@ -33,7 +33,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
-import type { ReactNode } from 'react';
+import type { KeyboardEvent, ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
 import type {
   AccountDevice,
@@ -49,9 +49,12 @@ import {
   Icon,
   Inset,
   InsetRow,
+  MenuButton,
+  MenuItem,
   Notice,
   SectionLabel,
 } from '../components';
+import { BarActions, DetailsColumn } from '../shell/page-slots';
 import type {
   AccountStore,
   AgentSnapshot,
@@ -60,14 +63,11 @@ import type {
 } from '../model';
 import {
   accountStores,
-  accountSubtitle,
-  plural,
   serverDisplayLabelForStore,
   usernameOf,
 } from '../model';
 import type { Location, NavigateOptions } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
-import { PageHeader } from '../shell/page-header';
 import {
   AddDeviceSheet,
   EnrollSheet,
@@ -81,12 +81,7 @@ import {
   YUBI_WORKFLOWS,
 } from './device-sheets';
 import type { SimpleYubiAction } from './device-sheets';
-import {
-  deviceAt,
-  deviceEntries,
-  enrollmentForDevice,
-  deviceIsCard,
-} from './device-model';
+import { deviceAt, deviceEntries, enrollmentForDevice } from './device-model';
 import type { DeviceEntry } from './device-model';
 import { UnavailableAccount } from './account-section';
 
@@ -179,6 +174,45 @@ function kindLabel(kind: DeviceEntry['kind']): string {
   return kind === 'Enrollment' ? 'Security key' : kind;
 }
 
+/**
+ * The list's groups and the sources each one holds. A key on a card that the
+ * account authenticates as a device is a device; a card enrollment is a
+ * security key.
+ */
+const DEVICE_GROUPS: ReadonlyArray<
+  readonly [string, ReadonlyArray<DeviceEntry['source']['kind']>]
+> = [
+  ['Devices', ['device']],
+  ['Security keys', ['yubi']],
+  ['Recovery phrases', ['backup']],
+];
+
+/** A row's caption: its type, its role, and a security key's card serial. */
+function deviceCaption(entry: DeviceEntry): string {
+  const serial =
+    entry.source.kind === 'yubi' ? entry.source.entry.cardSerial : undefined;
+  return [kindLabel(entry.kind), entry.role, serial ? String(serial) : '']
+    .filter(Boolean)
+    .join(' · ');
+}
+
+/** Up and Down move between the list's rows. */
+function moveRowFocus(event: KeyboardEvent<HTMLButtonElement>): void {
+  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+  const rows = [
+    ...(event.currentTarget
+      .closest('.devices-list')
+      ?.querySelectorAll<HTMLButtonElement>('.row.devrow') ?? []),
+  ];
+  const next =
+    rows[
+      rows.indexOf(event.currentTarget) + (event.key === 'ArrowDown' ? 1 : -1)
+    ];
+  if (!next) return;
+  event.preventDefault();
+  next.focus();
+}
+
 export interface DevicesScreenProps {
   snapshot: AgentSnapshot;
   bridge: Bridge;
@@ -203,6 +237,8 @@ export interface DevicesScreenProps {
   onDeviceLabel?: (label: DeviceLabel | null) => void;
   /** Re-probe connected cards independently of cached enrollment metadata. */
   hardwareRefresh?: number;
+  /** The bar's search text: the list narrows to the names it matches. */
+  query?: string;
 }
 
 export function DevicesScreen({
@@ -217,6 +253,7 @@ export function DevicesScreen({
   onMutationError,
   onDeviceLabel,
   hardwareRefresh = 0,
+  query = '',
 }: DevicesScreenProps): ReactNode {
   // The shell canonicalizes the route on mount; the scene it was entered at
   // is what decides whether a sheet opens with the page.
@@ -390,25 +427,6 @@ export function DevicesScreen({
     ...(at ? { store: at } : {}),
   });
   const backToList = (): void => onNavigate(listAt(location.store));
-  // An authenticated device may be a key on a card, which is not a Mac; the
-  // count says so rather than calling every device one.
-  const cardKeys = devices.filter((device) => deviceIsCard(device)).length;
-  const subtitle = stopped.stopped
-    ? 'Not listed while access is stopped'
-    : loading
-      ? // Counting what has not been read yet would report three zeroes.
-        'Loading…'
-      : [
-          plural(devices.length - cardKeys, 'computer'),
-          ...(cardKeys
-            ? [plural(cardKeys, 'key on a card', 'keys on cards')]
-            : []),
-          plural(backups.length, 'recovery phrase'),
-          // `list_yubi_accounts` answers with enrollments, not with keys: one
-          // count per object, under the name that object carries everywhere.
-          plural(yubi.length, 'enrollment'),
-        ].join(' · ');
-  const why = stopped.stopped ? stopped.reason : undefined;
   // A key's own page always names the enrollment its Card operations act on;
   // there is no page-wide "the one complete enrollment" left to fall back to.
   const openYubi = (action: SimpleYubiAction, entry: YubiEnrollment): void => {
@@ -419,72 +437,23 @@ export function DevicesScreen({
   // Every key on the account, sorted by type: computers, then recovery phrases,
   // then security key enrollments — the one list the page now shows.
   const entries = deviceEntries(lists);
-  /** The row's trailing chip or button, ahead of the "Open" button every row
-   * carries: which one depends on which of the three lists it came from. */
-  const deviceRowAction = (entry: DeviceEntry): ReactNode => {
-    const source = entry.source;
-    if (source.kind === 'device') {
-      const device = source.device;
-      if (device.current) return null;
-      if (deviceIsCard(device)) return <Chip tone="ok">Security key</Chip>;
-      return (
-        <Button
-          size="sm"
-          variant="danger"
-          disabled={stopped.stopped}
-          title={why}
-          onClick={() => {
-            setRemoving(device);
-            setSheet('remove-device');
-          }}
-        >
-          Remove…
-        </Button>
-      );
-    }
-    if (source.kind === 'backup') {
-      const backup = source.backup;
-      return (
-        <Button
-          size="sm"
-          variant="danger"
-          {...access.props('backup-revoke', target)}
-          onClick={() => {
-            setRevoking(backup);
-            setSheet('revoke-backup');
-          }}
-        >
-          Revoke…
-        </Button>
-      );
-    }
-    const enrollment = source.entry;
+  /** The row's trailing chip: this Mac, or a security key's enrollment
+   * state. A row's destructive action is on the key's details. */
+  const deviceRowChip = (entry: DeviceEntry): ReactNode => {
+    if (entry.current) return <Chip tone="you">This device</Chip>;
+    if (entry.source.kind !== 'yubi') return null;
+    const complete = entry.source.entry.state === 'complete';
     return (
-      <>
-        <Chip tone={enrollment.state === 'complete' ? 'ok' : 'warn'}>
-          {enrollment.state === 'complete' ? 'Enrolled' : 'Incomplete'}
-        </Chip>
-        <Button
-          size="sm"
-          variant="danger"
-          disabled={stopped.stopped || enrollment.state !== 'complete'}
-          title={
-            stopped.stopped
-              ? stopped.reason
-              : enrollment.state === 'complete'
-                ? undefined
-                : 'This enrollment is not complete'
-          }
-          onClick={() => {
-            setActingKey(enrollment);
-            setSheet('revoke');
-          }}
-        >
-          Revoke…
-        </Button>
-      </>
+      <Chip tone={complete ? 'ok' : 'warn'}>
+        {complete ? 'Enrolled' : 'Incomplete'}
+      </Chip>
     );
   };
+  // The list narrows to the names the bar's search field matches.
+  const needle = query.trim().toLowerCase();
+  const shownEntries = needle
+    ? entries.filter((entry) => entry.name.toLowerCase().includes(needle))
+    : entries;
   // The key a `device=` address names, once the four lists have answered.
   const detail = location.device
     ? deviceAt({ devices, backups, yubi, cards }, location.device)
@@ -505,13 +474,26 @@ export function DevicesScreen({
   if (!selected && accountReadiness !== 'ready')
     return (
       <>
-        <PageHeader ruled title="Devices" subtitle="" />
-        <div className="body">
-          <CollectionStatus state={accountReadiness} label="accounts" />
-          <Button onClick={() => void onRefreshSnapshot().catch(onError)}>
-            Refresh
-          </Button>
-        </div>
+        <section className="lpane devices-list" aria-label="Devices">
+          <div className="body rows">
+            <div className="list-head">
+              <div className="t">
+                <h2>Devices</h2>
+              </div>
+            </div>
+          </div>
+        </section>
+        <DetailsColumn>
+          <div className="bar" data-tauri-drag-region="" />
+          <div className="dbody">
+            <div className="dinner">
+              <CollectionStatus state={accountReadiness} label="accounts" />
+              <Button onClick={() => void onRefreshSnapshot().catch(onError)}>
+                Refresh
+              </Button>
+            </div>
+          </div>
+        </DetailsColumn>
       </>
     );
 
@@ -522,17 +504,28 @@ export function DevicesScreen({
   if (!selected && requested)
     return (
       <>
-        <PageHeader ruled title="Devices" subtitle="" />
-        <div className="body">
-          <div className="settings-main">
-            <UnavailableAccount
-              stores={stores}
-              snapshot={snapshot}
-              onSelect={(store) => onNavigate(listAt(store.id))}
-              onRefresh={() => void onRefreshSnapshot().catch(onError)}
-            />
+        <section className="lpane devices-list" aria-label="Devices">
+          <div className="body rows">
+            <div className="list-head">
+              <div className="t">
+                <h2>Devices</h2>
+              </div>
+            </div>
           </div>
-        </div>
+        </section>
+        <DetailsColumn>
+          <div className="bar" data-tauri-drag-region="" />
+          <div className="dbody">
+            <div className="dinner">
+              <UnavailableAccount
+                stores={stores}
+                snapshot={snapshot}
+                onSelect={(store) => onNavigate(listAt(store.id))}
+                onRefresh={() => void onRefreshSnapshot().catch(onError)}
+              />
+            </div>
+          </div>
+        </DetailsColumn>
       </>
     );
 
@@ -541,29 +534,40 @@ export function DevicesScreen({
   if (!selected)
     return (
       <>
-        <PageHeader ruled title="Devices" subtitle="" />
-        <div className="body">
-          <div className="settings-main">
-            <Notice
-              title="No account configured"
-              actions={
-                <Button
-                  variant="primary"
-                  onClick={() =>
-                    onNavigate({ kind: 'settings', section: 'account' })
-                  }
-                >
-                  Open Account
-                </Button>
-              }
-            >
-              <p>
-                Add or recover an account before configuring devices and
-                security keys.
-              </p>
-            </Notice>
+        <section className="lpane devices-list" aria-label="Devices">
+          <div className="body rows">
+            <div className="list-head">
+              <div className="t">
+                <h2>Devices</h2>
+              </div>
+            </div>
           </div>
-        </div>
+        </section>
+        <DetailsColumn>
+          <div className="bar" data-tauri-drag-region="" />
+          <div className="dbody">
+            <div className="dinner">
+              <Notice
+                title="No account configured"
+                actions={
+                  <Button
+                    variant="primary"
+                    onClick={() =>
+                      onNavigate({ kind: 'settings', section: 'account' })
+                    }
+                  >
+                    Open Account
+                  </Button>
+                }
+              >
+                <p>
+                  Add or recover an account before configuring devices and
+                  security keys.
+                </p>
+              </Notice>
+            </div>
+          </div>
+        </DetailsColumn>
       </>
     );
 
@@ -577,228 +581,254 @@ export function DevicesScreen({
     />
   );
   const staleClass = freshness.stale ? ' stale' : '';
-  // A scan of the Mac's own ports. On the list it follows the rows it updates;
-  // a key's own page keeps the same control available for card operations.
+  // A scan of the Mac's own ports: the ⋯ menu in the bar offers it for the
+  // list, and a key that is not listed offers it beside its notice.
+  const scan = access.props('yubi-scan', { profile: selected.server });
+  const scanReason = scan.disabled ? (scan.title ?? 'Unavailable') : undefined;
+  const refreshHardware = (): void =>
+    void refreshConnectedCards(
+      bridge,
+      access,
+      selected.server,
+      hardware.capture(),
+      (found) => {
+        setCards(found);
+        // A scan that finds nothing is a legitimate result, not an
+        // error, so the empty case has to say so itself.
+        if (found.length === 0) toasts.show('No security keys found');
+      },
+      onError,
+    );
   const refreshHardwareKeys = (
-    <Button
-      size="sm"
-      {...access.props('yubi-scan', { profile: selected.server })}
-      onClick={() =>
-        void refreshConnectedCards(
-          bridge,
-          access,
-          selected.server,
-          hardware.capture(),
-          (found) => {
-            setCards(found);
-            // A scan that finds nothing is a legitimate result, not an
-            // error, so the empty case has to say so itself.
-            if (found.length === 0) toasts.show('No security keys found');
-          },
-          onError,
-        )
-      }
-    >
-      Refresh hardware keys
+    <Button size="sm" {...scan} onClick={refreshHardware}>
+      Refresh Hardware Keys
     </Button>
   );
 
   return (
     <WorkflowProvider snapshot={snapshot}>
-      {/* One key's own page: the full id, and the one destructive action for
-          that kind. It reads the page's own lists, so a sheet opened from it
-          is the sheet the row would have opened. */}
-      {location.device ? (
-        <DeviceDetail
-          snapshot={snapshot}
-          store={selected}
-          entry={detail}
-          deviceEnrollment={
-            detail?.source.kind === 'device'
-              ? enrollmentForDevice(yubi, detail.source.device.id)
-              : undefined
-          }
-          loading={loading}
-          failed={failed}
-          stopped={stopped}
-          cards={cards}
-          metadataStatus={metadataStatus}
-          stale={freshness.stale}
-          refreshHardwareKeys={refreshHardwareKeys}
-          onBack={backToList}
-          onNavigate={onNavigate}
-          onCopy={(text) => copyText(text, 'Key id copied')}
-          onRemove={(device) => {
-            setRemoving(device);
-            setSheet('remove-device');
-          }}
-          onRevokeBackup={(backup) => {
-            setRevoking(backup);
-            setSheet('revoke-backup');
-          }}
-          onRevokeKey={(entry) => {
-            setActingKey(entry);
-            setSheet('revoke');
-          }}
-          onProvision={() => setSheet('provision')}
-          onYubiAction={openYubi}
+      {/* The panel's bar carries the list's commands: the hardware scan, in
+          the ⋯ menu, and Add a Device. */}
+      <BarActions>
+        <MenuButton
+          label=""
+          aria-label="More"
+          title="More"
+          variant="quiet"
+          icon="ellipsis"
+          trailingIcon={null}
+          menuLabel="Devices"
+          align="end"
+        >
+          {(close) => (
+            <MenuItem
+              icon="refresh"
+              reason={scanReason}
+              onClick={() => {
+                close();
+                refreshHardware();
+              }}
+            >
+              Refresh Hardware Keys
+            </MenuItem>
+          )}
+        </MenuButton>
+        <Button
+          variant="quiet"
+          icon="plus"
+          aria-label="Add a device"
+          disabled={!canAdd}
+          title={addReason ?? 'Add a device'}
+          onClick={() => setSheet('add')}
         />
-      ) : (
-        <>
-          <PageHeader
-            ruled
-            title="Devices"
-            subtitle={subtitle}
-            action={
-              <Button
-                variant="primary"
-                icon="plus"
-                disabled={!canAdd}
-                title={addReason}
-                onClick={() => setSheet('add')}
-              >
-                Add a device
-              </Button>
-            }
-          />
-          <div className="body">
-            <div className="settings-main">
-              {stopped.stopped ? (
-                <Band
-                  severity="crit"
-                  label="Account access is stopped"
-                  action={
-                    <Button
-                      size="sm"
-                      onClick={() =>
-                        onNavigate({
-                          kind: 'settings',
-                          section: 'account',
-                          profile: selected.server,
-                        })
-                      }
-                    >
-                      Open server
-                    </Button>
-                  }
-                >
-                  Devices and keys are not listed while access is stopped.
-                </Band>
-              ) : null}
-              {!stopped.stopped && pairingOfferOpen ? (
-                <Band
-                  label="A pairing is waiting on this device"
-                  action={
-                    <Button
-                      size="sm"
-                      onClick={() => {
-                        setPairMode('offer');
-                        setSheet('pair');
-                      }}
-                    >
-                      Resume offer…
-                    </Button>
-                  }
-                >
-                  Type the phrase already issued on the other device, or open it
-                  again here.
-                </Band>
-              ) : null}
-              {!stopped.stopped &&
-              !loading &&
-              !failed &&
-              !backupsUnknown &&
-              !backups.length ? (
-                <Band
-                  label="No recovery key"
-                  action={
-                    <Button
-                      size="sm"
-                      {...access.props('backup-create', target)}
-                      onClick={() => setSheet('phrase')}
-                    >
-                      Create a recovery phrase…
-                    </Button>
-                  }
-                >
-                  This account cannot be recovered on a new device.
-                </Band>
-              ) : null}
-
-              <div
-                className="settings-section"
-                ref={listAnchor}
-                tabIndex={-1}
-                role="region"
-                aria-labelledby="devices-all-label"
-              >
-                {/* Every key on the account is one list, sorted by type:
-                    computers (and any device key on a card among them), then
-                    recovery phrases, then security key enrollments — the order
-                    `deviceEntries` already reads the three lists in. */}
-                <SectionLabel id="devices-all-label">Devices</SectionLabel>
-                <Inset className={`settings-inset middle wide${staleClass}`}>
-                  {loading ? (
-                    <InsetRow label="Devices">
-                      Loading devices, recovery phrases and security keys…
-                    </InsetRow>
-                  ) : entries.length ? (
-                    entries.map((entry) => (
-                      <InsetRow
-                        key={entry.address}
-                        className="devrow"
-                        onClick={(event) => {
-                          if (
-                            event.target instanceof Element &&
-                            event.target.closest(
-                              'button, a, input, select, textarea',
-                            )
-                          )
-                            return;
-                          openDevice(entry.address);
-                        }}
-                        action={
-                          <>
-                            {deviceRowAction(entry)}
-                            <OpenDevice
-                              name={entry.name}
-                              onOpen={() => openDevice(entry.address)}
-                            />
-                          </>
-                        }
-                      >
-                        <span className="device-icon" aria-hidden="true">
-                          <Icon name={entry.icon} />
-                        </span>
-                        <span className="t">
-                          <b>{entry.name}</b>
-                          <small>{kindLabel(entry.kind)}</small>
-                        </span>
-                        {entry.source.kind === 'device' &&
-                        entry.source.device.current ? (
-                          <Chip tone="you">Current</Chip>
-                        ) : null}
-                      </InsetRow>
-                    ))
-                  ) : (
-                    <InsetRow label="Devices">
-                      {stopped.stopped
-                        ? 'Not listed while access is stopped'
-                        : failed
-                          ? 'Devices and keys could not be read. Refresh to try again.'
-                          : 'No devices, recovery phrases or security keys on this account.'}
-                    </InsetRow>
-                  )}
-                </Inset>
-                <div className="device-list-actions">
-                  {refreshHardwareKeys}
-                  {metadataStatus}
-                </div>
-              </div>
+      </BarActions>
+      <section
+        className="lpane devices-list"
+        ref={listAnchor}
+        tabIndex={-1}
+        role="region"
+        aria-labelledby="devices-all-label"
+      >
+        <div className="body rows">
+          <div className="list-head">
+            <div className="t">
+              <h2 id="devices-all-label">Devices</h2>
+              <p>
+                {usernameOf(snapshot, selected) ?? selected.account} ·{' '}
+                {serverDisplayLabelForStore(snapshot, selected)}
+              </p>
             </div>
           </div>
-        </>
-      )}
+          {stopped.stopped ? (
+            <Band
+              severity="crit"
+              label="Account access is stopped"
+              action={
+                <Button
+                  size="sm"
+                  onClick={() =>
+                    onNavigate({
+                      kind: 'settings',
+                      section: 'account',
+                      profile: selected.server,
+                    })
+                  }
+                >
+                  Open server
+                </Button>
+              }
+            >
+              Devices and keys are not listed while access is stopped.
+            </Band>
+          ) : null}
+          {!stopped.stopped && pairingOfferOpen ? (
+            <Band
+              label="A pairing is waiting on this device"
+              action={
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setPairMode('offer');
+                    setSheet('pair');
+                  }}
+                >
+                  Resume offer…
+                </Button>
+              }
+            >
+              Type the phrase already issued on the other device, or open it
+              again here.
+            </Band>
+          ) : null}
+          {!stopped.stopped &&
+          !loading &&
+          !failed &&
+          !backupsUnknown &&
+          !backups.length ? (
+            <Band
+              label="No recovery key"
+              action={
+                <Button
+                  size="sm"
+                  {...access.props('backup-create', target)}
+                  onClick={() => setSheet('phrase')}
+                >
+                  Create a recovery phrase…
+                </Button>
+              }
+            >
+              This account cannot be recovered on a new device.
+            </Band>
+          ) : null}
+          {loading ? (
+            <p className="list-note" role="status">
+              Loading devices, recovery phrases and security keys…
+            </p>
+          ) : entries.length ? (
+            /* Account devices (computers, and keys on cards authenticated as
+               devices), then security key enrollments, then recovery phrases,
+               each group in the order `deviceEntries` reads it. */
+            <div className={`device-groups${staleClass}`}>
+              {DEVICE_GROUPS.map(([group, sources]) => {
+                const rows = shownEntries.filter((entry) =>
+                  sources.includes(entry.source.kind),
+                );
+                if (!rows.length) return null;
+                return (
+                  <div key={group} role="group" aria-label={group}>
+                    <div className="gsec" aria-hidden="true">
+                      {group}
+                    </div>
+                    {rows.map((entry) => {
+                      const on = entry.address === location.device;
+                      return (
+                        <button
+                          type="button"
+                          key={entry.address}
+                          className={on ? 'row devrow sel' : 'row devrow'}
+                          aria-current={on ? 'true' : undefined}
+                          aria-label={`Open ${entry.name}`}
+                          onClick={() => openDevice(entry.address)}
+                          onKeyDown={moveRowFocus}
+                        >
+                          <span className="tile" aria-hidden="true">
+                            <Icon name={entry.icon} />
+                          </span>
+                          <span className="name">
+                            <b>{entry.name}</b>
+                            <small>{deviceCaption(entry)}</small>
+                          </span>
+                          <span className="r">{deviceRowChip(entry)}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+              {query && !shownEntries.length ? (
+                <p className="list-note">
+                  No device, recovery phrase or security key matches “
+                  {query.trim()}”.
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            <p className="list-note">
+              {stopped.stopped
+                ? 'Not listed while access is stopped'
+                : failed
+                  ? 'Devices and keys could not be read. Refresh to try again.'
+                  : 'No devices, recovery phrases or security keys on this account.'}
+            </p>
+          )}
+          <div className="device-list-actions">{metadataStatus}</div>
+        </div>
+      </section>
+      {/* One key's details beside the list: the full id, and the one
+          destructive action for that kind. It reads the page's own lists, so
+          a sheet opened from it is the sheet the row would have opened. */}
+      <DetailsColumn>
+        <div className="bar" data-tauri-drag-region="" />
+        {location.device ? (
+          <DeviceDetail
+            snapshot={snapshot}
+            store={selected}
+            entry={detail}
+            deviceEnrollment={
+              detail?.source.kind === 'device'
+                ? enrollmentForDevice(yubi, detail.source.device.id)
+                : undefined
+            }
+            loading={loading}
+            failed={failed}
+            stopped={stopped}
+            cards={cards}
+            stale={freshness.stale}
+            refreshHardwareKeys={refreshHardwareKeys}
+            onBack={backToList}
+            onNavigate={onNavigate}
+            onCopy={(text) => copyText(text, 'Key id copied')}
+            onRemove={(device) => {
+              setRemoving(device);
+              setSheet('remove-device');
+            }}
+            onRevokeBackup={(backup) => {
+              setRevoking(backup);
+              setSheet('revoke-backup');
+            }}
+            onRevokeKey={(entry) => {
+              setActingKey(entry);
+              setSheet('revoke');
+            }}
+            onProvision={() => setSheet('provision')}
+            onYubiAction={openYubi}
+          />
+        ) : (
+          <div className="empty">
+            <b>No Selection</b>
+          </div>
+        )}
+      </DetailsColumn>
       {sheet === 'add' && selected ? (
         <AddDeviceSheet
           store={selected}
@@ -939,21 +969,6 @@ export function DevicesScreen({
   );
 }
 
-/** The chevron at the end of a key's row: that key's own page. */
-function OpenDevice({
-  name,
-  onOpen,
-}: {
-  name: string;
-  onOpen: () => void;
-}): ReactNode {
-  return (
-    <Button size="sm" aria-label={`Open ${name}`} onClick={onOpen}>
-      Open
-    </Button>
-  );
-}
-
 /**
  * One key's page: every fact the agent reports about it, the full id with a
  * way to copy it, and the one destructive action its kind has.
@@ -967,7 +982,6 @@ function DeviceDetail({
   failed,
   stopped,
   cards,
-  metadataStatus,
   stale,
   refreshHardwareKeys,
   onBack,
@@ -990,7 +1004,6 @@ function DeviceDetail({
   stopped: { stopped: boolean; reason: string };
   /** The cards in this Mac's ports right now. */
   cards: { serial: number }[];
-  metadataStatus: ReactNode;
   /** The lists this page reads could not be refreshed. */
   stale: boolean;
   refreshHardwareKeys: ReactNode;
@@ -1007,50 +1020,42 @@ function DeviceDetail({
   const target = { profile: store.server, account: store.account };
   if (!entry)
     return (
-      <>
-        <PageHeader
-          ruled
-          title="Devices"
-          subtitle={accountSubtitle(snapshot, store)}
-        />
-        <div className="body">
-          <div className="settings-main">
-            <Notice
-              severity={
-                loading || stopped.stopped ? 'info' : failed ? 'warn' : 'crit'
-              }
-              title={
-                stopped.stopped
-                  ? 'Not listed while access is stopped'
-                  : loading
-                    ? 'Reading this account’s keys…'
-                    : failed
-                      ? 'Devices and keys could not be read'
-                      : 'This key is not on this account'
-              }
-              actions={
-                <>
-                  <Button variant="primary" onClick={onBack}>
-                    Back to Devices
-                  </Button>
-                  {refreshHardwareKeys}
-                </>
-              }
-            >
-              <p>
-                {stopped.stopped
-                  ? stopped.reason
-                  : loading
-                    ? 'Loading devices, recovery phrases, and security keys…'
-                    : failed
-                      ? 'Whether this key is still on this account is unknown until its devices, recovery phrases and security keys are read again.'
-                      : 'This key is no longer associated with this account on this device.'}
-              </p>
-            </Notice>
-            {metadataStatus}
-          </div>
+      <div className="dbody devices-detail">
+        <div className="dinner">
+          <Notice
+            severity={
+              loading || stopped.stopped ? 'info' : failed ? 'warn' : 'crit'
+            }
+            title={
+              stopped.stopped
+                ? 'Not listed while access is stopped'
+                : loading
+                  ? 'Reading this account’s keys…'
+                  : failed
+                    ? 'Devices and keys could not be read'
+                    : 'This key is not on this account'
+            }
+            actions={
+              <>
+                <Button variant="primary" onClick={onBack}>
+                  Back to Devices
+                </Button>
+                {refreshHardwareKeys}
+              </>
+            }
+          >
+            <p>
+              {stopped.stopped
+                ? stopped.reason
+                : loading
+                  ? 'Loading devices, recovery phrases, and security keys…'
+                  : failed
+                    ? 'Whether this key is still on this account is unknown until its devices, recovery phrases and security keys are read again.'
+                    : 'This key is no longer associated with this account on this device.'}
+            </p>
+          </Notice>
         </div>
-      </>
+      </div>
     );
 
   const source = entry.source;
@@ -1061,100 +1066,161 @@ function DeviceDetail({
     (enrollment && enrollment.state !== 'complete'
       ? 'This enrollment is not complete'
       : undefined);
+  const caption =
+    entry.scope === 'profile'
+      ? `${kindLabel(entry.kind)} · on ${serverDisplayLabelForStore(snapshot, store)}`
+      : kindLabel(entry.kind);
+  // A key on a card is the card's, whether or not this Mac is authenticated
+  // with it now: it is not removed the way another Mac is, so its kind decides
+  // this before its currency does. Neither it nor this Mac has a destructive
+  // action here; each says where its removal is instead, as a note.
+  const cardKey = source.kind === 'device' && entry.kind === 'Key on a card';
   return (
-    <>
-      <PageHeader
-        ruled
-        title={entry.name}
-        // An enrollment is the server's, not this account's, and the caption
-        // says so rather than naming an account the agent did not answer for.
-        subtitle={
-          entry.scope === 'profile'
-            ? `${kindLabel(entry.kind)} · on ${serverDisplayLabelForStore(snapshot, store)}`
-            : `${kindLabel(entry.kind)} · ${accountSubtitle(snapshot, store)}`
-        }
-        // The chip states what this key is, so it reads beside the name
-        // rather than among the header's actions.
-        badge={
-          entry.current ? (
-            <Chip tone="you">
-              {entry.kind === 'Key on a card'
-                ? 'Current key on a card'
-                : 'This device'}
-            </Chip>
-          ) : enrollment ? (
-            <Chip tone={enrollment.state === 'complete' ? 'ok' : 'warn'}>
-              {enrollment.state === 'complete' ? 'Enrolled' : 'Incomplete'}
-            </Chip>
-          ) : null
-        }
-        action={refreshHardwareKeys}
-      />
-      <div className="body">
-        <div className="settings-main">
-          <div
-            className="settings-section"
-            role="region"
-            aria-labelledby="device-facts-label"
-          >
-            <SectionLabel id="device-facts-label">This key</SectionLabel>
-            <Inset
-              className={`settings-inset middle wide${stale ? ' stale' : ''}`}
-            >
-              {entry.scope === 'profile' ? (
-                <InsetRow label="Server">
-                  <b>{serverDisplayLabelForStore(snapshot, store)}</b>
-                  <small>This enrollment applies across the server.</small>
-                </InsetRow>
-              ) : (
-                <InsetRow label="Account">
-                  <span className="namechip">
-                    <b>{username}</b> <Chip>{store.account}</Chip>
-                  </span>
-                  <small>
-                    on {serverDisplayLabelForStore(snapshot, store)}
-                  </small>
-                </InsetRow>
-              )}
-              {entry.role ? (
-                <InsetRow label="Role on the account">{entry.role}</InsetRow>
-              ) : null}
-              <InsetRow label="Kind">{kindLabel(entry.kind)}</InsetRow>
-              <InsetRow label={entry.keyLabel}>
-                {entry.keyId ? (
-                  <CopyBox text={entry.keyId} onCopy={onCopy}>
-                    <span className="mono">{entry.keyId}</span>
-                  </CopyBox>
-                ) : (
-                  <>
-                    {entry.name}
-                    <small>
-                      {enrollment?.cardSerial
-                        ? `Card serial ${enrollment.cardSerial}; no device key recorded.`
-                        : 'This enrollment cannot be matched to a card on this device.'}
-                    </small>
-                  </>
-                )}
-              </InsetRow>
+    <div className="dbody devices-detail">
+      <div className="dinner">
+        <div className="hero">
+          <span className="bigtile" aria-hidden="true">
+            <Icon name={entry.icon} />
+          </span>
+          <div className="t">
+            <h1>{entry.name}</h1>
+            {/* The chip states what this key is, so it reads beside the
+                caption rather than among actions. An enrollment is the
+                server's, not this account's, and the caption says so. */}
+            <p>
+              {caption}
               {entry.current ? (
-                <InsetRow label="Status">
-                  Authenticated on this device now
-                </InsetRow>
+                <>
+                  {' · '}
+                  <Chip tone="you">
+                    {entry.kind === 'Key on a card'
+                      ? 'Current key on a card'
+                      : 'This device'}
+                  </Chip>
+                </>
+              ) : enrollment ? (
+                <>
+                  {' · '}
+                  <Chip tone={enrollment.state === 'complete' ? 'ok' : 'warn'}>
+                    {enrollment.state === 'complete'
+                      ? 'Enrolled'
+                      : 'Incomplete'}
+                  </Chip>
+                </>
               ) : null}
-            </Inset>
-            {metadataStatus}
+            </p>
           </div>
-          {enrollment ? (
-            <CardOperations
-              enrollment={enrollment}
-              cards={cards}
-              stopped={stopped}
-              store={store}
-              onNavigate={onNavigate}
-              onProvision={onProvision}
-              onYubiAction={onYubiAction}
-            />
-          ) : null}
+        </div>
+        {cardKey ? (
+          <Notice
+            severity="info"
+            title="Revoked under its enrollment"
+            actions={
+              <Button
+                onClick={() =>
+                  onNavigate({
+                    kind: 'devices',
+                    section: 'keys',
+                    store: store.id,
+                    ...(deviceEnrollment
+                      ? { device: `yubi:${deviceEnrollment.alias}` }
+                      : {}),
+                  })
+                }
+              >
+                {deviceEnrollment
+                  ? `Open ${deviceEnrollment.alias}`
+                  : 'Go to Devices'}
+              </Button>
+            }
+          >
+            <p>
+              A key on a card is revoked under its enrollment, listed on
+              Devices.
+            </p>
+          </Notice>
+        ) : entry.current ? (
+          <Notice
+            severity="info"
+            title="This device cannot be removed here"
+            actions={
+              <Button
+                onClick={() => onNavigate({ kind: 'settings', section: 'mac' })}
+              >
+                Open Settings
+              </Button>
+            }
+          >
+            <p>
+              To remove this device, use another enrolled device. Or, use the
+              Reset this device option in Settings to erase local data and
+              delete credentials across servers.
+            </p>
+          </Notice>
+        ) : null}
+        <div
+          className="settings-section"
+          role="region"
+          aria-labelledby="device-facts-label"
+        >
+          <SectionLabel className="offscreen" id="device-facts-label">
+            This key
+          </SectionLabel>
+          <Inset
+            className={`settings-inset middle wide${stale ? ' stale' : ''}`}
+          >
+            {entry.scope === 'profile' ? (
+              <InsetRow label="Server">
+                <b>{serverDisplayLabelForStore(snapshot, store)}</b>
+                <small>This enrollment applies across the server.</small>
+              </InsetRow>
+            ) : (
+              <InsetRow label="Account">
+                <span className="namechip">
+                  <b>{username}</b> <Chip>{store.account}</Chip>
+                </span>
+                <small>on {serverDisplayLabelForStore(snapshot, store)}</small>
+              </InsetRow>
+            )}
+            {entry.role ? (
+              <InsetRow label="Role on the account">{entry.role}</InsetRow>
+            ) : null}
+            <InsetRow label="Kind">{kindLabel(entry.kind)}</InsetRow>
+            <InsetRow label={entry.keyLabel}>
+              {entry.keyId ? (
+                <CopyBox text={entry.keyId} onCopy={onCopy}>
+                  <span className="mono">{entry.keyId}</span>
+                </CopyBox>
+              ) : (
+                <>
+                  {entry.name}
+                  <small>
+                    {enrollment?.cardSerial
+                      ? `Card serial ${enrollment.cardSerial}; no device key recorded.`
+                      : 'This enrollment cannot be matched to a card on this device.'}
+                  </small>
+                </>
+              )}
+            </InsetRow>
+            {entry.current ? (
+              <InsetRow label="Status">
+                Authenticated on this device now
+              </InsetRow>
+            ) : null}
+          </Inset>
+        </div>
+        {enrollment ? (
+          <CardOperations
+            enrollment={enrollment}
+            cards={cards}
+            stopped={stopped}
+            store={store}
+            onNavigate={onNavigate}
+            onProvision={onProvision}
+            onYubiAction={onYubiAction}
+          />
+        ) : null}
+        {cardKey || entry.current ? null : (
           <div
             className="settings-section"
             role="region"
@@ -1164,60 +1230,7 @@ function DeviceDetail({
               Danger zone
             </SectionLabel>
             <Inset className="settings-inset middle wide danger-box">
-              {/* A key on a card is the card's, whether or not this Mac is
-                  authenticated with it now: it is not removed the way another
-                  Mac is, so its kind decides this before its currency does. */}
-              {source.kind === 'device' && entry.kind === 'Key on a card' ? (
-                <InsetRow
-                  className="dangerrow"
-                  label="Revoked under its enrollment"
-                  action={
-                    <Button
-                      size="sm"
-                      onClick={() =>
-                        onNavigate({
-                          kind: 'devices',
-                          section: 'keys',
-                          store: store.id,
-                          ...(deviceEnrollment
-                            ? { device: `yubi:${deviceEnrollment.alias}` }
-                            : {}),
-                        })
-                      }
-                    >
-                      {deviceEnrollment
-                        ? `Open ${deviceEnrollment.alias}`
-                        : 'Go to Devices'}
-                    </Button>
-                  }
-                >
-                  <small>
-                    A key on a card is revoked under its enrollment, listed on
-                    Devices.
-                  </small>
-                </InsetRow>
-              ) : entry.current ? (
-                <InsetRow
-                  className="dangerrow"
-                  label="This device cannot be removed here"
-                  action={
-                    <Button
-                      size="sm"
-                      onClick={() =>
-                        onNavigate({ kind: 'settings', section: 'mac' })
-                      }
-                    >
-                      Open Settings
-                    </Button>
-                  }
-                >
-                  <small>
-                    To remove this device, use another enrolled device. Or, use
-                    the Reset this device option in Settings to erase local data
-                    and delete credentials across servers.
-                  </small>
-                </InsetRow>
-              ) : source.kind === 'device' ? (
+              {source.kind === 'device' ? (
                 <InsetRow
                   className="dangerrow"
                   label="Remove this device"
@@ -1281,9 +1294,9 @@ function DeviceDetail({
               )}
             </Inset>
           </div>
-        </div>
+        )}
       </div>
-    </>
+    </div>
   );
 }
 

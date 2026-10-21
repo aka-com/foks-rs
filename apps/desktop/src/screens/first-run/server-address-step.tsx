@@ -2,7 +2,7 @@ import type { ReactNode, RefObject } from 'react';
 import { Button, CopyBox, Inset, Toggle } from '../../components';
 import type { FirstRunPath, FirstRunStateName } from '../../first-run-state';
 import type { presentFirstRunFailure } from '../../first-run-failure';
-import { Foot, Pane } from '../first-run-view';
+import { Foot, Pane, StepIntro } from '../first-run-view';
 
 /** Address entry and failure presentation; server verification is a separate workflow. */
 export function ServerAddressStep({
@@ -55,16 +55,18 @@ export function ServerAddressStep({
         </Foot>
       }
     >
-      <h1>
-        {path === 'invited' ? 'Select a server address' : 'Select a server'}
-      </h1>
-      <p className="lead">
-        FOKS synchronizes your account, teams, and encrypted vaults through a
-        server.{' '}
-        {path === 'invited'
-          ? `Enter the server address provided by ${adminShort}.`
-          : null}
-      </p>
+      <StepIntro>
+        <h1>
+          {path === 'invited' ? 'Select a server address' : 'Select a server'}
+        </h1>
+        <p className="lead">
+          FOKS synchronizes your account, teams, and encrypted vaults through a
+          server.{' '}
+          {path === 'invited'
+            ? `Enter the server address provided by ${adminShort}.`
+            : null}
+        </p>
+      </StepIntro>
       <Inset
         className={state === 'error' || addressInvalid ? 'err' : undefined}
       >

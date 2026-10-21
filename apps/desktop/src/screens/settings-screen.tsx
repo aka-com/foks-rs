@@ -58,7 +58,7 @@ import {
   usernameOf,
 } from '../model';
 import type { AgentSnapshot, Server } from '../model';
-import { PageHeader } from '../shell/page-header';
+import type { FoksIconName } from '../icons';
 import {
   RAIL_COLORS,
   applyRailColor,
@@ -93,6 +93,14 @@ type Sheet = 'reset-mac' | null;
 
 /** The base the sub-navigation's tab and panel ids are derived from. */
 const SETTINGS_TABS = 'settings-sections';
+
+/** The glyph each section's row in the sub-navigation carries. */
+const SECTION_ICON: Readonly<Record<SettingsSection, FoksIconName>> = {
+  account: 'user',
+  servers: 'user',
+  preferences: 'settings',
+  mac: 'folder',
+};
 
 export function SettingsScreen({
   snapshot,
@@ -180,6 +188,7 @@ export function SettingsScreen({
           items={SETTINGS_SECTIONS.map((id) => ({
             id,
             label: SETTINGS_SECTION_LABEL[id],
+            icon: SECTION_ICON[id],
           }))}
         />
       </nav>
@@ -211,18 +220,17 @@ export function SettingsScreen({
             serverSection={serversSection}
           />
         ) : (
-          <>
-            <PageHeader ruled title={SETTINGS_SECTION_LABEL[section]} />
-            {/* Fixed IDs associate each tab button with its tabpanel. */}
-            <div
-              className="body"
-              role="tabpanel"
-              id={tabPanelId(SETTINGS_TABS, section)}
-              aria-labelledby={tabId(SETTINGS_TABS, section)}
-            >
-              <div className="settings-main">{page}</div>
-            </div>
-          </>
+          // The bar names Settings and the sub-navigation names the section,
+          // so the page opens on its first group rather than a third title.
+          // Fixed IDs associate each tab button with its tabpanel.
+          <div
+            className="body"
+            role="tabpanel"
+            id={tabPanelId(SETTINGS_TABS, section)}
+            aria-labelledby={tabId(SETTINGS_TABS, section)}
+          >
+            <div className="settings-main">{page}</div>
+          </div>
         )}
       </div>
       {sheet === 'reset-mac' ? (

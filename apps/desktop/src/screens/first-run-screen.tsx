@@ -10,6 +10,8 @@ import {
   AddedDetails,
   Foot,
   Pane,
+  StepIntro,
+  FirstRunIntroSlot,
 } from './first-run-view';
 export { FirstRunChecklistStatus } from './first-run-view';
 import {
@@ -288,6 +290,8 @@ function FirstRunSession({
     clearBackup,
     navigateBackup,
   } = useRecoveryBackup();
+  // The setup card's left panel, where each step's StepIntro is drawn.
+  const [introSlot, setIntroSlot] = useState<HTMLElement | null>(null);
   // Pending path selection before confirmation.
   const [pendingPath, setPendingPath] = useState<FirstRunPath | null>(null);
   const [otherMutationBusy, setBusy] = useState(false);
@@ -1209,14 +1213,16 @@ function FirstRunSession({
           : 'Creating…';
     content = (
       <Pane title="Check account setup" header={false}>
-        <h1>{busy ? 'Connecting your account' : 'Check account setup'}</h1>
-        <p className="lead">
-          {busy
-            ? 'Account setup is running.'
-            : operationProblem !== 'profile-missing' && operationStatus
-              ? operationStatus
-              : 'Checking account status…'}
-        </p>
+        <StepIntro>
+          <h1>{busy ? 'Connecting your account' : 'Check account setup'}</h1>
+          <p className="lead">
+            {busy
+              ? 'Account setup is running.'
+              : operationProblem !== 'profile-missing' && operationStatus
+                ? operationStatus
+                : 'Checking account status…'}
+          </p>
+        </StepIntro>
         {operationProblem === 'profile-missing' && operationStatus ? (
           <MissingServerWarning />
         ) : null}
@@ -1287,11 +1293,13 @@ function FirstRunSession({
   } else if (state === 'identity-pending')
     content = (
       <Pane title="Load account details" header={false}>
-        <h1>Your account is connected</h1>
-        <p className="lead">
-          Your account is connected. Try again to load its details, or finish
-          setup later.
-        </p>
+        <StepIntro>
+          <h1>Your account is connected</h1>
+          <p className="lead">
+            Your account is connected. Try again to load its details, or finish
+            setup later.
+          </p>
+        </StepIntro>
         {identityProblem === 'profile-missing' ? (
           <MissingServerWarning
             action={
@@ -1356,11 +1364,13 @@ function FirstRunSession({
           </Foot>
         }
       >
-        <h1>Set up FOKS</h1>
-        <p className="lead">
-          A private FOKS server is already running on this device. Use it to
-          create your Personal vault.
-        </p>
+        <StepIntro>
+          <h1>Set up FOKS</h1>
+          <p className="lead">
+            A private FOKS server is already running on this device. Use it to
+            create your Personal vault.
+          </p>
+        </StepIntro>
         <div className="local-server-card">
           <div className="local-server-head">
             <span className="local-server-mark" aria-hidden="true">
@@ -1427,11 +1437,13 @@ function FirstRunSession({
   )
     content = (
       <Pane title="Checking this device" header={false}>
-        <h1>Looking for existing FOKS accounts</h1>
-        <p className="lead">
-          Checking for existing accounts from the official FOKS CLI. No changes
-          will be made to your data.
-        </p>
+        <StepIntro>
+          <h1>Looking for existing FOKS accounts</h1>
+          <p className="lead">
+            Checking for existing accounts from the official FOKS CLI. No
+            changes will be made to your data.
+          </p>
+        </StepIntro>
         <div className="setup-actions">
           <Button variant="primary" disabled busy>
             Checking…
@@ -1445,11 +1457,13 @@ function FirstRunSession({
   else if (goChooserOpen)
     content = (
       <Pane title="Set up FOKS" header={false} wide>
-        <h1>Set up FOKS</h1>
-        <p className="lead">
-          A FOKS CLI account was found on this Mac. You can use it here or set
-          up a new one.
-        </p>
+        <StepIntro>
+          <h1>Set up FOKS</h1>
+          <p className="lead">
+            A FOKS CLI account was found on this Mac. You can use it here or set
+            up a new one.
+          </p>
+        </StepIntro>
         <Inset>
           <RadioGroup label="How to start">
             <div className="choice">
@@ -1516,11 +1530,13 @@ function FirstRunSession({
   else if (state === 'who' || state === 'boot')
     content = (
       <Pane title="How are you joining?" header={false} wide>
-        <h1>How are you joining?</h1>
-        <p className="lead">
-          Choose an option to get started. You will set up your account and
-          server in the next steps.
-        </p>
+        <StepIntro>
+          <h1>How are you joining?</h1>
+          <p className="lead">
+            Choose an option to get started. You will set up your account and
+            server in the next steps.
+          </p>
+        </StepIntro>
         {goScanError ? (
           <div className="crit" role="alert">
             Could not check existing CLI profiles: {goScanError}
@@ -1639,10 +1655,12 @@ function FirstRunSession({
           </Foot>
         }
       >
-        <h1>Create your account</h1>
-        <p className="lead">
-          Choose a username for this server and a name for this device.
-        </p>
+        <StepIntro>
+          <h1>Create your account</h1>
+          <p className="lead">
+            Choose a username for this server and a name for this device.
+          </p>
+        </StepIntro>
         <div className="local-field-card">
           <label className="local-field-row">
             <span>Username</span>
@@ -1865,12 +1883,14 @@ function FirstRunSession({
           </Foot>
         }
       >
-        <h1>Add this device to your account</h1>
-        <p className="lead">
-          Your account already exists on {profile?.canonicalName}. Recover it
-          with your recovery phrase
-          {goCandidate ? ' or connect using the official FOKS CLI' : ''}.
-        </p>
+        <StepIntro>
+          <h1>Add this device to your account</h1>
+          <p className="lead">
+            Your account already exists on {profile?.canonicalName}. Recover it
+            with your recovery phrase
+            {goCandidate ? ' or connect using the official FOKS CLI' : ''}.
+          </p>
+        </StepIntro>
         {signinSections(1)}
       </Pane>
     );
@@ -2040,11 +2060,13 @@ function FirstRunSession({
   const readinessBlocker =
     !agentReady && onRetryAgent ? (
       <Pane title="Service setup" header={false}>
-        <h1>Finish preparing this device</h1>
-        <p className="lead">
-          FOKS needs to finish preparing and checking local setup before account
-          setup can continue. Your progress is still saved.
-        </p>
+        <StepIntro>
+          <h1>Finish preparing this device</h1>
+          <p className="lead">
+            FOKS needs to finish preparing and checking local setup before
+            account setup can continue. Your progress is still saved.
+          </p>
+        </StepIntro>
         {agentRetryError ? (
           <div className="crit" role="alert">
             <b>Setup could not be completed</b>
@@ -2070,104 +2092,132 @@ function FirstRunSession({
         </div>
       </Pane>
     ) : null;
+  const mainColumn = (
+    <main className="main first-run-main" aria-busy={agentReady && busy}>
+      {restartError ? (
+        <p role="alert" className="crit">
+          {restartError}
+        </p>
+      ) : null}
+      {slow || phraseOperation ? (
+        <div className="bandstrip">
+          <div className="band" role="status">
+            <span className="t">
+              {slow
+                ? `This is taking longer than expected. ${
+                    checkpoint.provisioning
+                      ? 'You can finish later while account setup completes.'
+                      : 'FOKS is still waiting for a response.'
+                  }`
+                : 'Preparing your recovery phrase…'}
+            </span>
+            {phraseOperation ? (
+              <span className="a">
+                <Button
+                  onClick={() => {
+                    clearSecrets();
+                    go('protect');
+                  }}
+                >
+                  Back to recovery options
+                </Button>
+              </span>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+      <div
+        data-setup-controls=""
+        style={{ display: 'contents' }}
+        inert={agentReady && busy && !checkpoint.provisioning}
+      >
+        {readinessBlocker ?? content}
+      </div>
+    </main>
+  );
   return (
     <>
       {appMode ? (
-        <FirstRunAppSidebar
-          snapshot={snapshot}
-          native={Boolean(bridge.native)}
-          checkpoint={checkpoint}
-          groupName={checkpoint.group?.name ?? group}
-          location={location}
-          onNavigate={onNavigate}
-          onReenter={reenterSetup}
-          collapsed={collapsed}
-          onToggleCollapsed={onToggleCollapsed}
-          agent={agent}
-          blocked={blocked}
-          devicesAlert={devicesAlert}
-        />
+        <>
+          <FirstRunAppSidebar
+            snapshot={snapshot}
+            native={Boolean(bridge.native)}
+            checkpoint={checkpoint}
+            groupName={checkpoint.group?.name ?? group}
+            location={location}
+            onNavigate={onNavigate}
+            onReenter={reenterSetup}
+            collapsed={collapsed}
+            onToggleCollapsed={onToggleCollapsed}
+            agent={agent}
+            blocked={blocked}
+            devicesAlert={devicesAlert}
+          />
+          {mainColumn}
+        </>
       ) : (
-        <SetupSidebar
-          checkpoint={checkpoint}
-          native={Boolean(bridge.native)}
-          agent={agent}
-          blocked={blocked}
-          pendingPath={pendingPath}
-          onAnotherServer={
-            !busy &&
-            checkpoint.managedLocal &&
-            !checkpoint.account &&
-            !checkpoint.provisioning &&
-            !checkpoint.provisionedAccount
-              ? () => send({ type: 'choose', path: 'own' })
-              : undefined
-          }
-          onRecoverAccount={
-            !busy &&
-            checkpoint.managedLocal &&
-            !checkpoint.account &&
-            !checkpoint.provisioning &&
-            !checkpoint.provisionedAccount
-              ? () => selectManagedProfile(true)
-              : undefined
-          }
-          recoverEnabled={Boolean(managedReport)}
-          cancelDisabled={leaveDisabled}
-          onRestart={() => setConfirmingRestart(true)}
-          restartDisabled={!recoveryActions.canRestart}
-          restartReason={recoveryActions.restartReason}
-          onCancel={() => {
-            // Clear entered values before navigating so the guard allows the
-            // exit.
-            clearSecrets();
-            if (state === 'phrase')
-              send({ type: 'navigate', state: 'protect' });
-            onNavigate({ kind: 'all' });
-          }}
-        />
-      )}
-      <main className="main first-run-main" aria-busy={agentReady && busy}>
-        {restartError ? (
-          <p role="alert" className="crit">
-            {restartError}
-          </p>
-        ) : null}
-        {slow || phraseOperation ? (
-          <div className="bandstrip">
-            <div className="band" role="status">
-              <span className="t">
-                {slow
-                  ? `This is taking longer than expected. ${
-                      checkpoint.provisioning
-                        ? 'You can finish later while account setup completes.'
-                        : 'FOKS is still waiting for a response.'
-                    }`
-                  : 'Preparing your recovery phrase…'}
+        // Setup is a centred card under a title bar: the step's title, lead
+        // and the step list on the left, the step itself on the right.
+        <div className="fr-setup">
+          <div className="fr-titlebar" data-tauri-drag-region="">
+            {bridge.native ? (
+              <span className="lights-space" aria-hidden="true" />
+            ) : (
+              <span className="lights" aria-hidden="true">
+                <span className="light" />
+                <span className="light" />
+                <span className="light" />
               </span>
-              {phraseOperation ? (
-                <span className="a">
-                  <Button
-                    onClick={() => {
-                      clearSecrets();
-                      go('protect');
-                    }}
-                  >
-                    Back to recovery options
-                  </Button>
-                </span>
-              ) : null}
+            )}
+            <span className="fr-ttl">FOKS</span>
+          </div>
+          <div className="fr-stage">
+            <div className="fr-card">
+              <FirstRunIntroSlot.Provider value={introSlot}>
+                <SetupSidebar
+                  introRef={setIntroSlot}
+                  checkpoint={checkpoint}
+                  agent={agent}
+                  blocked={blocked}
+                  pendingPath={pendingPath}
+                  onAnotherServer={
+                    !busy &&
+                    checkpoint.managedLocal &&
+                    !checkpoint.account &&
+                    !checkpoint.provisioning &&
+                    !checkpoint.provisionedAccount
+                      ? () => send({ type: 'choose', path: 'own' })
+                      : undefined
+                  }
+                  onRecoverAccount={
+                    !busy &&
+                    checkpoint.managedLocal &&
+                    !checkpoint.account &&
+                    !checkpoint.provisioning &&
+                    !checkpoint.provisionedAccount
+                      ? () => selectManagedProfile(true)
+                      : undefined
+                  }
+                  recoverEnabled={Boolean(managedReport)}
+                  cancelDisabled={leaveDisabled}
+                  onRestart={() => setConfirmingRestart(true)}
+                  restartDisabled={!recoveryActions.canRestart}
+                  restartReason={recoveryActions.restartReason}
+                  onCancel={() => {
+                    // Clear entered values before navigating so the guard allows the
+                    // exit.
+                    clearSecrets();
+                    if (state === 'phrase')
+                      send({ type: 'navigate', state: 'protect' });
+                    onNavigate({ kind: 'all' });
+                  }}
+                />
+                {mainColumn}
+              </FirstRunIntroSlot.Provider>
             </div>
           </div>
-        ) : null}
-        <div
-          data-setup-controls=""
-          style={{ display: 'contents' }}
-          inert={agentReady && busy && !checkpoint.provisioning}
-        >
-          {readinessBlocker ?? content}
         </div>
-      </main>
+      )}
       {state === 'added' ? (
         <AddedDetails snapshot={snapshot} storeId={addedStore} />
       ) : null}

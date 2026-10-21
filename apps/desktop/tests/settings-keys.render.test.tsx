@@ -60,6 +60,8 @@ interface DevicesOptions {
   onError?: (error: unknown) => void;
   /** The shell's catalog refresh, for a test that watches whether it runs. */
   refresh?: () => Promise<AgentSnapshot>;
+  /** The bar's search text. */
+  query?: string;
 }
 
 async function renderDevices(
@@ -75,6 +77,7 @@ async function renderDevices(
       throw error;
     },
     refresh = async () => snapshot,
+    query,
   }: DevicesOptions = {},
 ) {
   const { DevicesScreen } = (await vite.ssrLoadModule(
@@ -116,6 +119,7 @@ async function renderDevices(
           onMutationError: async (error: unknown) => {
             throw error;
           },
+          ...(query ? { query } : {}),
         }),
       }),
     });
@@ -133,48 +137,59 @@ async function renderDevices(
   return Object.assign(rendered, { showAccount });
 }
 
-test('one page lists every device, recovery phrase and security key together', async () => {
+test('one list groups the devices, security keys and recovery phrases', async () => {
   const rendered = await renderDevices(await fixture(), {
     store: 'acct:personal',
   });
 
-  // One region, one heading — no more "Computers and security keys", "Paper
-  // keys" or "Security keys" sections.
+  // One region, named by the list's own heading, with the account's
+  // keys grouped by what they are.
   const list = rendered.getByRole('region', { name: 'Devices' });
   assert.ok(list);
-  assert.equal(rendered.queryByText('Computers and security keys'), null);
-  assert.equal(rendered.queryByText('Recovery phrases'), null);
-  assert.equal(rendered.queryByText('Security keys'), null);
   assert.equal(
-    rendered.queryByRole('group', { name: 'Accounts on this device' }),
-    null,
+    rendered.queryByText('Computers and security keys') === null,
+    true,
+  );
+  const groups = ui
+    .within(list)
+    .getAllByRole('group')
+    .map((group) => group.getAttribute('aria-label'));
+  assert.deepEqual(groups, ['Devices', 'Security keys', 'Recovery phrases']);
+  assert.equal(
+    rendered.queryByRole('group', { name: 'Accounts on this device' }) === null,
+    true,
   );
 
-  // This Mac says so, with the same "Current" chip every current row reads,
-  // and cannot remove itself; the other Mac can be removed, and the key on a
-  // card is neither — it is revoked under its enrollment.
-  assert.ok(rendered.getByText('Current'));
-  assert.equal(rendered.getAllByRole('button', { name: 'Remove…' }).length, 1);
-  assert.ok(rendered.getByText('Pocket YubiKey'));
-  // Its caption names its hardware type, and its chip uses the user-facing
-  // security-key label.
-  assert.equal(rendered.getAllByText('Security key').length, 2);
-  assert.ok(rendered.getByText('Key on a card'));
+  // This Mac says so; no row carries a destructive action: removal and
+  // revocation are on the key's details.
+  assert.ok(rendered.getByText('This device'));
   assert.equal(
-    rendered.queryByRole('button', { name: 'Open Pocket YubiKey' })?.tagName,
-    'BUTTON',
+    rendered.queryAllByRole('button', { name: 'Remove…' }).length,
+    0,
   );
-  assert.ok(rendered.getByText('MacBook Pro'));
-  assert.ok(rendered.getByText('Travel Mac'));
-  // Every row's caption names its type, not its role — the role moved to the
-  // key's own page.
-  assert.equal(rendered.getAllByText('Computer').length, 2);
-  assert.equal(document.querySelector('.devrow .kid'), null);
-  assert.ok(rendered.getByText('paper-backup'));
-  assert.ok(rendered.getByText('Recovery phrase'));
-  assert.ok(rendered.getByText('primary key'));
-  // The list is sorted by type: computers (and any key on a card among
-  // them), then recovery phrases, then security key enrollments.
+  assert.equal(
+    rendered.queryAllByRole('button', { name: 'Revoke…' }).length,
+    0,
+  );
+  // The key on a card is a device on the account, under Devices, and its
+  // caption names its hardware type and role.
+  const devices = ui.within(list).getByRole('group', { name: 'Devices' });
+  assert.ok(ui.within(devices).getByText('Pocket YubiKey'));
+  assert.ok(ui.within(devices).getByText('Key on a card · Member'));
+  assert.ok(ui.within(devices).getByText('Travel Mac'));
+  assert.equal(ui.within(devices).getAllByText(/^Computer · /).length, 2);
+  // A security key's caption carries the user-facing label and its card.
+  const keys = ui.within(list).getByRole('group', { name: 'Security keys' });
+  assert.ok(ui.within(keys).getByText('primary key'));
+  assert.ok(ui.within(keys).getByText(/^Security key · /));
+  assert.ok(ui.within(keys).getByText('Enrolled'));
+  const phrases = ui
+    .within(list)
+    .getByRole('group', { name: 'Recovery phrases' });
+  assert.ok(ui.within(phrases).getByText('paper-backup'));
+  assert.ok(ui.within(phrases).getByText('Recovery phrase'));
+  assert.equal(document.querySelector('.devrow .kid') === null, true);
+  // Every row opens its key, in group order.
   const names = rendered
     .getAllByRole('button', { name: /^Open / })
     .map((button) => button.getAttribute('aria-label'));
@@ -182,48 +197,50 @@ test('one page lists every device, recovery phrase and security key together', a
     'Open MacBook Pro',
     'Open Travel Mac',
     'Open Pocket YubiKey',
-    'Open paper-backup',
     'Open primary key',
+    'Open paper-backup',
   ]);
-  // There is no sub-navigation left on this page.
-  assert.equal(rendered.queryByText('Recovery devices'), null);
-  // Neither the section-level "Add a recovery phrase…" button nor the "More…" menu
-  // survive: "Add a device" is the only add control left.
+  // With no key chosen the details say so.
+  assert.ok(rendered.getByText('No Selection'));
+  // "Add a device" is the only add control; the hardware scan is in the
+  // More menu beside it.
   assert.equal(
-    rendered.queryByRole('button', { name: 'Add a recovery phrase…' }),
-    null,
+    rendered.queryByRole('button', { name: 'Add a recovery phrase…' }) === null,
+    true,
   );
-  assert.equal(rendered.queryByRole('button', { name: 'More…' }), null);
   assert.ok(rendered.getByRole('button', { name: 'Add a device' }));
-  const refreshHardware = ui
-    .within(list)
-    .getByRole('button', { name: 'Refresh hardware keys' });
-  assert.ok(refreshHardware.classList.contains('cap'));
-  assert.equal(
-    [...document.querySelectorAll<HTMLButtonElement>('.path .btn')].some(
-      (button) => button.textContent === 'Refresh hardware keys',
-    ),
-    false,
-  );
-  const rows = list.querySelector('.settings-inset');
-  assert.ok(rows);
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'More' }));
+  });
   assert.ok(
-    rows.compareDocumentPosition(refreshHardware) &
-      Node.DOCUMENT_POSITION_FOLLOWING,
+    await ui.waitFor(() =>
+      rendered.getByRole('menuitem', { name: 'Refresh Hardware Keys' }),
+    ),
   );
   // Account creation and recovery live with the other account workflows.
   assert.equal(
     rendered.queryByRole('button', {
       name: 'Connect an existing account with a recovery phrase',
-    }),
-    null,
+    }) === null,
+    true,
   );
   assert.equal(
     rendered.queryByRole('button', {
       name: 'Create an account on a hardware key…',
-    }),
-    null,
+    }) === null,
+    true,
   );
+});
+
+test('the search field narrows the list to the names it matches', async () => {
+  const rendered = await renderDevices(await fixture(), {
+    store: 'acct:personal',
+    query: 'mac',
+  });
+  const names = rendered
+    .getAllByRole('button', { name: /^Open / })
+    .map((button) => button.getAttribute('aria-label'));
+  assert.deepEqual(names, ['Open MacBook Pro', 'Open Travel Mac']);
 });
 
 /** Open the chooser and continue on the card with this title. */
@@ -618,7 +635,7 @@ test('the chooser offers both pairing directions, so a phrase can be entered', a
   );
 });
 
-test('a revoke acts on the key whose row was pressed', async () => {
+test('a revoke acts on the key whose details are open', async () => {
   const snapshot = await fixture();
   const twoKeys: AgentSnapshot = {
     ...snapshot,
@@ -632,14 +649,14 @@ test('a revoke acts on the key whose row was pressed', async () => {
       },
     ],
   };
-  const rendered = await renderDevices(twoKeys, { store: 'acct:personal' });
+  const rendered = await renderDevices(twoKeys, {
+    store: 'acct:personal',
+    device: 'yubi:travel key',
+  });
 
-  // The list also carries the recovery phrase's own Revoke…, so the row is found
-  // by name rather than by counting every Revoke… button on the page.
-  const row = rendered.getByText('travel key').closest('.fr');
-  assert.ok(row instanceof HTMLElement);
+  // The details beside the list are the key's, and so is their Revoke….
   await ui.act(async () => {
-    ui.fireEvent.click(ui.within(row).getByRole('button', { name: 'Revoke…' }));
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Revoke…' }));
   });
   const dialog = await ui.waitFor(() => rendered.getByRole('alertdialog'));
   assert.equal(
@@ -652,21 +669,23 @@ test('a revoke acts on the key whose row was pressed', async () => {
 test('an unfinished enrollment says so and cannot be revoked', async () => {
   // The work account's key was never finished, and the key list is the one
   // that account's server answered with — not the other account's.
-  const rendered = await renderDevices(await fixture(), { store: 'acct:work' });
+  const rendered = await renderDevices(await fixture(), {
+    store: 'acct:work',
+    device: 'yubi:work key',
+  });
 
-  assert.ok(rendered.getByText('work key'));
-  assert.equal(rendered.queryByText('primary key'), null);
-  assert.ok(rendered.getByText('Incomplete'));
-  const row = rendered.getByText('work key').closest('.fr');
-  assert.ok(row instanceof HTMLElement);
-  const revoke = ui.within(row).getByRole('button', { name: 'Revoke…' });
+  const list = rendered.getByRole('region', { name: 'Devices' });
+  assert.ok(ui.within(list).getByText('work key'));
+  assert.equal(rendered.queryByText('primary key') === null, true);
+  assert.ok(ui.within(list).getByText('Incomplete'));
+  const revoke = rendered.getByRole('button', { name: 'Revoke…' });
   assert.equal(revoke.hasAttribute('disabled'), true);
   assert.equal(revoke.getAttribute('title'), 'This enrollment is not complete');
 
   // Switching back lists the other account's key and nothing of this one's.
   await rendered.showAccount('acct:personal');
   assert.ok(rendered.getByText('primary key'));
-  assert.equal(rendered.queryByText('work key'), null);
+  assert.equal(rendered.queryByText('work key') === null, true);
   assert.ok(rendered.getByText('Enrolled'));
 });
 
@@ -761,14 +780,15 @@ test('a key on a card is revoked under its enrollment, not removed here', async 
     page.getByRole('heading', { level: 1 }).textContent,
     'Pocket YubiKey',
   );
-  assert.ok(page.getByText('Key on a card'));
-  assert.ok(page.getByText(card));
+  const facts = page.getByRole('region', { name: 'This key' });
+  assert.ok(ui.within(facts).getByText('Key on a card'));
+  assert.ok(ui.within(facts).getByText(card));
   assert.ok(page.getByText('Revoked under its enrollment'));
   assert.equal(
     page.queryByRole('button', { name: 'Remove this device…' }),
     null,
   );
-  // The row is not a dead end: it leads back to the list that revokes the key.
+  // The note is not a dead end: it leads to the list that revokes the key.
   await ui.act(async () => {
     ui.fireEvent.click(page.getByRole('button', { name: 'Go to Devices' }));
   });
@@ -818,25 +838,22 @@ test('a key’s row opens its own page, with the full id and a way to copy it', 
   });
   const row = list.getByText('Travel Mac').closest('.devrow');
   assert.ok(row);
+  // The whole row is the control: a click on its name opens it too.
   ui.fireEvent.click(list.getByText('Travel Mac'));
-  ui.fireEvent.click(row);
-  assert.equal(chosen.length, 2);
+  assert.equal(chosen.length, 1);
   await ui.act(async () => {
     ui.fireEvent.click(list.getByRole('button', { name: 'Open Travel Mac' }));
   });
-  assert.equal(chosen.length, 3);
+  assert.equal(chosen.length, 2);
   assert.deepEqual(chosen.at(-1), {
     kind: 'devices',
     store: 'acct:personal',
     device: travel,
   });
-  ui.fireEvent.click(
-    ui.within(row as HTMLElement).getByRole('button', { name: 'Remove…' }),
-  );
+  // The row carries no destructive action of its own.
   assert.equal(
-    chosen.length,
-    3,
-    'Remove opens its confirmation without navigating',
+    ui.within(row as HTMLElement).queryAllByRole('button').length,
+    0,
   );
   ui.cleanup();
 
@@ -856,10 +873,11 @@ test('a key’s row opens its own page, with the full id and a way to copy it', 
     page.getByRole('heading', { level: 1 }).textContent,
     'Travel Mac',
   );
-  // The row shortened the id; the page carries the whole of it.
-  assert.ok(page.getByText(travel));
-  assert.ok(page.getByText('Computer'));
-  assert.ok(page.getByText('Owner'));
+  // The row shows no id; the details carry the whole of it.
+  const facts = page.getByRole('region', { name: 'This key' });
+  assert.ok(ui.within(facts).getByText(travel));
+  assert.ok(ui.within(facts).getByText('Computer'));
+  assert.ok(ui.within(facts).getByText('Owner'));
   await ui.act(async () => {
     ui.fireEvent.click(page.getByRole('button', { name: 'Copy' }));
   });
@@ -903,8 +921,8 @@ test('the local device detail page disables device removal', async () => {
     ui.fireEvent.click(page.getByRole('button', { name: 'Open Settings' }));
   });
   assert.deepEqual(chosen.at(-1), { kind: 'settings', section: 'mac' });
-  // The way back to the list is the topbar's chevron, which the shell draws
-  // from the location alone.
+  // The list stays beside the details; the location's parent is the list
+  // at the same account.
   const { parentLocation } = await import('../src/location');
   assert.deepEqual(
     parentLocation({
@@ -923,8 +941,9 @@ test('a recovery phrase and an enrollment each carry their own page', async () =
     store: 'acct:personal',
     device: backupId,
   });
-  assert.ok(paper.getByText('Recovery phrase'));
-  assert.ok(paper.getByText(backupId));
+  const paperFacts = paper.getByRole('region', { name: 'This key' });
+  assert.ok(ui.within(paperFacts).getByText('Recovery phrase'));
+  assert.ok(ui.within(paperFacts).getByText(backupId));
   await ui.act(async () => {
     ui.fireEvent.click(paper.getByRole('button', { name: 'Revoke…' }));
   });
@@ -942,8 +961,9 @@ test('a recovery phrase and an enrollment each carry their own page', async () =
   // An enrollment has no id to copy, and the page says that rather than
   // showing an empty field.
   assert.equal(key.queryByRole('button', { name: 'Copy' }), null);
-  assert.ok(key.getByText('Server'));
-  assert.ok(key.getByText('Personal server'));
+  const keyFacts = key.getByRole('region', { name: 'This key' });
+  assert.ok(ui.within(keyFacts).getByText('Server'));
+  assert.ok(ui.within(keyFacts).getByText('Personal server'));
   assert.ok(key.getByText('This enrollment applies across the server.'));
   assert.equal(key.queryByText('satoshi'), null);
   assert.ok(key.getByText(/Card serial .*; no device key recorded\./));
@@ -1039,13 +1059,13 @@ test('device metadata retry reloads device lists without refreshing the catalog'
       /could not be loaded/,
     ),
   );
-  assert.equal(page.queryByText('Current'), null);
+  assert.equal(page.queryByText('This device'), null);
   await ui.act(async () => {
     ui.fireEvent.click(page.getByRole('button', { name: 'Retry' }));
   });
   // The second read answers, so this Mac's own row is listed and the caption
   // has nothing more to say. No catalog refresh was asked for on its behalf.
-  await ui.waitFor(() => assert.ok(page.getByText('Current')));
+  await ui.waitFor(() => assert.ok(page.getByText('This device')));
   assert.equal(reads, 2);
   assert.equal(refreshes, 0);
   assert.equal(page.queryByLabelText('device metadata freshness'), null);
@@ -1180,8 +1200,12 @@ test('PIN status on a key’s own page acts on that key, not on card or list ord
       },
     }),
   });
+  // The hardware scan is in the bar's More menu.
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'More' }));
+  });
   ui.fireEvent.click(
-    rendered.getByRole('button', { name: 'Refresh hardware keys' }),
+    await rendered.findByRole('menuitem', { name: 'Refresh Hardware Keys' }),
   );
   const pinStatus = await rendered.findByRole('button', {
     name: 'PIN status',
@@ -1205,7 +1229,7 @@ test('PIN status on a key’s own page acts on that key, not on card or list ord
 test('a card-backed device opens its enrollment by the native key id', async () => {
   const id = '0802' + 'ab'.repeat(32);
   const locations: Location[] = [];
-  const rendered = await renderDevices(await fixture(), {
+  await renderDevices(await fixture(), {
     store: 'acct:personal',
     device: id,
     onNavigate: (at) => locations.push(at),
@@ -1219,8 +1243,16 @@ test('a card-backed device opens its enrollment by the native key id', async () 
       ],
     }),
   });
+  // The details' note, not the list's row of the same name.
+  const note = await ui.waitFor(() => {
+    const found = document.querySelector<HTMLElement>(
+      '.devices-detail .notice',
+    );
+    assert.ok(found);
+    return found;
+  });
   ui.fireEvent.click(
-    await rendered.findByRole('button', { name: 'Open travel' }),
+    ui.within(note).getByRole('button', { name: 'Open travel' }),
   );
   assert.deepEqual(locations.at(-1), {
     kind: 'devices',

@@ -37,7 +37,6 @@ import {
 } from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import type { Server, StoreRef, TeamStore, AgentSnapshot } from '../model';
-import { PageHeader } from '../shell/page-header';
 import { AccountMark } from './account-switcher';
 import { ProfileKeys } from './profile-keys';
 import { GroupMark } from './group-mark';
@@ -382,50 +381,62 @@ export function ServersSection({
   if (selected && selectedState)
     return (
       <>
-        <PageHeader
-          ruled
-          title={serverDisplayLabelOrLoading(selected)}
-          mark={<ServerMark state={selectedState} />}
-          sub={
-            selectedAccount && !isLocked(selectedState)
-              ? `Signed in as ${selectedAccount.username}`
-              : selected.configuredEndpoint
-          }
-          action={
-            <>
-              <StatusChip state={selectedState} />
-              <Button size="sm" onClick={() => setSheet('rename')}>
-                Rename…
-              </Button>
-              <Button
-                size="sm"
-                icon="refresh"
-                disabled={
-                  busy ||
-                  selectedState === 'blocked' ||
-                  selectedState === 'recovery-required'
-                }
-                title={
-                  selectedState === 'recovery-required'
-                    ? 'Restore saved security state before checking this identity.'
-                    : selectedState === 'blocked'
-                      ? 'This server is blocked because its identity changed'
-                      : 'Verify the saved server identity; this does not renew compatibility permission.'
-                }
-                onClick={() => void check(selected)}
-              >
-                Check
-              </Button>
-            </>
-          }
-        />
         <div
           className="body"
           role="tabpanel"
           id={panel?.id}
           aria-labelledby={panel?.labelledBy}
         >
-          <div className="settings-main">{content}</div>
+          <div className="settings-main server-main">
+            {/* The way back to the Account page this server was opened from:
+                the bar names only Settings. */}
+            <div className="pathbar">
+              <button
+                type="button"
+                onClick={() => onNavigate(servers(undefined, store))}
+              >
+                <Icon name="chevronDown" className="chev-left" />
+                Account
+              </button>
+            </div>
+            <div className="hero server-hero">
+              <ServerMark state={selectedState} />
+              <div className="t">
+                <h1>{serverDisplayLabelOrLoading(selected)}</h1>
+                <p>
+                  {selectedAccount && !isLocked(selectedState)
+                    ? `Signed in as ${selectedAccount.username}`
+                    : selected.configuredEndpoint}
+                </p>
+              </div>
+              <div className="hero-acts">
+                <StatusChip state={selectedState} />
+                <Button size="sm" onClick={() => setSheet('rename')}>
+                  Rename…
+                </Button>
+                <Button
+                  size="sm"
+                  icon="refresh"
+                  disabled={
+                    busy ||
+                    selectedState === 'blocked' ||
+                    selectedState === 'recovery-required'
+                  }
+                  title={
+                    selectedState === 'recovery-required'
+                      ? 'Restore saved security state before checking this identity.'
+                      : selectedState === 'blocked'
+                        ? 'This server is blocked because its identity changed'
+                        : 'Verify the saved server identity; this does not renew compatibility permission.'
+                  }
+                  onClick={() => void check(selected)}
+                >
+                  Check
+                </Button>
+              </div>
+            </div>
+            {content}
+          </div>
         </div>
         {overlay}
       </>

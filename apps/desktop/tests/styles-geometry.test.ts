@@ -15,6 +15,10 @@ const STYLES = [
   '../src/screens/files.css',
   '../src/screens/chat.css',
   '../src/screens/chat-picker.css',
+  '../src/screens/teams.css',
+  '../src/screens/devices.css',
+  '../src/screens/settings.css',
+  '../src/screens/first-run.css',
   '../src/shell/search-palette.css',
 ];
 const TOKEN_ONLY_COLORS = STYLES;

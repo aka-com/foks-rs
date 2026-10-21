@@ -1,0 +1,194 @@
+/*
+ * Devices: the account's keys as a list column beside one key's details
+ * (design A, v3 "devices"). The list sits in the panel's `.main`, under the
+ * list bar; the details are portaled into the shell's `.details` column.
+ */
+
+/* ---------------------------------------------------------------- list */
+.devices-list {
+  flex: 1;
+  min-height: 0;
+}
+
+.devices-list > .body.rows {
+  padding: 0 0 24px;
+}
+
+.devices-list .band {
+  margin: 6px 14px;
+  flex-wrap: wrap;
+}
+
+.devices-list .band .btn {
+  margin-left: auto;
+}
+
+.devices-list .row.devrow .tile {
+  font-size: 14px;
+}
+
+.devices-list .row.devrow .r .chip {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-groups.stale {
+  opacity: 0.75;
+}
+
+.devices-list .list-note {
+  margin: 8px 14px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.devices-list .device-list-actions {
+  padding: 8px 14px 0;
+}
+
+.devices-list .device-list-actions:empty {
+  display: none;
+}
+
+/* -------------------------------------------------------------- details */
+.devices-details .dbody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 24px 32px;
+}
+
+.devices-details .dinner {
+  max-width: 760px;
+}
+
+.devices-details .hero h1 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 18px;
+  font-weight: var(--weight-title);
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.devices-details .hero p .chip {
+  margin-left: 0;
+}
+
+.devices-details .notice {
+  margin: 4px 0 10px;
+}
+
+/* The key's facts are property rows on the panel, not a boxed card. */
+.devices-details .settings-section {
+  margin: 0;
+}
+
+.devices-details .settings-inset:not(.danger-box) {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+  padding: 6px 0;
+}
+
+.devices-details .settings-inset:not(.danger-box) .fr {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 12px;
+  min-height: var(--prop-row-h);
+  padding: 3px 0;
+  border-top: 0;
+}
+
+.devices-details .settings-inset:not(.danger-box) .fr .k {
+  width: auto;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.devices-details .settings-inset:not(.danger-box) .fr .v {
+  grid-column: 2 / -1;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+}
+
+.devices-details .settings-inset:not(.danger-box) .fr .v small {
+  display: inline;
+  font-size: 13px;
+}
+
+.devices-details .settings-inset:not(.danger-box) .fr .v > .copybox {
+  flex: 1;
+}
+
+.devices-details .settings-inset .fr .v .namechip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.devices-details .settings-inset .fr .v .namechip b {
+  font-weight: 400;
+}
+
+/* The full key wraps in the monospace face, with Copy at the trailing edge. */
+.devices-details .copybox {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  gap: 12px;
+}
+
+.devices-details .copybox .v .mono,
+.devices-details .copybox .v {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  word-break: break-all;
+}
+
+.devices-details .sec {
+  margin: 18px 0 6px;
+}
+
+.devices-details .danger-box {
+  background: var(--card);
+  border-radius: var(--radius-lg);
+}
+
+.devices-details .danger-box .fr {
+  min-height: 44px;
+  padding: 8px 16px;
+}
+
+.devices-details .danger-box .fr .k {
+  width: auto;
+  flex: 1;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+@container (max-width: 520px) {
+  .devices-details .settings-inset:not(.danger-box) .fr {
+    grid-template-columns: 104px minmax(0, 1fr) auto;
+  }
+}
+
+@container (max-width: 359px) {
+  .devices-details .settings-inset:not(.danger-box) .fr {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .devices-details .settings-inset:not(.danger-box) .fr .v {
+    grid-column: 1;
+  }
+}

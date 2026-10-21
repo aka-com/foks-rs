@@ -895,7 +895,7 @@ export function SyncPopover({
       anchorRef={anchorRef}
       className={`menu-portal sync-popover${single ? '' : ' multi'}`}
       align="end"
-      minWidth={400}
+      minWidth={320}
       onClose={onClose}
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}

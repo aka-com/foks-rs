@@ -62,10 +62,11 @@ import {
 } from '../screens/write-workflows';
 import { useSearchShortcut } from '../shell/search-palette';
 import { Sidebar } from '../shell/sidebar';
-import { Topbar } from '../shell/topbar';
+import { Topbar, type TopbarProps } from '../shell/topbar';
+import { BarActionsSlot, DetailsSlot } from '../shell/page-slots';
+import { activityBadge } from '../activity';
 import { FilesViewMenu } from '../shell/files-view-menu';
 import { PlainSyncStatus, SyncControls } from '../shell/sync-status';
-import { requestNewChat } from '../screens/chat-tab';
 import { chatTeams } from '../screens/chat-teams';
 import { useAccessRuntime } from './access-runtime';
 import { AccessLifetime } from './access-lifetime';
@@ -368,6 +369,10 @@ export function VaultShell({
 
   const pendingFirstRun = incompleteFirstRunCheckpoint();
   const [setupLater, setSetupLater] = useState(false);
+  // The elements a page portals its bar commands and its details column
+  // into (`shell/page-slots.tsx`).
+  const [barSlot, setBarSlot] = useState<HTMLElement | null>(null);
+  const [detailsSlot, setDetailsSlot] = useState<HTMLElement | null>(null);
   const detailsShown =
     state.details &&
     listsItems(here) &&
@@ -588,12 +593,71 @@ export function VaultShell({
     here.kind === 'store' &&
     (() => {
       const pageStore = storeOf(shown, here.ref);
-      return (
-        !pageStore || storeDescriptionState(shown, pageStore) !== 'normal'
-      );
+      return !pageStore || storeDescriptionState(shown, pageStore) !== 'normal';
     })();
-  const splitEmpty =
-    filesHere && !herePage && !detailsShown && !teamInfoShown;
+  const splitEmpty = filesHere && !herePage && !detailsShown && !teamInfoShown;
+  // Chat draws this bar over its own resizable channel column, with the
+  // column's add control passed in, so the conversation beside it can carry
+  // a bar of its own; every other place draws it across the top of the panel.
+  const renderTopbar = (extra?: Partial<TopbarProps>): ReactNode => (
+    <Topbar
+      blocked={chrome.blocked}
+      deviceLabel={deviceLabel}
+      snapshot={shown}
+      location={here}
+      folder={state.folder}
+      onNavigate={(location) => locations.navigate(location)}
+      onSetFolder={(folder) => locations.setFolder(folder)}
+      // One field for the shell: on the views that list items it
+      // drives the same query the browser reads.
+      actionsSlot={setBarSlot}
+      {...(filesHere ||
+      here.kind === 'chat' ||
+      here.kind === 'activity' ||
+      here.kind === 'devices'
+        ? {
+            query: state.query,
+            onQuery: (query: string) => locations.search(query),
+          }
+        : {})}
+      {...(here.kind === 'chat'
+        ? { chatTeamCount: chatTeams(shown).length }
+        : {})}
+      {...(filesHere && newStore
+        ? {
+            onNew: (itemKind: Exclude<KindFilter, 'All'>) =>
+              void openNewItem(itemKind),
+            onNewFolder: () =>
+              setWorkflow({
+                kind: 'new-folder',
+                storeId: newStore.id,
+                initialFolder:
+                  newSelection && newSelection.store !== ALL_ITEMS
+                    ? newSelection.path
+                    : '/',
+              }),
+            newBlocked: writeBlockReason(shown, newStore),
+          }
+        : {})}
+      {...(filesHere
+        ? {
+            actions: (
+              <FilesViewMenu
+                sort={state.sort}
+                direction={state.sortDirection}
+                onSort={(sort, direction) => locations.setSort(sort, direction)}
+                locationSort={newSelection?.store === ALL_ITEMS}
+                disabled={chrome.blocked}
+              />
+            ),
+          }
+        : {})}
+      collapsed={sideCollapsed}
+      onToggleCollapsed={toggleSidebar}
+      nativeChrome={bridge.native}
+      {...extra}
+    />
+  );
   const shell = (
     <div
       className={[
@@ -609,6 +673,8 @@ export function VaultShell({
           'app',
           detailsShown ||
           splitEmpty ||
+          here.kind === 'activity' ||
+          here.kind === 'devices' ||
           (here.kind === 'first-run' && here.step === 'added')
             ? 'with-details'
             : '',
@@ -674,6 +740,7 @@ export function VaultShell({
                 account={locations.getAccount()}
                 attention={unroutedNotices(shown).length}
                 teamRequests={teamRequestsBadge(shown, teamRequestCounts)}
+                activity={activityBadge(shown, teamRequestCounts)}
                 devicesAlert={devicesAlertSummary(shown, deviceAlerts)}
                 settingsAlert={settingsAlertSummary(shown)}
                 onTabNavigate={(tab) => locations.navigateTab(tab)}
@@ -759,63 +826,7 @@ export function VaultShell({
                 blocked={chrome.blocked}
               />
               <main className="main">
-                <Topbar
-                  blocked={chrome.blocked}
-                  deviceLabel={deviceLabel}
-                  snapshot={shown}
-                  location={here}
-                  folder={state.folder}
-                  onNavigate={(location) => locations.navigate(location)}
-                  onSetFolder={(folder) => locations.setFolder(folder)}
-                  // One field for the shell: on the views that list items it
-                  // drives the same query the browser reads.
-                  {...(filesHere || here.kind === 'chat'
-                    ? {
-                        query: state.query,
-                        onQuery: (query: string) => locations.search(query),
-                      }
-                    : {})}
-                  {...(here.kind === 'chat'
-                    ? {
-                        onNewChat: requestNewChat,
-                        chatTeamCount: chatTeams(shown).length,
-                      }
-                    : {})}
-                  {...(filesHere && newStore
-                    ? {
-                        onNew: (itemKind: Exclude<KindFilter, 'All'>) =>
-                          void openNewItem(itemKind),
-                        onNewFolder: () =>
-                          setWorkflow({
-                            kind: 'new-folder',
-                            storeId: newStore.id,
-                            initialFolder:
-                              newSelection && newSelection.store !== ALL_ITEMS
-                                ? newSelection.path
-                                : '/',
-                          }),
-                        newBlocked: writeBlockReason(shown, newStore),
-                      }
-                    : {})}
-                  {...(filesHere
-                    ? {
-                        actions: (
-                          <FilesViewMenu
-                            sort={state.sort}
-                            direction={state.sortDirection}
-                            onSort={(sort, direction) =>
-                              locations.setSort(sort, direction)
-                            }
-                            locationSort={newSelection?.store === ALL_ITEMS}
-                            disabled={chrome.blocked}
-                          />
-                        ),
-                      }
-                    : {})}
-                  collapsed={sideCollapsed}
-                  onToggleCollapsed={toggleSidebar}
-                  nativeChrome={bridge.native}
-                />
+                {here.kind === 'chat' ? null : renderTopbar()}
                 {chatMigration.notice}
                 {/* Reset screen failures when the location changes while keeping
                     the rail and topbar outside the error boundary. */}
@@ -823,34 +834,39 @@ export function VaultShell({
                   key={screenBoundaryKey(here)}
                   identity={screenIdentity(here)}
                 >
-                  <ScreenRouter
-                    shown={shown}
-                    bridge={bridge}
-                    state={state}
-                    locations={locations}
-                    enteredScene={enteredScene}
-                    namedState={namedState}
-                    concealSignal={concealSignal}
-                    hardwareRefresh={hardwareRefresh}
-                    setDeviceLabel={setDeviceLabel}
-                    setRevealRequest={setRevealRequest}
-                    workflow={workflow}
-                    setWorkflow={setWorkflow}
-                    refresh={refresh}
-                    refreshSnapshot={refreshSnapshot}
-                    commandError={commandError}
-                    mutationError={mutationError}
-                    onLock={onLock}
-                    agentLifecycle={agentLifecycle}
-                    recoverAgentReadiness={recoverAgentReadiness}
-                    uploadDroppedFile={uploadDroppedFile}
-                    accessNow={accessNow}
-                    accessGenerations={accessGenerations}
-                    onTeamInfo={(storeId, trigger) => {
-                      locations.setDetails(false);
-                      setTeamInfo({ storeId, trigger });
-                    }}
-                  />
+                  <BarActionsSlot.Provider value={barSlot}>
+                    <DetailsSlot.Provider value={detailsSlot}>
+                      <ScreenRouter
+                        shown={shown}
+                        bridge={bridge}
+                        state={state}
+                        locations={locations}
+                        enteredScene={enteredScene}
+                        namedState={namedState}
+                        concealSignal={concealSignal}
+                        hardwareRefresh={hardwareRefresh}
+                        setDeviceLabel={setDeviceLabel}
+                        setRevealRequest={setRevealRequest}
+                        workflow={workflow}
+                        setWorkflow={setWorkflow}
+                        refresh={refresh}
+                        refreshSnapshot={refreshSnapshot}
+                        commandError={commandError}
+                        mutationError={mutationError}
+                        onLock={onLock}
+                        agentLifecycle={agentLifecycle}
+                        recoverAgentReadiness={recoverAgentReadiness}
+                        uploadDroppedFile={uploadDroppedFile}
+                        accessNow={accessNow}
+                        accessGenerations={accessGenerations}
+                        onTeamInfo={(storeId, trigger) => {
+                          locations.setDetails(false);
+                          setTeamInfo({ storeId, trigger });
+                        }}
+                        renderBar={renderTopbar}
+                      />
+                    </DetailsSlot.Provider>
+                  </BarActionsSlot.Provider>
                 </ScreenErrorBoundary>
               </main>
             </>
@@ -885,6 +901,15 @@ export function VaultShell({
                 </>
               )}
             </section>
+          ) : null}
+          {here.kind === 'activity' || here.kind === 'devices' ? (
+            // Activity's and Devices' details column: the page portals the
+            // selected entry's details here.
+            <section
+              ref={setDetailsSlot}
+              className={`details ${here.kind}-details`}
+              aria-label="Details"
+            />
           ) : null}
           {here.kind !== 'first-run' && detailsShown ? (
             <DetailsPanel
