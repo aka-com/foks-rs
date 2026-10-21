@@ -1,10 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/foks-proj/go-foks/lib/core"
@@ -20,33 +17,11 @@ import (
 // the way client/librt sealMessage seals them (bf9ace5). Identifiers and keys
 // match the v0.1.9 realtime fixtures so the Rust side can open the messages.
 //
-// Set FOKS_RT_MAIN_FIXTURE_OUT to write the files; otherwise the test compares
-// against the checked-in tree.
+// Set FOKS_MAIN_FIXTURE_OUT to write the files (under realtime/, with
+// SHA256SUMS); otherwise the test compares against the checked-in tree.
 func TestRealtimeMainFixtures(t *testing.T) {
-	root := os.Getenv("FOKS_RT_MAIN_FIXTURE_OUT")
-	generate := root != ""
-	if !generate {
-		root = filepath.Join("..", "..", "crates", "foks-snowpack", "tests", "fixtures", "foks-main", "realtime")
-	} else if err := os.MkdirAll(root, 0755); err != nil {
-		t.Fatal(err)
-	}
-	put := func(name string, b []byte) {
-		t.Helper()
-		path := filepath.Join(root, name)
-		if generate {
-			if e := os.WriteFile(path, b, 0644); e != nil {
-				t.Fatal(e)
-			}
-			return
-		}
-		old, e := os.ReadFile(path)
-		if e != nil {
-			t.Fatal(e)
-		}
-		if !bytes.Equal(b, old) {
-			t.Fatalf("fixture changed: %s", name)
-		}
-	}
+	d := newFixtureDir(t, "realtime")
+	put := d.put
 	emit := func(name string, obj core.Codecable) {
 		t.Helper()
 		b, e := core.EncodeToBytes(obj)
@@ -205,4 +180,5 @@ func TestRealtimeMainFixtures(t *testing.T) {
 		emit(fmt.Sprintf("pegged-%s", c.name), &msg)
 		prev = mid
 	}
+	d.finish()
 }
