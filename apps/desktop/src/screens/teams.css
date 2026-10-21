@@ -56,7 +56,7 @@
 .team-inner>.tabs .tab:hover{background:transparent;color:var(--ink)}
 .team-inner>.tabs .tab.on{background:var(--seg-on);color:var(--ink);font-weight:var(--weight-label);box-shadow:var(--shadow-seg)}
 .team-inner>.tabs .tab.on::after{content:none}
-.team-inner>.tabs .tab .n,.team-inner>.tabs .tab.on .n{padding:0;background:none;font-size:12px;font-weight:var(--weight-label);line-height:inherit;color:var(--faint)}
+.team-inner>.tabs .tab .n,.team-inner>.tabs .tab.on .n{padding:0;background:none;font-size:12px;font-weight:var(--weight-label);line-height:inherit;color:var(--muted)}
 .team-panel{min-width:0}
 
 /* Members: initials or a glyph tile, and the links under a card. */
