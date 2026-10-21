@@ -114,3 +114,18 @@ test('a page listbox is not a popup; a portaled popup or an expanded combobox is
     false,
   );
 });
+
+test('a window whose focus was never placed is left alone as its list renders', async () => {
+  page('<div class="rows"></div>');
+  // The shell names its first place before the keeper starts.
+  setFocusContext('first');
+  const stop = mountFocusKeeper();
+  try {
+    document.querySelector('.rows')!.innerHTML =
+      '<div tabindex="0" data-row-key="one">one</div>';
+    await tick();
+    assert.equal(document.activeElement, document.body);
+  } finally {
+    stop();
+  }
+});

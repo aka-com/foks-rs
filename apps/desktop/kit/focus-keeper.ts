@@ -164,14 +164,13 @@ function check(): void {
   if (!focusLost()) return;
   requested = [];
   // A click on blank space leaves a usable control behind; that is the
-  // user's choice. Only a control that went away, or a caller's request,
-  // moves the focus.
+  // user's choice. Nothing focused yet (the window just opened) is the
+  // platform's. Only a control that went away, a navigation or a caller's
+  // request moves the focus.
   if (
     !asked.length &&
     !navigated &&
-    last &&
-    last.element.isConnected &&
-    focusable(last.element)
+    (!last || (last.element.isConnected && focusable(last.element)))
   )
     return;
   const candidates: Candidate[] = [
@@ -224,6 +223,9 @@ export function setFocusContext(key: string): void {
 export function mountFocusKeeper(
   root: HTMLElement = document.body,
 ): () => void {
+  // The window opening is not a navigation: the focus starts where the
+  // platform puts it.
+  contextChanged = false;
   const onFocusIn = (event: FocusEvent): void => {
     const target = event.target;
     if (!(target instanceof HTMLElement) || target === document.body) return;
