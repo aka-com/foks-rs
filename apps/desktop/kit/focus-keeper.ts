@@ -62,7 +62,7 @@ interface Lost {
   /** The user moved the focus off it with a pointer press on blank space. */
   released?: boolean;
   /**
-   * The control's nearest two containers, for a control that goes away with
+   * The control's nearest four containers, for a control that goes away with
    * no replacement (a row's Check button that the result removes): the focus
    * moves to the first control left in the closest one still on screen.
    * Empty for list rows and in dialogs, which have their own landing rules.
@@ -89,7 +89,9 @@ let contextChanged = false;
  * platform put it.
  */
 let engaged = false;
-const remembered = new Map<string, string[]>();
+/** The landing target the keeper last chose after a navigation. */
+let landed: HTMLElement | null = null;
+const remembered = new Map<string, Candidate[]>();
 
 function quoted(value: string): string {
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
@@ -114,6 +116,36 @@ export function focusIdentity(element: Element): string[] {
   return identity;
 }
 
+function labelOf(element: Element): string {
+  return (element.getAttribute('aria-label') ?? element.textContent ?? '')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+/**
+ * Finds a control again by what it says, for one with no key, id or row
+ * (a team row, a server row's Manage ›): the element with the same tag and
+ * label in the page's columns, the same one of several by position.
+ */
+function sameLabelled(
+  element: HTMLElement,
+  scopes: readonly string[] = ['.main', '.details'],
+): Candidate {
+  const label = labelOf(element);
+  if (!label) return null;
+  const matches = (): HTMLElement[] =>
+    Array.from(
+      document.querySelectorAll<HTMLElement>(
+        scopes.map((scope) => `${scope} ${element.tagName}`).join(', '),
+      ),
+    ).filter((other) => labelOf(other) === label);
+  const index = Math.max(matches().indexOf(element), 0);
+  return () => {
+    const found = matches();
+    return found[index] ?? found[0];
+  };
+}
+
 /** See `Lost.around`. */
 function containersOf(element: HTMLElement): HTMLElement[] {
   if (element.closest('[role="option"], [role="treeitem"], [data-row-key]'))
@@ -124,7 +156,7 @@ function containersOf(element: HTMLElement): HTMLElement[] {
   const around: HTMLElement[] = [];
   for (
     let parent = element.parentElement;
-    parent && scope && parent !== scope && around.length < 2;
+    parent && scope && parent !== scope && around.length < 4;
     parent = parent.parentElement
   )
     around.push(parent);
@@ -222,7 +254,21 @@ function check(): void {
   const asked = requested.flatMap((request) => request.candidates);
   const navigated = contextChanged;
   contextChanged = false;
-  if (!focusLost()) return;
+  if (!focusLost()) {
+    // The focus survived the navigation only because the keeper put it on a
+    // control both places share (a Settings tab) and the user has not moved
+    // it since: the remembered control for the new place still wins.
+    const active = document.activeElement;
+    if (!navigated || !landed || active !== landed) return;
+    for (const candidate of remembered.get(context) ?? []) {
+      const target = resolve(candidate);
+      if (target && target !== active) {
+        target.focus();
+        return;
+      }
+    }
+    return;
+  }
   requested = [];
   // A click on blank space leaves a usable control behind; that is the
   // user's choice. Nothing focused yet (the window just opened) is the
@@ -259,7 +305,9 @@ function check(): void {
       return;
     }
   }
-  landing()?.focus({ preventScroll: true });
+  const target = landing();
+  target?.focus({ preventScroll: true });
+  if (navigated) landed = target;
 }
 
 function schedule(): void {
@@ -294,6 +342,24 @@ export function setFocusContext(key: string): void {
   schedule();
 }
 
+/** What had the focus when the keeper last stopped. */
+let parked: Candidate[] = [];
+/** Where the focus goes when the keeper next starts (after an unlock). */
+let returnTo: Candidate[] = [];
+
+/**
+ * Keeps what had the focus when the shell went away for the lock screen, so
+ * that the shell coming back after Unlock puts the focus there again. Called
+ * by the lock screen as it appears; any other teardown leaves nothing behind.
+ */
+export function holdFocusForReturn(): void {
+  // The shell's keeper may stop after the lock screen mounts (passive effect
+  // cleanups run after layout effects); it then hands its focus over itself.
+  holding = true;
+  returnTo = parked;
+}
+let holding = false;
+
 /** Starts the keeper for this document; returns the stop function. */
 export function mountFocusKeeper(
   root: HTMLElement = document.body,
@@ -302,20 +368,42 @@ export function mountFocusKeeper(
   // platform puts it.
   contextChanged = false;
   engaged = false;
+  parked = [];
+  holding = false;
+  if (returnTo.length) {
+    const candidates = returnTo;
+    returnTo = [];
+    focusWhenRendered(() => {
+      if (!focusLost()) return null;
+      for (const candidate of candidates) {
+        const target = resolve(candidate);
+        if (target) return target;
+      }
+      return null;
+      // The shell reads the catalog again after an unlock; wait for it.
+    }, 120);
+  }
   const onFocusIn = (event: FocusEvent): void => {
     const target = event.target;
     if (!(target instanceof HTMLElement) || target === document.body) return;
     engaged = true;
+    if (target !== landed) landed = null;
     // A pointer press is the user choosing where the focus goes; earlier
     // requests no longer apply.
     if (pressing) requested = [];
     const identity = focusIdentity(target);
     last = { element: target, identity, around: containersOf(target) };
+    if (target.closest('.side, .main, .details') && !topDialog())
+      inShell = last;
     // Remember controls in the page's own columns; the sidebar keeps its
     // focus across navigation, and dialogs and popups do not survive it.
-    if (target.closest('.main, .details')) remembered.set(context, identity);
+    if (target.closest('.main, .details'))
+      remembered.set(context, [...identity, sameLabelled(target)]);
   };
   let pressing = false;
+  // The last control focused in the window's own columns, outside dialogs:
+  // what the shell gets back after the lock screen.
+  let inShell: Lost | null = null;
   const onKeyDown = (): void => {
     engaged = true;
   };
@@ -352,6 +440,16 @@ export function mountFocusKeeper(
   document.addEventListener('pointerdown', onPointerDown, true);
   document.addEventListener('keydown', onKeyDown, true);
   return () => {
+    parked = inShell
+      ? [
+          ...inShell.identity,
+          sameLabelled(inShell.element, ['.side', '.main', '.details']),
+        ]
+      : [];
+    if (holding) {
+      returnTo = parked;
+      holding = false;
+    }
     observer?.disconnect();
     document.removeEventListener('focusin', onFocusIn);
     document.removeEventListener('focusout', onFocusOut);
@@ -362,6 +460,7 @@ export function mountFocusKeeper(
     last = null;
     requested = [];
     remembered.clear();
+    landed = null;
     context = '';
     contextChanged = false;
     engaged = false;
