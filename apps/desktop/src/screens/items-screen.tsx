@@ -787,6 +787,8 @@ export function ItemsScreen({
     renderedKeys: flatMode
       ? visibleRows.map((item) => `${item.store}|${item.path}`)
       : undefined,
+    // Cards: Left and Right step a card, Up and Down a line of cards.
+    columns: view === 'grid' ? gridWindow.columns : 1,
     labelOf: (key) => {
       const entry = entryAt.get(key)?.entry;
       if (!entry) return '';

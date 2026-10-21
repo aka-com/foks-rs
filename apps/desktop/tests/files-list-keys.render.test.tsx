@@ -304,3 +304,50 @@ test('Team Info opens in the details column beside the list', async () => {
   assert.ok(document.querySelector('.app.with-details'));
   assert.equal(document.querySelector('.details-empty'), null);
 });
+
+test('PageDown and PageUp move a page of rows, stopping at the ends', async () => {
+  const { store } = await mount({ kind: 'all' });
+  const options = [
+    ...listbox().querySelectorAll<HTMLElement>('[role="option"]'),
+  ];
+  assert.ok(options.length > 10);
+  const first = options[0];
+  first.focus();
+  // Without a layout (jsdom) a page is nine rows.
+  ui.fireEvent.keyDown(first, { key: 'PageDown' });
+  await ui.waitFor(() => assert.ok(document.activeElement === options[9]));
+  assert.equal(options[9].getAttribute('aria-selected'), 'true');
+  ui.fireEvent.keyDown(options[9], { key: 'PageDown' });
+  await ui.waitFor(() => assert.ok(document.activeElement === options.at(-1)));
+  ui.fireEvent.keyDown(options.at(-1)!, { key: 'PageUp' });
+  ui.fireEvent.keyDown(document.activeElement!, { key: 'PageUp' });
+  await ui.waitFor(() => assert.ok(document.activeElement === first));
+  assert.ok(store.getSnapshot().selection);
+});
+
+test('in cards, Left and Right step a card and Up and Down a line of cards', async () => {
+  window.localStorage.setItem('filesView', 'grid');
+  await mount({ kind: 'all' });
+  const grid = document.querySelector<HTMLElement>('.lpane .files-grid');
+  assert.ok(grid);
+  const columns = Number(
+    /repeat\((\d+)/.exec(grid.style.gridTemplateColumns)?.[1],
+  );
+  assert.ok(columns > 1, `the grid has ${columns} columns`);
+  const options = [
+    ...listbox().querySelectorAll<HTMLElement>('[role="option"]'),
+  ];
+  const at = (index: number) => options[index];
+  at(0).focus();
+  ui.fireEvent.keyDown(at(0), { key: 'ArrowRight' });
+  await ui.waitFor(() => assert.ok(document.activeElement === at(1)));
+  ui.fireEvent.keyDown(at(1), { key: 'ArrowDown' });
+  await ui.waitFor(() => assert.ok(document.activeElement === at(1 + columns)));
+  ui.fireEvent.keyDown(at(1 + columns), { key: 'ArrowLeft' });
+  await ui.waitFor(() => assert.ok(document.activeElement === at(columns)));
+  ui.fireEvent.keyDown(at(columns), { key: 'ArrowUp' });
+  await ui.waitFor(() => assert.ok(document.activeElement === at(0)));
+  // Up from the first line stays put.
+  ui.fireEvent.keyDown(at(0), { key: 'ArrowUp' });
+  assert.ok(document.activeElement === at(0));
+});
