@@ -82,7 +82,7 @@ export function SsoSignUpPanel({
         {progress.state === 'service-unavailable' ? (
           <div className="btns">
             <Button disabled={blocked} onClick={flow.status}>
-              Refresh status
+              Refresh Status
             </Button>
           </div>
         ) : null}
@@ -101,7 +101,7 @@ export function SsoSignUpPanel({
         disabled={blocked}
         onClick={flow.openBrowser}
       >
-        Open sign-in browser
+        Open Sign-In Browser
       </Button>
     ) : null;
     const checkButton = flow.pollable ? (
@@ -110,7 +110,7 @@ export function SsoSignUpPanel({
         disabled={blocked}
         onClick={flow.poll}
       >
-        Check sign-in
+        Check Sign-In
       </Button>
     ) : null;
     const finishButton = flow.finishable ? (
@@ -120,7 +120,7 @@ export function SsoSignUpPanel({
         disabled={blocked || (flow.hardwareRequired && !flow.pin)}
         onClick={flow.finish}
       >
-        Finish sign-up
+        Finish Sign-Up
       </Button>
     ) : null;
     primaryButton =
@@ -135,11 +135,11 @@ export function SsoSignUpPanel({
         {primary === 'check' ? null : checkButton}
         {flow.cancellable ? (
           <Button disabled={blocked} onClick={flow.cancel}>
-            Cancel sign-in
+            Cancel Sign-In
           </Button>
         ) : null}
         <Button disabled={blocked} onClick={flow.status}>
-          Refresh status
+          Refresh Status
         </Button>
       </>
     );

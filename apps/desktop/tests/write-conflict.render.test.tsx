@@ -98,7 +98,7 @@ test('an edit conflict with a deleted item preserves a new-item draft', async ()
   assert.ok(rendered.getByText(/changed or removed while you were editing/));
   await ui.act(async () => {
     ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Refresh and review' }),
+      rendered.getByRole('button', { name: 'Refresh and Review' }),
     );
   });
 
@@ -130,7 +130,7 @@ test('an edit conflict with an existing item resumes against the refreshed versi
   await rendered.findByText('Item changed elsewhere');
   await ui.act(async () => {
     ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Refresh and review' }),
+      rendered.getByRole('button', { name: 'Refresh and Review' }),
     );
   });
   await ui.waitFor(() => assert.match(toasts(), /Review your draft/));

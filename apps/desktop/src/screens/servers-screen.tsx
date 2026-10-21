@@ -686,7 +686,7 @@ function StatusBand({
             disabled={busy}
             onClick={onCheck}
           >
-            Check now
+            Check Now
           </Button>
         }
       >
@@ -707,7 +707,7 @@ function StatusBand({
             disabled={busy}
             onClick={onCheck}
           >
-            Check now
+            Check Now
           </Button>
         }
       >
@@ -1114,7 +1114,7 @@ function AddServerSheet({
                 .finally(() => setBusy(false));
             }}
           >
-            Add server
+            Add Server
           </Button>
         </>
       }
@@ -1258,7 +1258,7 @@ function RemoveServerSheet({
                 .finally(() => setBusy(false));
             }}
           >
-            Remove server and credentials
+            Remove Server and Credentials
           </Button>
         </>
       }

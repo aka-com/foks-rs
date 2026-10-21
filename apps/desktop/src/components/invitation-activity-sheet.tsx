@@ -291,7 +291,7 @@ export function InvitationActivitySheet({
                 disabled={busy}
                 onClick={() => void finish(row)}
               >
-                Finish creating
+                Finish Creating
               </Button>
               <Button
                 size="sm"
@@ -308,7 +308,7 @@ export function InvitationActivitySheet({
               disabled={busy}
               onClick={() => void check(row)}
             >
-              Check status
+              Check Status
             </Button>
           )}
         </div>
@@ -377,7 +377,7 @@ export function InvitationActivitySheet({
           disabled={busy || !row.role}
           onClick={() => void resumeApproval(row)}
         >
-          Resume approval
+          Resume Approval
         </Button>
       </div>
     </article>

@@ -273,7 +273,7 @@ export function GoProfileConnectSheet({
                 disabled={busy || !alias.trim()}
                 onClick={() => void pair(true)}
               >
-                Resume pairing
+                Resume Pairing
               </Button>
               <Button
                 variant="primary"
@@ -282,7 +282,7 @@ export function GoProfileConnectSheet({
                 }
                 onClick={() => void pair(false)}
               >
-                Pair this device
+                Pair This Device
               </Button>
             </>
           ) : checked && method === 'copy' ? (
@@ -291,7 +291,7 @@ export function GoProfileConnectSheet({
               disabled={busy || !selected?.copyable || !alias.trim()}
               onClick={() => void copy()}
             >
-              Import credentials
+              Import Credentials
             </Button>
           ) : null}
         </>
@@ -308,7 +308,7 @@ export function GoProfileConnectSheet({
               : 'The official FOKS CLI was not found on this computer.'}
           </p>
           <Button disabled={busy} onClick={scan}>
-            Scan again
+            Scan Again
           </Button>
         </Inset>
       ) : null}
@@ -343,7 +343,7 @@ export function GoProfileConnectSheet({
               disabled={busy}
               onClick={() => setServer('foks.app:4430')}
             >
-              Use official FOKS server
+              Use Official FOKS Server
             </Button>
           </div>
         </>
@@ -357,7 +357,7 @@ export function GoProfileConnectSheet({
               variant={method === 'pair' ? 'primary' : undefined}
               onClick={() => setMethod('pair')}
             >
-              Add as a new device
+              Add as a New Device
             </Button>
             <p>Connect as an authorized device</p>
             <Button
@@ -365,7 +365,7 @@ export function GoProfileConnectSheet({
               disabled={busy || !selected.copyable}
               onClick={() => setMethod('copy')}
             >
-              Import this device’s FOKS CLI credentials
+              Import This Device’s FOKS CLI Credentials
             </Button>
             <p>Share existing credentials with the FOKS CLI</p>
           </Inset>

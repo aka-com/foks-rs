@@ -228,15 +228,15 @@ test('remaining work is visible beside healthy jobs and disappears when it settl
       .textContent?.includes('Loading team rosters'),
   );
   const refreshNow = ui.screen.getByRole<HTMLButtonElement>('button', {
-    name: 'Refresh now',
+    name: 'Refresh Now',
   });
   const copy = ui.screen.getByRole<HTMLButtonElement>('button', {
     name: 'Copy diagnostics',
   });
   const footerButtons = [...document.querySelectorAll('.sync-foot .btn')];
   assert.deepEqual(footerButtons, [copy, refreshNow]);
-  assert.equal(refreshNow.textContent, 'Refresh now');
-  assert.equal(refreshNow.title, 'Refresh now');
+  assert.equal(refreshNow.textContent, 'Refresh Now');
+  assert.equal(refreshNow.title, 'Refresh Now');
   assert.ok(refreshNow.querySelector('svg'));
   assert.equal(refreshNow.disabled, true);
   assert.equal(button.disabled, false);
@@ -340,7 +340,7 @@ test('Chat with teams keeps a live field and draws the add control it is given',
           query: '',
           onQuery: () => {},
           chatTeamCount: 2,
-          add: createElement('button', { type: 'button' }, 'New channel'),
+          add: createElement('button', { type: 'button' }, 'New Channel'),
         }),
       }),
     ),
@@ -348,7 +348,7 @@ test('Chat with teams keeps a live field and draws the add control it is given',
   const field = document.querySelector<HTMLInputElement>('.topsearch input');
   assert.ok(field);
   assert.equal(field.disabled, false);
-  assert.ok(ui.screen.getByRole('button', { name: 'New channel' }));
+  assert.ok(ui.screen.getByRole('button', { name: 'New Channel' }));
 });
 
 // Settings names only itself in the bar: the sub-navigation names the

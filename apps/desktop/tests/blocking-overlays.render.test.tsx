@@ -842,7 +842,7 @@ test('restoration-failed keeps its retry and adds a quit action', async () => {
   });
   assert.equal(quits, 1);
   const retry = await rendered.findByRole('button', {
-    name: 'Restart service',
+    name: 'Restart Service',
   });
   await ui.act(async () => {
     retry.click();

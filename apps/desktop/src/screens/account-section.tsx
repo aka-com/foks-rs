@@ -847,7 +847,7 @@ function AccountPanel({
                 })
               }
             >
-              Open server
+              Open Server
             </Button>
           }
         >
@@ -1032,21 +1032,21 @@ function AccountActions({
           {...access.props('bot-list', target)}
           onClick={() => onSheet('bot')}
         >
-          Bot accounts
+          Bot Accounts
         </Button>
         <Button
           size="sm"
           {...access.props('web-admin-configure', target)}
           onClick={() => onSheet('admin')}
         >
-          Web admin panel
+          Web Admin Panel
         </Button>
         <Button
           size="sm"
           {...access.props('sso-login', target)}
           onClick={() => onSheet('sso')}
         >
-          Sign in via SSO
+          Sign In via SSO
         </Button>
         <Button size="sm" onClick={() => onSheet('go-profile')}>
           Import from FOKS CLI
@@ -1056,14 +1056,14 @@ function AccountActions({
           {...access.props('account-recover', { profile: store.server })}
           onClick={() => onSheet('recover')}
         >
-          Connect an existing account with a recovery phrase
+          Connect an Existing Account with a Recovery Phrase
         </Button>
         <Button
           size="sm"
           {...access.props('yubi-create', { profile: store.server })}
           onClick={() => onSheet('enroll')}
         >
-          Create an account on a hardware key…
+          Create an Account on a Hardware Key…
         </Button>
       </div>
     </>
@@ -1127,7 +1127,7 @@ function NoAvailableAccount({
       title="No available account on this device"
       actions={
         <Button variant="primary" onClick={onConnectGoProfile}>
-          Connect existing account
+          Connect Existing Account
         </Button>
       }
     >

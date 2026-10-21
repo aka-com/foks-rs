@@ -81,7 +81,7 @@ test('a screen render error preserves shell navigation and Reload page retries t
   );
 
   throwing = false;
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Reload page' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Reload Page' }));
   assert.ok(rendered.getByText('The page'));
   assert.equal(rendered.queryByRole('alert'), null);
 });

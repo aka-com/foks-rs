@@ -365,9 +365,9 @@ test('message copy is available only from the right-click menu', async () => {
   });
   const text = message.querySelector('p')?.textContent;
   assert.ok(text);
-  assert.equal(ui.screen.queryByRole('button', { name: 'Copy message' }), null);
+  assert.equal(ui.screen.queryByRole('button', { name: 'Copy Message' }), null);
   ui.fireEvent.contextMenu(message, { clientX: 120, clientY: 80 });
-  const copy = await ui.screen.findByRole('menuitem', { name: 'Copy message' });
+  const copy = await ui.screen.findByRole('menuitem', { name: 'Copy Message' });
   ui.fireEvent.click(copy);
   assert.equal(ui.screen.queryByRole('menu'), null);
   await ui.waitFor(() => assert.deepEqual(copied, [text]));
@@ -619,7 +619,7 @@ test('a team with a lapsed server check-in remains listed with recovery actions'
   );
   ui.fireEvent.click(head('Engineering'));
   await ui.screen.findByRole('heading', { name: 'Engineering chat is locked' });
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Check in' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Check In' }));
   assert.deepEqual(journal.at(-1), {
     kind: 'settings',
     section: 'account',
@@ -627,7 +627,7 @@ test('a team with a lapsed server check-in remains listed with recovery actions'
   });
   // Open another available team.
   ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Open another team' }),
+    ui.screen.getByRole('button', { name: 'Open Another Team' }),
   );
   assert.deepEqual(journal.at(-1), { kind: 'chat', ref: 'team:household' });
 });
@@ -672,8 +672,8 @@ test('with no team at all the tab offers team creation', async () => {
       'Every team has a #general channel. Create a team, or accept an invitation, to start.',
     ),
   );
-  assert.ok(ui.screen.getByRole('button', { name: 'Create a team' }));
-  assert.ok(ui.screen.getByRole('button', { name: 'Accept an invitation' }));
+  assert.ok(ui.screen.getByRole('button', { name: 'Create a Team' }));
+  assert.ok(ui.screen.getByRole('button', { name: 'Accept an Invitation' }));
   assert.equal(ui.screen.queryByText('How chat gets turned on'), null);
   // The "Chat unavailable" teams are still a column worth searching, so the
   // header's query still narrows it even though the column has no team with
@@ -1285,7 +1285,7 @@ test('the saved-creation check is announced while it runs and offered again once
   // the reader to do: the sheet says so and offers no button.
   await ui.screen.findByText('Checking saved channel creations…');
   assert.equal(
-    ui.screen.queryByRole('button', { name: 'Check saved creations' }),
+    ui.screen.queryByRole('button', { name: 'Check Saved Creations' }),
     null,
   );
   ui.fireEvent.change(
@@ -1307,7 +1307,7 @@ test('the saved-creation check is announced while it runs and offered again once
   armed = false;
   await ui.waitFor(() => {
     const again = ui.screen.queryByRole('button', {
-      name: 'Check saved creations',
+      name: 'Check Saved Creations',
     });
     assert.ok(again);
     ui.fireEvent.click(again);
@@ -1331,7 +1331,7 @@ async function openCreateForm(team: RegExp): Promise<HTMLElement> {
   ui.fireEvent.click(await ui.screen.findByRole('option', { name: team }));
   await ui.waitFor(() =>
     assert.equal(
-      ui.screen.queryByRole('button', { name: 'Check saved creations' }),
+      ui.screen.queryByRole('button', { name: 'Check Saved Creations' }),
       null,
     ),
   );
@@ -2260,9 +2260,9 @@ test('sidebar context menus distinguish background, teams, and channels', async 
   const teamMenu = ui.screen.getByRole('menu', {
     name: 'Chat sidebar actions',
   });
-  assert.ok(ui.within(teamMenu).getByRole('menuitem', { name: 'Go to team' }));
+  assert.ok(ui.within(teamMenu).getByRole('menuitem', { name: 'Go to Team' }));
   ui.fireEvent.click(
-    ui.within(teamMenu).getByRole('menuitem', { name: 'Go to team' }),
+    ui.within(teamMenu).getByRole('menuitem', { name: 'Go to Team' }),
   );
   assert.deepEqual(journal.at(-1), { kind: 'teams', ref: 'team:eng' });
   const channel = await ui.waitFor(() => {
@@ -2280,28 +2280,28 @@ test('sidebar context menus distinguish background, teams, and channels', async 
       .getAllByRole('menuitem')
       .map((item) => item.textContent),
     [
-      'Open channel',
-      'Edit channel',
-      'Delete channel',
-      'Channel info',
+      'Open Channel',
+      'Edit Channel',
+      'Delete Channel',
+      'Channel Info',
       'Add FOKS User…',
       'Add FOKS team…',
       'Invite New User…',
     ],
   );
-  for (const name of ['Edit channel', 'Delete channel']) {
+  for (const name of ['Edit Channel', 'Delete Channel']) {
     const item = ui.within(menu).getByRole('menuitem', { name });
     assert.equal(item.getAttribute('aria-disabled'), 'true');
     ui.fireEvent.click(item);
     assert.ok(ui.screen.getByRole('menu'));
   }
   ui.fireEvent.click(
-    ui.within(menu).getByRole('menuitem', { name: 'Open channel' }),
+    ui.within(menu).getByRole('menuitem', { name: 'Open Channel' }),
   );
   assert.equal(ui.screen.queryByRole('menu'), null);
   assert.equal(journal.at(-1)?.kind, 'chat');
   ui.fireEvent.contextMenu(channel, { clientX: 40, clientY: 50 });
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Channel info' }));
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Channel Info' }));
   assert.equal(ui.screen.queryByRole('menu'), null);
   assert.equal(journal.at(-1)?.kind, 'chat');
   assert.ok(await ui.screen.findByRole('dialog', { name: 'Channel info' }));
@@ -2347,7 +2347,7 @@ test('channel context menu disables opening a channel without read permission', 
     return node;
   });
   ui.fireEvent.contextMenu(channel);
-  const open = ui.screen.getByRole('menuitem', { name: 'Open channel' });
+  const open = ui.screen.getByRole('menuitem', { name: 'Open Channel' });
   assert.equal(open.getAttribute('aria-disabled'), 'true');
   assert.match(open.getAttribute('title') ?? '', /access/);
   ui.fireEvent.click(open);

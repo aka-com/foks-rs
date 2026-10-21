@@ -161,7 +161,7 @@ export function AgentStopCard({
     ) : lifecycle.state === 'restoration-failed' ? (
       <>
         <Button variant="primary" onClick={onRetryRestoration}>
-          Restart service
+          Restart Service
         </Button>
         {quit}
       </>

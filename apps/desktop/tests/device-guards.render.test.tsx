@@ -216,7 +216,7 @@ test('an untouched accept form answers nothing', async () => {
   );
 });
 
-for (const action of ['Start', 'Resume offer']) {
+for (const action of ['Start', 'Resume Offer']) {
   test(`${action} explains that a pending pairing phrase can be shown again`, async () => {
     const h = await harness();
     const offer = {
@@ -243,7 +243,7 @@ for (const action of ['Start', 'Resume offer']) {
       rendered.baseElement.textContent ?? '',
       /shown once|shows a phrase once/,
     );
-    if (action === 'Resume offer')
+    if (action === 'Resume Offer')
       assert.ok(
         rendered.getByText('The phrase below is the one already issued.'),
       );

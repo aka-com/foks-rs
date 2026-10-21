@@ -254,7 +254,7 @@ export function ChatThread({
                     disabled={busy}
                     onClick={() => void load(before)}
                   >
-                    Load older messages
+                    Load Older Messages
                   </Button>
                 ) : messages.length > 0 ? (
                   <small>Beginning of {channelTitle(channel)}</small>

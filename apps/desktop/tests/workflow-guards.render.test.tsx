@@ -360,7 +360,7 @@ test('scanning and adding a CLI server both allow navigation', async () => {
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Continue' }));
   await ui.act(async () => {
     ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Use official FOKS server' }),
+      rendered.getByRole('button', { name: 'Use Official FOKS Server' }),
     );
   });
   await ui.act(async () => {

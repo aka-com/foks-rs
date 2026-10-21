@@ -346,7 +346,7 @@ test('closing an in-flight creation keeps application-owned work and never redir
     name: 'Created channels',
   });
   ui.fireEvent.click(
-    ui.within(completion).getByRole('button', { name: 'Open channel' }),
+    ui.within(completion).getByRole('button', { name: 'Open Channel' }),
   );
   assert.equal(opened.length, 1);
   assert.equal(opened[0].store, team.id);

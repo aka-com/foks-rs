@@ -509,7 +509,7 @@ export function NewChatSheet({
               <p role="status" className="action-error">
                 Saved channel creations could not be checked: {check.error}{' '}
                 <Button onClick={() => void controller.discover(picked.store)}>
-                  Check saved creations
+                  Check Saved Creations
                 </Button>
               </p>
             ) : (

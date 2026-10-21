@@ -830,7 +830,7 @@ function FederationRemovalSheet({
             disabled={busy || !confirmed || !entry.active}
             onClick={() => void apply()}
           >
-            Remove and rekey
+            Remove and Rekey
           </Button>
         </>
       }
@@ -1148,7 +1148,7 @@ export function AbandonGroupSheet({
                 .finally(() => setBusy(false));
             }}
           >
-            Remove team
+            Remove Team
           </Button>
         </>
       }

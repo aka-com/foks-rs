@@ -46,7 +46,7 @@ function restartSetup(view: ReturnType<typeof ui.render>): void {
   ui.fireEvent.click(
     ui
       .within(view.getByRole('alertdialog', { name: 'Restart setup?' }))
-      .getByRole('button', { name: 'Start over' }),
+      .getByRole('button', { name: 'Start Over' }),
   );
 }
 
@@ -432,7 +432,7 @@ test('canceling organization signup releases ordinary account creation', async (
     },
   );
   ui.fireEvent.click(
-    await r.view.findByRole('button', { name: 'Cancel sign-in' }),
+    await r.view.findByRole('button', { name: 'Cancel Sign-In' }),
   );
   await ui.waitFor(() => assert.equal(h.saved()?.sso, undefined));
   assert.equal(

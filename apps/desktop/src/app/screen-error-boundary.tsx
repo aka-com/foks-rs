@@ -104,7 +104,7 @@ export class ScreenErrorBoundary extends Component<
                     }))
                   }
                 >
-                  Reload page
+                  Reload Page
                 </Button>
               }
             >

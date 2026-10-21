@@ -280,7 +280,7 @@ export function TeamInfoPanel({
                 <p role="alert">{federationFailure.message}</p>
               ) : null}
               <Button icon="users" onClick={() => teamTab('people')}>
-                Manage members
+                Manage Members
               </Button>
             </section>
             <section>
@@ -330,7 +330,7 @@ export function TeamInfoPanel({
                   )}
                 </>
               )}
-              <Button onClick={() => teamTab('channels')}>View channels</Button>
+              <Button onClick={() => teamTab('channels')}>View Channels</Button>
             </section>
             <section>
               <h3>Files</h3>
@@ -350,7 +350,7 @@ export function TeamInfoPanel({
                 icon="folder"
                 onClick={() => navigate({ kind: 'store', ref: store.id })}
               >
-                Open team files
+                Open Team Files
               </Button>
             </section>
             {store.team_kind === 'named' &&
@@ -363,7 +363,7 @@ export function TeamInfoPanel({
                     : `${requestCount} pending ${requestCount === 1 ? 'request' : 'requests'}`}
                 </p>
                 <Button onClick={() => teamTab('requests')}>
-                  Review requests
+                  Review Requests
                 </Button>
               </section>
             ) : null}
@@ -378,10 +378,10 @@ export function TeamInfoPanel({
               void bridge.copyText(store.team_id_hex).catch(onError);
             }}
           >
-            Copy team ID
+            Copy Team ID
           </Button>
           <Button icon="settings" onClick={() => teamTab('settings')}>
-            Team settings
+            Team Settings
           </Button>
         </section>
       </div>

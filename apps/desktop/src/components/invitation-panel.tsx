@@ -460,7 +460,7 @@ export function InvitationPanel({
             disabled={busy}
             onClick={() => void checkStatus(row)}
           >
-            Check status
+            Check Status
           </Button>
         )}
       </div>
@@ -530,7 +530,7 @@ export function InvitationPanel({
                 disabled={busy}
                 onClick={() => void cancelRequest(operation)}
               >
-                Cancel request
+                Cancel Request
               </Button>
               <span className="spacer" />
               <Button
@@ -548,12 +548,12 @@ export function InvitationPanel({
                   disabled={busy}
                   onClick={() => void checkStatus(operation)}
                 >
-                  Check status
+                  Check Status
                 </Button>
               )}
               {remote && preview?.team_id && !operation.membership_verified ? (
                 <Button disabled={busy} onClick={() => void verifyRemote()}>
-                  Verify membership and keys
+                  Verify Membership and Keys
                 </Button>
               ) : null}
               <span className="spacer" />
@@ -621,7 +621,7 @@ export function InvitationPanel({
               disabled={busy || (joinAs === 'team' && !sourceTeam)}
               onClick={() => void requestMembership()}
             >
-              Request membership
+              Request Membership
             </Button>
           </>
         }

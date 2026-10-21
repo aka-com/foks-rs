@@ -224,7 +224,7 @@ test('dropping a file onto an existing path displays the conflict resolution ste
   await ui.waitFor(() =>
     assert.ok(rendered.getByText(`An item already exists at ${taken.path}`)),
   );
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Change path' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Change Path' }));
   await rendered.findByText(name, { selector: '.mono' });
   ui.fireEvent.change(rendered.getByLabelText('Name'), {
     target: { value: `copy-${name}` },
@@ -331,7 +331,7 @@ test('a picker-selected file survives a naming conflict and retries without reop
     rendered.getByRole('button', { name: 'Choose File and Create' }),
   );
   await rendered.findByText('An item already exists at /report.pdf');
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Change path' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Change Path' }));
   await rendered.findByText('report.pdf', { selector: '.mono' });
   ui.fireEvent.change(rendered.getByLabelText('Name'), {
     target: { value: 'renamed-report.pdf' },

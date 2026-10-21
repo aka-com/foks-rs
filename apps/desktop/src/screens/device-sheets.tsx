@@ -329,7 +329,7 @@ export function PhraseSheet({
                     .finally(controller.settled(() => setBusy(false)));
                 }}
               >
-                Save recovery phrase
+                Save Recovery Phrase
               </Button>
             </>
           ) : (
@@ -356,7 +356,7 @@ export function PhraseSheet({
                     .finally(() => setBusy(false));
                 }}
               >
-                Generate phrase
+                Generate Phrase
               </Button>
             </>
           )}
@@ -577,7 +577,7 @@ export function PairSheet({
                   )
                 }
               >
-                Resume acceptance
+                Resume Acceptance
               </Button>
               <Button
                 variant="primary"
@@ -649,7 +649,7 @@ export function PairSheet({
                       )
                     }
                   >
-                    Resume offer
+                    Resume Offer
                   </Button>
                 </span>
               </>
@@ -913,7 +913,7 @@ export function EnrollSheet({
                 .finally(controller.settled(() => setBusy(false)));
             }}
           >
-            Create account
+            Create Account
           </Button>
         </>
       }
@@ -1474,7 +1474,7 @@ export function RevokeBackupSheet({
                 .finally(controller.settled(() => setBusy(false)));
             }}
           >
-            Revoke recovery phrase
+            Revoke Recovery Phrase
           </Button>
         </>
       }
@@ -1560,7 +1560,7 @@ export function RemoveDeviceSheet({
                 .finally(controller.settled(() => setBusy(false)));
             }}
           >
-            Remove device
+            Remove Device
           </Button>
         </>
       }

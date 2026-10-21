@@ -906,7 +906,7 @@ test('an invitation prepared after unmount is recovered from the group banner', 
   ui.fireEvent.click(await returned.findByRole('button', { name: 'Review' }));
   const dialog = returned.getByRole('dialog');
   await ui.within(dialog).findByText(/Creation interrupted/);
-  assert.ok(ui.within(dialog).getByRole('button', { name: 'Finish creating' }));
+  assert.ok(ui.within(dialog).getByRole('button', { name: 'Finish Creating' }));
 });
 
 test('the link under Accounts names the invitation it opens', async () => {

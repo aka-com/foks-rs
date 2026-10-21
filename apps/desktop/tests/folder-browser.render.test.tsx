@@ -269,7 +269,7 @@ test('an empty team displays shared-item details and its Manage command', async 
     document.querySelector('.lpane .access-notice h2')?.textContent,
     'Setup incomplete',
   );
-  assert.ok(ui.screen.getByRole('button', { name: 'Finish setup' }));
+  assert.ok(ui.screen.getByRole('button', { name: 'Finish Setup' }));
   // A team's head offers its page.
   ui.fireEvent.click(treeRow('Household'));
   await ui.waitFor(() => assert.equal(currentTitle(), 'Household'));

@@ -142,7 +142,7 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
   const pinStatus = await ui.waitFor(() => {
     const button = [
       ...document.querySelectorAll<HTMLButtonElement>('button'),
-    ].find((node) => node.textContent === 'PIN status');
+    ].find((node) => node.textContent === 'PIN Status');
     assert.ok(button);
     return button;
   });

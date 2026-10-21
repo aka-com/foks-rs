@@ -368,7 +368,7 @@ export function InviteNewUserSheet({
             {busy
               ? 'Creating…'
               : operation?.operation_id
-                ? 'Finish creating'
+                ? 'Finish Creating'
                 : 'Create invitation'}
           </Button>
         </>
@@ -391,7 +391,7 @@ export function InviteNewUserSheet({
                     disabled={busy}
                     onClick={() => void run(() => finish(row))}
                   >
-                    Finish creating
+                    Finish Creating
                   </Button>
                   <Button
                     size="sm"
@@ -408,7 +408,7 @@ export function InviteNewUserSheet({
                   disabled={busy}
                   onClick={() => void checkStatus(row)}
                 >
-                  Check status
+                  Check Status
                 </Button>
               )
             }
@@ -428,7 +428,7 @@ export function InviteNewUserSheet({
               disabled={busy}
               onClick={() => void checkStatus(unconfirmed)}
             >
-              Check status
+              Check Status
             </Button>
           }
         >

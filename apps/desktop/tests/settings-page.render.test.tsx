@@ -344,7 +344,7 @@ test('the server inventory remains available when this device has no account', a
   assert.ok(rendered.getByRole('button', { name: 'Add a Server…' }));
 });
 
-test('Add server explains the protocol and starts with example placeholders', async () => {
+test('Add Server explains the protocol and starts with example placeholders', async () => {
   const rendered = await renderSettings(await fixture());
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Add a Server…' }));
 
@@ -367,13 +367,13 @@ test('Add server explains the protocol and starts with example placeholders', as
   assert.equal(
     ui
       .within(dialog)
-      .getByRole('button', { name: 'Add server' })
+      .getByRole('button', { name: 'Add Server' })
       .hasAttribute('disabled'),
     true,
   );
 });
 
-test('Add server verifies online and opens the profile returned by the backend', async () => {
+test('Add Server verifies online and opens the profile returned by the backend', async () => {
   const submitted: Array<[string, string]> = [];
   const events: string[] = [];
   const rendered = await renderSettings(await fixture(), {
@@ -410,7 +410,7 @@ test('Add server verifies online and opens the profile returned by the backend',
   });
   await ui.act(async () => {
     ui.fireEvent.click(
-      ui.within(dialog).getByRole('button', { name: 'Add server' }),
+      ui.within(dialog).getByRole('button', { name: 'Add Server' }),
     );
     await Promise.resolve();
   });
@@ -423,7 +423,7 @@ test('Add server verifies online and opens the profile returned by the backend',
   ]);
 });
 
-test('Add server keeps the sheet open and re-enables submission after verification fails', async () => {
+test('Add Server keeps the sheet open and re-enables submission after verification fails', async () => {
   const failure = new Error('TLS certificate rejected');
   const errors: unknown[] = [];
   const navigations: string[] = [];
@@ -454,7 +454,7 @@ test('Add server keeps the sheet open and re-enables submission after verificati
   ui.fireEvent.change(ui.within(dialog).getByLabelText('Address'), {
     target: { value: 'bad.example' },
   });
-  const add = ui.within(dialog).getByRole('button', { name: 'Add server' });
+  const add = ui.within(dialog).getByRole('button', { name: 'Add Server' });
   await ui.act(async () => {
     ui.fireEvent.click(add);
     await Promise.resolve();
@@ -846,7 +846,7 @@ test('server removal deletes its local credentials after exact-name confirmation
   );
   const remove = ui
     .within(dialog)
-    .getByRole('button', { name: 'Remove server and credentials' });
+    .getByRole('button', { name: 'Remove Server and Credentials' });
   assert.equal(remove.hasAttribute('disabled'), true);
   await ui.act(async () => {
     ui.fireEvent.change(
@@ -1072,7 +1072,7 @@ test('a lapsed server says its check-in expired and offers the check', async () 
       (node) => node.textContent === 'Check-in expired',
     ),
   );
-  assert.ok(rendered.getByRole('button', { name: 'Check now' }));
+  assert.ok(rendered.getByRole('button', { name: 'Check Now' }));
   assert.ok(rendered.getByText('Hidden while locked'));
 });
 
@@ -1272,7 +1272,7 @@ test('one server whose preview fails does not hold the reset of the others', asy
   acmeAnswers = true;
   await ui.act(async () => {
     ui.fireEvent.click(
-      ui.within(dialog).getByRole('button', { name: 'Retry preview' }),
+      ui.within(dialog).getByRole('button', { name: 'Retry Preview' }),
     );
   });
   await ui.waitFor(() =>

@@ -572,20 +572,20 @@ export function ChatTeamColumn({
                     onOpen(context.team!, context.channel);
                   }}
                 >
-                  Open channel
+                  Open Channel
                 </MenuItem>
                 <MenuItem
                   icon="pencil"
                   reason="Editing channels is not implemented."
                 >
-                  Edit channel
+                  Edit Channel
                 </MenuItem>
                 <MenuItem
                   icon="trash"
                   danger
                   reason="Deleting channels is not implemented."
                 >
-                  Delete channel
+                  Delete Channel
                 </MenuItem>
                 <MenuItem
                   icon="info"
@@ -599,7 +599,7 @@ export function ChatTeamColumn({
                     onChannelInfo(context.team!, context.channel!);
                   }}
                 >
-                  Channel info
+                  Channel Info
                 </MenuItem>
               </>
             ) : context.team ? (
@@ -616,7 +616,7 @@ export function ChatTeamColumn({
                     onTeams(context.team!);
                   }}
                 >
-                  Go to team
+                  Go to Team
                 </MenuItem>
               </>
             ) : (

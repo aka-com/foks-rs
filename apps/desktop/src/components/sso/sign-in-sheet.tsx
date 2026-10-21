@@ -67,7 +67,7 @@ export function SsoSignInSheet({
           <>
             {progress.state === 'service-unavailable' ? (
               <Button disabled={blocked} onClick={flow.status}>
-                Refresh status
+                Refresh Status
               </Button>
             ) : null}
             <span className="spacer" />
@@ -99,7 +99,7 @@ export function SsoSignInSheet({
         disabled={blocked}
         onClick={flow.openBrowser}
       >
-        Open sign-in browser
+        Open Sign-In Browser
       </Button>
     ) : null;
     const checkButton = flow.pollable ? (
@@ -108,7 +108,7 @@ export function SsoSignInSheet({
         disabled={blocked}
         onClick={flow.poll}
       >
-        Check sign-in
+        Check Sign-In
       </Button>
     ) : null;
     const finishButton = flow.finishable ? (
@@ -118,7 +118,7 @@ export function SsoSignInSheet({
         disabled={blocked || (flow.hardwareRequired && !flow.pin)}
         onClick={flow.finish}
       >
-        Finish sign-in
+        Finish Sign-In
       </Button>
     ) : null;
     // Render the next required action as the final primary button.
@@ -139,11 +139,11 @@ export function SsoSignInSheet({
           <>
             {flow.cancellable ? (
               <Button disabled={blocked} onClick={flow.cancel}>
-                Cancel sign-in
+                Cancel Sign-In
               </Button>
             ) : null}
             <Button disabled={blocked} onClick={flow.status}>
-              Refresh status
+              Refresh Status
             </Button>
             <span className="spacer" />
             {primary === 'open' ? null : openButton}
@@ -171,7 +171,7 @@ export function SsoSignInSheet({
       footer={
         <>
           <Button disabled={blocked} onClick={flow.checkLinkage}>
-            Check linkage
+            Check Linkage
           </Button>
           <span className="spacer" />
           <Button disabled={busy} onClick={presentation.onClose}>

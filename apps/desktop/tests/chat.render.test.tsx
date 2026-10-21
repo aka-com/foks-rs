@@ -1187,7 +1187,7 @@ test('prepending older messages preserves scroll position', async () => {
   });
   scroll.scrollTop = 20;
   ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Load older messages' }),
+    ui.screen.getByRole('button', { name: 'Load Older Messages' }),
   );
   await ui.screen.findByText('First earlier message');
   assert.equal(scroll.scrollTop, 220);

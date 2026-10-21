@@ -80,7 +80,7 @@ test('admin configuration and opening are distinct explicit actions and PIN is c
   ui.fireEvent.change(r.getByLabelText('Admin panel address'), {
     target: { value: 'https://admin.example/' },
   });
-  ui.fireEvent.click(r.getByText('Save address'));
+  ui.fireEvent.click(r.getByText('Save Address'));
   await ui.waitFor(() => assert.ok(r.queryByText('Address saved.')));
   assert.deepEqual(calls, [['local', 'work', 'https://admin.example/']]);
   ui.fireEvent.change(
@@ -89,7 +89,7 @@ test('admin configuration and opening are distinct explicit actions and PIN is c
       target: { value: '654321' },
     },
   );
-  ui.fireEvent.click(r.getByText('Open admin panel'));
+  ui.fireEvent.click(r.getByText('Open Admin Panel'));
   await ui.waitFor(() => assert.ok(r.queryByRole('alert')));
   assert.deepEqual(calls[1], ['local', 'work', '654321']);
   assert.equal(

@@ -76,7 +76,7 @@ export function ProfileKeys({
                         })
                       }
                     >
-                      Resume enrollment…
+                      Resume Enrollment…
                     </Button>
                   ) : (
                     <>
@@ -123,7 +123,7 @@ export function ProfileKeys({
                           })
                         }
                       >
-                        Change unlock code…
+                        Change Unlock Code…
                       </Button>
                     </>
                   )

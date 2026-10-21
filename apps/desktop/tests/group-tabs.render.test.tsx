@@ -702,7 +702,7 @@ test('removing an unfinished group is confirmed by its stored alias', async () =
   await ui.act(async () => {
     ui.fireEvent.click(rendered.getByRole('button', { name: 'Remove Team…' }));
   });
-  const confirm = rendered.getByRole('button', { name: 'Remove team' });
+  const confirm = rendered.getByRole('button', { name: 'Remove Team' });
   // Nothing is removed until the alias is typed back.
   assert.equal(confirm.hasAttribute('disabled'), true);
   await ui.act(async () => {
@@ -717,7 +717,7 @@ test('removing an unfinished group is confirmed by its stored alias', async () =
     ui.fireEvent.change(field, { target: { value: 'homelab' } });
   });
   await ui.act(async () => {
-    ui.fireEvent.click(rendered.getByRole('button', { name: 'Remove team' }));
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Remove Team' }));
   });
   assert.deepEqual(abandoned, ['team:homelab']);
 });

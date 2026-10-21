@@ -211,7 +211,7 @@ export function MessageText({
                   );
               }}
             >
-              Copy message
+              Copy Message
             </button>
           </Menu>
         </ContextMenu>

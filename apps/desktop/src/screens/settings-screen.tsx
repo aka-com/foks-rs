@@ -485,7 +485,7 @@ function DeviceSection({
                     .catch(onError)
                 }
               >
-                Retry connection
+                Retry Connection
               </Button>
             )
           }
@@ -1043,7 +1043,7 @@ function ResetMacSheet({
                       busy={retrying.has(server.profileName)}
                       onClick={() => retry(server)}
                     >
-                      Retry preview
+                      Retry Preview
                     </Button>
                   }
                 >

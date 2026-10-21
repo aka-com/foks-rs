@@ -427,7 +427,7 @@ function NoChatForTeam({
           variant="primary"
           onClick={() => onNavigate({ kind: 'chat', ref: elsewhere.id })}
         >
-          Open another team
+          Open Another Team
         </Button>
       )}
     </div>
@@ -457,13 +457,13 @@ function NoTeamWithChat({
             title="Create a team on the Teams page"
             onClick={() => onNavigate({ kind: 'teams', open: 'create' })}
           >
-            Create a team
+            Create a Team
           </Button>
           <Button
             title="Paste an invitation on the Teams page"
             onClick={() => onNavigate({ kind: 'teams', open: 'join' })}
           >
-            Accept an invitation
+            Accept an Invitation
           </Button>
         </div>
       </div>

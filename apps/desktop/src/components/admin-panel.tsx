@@ -79,7 +79,7 @@ export function AdminPanel({
             disabled={busy || configureAccess.disabled || !destination}
             onClick={() => void run(true)}
           >
-            Save address
+            Save Address
           </Button>
           <Button
             variant="primary"
@@ -87,7 +87,7 @@ export function AdminPanel({
             disabled={busy || openAccess.disabled}
             onClick={() => void run(false)}
           >
-            Open admin panel
+            Open Admin Panel
           </Button>
         </>
       }

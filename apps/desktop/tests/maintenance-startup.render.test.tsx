@@ -454,7 +454,7 @@ test('startup restoration retry continues through catalog load into the shell', 
 
   const rendered = ui.render(createElement(App, { bridge }));
   const retry = await rendered.findByRole('button', {
-    name: 'Restart service',
+    name: 'Restart Service',
   });
   assert.match(
     document.body.textContent ?? '',

@@ -1866,7 +1866,7 @@ function FirstRunSession({
             back={() => go(checkpoint.account ? 'protect' : accountBackTarget)}
           >
             {checkpoint.account ? (
-              <Button onClick={() => go('protect')}>Skip to latest step</Button>
+              <Button onClick={() => go('protect')}>Skip to Latest Step</Button>
             ) : (
               <>
                 <Button
@@ -2268,7 +2268,7 @@ function FirstRunSession({
             verdict: 'prompt',
             title: 'Restart setup?',
             body: 'The setup in progress on this device will be discarded. If an account was already created on the server, you will need a recovery key to reconnect to it.',
-            confirm: 'Start over',
+            confirm: 'Start Over',
           }}
           onConfirm={startSetupOver}
           onCancel={() => setConfirmingRestart(false)}
