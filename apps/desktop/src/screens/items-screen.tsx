@@ -131,6 +131,8 @@ function Row({
   option,
 }: RowProps): ReactNode {
   const rowRef = useRef<HTMLDivElement>(null);
+  const pressTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(pressTimer.current), []);
   const [menuPoint, setMenuPoint] = useState<{ x: number; y: number } | null>(
     null,
   );
@@ -193,7 +195,31 @@ function Row({
         data-row-key={`${item.store}|${item.path}`}
         {...option}
         aria-haspopup="menu"
-        onClick={onSelect}
+        // A row selects on the press, as a macOS list does, once the press
+        // has focused it (so a Discard changes? alert the guarded selection
+        // opens keeps the focus); the click that follows has nothing left to
+        // do. A press on a hover action, a modified click and the secondary
+        // button leave the selection to the click and the context menu.
+        onMouseDown={(event) => {
+          if (
+            event.button !== 0 ||
+            event.ctrlKey ||
+            event.metaKey ||
+            event.shiftKey ||
+            event.altKey ||
+            (event.target instanceof Element &&
+              event.target.closest('.acts button'))
+          )
+            return;
+          window.clearTimeout(pressTimer.current);
+          pressTimer.current = window.setTimeout(() => {
+            pressTimer.current = undefined;
+            onSelect();
+          });
+        }}
+        onClick={() => {
+          if (pressTimer.current === undefined && !selected) onSelect();
+        }}
         onContextMenu={(event) => {
           event.preventDefault();
           rowRef.current?.focus();
