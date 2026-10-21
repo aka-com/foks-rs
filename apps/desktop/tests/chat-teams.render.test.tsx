@@ -2292,9 +2292,7 @@ test('sidebar context menus distinguish background, teams, and channels', async 
   ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Channel info' }));
   assert.equal(ui.screen.queryByRole('menu'), null);
   assert.equal(journal.at(-1)?.kind, 'chat');
-  assert.ok(
-    await ui.screen.findByRole('complementary', { name: 'Channel info' }),
-  );
+  assert.ok(await ui.screen.findByRole('dialog', { name: 'Channel info' }));
   for (const [label, intent] of [
     ['Add FOKS user…', 'add'],
     ['Add FOKS team…', 'add-team'],

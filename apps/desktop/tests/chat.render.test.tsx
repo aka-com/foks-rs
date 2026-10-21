@@ -684,11 +684,10 @@ test('team members opens the existing membership workflow in the same window', a
   await setup(undefined, true, (location) => {
     destination = location;
   });
-  // Team membership management is accessed via the conversation header's Members button.
+  // Team membership management is reached through Channel info's Members
+  // row.
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Channel info' }));
-  ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Manage in Teams' }),
-  );
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: /^Members/ }));
   assert.deepEqual(destination, {
     kind: 'group-settings',
     ref: 'team:eng',
@@ -1849,17 +1848,14 @@ test('channel info keeps channel overrides and links to device notification sett
     },
   );
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Channel info' }));
-  const panel = await ui.screen.findByRole('complementary', {
+  const panel = await ui.screen.findByRole('dialog', {
     name: 'Channel info',
   });
   assert.equal(document.activeElement, panel);
   assert.ok(panelFocus.length > 0);
   assert.ok(panelFocus.every((options) => options?.preventScroll === true));
   ui.fireEvent.keyDown(panel, { key: 'Escape' });
-  assert.equal(
-    ui.screen.queryByRole('complementary', { name: 'Channel info' }),
-    null,
-  );
+  assert.equal(ui.screen.queryByRole('dialog', { name: 'Channel info' }), null);
   assert.equal(
     document.activeElement,
     ui.screen.getByRole('button', { name: 'Channel info' }),
@@ -1995,10 +1991,12 @@ test('the provider stops periodic team synchronization while the window is hidde
 });
 
 test('clicking outside channel info dismisses it without stealing focus or toggling it back open', async () => {
+  // jsdom's window is under 1100px, so the panel is drawn over the
+  // conversation: a dialog that closes on a click outside it.
   await setup();
   const toggle = ui.screen.getByRole('button', { name: 'Channel info' });
   ui.fireEvent.click(toggle);
-  const panel = await ui.screen.findByRole('complementary', {
+  const panel = await ui.screen.findByRole('dialog', {
     name: 'Channel info',
   });
   const pointer = (target: Element) =>
@@ -2007,20 +2005,33 @@ test('clicking outside channel info dismisses it without stealing focus or toggl
       new window.MouseEvent('pointerdown', { bubbles: true, button: 0 }),
     );
   pointer(panel);
-  assert.ok(ui.screen.queryByRole('complementary', { name: 'Channel info' }));
+  assert.ok(ui.screen.queryByRole('dialog', { name: 'Channel info' }));
   const composer = ui.screen.getByRole('textbox', { name: 'Message' });
   composer.focus();
   pointer(composer);
-  assert.equal(
-    ui.screen.queryByRole('complementary', { name: 'Channel info' }),
-    null,
-  );
+  assert.equal(ui.screen.queryByRole('dialog', { name: 'Channel info' }), null);
   assert.equal(document.activeElement, composer);
   ui.fireEvent.click(toggle);
   pointer(toggle);
   ui.fireEvent.click(toggle);
-  assert.equal(
-    ui.screen.queryByRole('complementary', { name: 'Channel info' }),
-    null,
-  );
+  assert.equal(ui.screen.queryByRole('dialog', { name: 'Channel info' }), null);
+});
+
+test('over the conversation, Tab stays inside channel info', async () => {
+  await setup();
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Channel info' }));
+  const panel = await ui.screen.findByRole('dialog', { name: 'Channel info' });
+  const stops = [
+    ...panel.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), select:not([disabled]), [tabindex="0"]',
+    ),
+  ];
+  assert.ok(stops.length > 1);
+  // Tab from the last control wraps to the first; Shift+Tab from the first
+  // wraps to the last, instead of walking into the covered conversation.
+  stops.at(-1)!.focus();
+  ui.fireEvent.keyDown(stops.at(-1)!, { key: 'Tab' });
+  assert.equal(document.activeElement, stops[0]);
+  ui.fireEvent.keyDown(stops[0], { key: 'Tab', shiftKey: true });
+  assert.equal(document.activeElement, stops.at(-1));
 });
