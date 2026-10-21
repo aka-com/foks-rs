@@ -13,6 +13,9 @@ pub const KV_LIST_TIME_SQL: &str = "SELECT d.exact_dirent, c.node_id FROM kv_dir
 JOIN kv_dirents d ON d.uid=c.uid AND d.parent_id=c.parent_id AND d.dirent_id=c.dirent_id AND d.version=c.version
 WHERE c.uid=?1 AND c.parent_id=?2 AND c.creation_time>=?3 ORDER BY c.creation_time,c.dirent_id LIMIT ?4";
 
+/// `kv_directories.status` of an active directory (`KvDirectoryStatus::Active`).
+const KV_DIRECTORY_STATUS_ACTIVE: u64 = 0;
+
 use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, OptionalExtension as _, TransactionBehavior};
 
@@ -85,6 +88,23 @@ pub struct StoredKvDirent {
     pub exact: Vec<u8>,
     pub node_id: [u8; 17],
     pub exact_directory: Option<Vec<u8>>,
+}
+
+/// Outcome of creating a KV directory or small node whose ID the client chose.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[must_use]
+pub enum KvCreation {
+    /// The object was inserted and charged against the namespace's usage.
+    Created,
+    /// An active object with this ID and exactly these persisted contents
+    /// already existed. Nothing was inserted or charged.
+    Replayed,
+}
+
+impl KvCreation {
+    pub fn was_replay(self) -> bool {
+        self == Self::Replayed
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -187,6 +207,26 @@ impl Database {
         mutation: &KvDirectoryMutation<'_>,
         precondition: Option<&foks_proto::KvPathVersionVector>,
     ) -> Result<()> {
+        match self.create_kv_directory(mutation, precondition) {
+            Ok(_) => Ok(()),
+            Err(Error::KvObjectReused) => Err(Error::KvConflict),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Creates a directory, recognizing a byte-identical replay of an earlier
+    /// creation. The comparison and the insert run in one immediate
+    /// transaction, so a replay that races its original cannot fall through
+    /// to the insert. A replay matches only while the stored head is the same
+    /// active version: the exact directory encodes the seed box, key role and
+    /// generation, write role and status, and every one of them must match.
+    /// Any other directory under this ID fails with
+    /// [`Error::KvObjectReused`].
+    pub fn create_kv_directory(
+        &mut self,
+        mutation: &KvDirectoryMutation<'_>,
+        precondition: Option<&foks_proto::KvPathVersionVector>,
+    ) -> Result<KvCreation> {
         validate_directory(self, mutation)?;
         if !self.ensure_kv_namespace(mutation.uid)? {
             return Err(Error::Invalid("unknown KV namespace"));
@@ -194,25 +234,32 @@ impl Database {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existing: Option<(i64, Vec<u8>)> = transaction
+        let existing: Option<(i64, i64, Vec<u8>)> = transaction
             .query_row(
-                "SELECT h.version, d.exact_directory
+                "SELECT h.version, d.status, d.exact_directory
                  FROM kv_directory_heads h JOIN kv_directories d
                    ON d.uid = h.uid AND d.directory_id = h.directory_id
                   AND d.version = h.version
                  WHERE h.uid = ?1 AND h.directory_id = ?2",
                 params![mutation.uid, mutation.id],
-                |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
+                |row| {
+                    Ok((
+                        row.budgeted_get(0)?,
+                        row.budgeted_get(1)?,
+                        row.budgeted_get(2)?,
+                    ))
+                },
             )
             .optional()?;
         match existing {
-            Some((version, exact))
+            Some((version, status, exact))
                 if crate::error::unsigned(version)? == mutation.version
+                    && crate::error::unsigned(status)? == KV_DIRECTORY_STATUS_ACTIVE
                     && exact == mutation.exact =>
             {
-                return Ok(())
+                return Ok(KvCreation::Replayed)
             }
-            Some(_) => return Err(Error::KvConflict),
+            Some(_) => return Err(Error::KvObjectReused),
             None => {}
         }
         if let Some(precondition) = precondition {
@@ -251,10 +298,24 @@ impl Database {
             params![mutation.uid, mutation.id, sql_integer(mutation.version)?],
         )?;
         transaction.commit()?;
-        Ok(())
+        Ok(KvCreation::Created)
     }
 
     pub fn put_kv_node(&mut self, mutation: &KvNodeMutation<'_>) -> Result<()> {
+        match self.create_kv_node(mutation) {
+            Ok(_) => Ok(()),
+            Err(Error::KvObjectReused) => Err(Error::KvConflict),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Creates a small-file or symlink node, recognizing a byte-identical
+    /// replay in the same immediate transaction as the insert. The exact node
+    /// encodes the ciphertext and its key role and generation, so a replay
+    /// matches every persisted field. A replay is not charged against usage
+    /// again; a different node under this ID fails with
+    /// [`Error::KvObjectReused`].
+    pub fn create_kv_node(&mut self, mutation: &KvNodeMutation<'_>) -> Result<KvCreation> {
         if mutation.uid.len() != 33
             || !matches!(mutation.node_type, 3 | 4)
             || u64::from(mutation.id[0]) != mutation.node_type
@@ -282,9 +343,9 @@ impl Database {
                     stamp_node_usage(&transaction, mutation)?;
                     transaction.commit()?;
                 }
-                Ok(())
+                Ok(KvCreation::Replayed)
             }
-            Some(_) => Err(Error::KvConflict),
+            Some(_) => Err(Error::KvObjectReused),
             None => {
                 ensure_kv_capacity(
                     &transaction,
@@ -305,7 +366,7 @@ impl Database {
                 )?;
                 stamp_node_usage(&transaction, mutation)?;
                 transaction.commit()?;
-                Ok(())
+                Ok(KvCreation::Created)
             }
         }
     }

@@ -151,6 +151,165 @@ pub(crate) fn go_style_kv_get_usage_directory_nodes_and_time_lists_work() {
     foks_rpc::read_void_response(&mut tls, foks_rpc::DEFAULT_MAX_FRAME_LENGTH, 5).unwrap();
 }
 
+/// go-foks main reports an identical replay of `kvMkdir` and
+/// `kvPutSmallFileOrSymlink` with `wasReplay` and refuses a reused ID with
+/// `KV_RACE_ERROR`. Each response must match upstream's frame byte for byte,
+/// and a replayed small file must not be charged against usage again.
+#[test]
+pub(crate) fn go_main_kv_creation_replays_match_upstream_frames() {
+    let fixture = Fixture::start("go-main-kv-replay");
+    let created = fixture
+        .client
+        .create_account(fixture.host(), &TestAccountSpec::new("gomainreplay", 0x5b))
+        .unwrap();
+    let uid = created.credential.uid.as_bytes().to_vec();
+    let root = created.kv_projection[0].root_directory_id;
+    let key = foks_proto::KvDirectory::decode(
+        &fixture
+            .server
+            .read_database()
+            .unwrap()
+            .kv_directory(&uid, &root)
+            .unwrap()
+            .unwrap()
+            .exact,
+    )
+    .unwrap()
+    .key;
+
+    // Every exchange runs on a fresh connection at sequence 1, the sequence
+    // the upstream fixtures were generated with.
+    let exchange = |request: &[u8]| -> Vec<u8> {
+        let mut tls = authenticated_stream(&fixture, &created.credential);
+        tls.write_all(&foks_rpc::encode_kv_select_vhost_request(fixture.host().host_id()).unwrap())
+            .unwrap();
+        foks_rpc::read_void_response(&mut tls, foks_rpc::DEFAULT_MAX_FRAME_LENGTH, 0).unwrap();
+        tls.write_all(request).unwrap();
+        foks_rpc::read_frame(&mut tls, foks_rpc::DEFAULT_MAX_FRAME_LENGTH).unwrap()
+    };
+    let upstream = |name: &str| -> Vec<u8> {
+        let bytes = std::fs::read(format!(
+            "{}/../foks-snowpack/tests/fixtures/foks-main/kv/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        foks_rpc::read_frame(&mut bytes.as_slice(), foks_rpc::DEFAULT_MAX_FRAME_LENGTH).unwrap()
+    };
+    let usage = || -> KvUsage {
+        let mut tls = authenticated_stream(&fixture, &created.credential);
+        tls.write_all(&foks_rpc::encode_kv_select_vhost_request(fixture.host().host_id()).unwrap())
+            .unwrap();
+        foks_rpc::read_void_response(&mut tls, foks_rpc::DEFAULT_MAX_FRAME_LENGTH, 0).unwrap();
+        tls.write_all(&foks_rpc::encode_kv_usage_request_at(KvAuth::User, 1).unwrap())
+            .unwrap();
+        KvUsage::decode(
+            &foks_rpc::read_response(&mut tls, foks_rpc::DEFAULT_MAX_FRAME_LENGTH, 1).unwrap(),
+        )
+        .unwrap()
+    };
+
+    let directory = foks_proto::KvDirectory {
+        id: [0x6d; 16],
+        version: 1,
+        key,
+        seed_ciphertext: vec![0x11; 48],
+        write_role: Role::OWNER,
+        status: foks_proto::KvDirectoryStatus::Active,
+    };
+    let mkdir = |directory: &foks_proto::KvDirectory| {
+        foks_rpc::encode_kv_mkdir_request_at(KvAuth::User, None, directory, 1).unwrap()
+    };
+    assert_eq!(
+        exchange(&mkdir(&directory)),
+        upstream("mkdir-response-fresh.frame")
+    );
+    assert_eq!(
+        exchange(&mkdir(&directory)),
+        upstream("mkdir-response-replay.frame")
+    );
+    let reused = foks_proto::KvDirectory {
+        seed_ciphertext: vec![0x12; 48],
+        ..directory.clone()
+    };
+    assert_eq!(
+        exchange(&mkdir(&reused)),
+        upstream("mkdir-race-response.frame")
+    );
+
+    let mut node = [0x7a; 17];
+    node[0] = foks_proto::KvNodeType::SmallFile as u8;
+    let node = foks_proto::KvNodeId(node);
+    let boxed = foks_proto::KvSmallFileBox {
+        key,
+        ciphertext: vec![0x21; 40],
+    };
+    let put_small = |boxed: &foks_proto::KvSmallFileBox| {
+        foks_rpc::encode_kv_put_small_file_or_symlink_request_at(KvAuth::User, node, boxed, 1)
+            .unwrap()
+    };
+    let before = usage();
+    assert_eq!(
+        exchange(&put_small(&boxed)),
+        upstream("put-small-response-fresh.frame")
+    );
+    let charged = usage();
+    assert_eq!(charged.small.number, before.small.number + 1);
+    assert_eq!(charged.small.bytes, before.small.bytes + 40);
+    assert_eq!(
+        exchange(&put_small(&boxed)),
+        upstream("put-small-response-replay.frame")
+    );
+    assert_eq!(usage(), charged);
+    let reused = foks_proto::KvSmallFileBox {
+        ciphertext: vec![0x22; 40],
+        ..boxed.clone()
+    };
+    assert_eq!(
+        exchange(&put_small(&reused)),
+        upstream("put-small-race-response.frame")
+    );
+    assert_eq!(usage(), charged);
+
+    // The Rust client reads the struct results and reports fresh creations.
+    let mut protected = fixture.client.open_protected_store().unwrap();
+    let mut session = fixture
+        .client
+        .foks()
+        .user_kv_write_session(
+            fixture.host(),
+            &created.credential,
+            &created.authenticated.verified,
+            &created.authenticated.puks,
+            fixture.client.soft_state_path(),
+            &mut protected,
+        )
+        .unwrap();
+    let options = KvWriteOptions {
+        read_role: Role::OWNER,
+        write_role: Role::OWNER,
+        overwrite: false,
+        expected_version: None,
+    };
+    assert!(
+        !session
+            .mkdir(root, "dir", options)
+            .unwrap()
+            .content_was_replay
+    );
+    assert!(
+        !session
+            .put_symlink(root, "link", "dir", options)
+            .unwrap()
+            .content_was_replay
+    );
+    assert!(
+        !session
+            .put_file(root, "file", &mut Cursor::new(b"small"), options)
+            .unwrap()
+            .content_was_replay
+    );
+}
+
 fn authenticated_stream(
     fixture: &Fixture,
     credential: &DeviceCredential,
