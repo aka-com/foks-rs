@@ -121,7 +121,8 @@ test('an expiring open vault conceals details while a healthy neighbor stays usa
   // available row. The expanded rail intentionally has no Back button.
   await ui.act(async () => locations.navigate({ kind: 'all' }));
   const personal = await ui.waitFor(() => {
-    const row = (rendered.getAllByRole('button') as HTMLButtonElement[]).find(
+    // The sidebar's store rows are tree items.
+    const row = (rendered.getAllByRole('treeitem') as HTMLButtonElement[]).find(
       (button) => button.textContent?.includes('Personal'),
     );
     assert.ok(row);

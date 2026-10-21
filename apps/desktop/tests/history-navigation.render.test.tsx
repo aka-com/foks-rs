@@ -117,3 +117,38 @@ test('swipe refusal is visible and navigation by another input cancels its pendi
   });
   assert.equal(store.getSnapshot().location.kind, 'teams');
 });
+
+test('⌘[ goes back from a place whose page holds a listbox, but not while a menu is open', async () => {
+  const { store, view } = await mount();
+  ui.act(() => store.navigate({ kind: 'activity' }));
+  await ui.waitFor(() =>
+    assert.ok(document.querySelector('.main [role="listbox"]')),
+  );
+  ui.act(() => {
+    document.body.dispatchEvent(
+      new window.KeyboardEvent('keydown', {
+        key: '[',
+        metaKey: true,
+        bubbles: true,
+      }),
+    );
+  });
+  assert.equal(store.getSnapshot().location.kind, 'files');
+
+  // An open menu is a popup: ⌘[ leaves the place alone while it is up.
+  ui.act(() => store.navigate({ kind: 'activity' }));
+  ui.act(() => store.navigate({ kind: 'files' }));
+  await ui.waitFor(() => assert.ok(document.querySelector('.lpane .row')));
+  ui.fireEvent.click(view.getByRole('button', { name: 'View options' }));
+  assert.ok(view.getByRole('menu'));
+  ui.act(() => {
+    document.body.dispatchEvent(
+      new window.KeyboardEvent('keydown', {
+        key: '[',
+        metaKey: true,
+        bubbles: true,
+      }),
+    );
+  });
+  assert.equal(store.getSnapshot().location.kind, 'files');
+});

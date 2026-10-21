@@ -10,10 +10,11 @@
  * also carries the control that shows it again, after the traffic lights.
  */
 
-import { Fragment } from 'react';
+import { Fragment, useId } from 'react';
 import type { ReactNode } from 'react';
 
 import { Icon, SearchField, StoreMark } from '../components';
+import { ariaShortcut } from '../components/menus';
 import { NewItemButton } from './toolbar';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import { channelLabel } from '../chat/presentation';
@@ -156,7 +157,41 @@ export function scopeLabel(
   return labels.length ? labels[labels.length - 1] : TAB_LABEL[tab];
 }
 
+/**
+ * The place's name for the window title and the page's heading: the folder
+ * or store on Files (or All Items, Passwords, Documents), the team on a team
+ * page, All Teams, and the last crumb everywhere else.
+ */
+export function placeTitle(
+  location: Location,
+  snapshot?: AgentSnapshot,
+  folder = '',
+  kind: KindFilter = 'All',
+): string {
+  const tab = railTabOf(location);
+  if (!tab) return '';
+  if (tab === 'files') {
+    const labels = filesFolderCrumb(snapshot, location, folder).labels;
+    if (labels.length) return labels[labels.length - 1];
+    if (location.kind === 'store')
+      return (snapshot && storeOf(snapshot, location.ref)?.name) ?? 'Files';
+    return kind === 'Password'
+      ? 'Passwords'
+      : kind === 'Document'
+        ? 'Documents'
+        : 'All Items';
+  }
+  if (location.kind === 'teams' && !location.ref) return 'All Teams';
+  return crumbTrail(location, snapshot).at(-1) ?? TAB_LABEL[tab];
+}
+
 export interface TopbarProps {
+  /**
+   * With the sidebar hidden, what its badges would say (requests waiting,
+   * unread chat, a device or setting to look at): the expand control carries
+   * a dot and says it.
+   */
+  sidebarAttention?: string;
   /** Absent while the agent is starting; the crumbs then name the tab alone. */
   snapshot?: AgentSnapshot;
   deviceLabel?: DeviceLabel | null;
@@ -285,7 +320,9 @@ export function Topbar({
   chatTeamCount,
   blocked = false,
   nativeChrome = false,
+  sidebarAttention,
 }: TopbarProps): ReactNode {
+  const attentionId = useId();
   const inbox = useSidebarInbox();
   // The channel's own name, where the shell already knows it: the inbox is
   // loaded for the sidebar's badge, and the crumb reads it rather than
@@ -352,13 +389,28 @@ export function Topbar({
         <button
           type="button"
           className="tbtn side-expand"
+          data-focus-key="sidebar-toggle"
+          aria-keyshortcuts={ariaShortcut('⌃⌘S')}
           aria-expanded="false"
           aria-label="Expand sidebar"
-          title="Expand sidebar"
+          aria-describedby={sidebarAttention ? attentionId : undefined}
+          title={
+            sidebarAttention
+              ? `Expand sidebar: ${sidebarAttention}`
+              : 'Expand sidebar'
+          }
           disabled={blocked}
           onClick={onToggleCollapsed}
         >
           <Icon name="panelLeft" />
+          {sidebarAttention ? (
+            <>
+              <span className="dot warn" aria-hidden="true" />
+              <span id={attentionId} className="offscreen">
+                {sidebarAttention}
+              </span>
+            </>
+          ) : null}
         </button>
       ) : null}
       {parent ? (
@@ -415,8 +467,6 @@ export function Topbar({
           onChange={onQuery ?? (() => undefined)}
           placeholder={tab === 'chat' ? 'Search channels' : 'Search'}
           disabled={!searchable}
-          shortcut={false}
-          kbd
         />
       ) : (
         <span className="grow" data-tauri-drag-region="" />

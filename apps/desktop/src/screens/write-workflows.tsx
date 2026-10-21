@@ -1128,6 +1128,7 @@ export function WriteOverlay({
   onRefreshConflict,
   onDiscardConflict,
   onDeleteConflict,
+  onDeleted,
   onOpenExisting,
   accessNow = () => Date.now() / 1000,
 }: {
@@ -1151,6 +1152,11 @@ export function WriteOverlay({
   onDiscardConflict: () => void;
   /** Refreshes after a delete conflict and states whether the item is still there. */
   onDeleteConflict: (item: Item) => Promise<void>;
+  /**
+   * The removal was acknowledged, before the refresh that takes its row out
+   * of the list: the shell moves the selection to a neighbouring row.
+   */
+  onDeleted?: (item: Item) => void;
   onOpenExisting: (
     workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'exists' }>,
   ) => Promise<void>;
@@ -1229,6 +1235,7 @@ export function WriteOverlay({
       onApplied={onApplied}
       onMutationError={onMutationError}
       onDeleteConflict={onDeleteConflict}
+      onDeleted={onDeleted}
     />
   );
 }
@@ -1352,6 +1359,7 @@ function DeleteSheet({
   onApplied,
   onMutationError,
   onDeleteConflict,
+  onDeleted,
 }: {
   snapshot: AgentSnapshot;
   accessNow: () => number;
@@ -1361,6 +1369,7 @@ function DeleteSheet({
   onApplied: (message: string, profile?: string) => Promise<void>;
   onMutationError: MutationFailureHandler;
   onDeleteConflict: (item: Item) => Promise<void>;
+  onDeleted?: (item: Item) => void;
 }): ReactNode {
   const [deleting, setDeleting] = useState(false);
   const [uncertain, setUncertain] = useState(false);
@@ -1390,6 +1399,7 @@ function DeleteSheet({
           path: workflow.item.path,
           version: workflow.item.version,
         });
+        onDeleted?.(workflow.item);
         setWorkflow(null);
         // Keep refresh failure separate from the acknowledged deletion.
         try {

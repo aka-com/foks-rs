@@ -87,7 +87,12 @@ export function useSidebarResize(enabled: boolean) {
               aria-valuemin={MIN_WIDTH}
               aria-valuemax={MAX_WIDTH}
               aria-valuenow={width}
-              tabIndex={0}
+              // Not in the Tab loop, as an NSSplitView divider is not: it
+              // sits after the panel in the DOM, so Tab out of the list
+              // would land on it. VoiceOver still reaches it, and once
+              // focused (by a press or VoiceOver) the arrows resize; the
+              // keyboard hides the sidebar with ⌃⌘S.
+              tabIndex={-1}
               onPointerDown={(event) => {
                 if (event.button !== 0) return;
                 event.preventDefault();

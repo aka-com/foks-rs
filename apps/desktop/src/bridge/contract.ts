@@ -34,6 +34,7 @@ import type {
   ExitState,
   MaintenanceSnapshot,
   TimingBatch,
+  MenuCommand,
   Unlisten,
   WindowStateEvent,
 } from './core';
@@ -413,6 +414,13 @@ export interface Bridge {
   onNewItem(
     listener: (kind: 'Password' | 'Document') => void,
   ): Promise<Unlisten>;
+  /**
+   * Native menu items that act on the window: Edit ▸ Find (⌘F), Edit ▸
+   * Search… (⌘K), View ▸ Toggle Sidebar (⌃⌘S) and File ▸ New Folder…. Their
+   * accelerators take the key before the page sees it, so the page runs the
+   * same command its own key handler would.
+   */
+  onMenuCommand(listener: (command: MenuCommand) => void): Promise<Unlisten>;
   onMaintenanceStatus(
     listener: (snapshot: MaintenanceSnapshot) => void,
   ): Promise<Unlisten>;

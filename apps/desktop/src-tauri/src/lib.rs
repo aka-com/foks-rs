@@ -36,6 +36,25 @@ const NEW_DOCUMENT_MENU_ID: &str = "new-document";
 const SETTINGS_MENU_ID: &str = "open-settings";
 #[cfg(target_os = "macos")]
 const OPEN_SETTINGS_EVENT: &str = "foks://open-settings";
+/// Menu items the page carries out itself; each id is the command name sent
+/// as the event payload (`MenuCommand` in `src/bridge/core.ts`).
+#[cfg(target_os = "macos")]
+const MENU_COMMAND_EVENT: &str = "foks://menu-command";
+#[cfg(target_os = "macos")]
+const FIND_MENU_ID: &str = "find";
+#[cfg(target_os = "macos")]
+const SEARCH_MENU_ID: &str = "search";
+#[cfg(target_os = "macos")]
+const TOGGLE_SIDEBAR_MENU_ID: &str = "toggle-sidebar";
+#[cfg(target_os = "macos")]
+const NEW_FOLDER_MENU_ID: &str = "new-folder";
+#[cfg(target_os = "macos")]
+const PAGE_COMMAND_MENU_IDS: [&str; 4] = [
+    FIND_MENU_ID,
+    SEARCH_MENU_ID,
+    TOGGLE_SIDEBAR_MENU_ID,
+    NEW_FOLDER_MENU_ID,
+];
 
 #[cfg(target_os = "macos")]
 fn open_main_window(app: &tauri::AppHandle, settings: bool) -> Result<(), String> {
@@ -86,8 +105,18 @@ fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
     let new_password = MenuItemBuilder::with_id(NEW_PASSWORD_MENU_ID, "New Password")
         .accelerator("CmdOrCtrl+N")
         .build(app)?;
-    let new_document = MenuItemBuilder::with_id(NEW_DOCUMENT_MENU_ID, "Add Document")
+    let new_document = MenuItemBuilder::with_id(NEW_DOCUMENT_MENU_ID, "New Document")
         .accelerator("CmdOrCtrl+Shift+N")
+        .build(app)?;
+    let new_folder = MenuItemBuilder::with_id(NEW_FOLDER_MENU_ID, "New Folder…").build(app)?;
+    let find = MenuItemBuilder::with_id(FIND_MENU_ID, "Find")
+        .accelerator("CmdOrCtrl+F")
+        .build(app)?;
+    let search = MenuItemBuilder::with_id(SEARCH_MENU_ID, "Search…")
+        .accelerator("CmdOrCtrl+K")
+        .build(app)?;
+    let toggle_sidebar = MenuItemBuilder::with_id(TOGGLE_SIDEBAR_MENU_ID, "Toggle Sidebar")
+        .accelerator("Ctrl+Cmd+S")
         .build(app)?;
     let items = menu.items()?;
     if let Some(application) = items.first().and_then(|item| item.as_submenu()) {
@@ -102,8 +131,25 @@ fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
         file.prepend(&PredefinedMenuItem::separator(app)?)?;
         file.prepend(&new_window)?;
         file.prepend(&PredefinedMenuItem::separator(app)?)?;
+        file.prepend(&new_folder)?;
         file.prepend(&new_document)?;
         file.prepend(&new_password)?;
+    }
+    let submenu = |title: &str| {
+        items
+            .iter()
+            .filter_map(|item| item.as_submenu())
+            .find(|submenu| submenu.text().is_ok_and(|text| text == title))
+            .cloned()
+    };
+    if let Some(edit) = submenu("Edit") {
+        edit.append(&PredefinedMenuItem::separator(app)?)?;
+        edit.append(&find)?;
+        edit.append(&search)?;
+    }
+    if let Some(view) = submenu("View") {
+        view.prepend(&PredefinedMenuItem::separator(app)?)?;
+        view.prepend(&toggle_sidebar)?;
     }
     app.set_menu(menu)?;
     app.on_menu_event(|app, event| {
@@ -111,6 +157,20 @@ fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
         if settings || event.id() == NEW_WINDOW_MENU_ID {
             if let Err(error) = open_main_window(app, settings) {
                 tracing::error!(%error, "Failed to open main window from application menu");
+            }
+            return;
+        }
+        if let Some(command) = PAGE_COMMAND_MENU_IDS
+            .into_iter()
+            .find(|command| event.id() == *command)
+        {
+            use tauri::Emitter as _;
+            // These act on the window on screen; with none open there is
+            // nothing to find in or toggle.
+            if let Some(window) = app.get_webview_window(MAIN) {
+                if let Err(error) = window.emit(MENU_COMMAND_EVENT, command) {
+                    tracing::error!(%error, "Failed to send a menu command to the window");
+                }
             }
             return;
         }

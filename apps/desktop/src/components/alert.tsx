@@ -64,6 +64,7 @@ export function AlertDialog({
   onCancel,
 }: AlertDialogProps): ReactNode {
   const titleId = useId();
+  const messageId = useId();
   const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
@@ -117,6 +118,8 @@ export function AlertDialog({
       className="backdrop alert-back"
       role="alertdialog"
       titleId={titleId}
+      // VoiceOver reads the message with the title, not only the title.
+      aria-describedby={message ? messageId : undefined}
       onDismiss={onCancel}
       dismissible={!busy}
       onKeyDown={onKeyDown}
@@ -126,7 +129,7 @@ export function AlertDialog({
           <Icon name={icon} />
         </span>
         <h2 id={titleId}>{title}</h2>
-        {message ? <p>{message}</p> : null}
+        {message ? <p id={messageId}>{message}</p> : null}
         {children ? <div className="alert-body">{children}</div> : null}
         <div className="btns">
           {destructive ? confirmButton : cancelButton}

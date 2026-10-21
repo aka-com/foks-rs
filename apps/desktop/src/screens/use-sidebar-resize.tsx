@@ -125,7 +125,9 @@ export function useSidebarResize<T extends HTMLElement = HTMLElement>({
         aria-valuenow={Math.round(width)}
         aria-valuetext={`${Math.round(width)} pixels`}
         title="Drag to resize; double-click to reset"
-        tabIndex={0}
+        // Out of the Tab loop, like the sidebar's divider: VoiceOver and a
+        // press still focus it, and the arrows then resize.
+        tabIndex={-1}
         onPointerDown={(event) => {
           if (event.button !== 0 || drag.current) return;
           event.preventDefault();

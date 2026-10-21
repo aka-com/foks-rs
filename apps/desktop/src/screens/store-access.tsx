@@ -186,10 +186,10 @@ export function accessCopy(
               : `Creation of ${store.name} must be checked on ${serverName}. Its saved identity and keys will be used to verify the result before setup continues.`,
         action: 'finish-setup',
         actionLabel: verified
-          ? 'Finish setup'
+          ? 'Finish Setup'
           : preparing
-            ? 'Continue creation'
-            : 'Check creation',
+            ? 'Continue Creation'
+            : 'Check Creation',
         actionDisabled: rejected,
       };
     }
@@ -235,7 +235,7 @@ export function StoreAccessTakeover({
         onClick={onFinishSetup}
         disabled={copy.actionDisabled}
       >
-        {copy.actionLabel ?? 'Finish setup'}
+        {copy.actionLabel ?? 'Finish Setup'}
       </Button>
     ) : (
       <Button onClick={() => onOpenServer(server?.profileName ?? store.server)}>

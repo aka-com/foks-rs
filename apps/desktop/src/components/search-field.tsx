@@ -2,7 +2,10 @@
 
 import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
+import { commandKey, shortcutLabel } from '/kit/keys';
+import { anyDialogOpen } from '/kit/overlay-primitives';
 import { Icon } from './icon';
+import { ariaShortcut } from './menus';
 
 export interface SearchFieldProps {
   value: string;
@@ -10,15 +13,11 @@ export interface SearchFieldProps {
   /** Input placeholder describing the current search scope. */
   placeholder: string;
   /**
-   * Whether to bind the ⌘K shortcut and display its badge. Set to false to
-   * avoid conflicting with the global search palette shortcut.
+   * Binds ⌘F (Ctrl+F off a Mac) to focus the field and select its text, and
+   * draws the badge. The list bar's field is the one that takes it; the ⌘K
+   * palette has its own field and its own key.
    */
   shortcut?: boolean;
-  /**
-   * Draw the ⌘K badge without binding the key. The header's field says which
-   * key opens the palette beside it; it does not claim the key itself.
-   */
-  kbd?: boolean;
   /** Optional search scope used in the input's accessible label. */
   scope?: string;
   /** Whether the search input should be disabled (e.g. when the active view contains no searchable items). */
@@ -27,19 +26,11 @@ export interface SearchFieldProps {
   className?: string;
 }
 
-function isMac(): boolean {
-  if (typeof navigator === 'undefined') return true;
-  return /Mac|iPhone|iPad/i.test(
-    `${navigator.platform} ${navigator.userAgent}`,
-  );
-}
-
 export function SearchField({
   value,
   onChange,
   placeholder,
   shortcut = true,
-  kbd = false,
   scope,
   disabled = false,
   className,
@@ -47,18 +38,30 @@ export function SearchField({
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (!shortcut) return;
+    if (!shortcut || disabled) return;
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k')
+      if (
+        !commandKey(event) ||
+        event.altKey ||
+        event.shiftKey ||
+        event.key.toLowerCase() !== 'f'
+      )
         return;
+      // This listener runs on document, beyond a dialog's event boundary.
+      if (anyDialogOpen()) return;
       event.preventDefault();
-      inputRef.current?.focus();
+      focusSearch(inputRef.current);
     };
     document.addEventListener('keydown', onKeyDown);
+    // The native Edit ▸ Find item, whose accelerator takes ⌘F before the
+    // page sees it, asks for the same thing.
+    const onFind = (): void => focusSearch(inputRef.current);
+    window.addEventListener(FIND_EVENT, onFind);
     return () => {
       document.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener(FIND_EVENT, onFind);
     };
-  }, [shortcut]);
+  }, [shortcut, disabled]);
 
   const label = scope ? `Search ${scope}` : placeholder;
   return (
@@ -74,6 +77,7 @@ export function SearchField({
         value={value}
         placeholder={placeholder}
         aria-label={label}
+        aria-keyshortcuts={shortcut ? ariaShortcut('⌘F') : undefined}
         autoComplete="off"
         disabled={disabled}
         onChange={(event) => {
@@ -86,9 +90,16 @@ export function SearchField({
           }
         }}
       />
-      {shortcut || kbd ? (
-        <kbd aria-hidden="true">{isMac() ? '⌘K' : 'Ctrl K'}</kbd>
-      ) : null}
+      {shortcut ? <kbd aria-hidden="true">{shortcutLabel('⌘F')}</kbd> : null}
     </label>
   );
+}
+
+/** Dispatched on `window` to focus the list bar's search field. */
+export const FIND_EVENT = 'foks:find';
+
+function focusSearch(input: HTMLInputElement | null): void {
+  if (!input || input.disabled || anyDialogOpen()) return;
+  input.focus();
+  input.select();
 }

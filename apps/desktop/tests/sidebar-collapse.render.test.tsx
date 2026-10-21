@@ -118,7 +118,17 @@ test('the toggle hides the sidebar, the panel bar shows it, and the preference i
   await ui.waitFor(() => assert.ok(hidden()));
   assert.ok(document.querySelector('.app.no-side'));
   assert.equal(expandToggle().getAttribute('aria-expanded'), 'false');
-  assert.equal(expandToggle().title, 'Expand sidebar');
+  // The name stays the action; the fixture's waiting requests and notices
+  // ride the control as a dot and its description.
+  assert.equal(expandToggle().getAttribute('aria-label'), 'Expand sidebar');
+  assert.match(expandToggle().title, /^Expand sidebar: .*requests/);
+  assert.ok(expandToggle().querySelector('.dot'));
+  const described = expandToggle().getAttribute('aria-describedby');
+  assert.ok(described);
+  assert.match(
+    document.getElementById(described)?.textContent ?? '',
+    /requests/,
+  );
   assert.equal(window.localStorage.getItem('sideCollapsed'), '1');
   // Hiding keeps the sidebar's state: every row is still in the document.
   assert.equal(document.querySelectorAll('.side .nav').length, rows);

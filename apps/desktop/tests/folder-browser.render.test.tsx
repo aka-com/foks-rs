@@ -89,10 +89,12 @@ async function expand(name: string): Promise<void> {
       ':scope > .twist',
     );
   assert.ok(twist, `${name} has a disclosure`);
-  if (twist.getAttribute('aria-expanded') === 'true') return;
+  // The treeitem carries the disclosure state; the triangle is the
+  // pointer's control.
+  if (treeRow(name).getAttribute('aria-expanded') === 'true') return;
   ui.fireEvent.click(twist);
   await ui.waitFor(() =>
-    assert.equal(twist.getAttribute('aria-expanded'), 'true'),
+    assert.equal(treeRow(name).getAttribute('aria-expanded'), 'true'),
   );
 }
 

@@ -67,6 +67,8 @@ function TreeRow({
   open,
   expandable,
   disabled,
+  position,
+  inactive = false,
   onSelect,
   onToggle,
 }: {
@@ -80,12 +82,21 @@ function TreeRow({
   open: boolean;
   expandable: boolean;
   disabled: boolean;
+  /** 1-based position among its siblings, and their number. */
+  position: { index: number; of: number };
+  /** An inactive team: its name is muted, as its mark is. */
+  inactive?: boolean;
   onSelect: () => void;
   onToggle: () => void;
 }): ReactNode {
   return (
     <div
-      className={['fn', depth === 0 ? 'root' : '', active ? 'on' : '']
+      className={[
+        'fn',
+        depth === 0 ? 'root' : '',
+        active ? 'on' : '',
+        inactive ? 'off' : '',
+      ]
         .filter(Boolean)
         .join(' ')}
       data-folder-store={storeId}
@@ -93,10 +104,13 @@ function TreeRow({
       style={{ '--d': depth } as CSSProperties}
     >
       {expandable ? (
+        // The pointer's disclosure. The row is a treeitem that carries
+        // aria-expanded and answers Right and Left, so the triangle stays
+        // out of the tree for VoiceOver and the keyboard.
         <button
           type="button"
           className={open ? 'twist open' : 'twist'}
-          aria-expanded={open}
+          aria-hidden="true"
           aria-label={open ? `Collapse ${name}` : `Expand ${name}`}
           tabIndex={-1}
           disabled={disabled}
@@ -111,30 +125,68 @@ function TreeRow({
       <button
         type="button"
         className={active ? 'nav tree fselect on' : 'nav tree fselect'}
+        role="treeitem"
+        aria-level={depth + 1}
+        aria-posinset={position.index}
+        aria-setsize={position.of}
+        aria-selected={active}
         aria-haspopup="menu"
         aria-current={active ? 'location' : undefined}
         aria-expanded={expandable ? open : undefined}
+        data-depth={depth}
         disabled={disabled}
         onClick={onSelect}
         onKeyDown={(event) => {
-          // The row is the disclosure's keyboard home: Right opens, Left
-          // closes, as in a Finder sidebar.
-          if (!expandable) return;
-          if (event.key === 'ArrowRight' && !open) {
+          // The row is the disclosure's keyboard home, as in a Finder
+          // sidebar: Right opens a closed folder and then steps into it;
+          // Left closes an open one and then steps out to its parent.
+          // Up and Down belong to the sidebar's source list.
+          if (event.altKey || event.metaKey || event.ctrlKey) return;
+          if (event.key === 'ArrowRight') {
             event.preventDefault();
-            onToggle();
-          } else if (event.key === 'ArrowLeft' && open) {
+            if (!expandable) return;
+            if (!open) onToggle();
+            else treeNeighbour(event.currentTarget, 'child')?.focus();
+          } else if (event.key === 'ArrowLeft') {
             event.preventDefault();
-            onToggle();
+            if (expandable && open) onToggle();
+            else treeNeighbour(event.currentTarget, 'parent')?.focus();
           }
         }}
       >
         {mark ?? <Icon name="folder" />}
         <span className="t nm">{name}</span>
+        {/* "Personal, 3" for VoiceOver rather than "Personal3". */}
+        {tail ? <span className="offscreen">, </span> : null}
         {tail}
       </button>
     </div>
   );
+}
+
+/**
+ * The first child of an open tree row, or the row's parent: the nearest row
+ * after it one level deeper, or before it one level shallower, in the same
+ * tree.
+ */
+function treeNeighbour(
+  row: HTMLElement,
+  direction: 'child' | 'parent',
+): HTMLElement | null {
+  const tree = row.closest('[role="tree"]');
+  if (!tree) return null;
+  const rows = Array.from(
+    tree.querySelectorAll<HTMLElement>('[role="treeitem"]'),
+  );
+  const at = rows.indexOf(row);
+  const depth = Number(row.dataset.depth ?? 0);
+  if (direction === 'child') {
+    const next = rows[at + 1];
+    return next && Number(next.dataset.depth) === depth + 1 ? next : null;
+  }
+  for (let index = at - 1; index >= 0; index -= 1)
+    if (Number(rows[index].dataset.depth) < depth) return rows[index];
+  return null;
 }
 
 /** The keys of `path` and every folder above it, under `store`. */
@@ -198,7 +250,7 @@ export function FilesTree({
     store: Store,
     depth: number,
   ): ReactNode =>
-    folders.map((node) => {
+    folders.map((node, index) => {
       const key = `${store.id}|${node.path}`;
       const open = expanded.has(key);
       return (
@@ -213,6 +265,7 @@ export function FilesTree({
             open={open}
             expandable={node.folders.length > 0}
             disabled={disabled}
+            position={{ index: index + 1, of: folders.length }}
             onSelect={() => onOpen(`${store.id}|${node.path}`)}
             onToggle={() => toggle(key)}
           />
@@ -221,7 +274,11 @@ export function FilesTree({
       );
     });
 
-  const storeRow = (tree: StoreTree): ReactNode => {
+  const storeRow = (
+    tree: StoreTree,
+    index: number,
+    group: readonly StoreTree[],
+  ): ReactNode => {
     const { store, root } = tree;
     const key = `${store.id}|/`;
     const open = expanded.has(key);
@@ -264,6 +321,8 @@ export function FilesTree({
           open={open}
           expandable={root.folders.length > 0}
           disabled={disabled}
+          position={{ index: index + 1, of: group.length }}
+          inactive={store.kind === 'team' && store.active === false}
           onSelect={() => onOpen(`${store.id}|/`)}
           onToggle={() => toggle(key)}
         />
@@ -280,21 +339,23 @@ export function FilesTree({
       onKeyDown={menu.handlers.onKeyDown}
     >
       {menu.menu}
-      <div className="nav-group" role="group" aria-labelledby="side-vaults">
+      <div className="nav-group">
         <h6
           className="nav-h"
           id="side-vaults"
-          // With one vault the heading stands for it, so its menu is there too.
-          tabIndex={single ? 0 : undefined}
+          // With one vault the heading stands for it, so a right click there
+          // opens its menu too. The vault's own row is the keyboard's way in.
           aria-haspopup={single ? 'menu' : undefined}
           data-folder-store={single?.id}
           data-folder-path={single ? '/' : undefined}
         >
           {single ? 'Your vault' : 'Vaults'}
         </h6>
-        {vaultTrees.map(storeRow)}
+        <div role="tree" aria-labelledby="side-vaults">
+          {vaultTrees.map(storeRow)}
+        </div>
       </div>
-      <div className="nav-group" role="group" aria-labelledby="side-teams">
+      <div className="nav-group">
         <h6 className="nav-h">
           <span id="side-teams">Teams</span>
           <button
@@ -308,7 +369,11 @@ export function FilesTree({
             <Icon name="plus" />
           </button>
         </h6>
-        {teamTrees.map(storeRow)}
+        {teamTrees.length ? (
+          <div role="tree" aria-labelledby="side-teams">
+            {teamTrees.map(storeRow)}
+          </div>
+        ) : null}
         {!teamTrees.length ? (
           <button
             type="button"
