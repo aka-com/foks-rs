@@ -576,14 +576,16 @@ test('a stopped account is dimmed and carries the way to restore it', async () =
   );
   assert.ok(current);
   assert.ok(current.classList.contains('on'));
-  assert.equal(
-    current.querySelector('.tick')?.getAttribute('aria-label'),
-    'Current account',
-  );
+  // The accounts are a radio group: the current one is checked.
+  assert.equal(current.getAttribute('role'), 'menuitemradio');
+  assert.equal(current.getAttribute('aria-checked'), 'true');
   const others = [...menu.querySelectorAll('.acct')].filter(
     (row) => row !== current,
   );
   assert.ok(others.every((row) => row.querySelector('.tick.off')));
+  assert.ok(
+    others.every((row) => row.getAttribute('aria-checked') === 'false'),
+  );
   // Nothing in the fixture is stopped, so no account carries the amber line.
   assert.equal(menu.querySelector('.warnline'), null);
   assert.equal(journal.navigations.length, 0);
