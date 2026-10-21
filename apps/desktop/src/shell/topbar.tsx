@@ -332,6 +332,13 @@ export function Topbar({
   // Settings names only itself: its sub-navigation names the section, and a
   // server page leads with its own way back to Account.
   const shownSegments = tab === 'settings' ? segments.slice(0, 1) : segments;
+  // The chevron goes to the enclosing page, not back through history (⌘[
+  // does that), so it is named for where it goes: "All Teams", as the
+  // sidebar names that page, else the crumb before this one.
+  const parentName =
+    parent?.kind === 'teams'
+      ? 'All Teams'
+      : (shownSegments.at(-2)?.label ?? 'Enclosing Page');
   return (
     <div
       className={listBar ? 'topbar bar list-bar' : 'topbar bar'}
@@ -365,8 +372,8 @@ export function Topbar({
         <button
           type="button"
           className="tbtn back"
-          aria-label="Back"
-          title="Back"
+          aria-label={parentName}
+          title={parentName}
           disabled={blocked}
           onClick={() => onNavigate(parent)}
         >
