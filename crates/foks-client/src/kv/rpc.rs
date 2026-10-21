@@ -14,7 +14,7 @@ use foks_rpc::{
     encode_kv_select_vhost_request, encode_kv_usage_request_at, KvAuth, KvListCursor,
 };
 
-use crate::{FoksClient, PinnedHost, PooledConnection, Result};
+use crate::{FoksClient, PinnedHost, PooledConnection, ResponseShape, Result};
 
 #[derive(Clone, Debug)]
 pub(crate) enum KvRequest {
@@ -151,19 +151,25 @@ impl KvRequest {
         }
     }
 
-    fn is_void(&self) -> bool {
-        matches!(
-            self,
+    fn response_shape(&self) -> ResponseShape {
+        match self {
+            // go-foks v0.1.9 declares these void; later releases return a
+            // `wasReplay` struct. See `KvWriteReceipt`.
+            Self::Mkdir { .. } | Self::PutSmall { .. } => ResponseShape::OptionalValue,
             Self::CacheCheck(_)
-                | Self::Mkdir { .. }
-                | Self::Put { .. }
-                | Self::PutSmall { .. }
-                | Self::UploadInit { .. }
-                | Self::UploadChunk { .. }
-                | Self::PutRoot(_)
-                | Self::LockAcquire { .. }
-                | Self::LockRelease { .. }
-        )
+            | Self::Put { .. }
+            | Self::UploadInit { .. }
+            | Self::UploadChunk { .. }
+            | Self::PutRoot(_)
+            | Self::LockAcquire { .. }
+            | Self::LockRelease { .. } => ResponseShape::Void,
+            Self::Root
+            | Self::Usage
+            | Self::Directory(_)
+            | Self::List { .. }
+            | Self::Node(_)
+            | Self::Chunk { .. } => ResponseShape::Value,
+        }
     }
 }
 
@@ -174,7 +180,7 @@ pub(crate) struct KvConnection {
 impl KvConnection {
     pub(crate) fn call(&mut self, auth: KvAuth<'_>, request: &KvRequest) -> Result<Vec<u8>> {
         let encoded = request.encode(auth, 0)?;
-        self.pooled.call(&encoded, request.is_void())
+        self.pooled.call_shaped(&encoded, request.response_shape())
     }
 }
 

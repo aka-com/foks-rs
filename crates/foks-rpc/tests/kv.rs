@@ -3,13 +3,14 @@ use foks_proto::{
     KvPathVersionVector, KvRoot, KvSmallFileBox, KvUploadChunk,
 };
 use foks_rpc::{
-    encode_kv_cache_check_request, encode_kv_file_upload_chunk_request_at,
-    encode_kv_file_upload_init_request_at, encode_kv_get_dir_request,
-    encode_kv_get_encrypted_chunk_request, encode_kv_get_node_request, encode_kv_get_root_request,
-    encode_kv_list_request, encode_kv_lock_acquire_request_at, encode_kv_lock_release_request_at,
-    encode_kv_mkdir_request_at, encode_kv_put_request_at, encode_kv_put_root_request_at,
-    encode_kv_put_small_file_or_symlink_request_at, encode_kv_select_vhost_request,
-    read_void_response, Error, KvAuth, KvListCursor, DEFAULT_MAX_FRAME_LENGTH,
+    decode_optional_response, encode_kv_cache_check_request,
+    encode_kv_file_upload_chunk_request_at, encode_kv_file_upload_init_request_at,
+    encode_kv_get_dir_request, encode_kv_get_encrypted_chunk_request, encode_kv_get_node_request,
+    encode_kv_get_root_request, encode_kv_list_request, encode_kv_lock_acquire_request_at,
+    encode_kv_lock_release_request_at, encode_kv_mkdir_request_at, encode_kv_put_request_at,
+    encode_kv_put_root_request_at, encode_kv_put_small_file_or_symlink_request_at,
+    encode_kv_select_vhost_request, read_optional_response, read_void_response, Error, KvAuth,
+    KvListCursor, KvWriteReceipt, DEFAULT_MAX_FRAME_LENGTH,
 };
 
 const DIR: &str = "../foks-snowpack/tests/fixtures/foks-v0.1.9/user";
@@ -208,4 +209,119 @@ fn official_stale_cache_status_preserves_the_version_vector() {
         matches!(error, Error::KvStaleCache(ref actual) if actual == &expected),
         "{error:?}"
     );
+}
+
+const MAIN_DIR: &str = "../foks-snowpack/tests/fixtures/foks-main/kv";
+
+fn main_fixture(name: &str) -> Vec<u8> {
+    std::fs::read(format!("{MAIN_DIR}/{name}")).unwrap()
+}
+
+fn read_kv_write_receipt(frame: &[u8], sequence: u64) -> foks_rpc::Result<KvWriteReceipt> {
+    let mut response = frame;
+    let data = read_optional_response(&mut response, DEFAULT_MAX_FRAME_LENGTH, sequence)?;
+    assert_eq!(response, []);
+    KvWriteReceipt::decode(data.as_deref().unwrap_or_default())
+}
+
+#[test]
+fn go_main_kv_write_results_decode_both_result_shapes() {
+    for method in ["mkdir", "put-small"] {
+        assert_eq!(
+            read_kv_write_receipt(&main_fixture(&format!("{method}-response-fresh.frame")), 1)
+                .unwrap(),
+            KvWriteReceipt { was_replay: false }
+        );
+        assert_eq!(
+            read_kv_write_receipt(&main_fixture(&format!("{method}-response-replay.frame")), 1)
+                .unwrap(),
+            KvWriteReceipt { was_replay: true }
+        );
+        // The void decoder used for go-foks v0.1.9 refuses the struct result.
+        let frame = main_fixture(&format!("{method}-response-fresh.frame"));
+        assert!(matches!(
+            read_void_response(&mut frame.as_slice(), DEFAULT_MAX_FRAME_LENGTH, 1),
+            Err(Error::Envelope {
+                expected: "nil void response data",
+                ..
+            })
+        ));
+    }
+    // A v0.1.9 server omits the result for both methods.
+    let void = main_fixture("void-response.frame");
+    let mut response = void.as_slice();
+    assert_eq!(
+        read_optional_response(&mut response, DEFAULT_MAX_FRAME_LENGTH, 1).unwrap(),
+        None
+    );
+    assert_eq!(
+        read_kv_write_receipt(&void, 1).unwrap(),
+        KvWriteReceipt::default()
+    );
+    // The pinned v0.1.9 void frame decodes the same way.
+    assert_eq!(
+        read_kv_write_receipt(&fixture("kv-select-vhost-response.frame"), 0).unwrap(),
+        KvWriteReceipt::default()
+    );
+}
+
+#[test]
+fn go_main_kv_reused_object_ids_are_race_statuses() {
+    for (name, message) in [
+        (
+            "mkdir-race-response.frame",
+            "dir id reused with different contents",
+        ),
+        (
+            "put-small-race-response.frame",
+            "small-file node id reused with different contents",
+        ),
+    ] {
+        let error = read_kv_write_receipt(&main_fixture(name), 1).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                Error::RemoteStatus { code: 8003, detail } if detail.detail() == Some(message)
+            ),
+            "{error:?}"
+        );
+    }
+}
+
+#[test]
+fn kv_write_receipt_accepts_the_optional_struct_and_its_growth() {
+    let decode = |bytes: &[u8]| KvWriteReceipt::decode(bytes).map(|receipt| receipt.was_replay);
+    assert!(!decode(&[]).unwrap());
+    assert!(!decode(&[0xc0]).unwrap());
+    assert!(!decode(&[0x91, 0xc2]).unwrap());
+    assert!(decode(&[0x91, 0xc3]).unwrap());
+    // A later upstream release may append fields to this unsigned result.
+    assert!(decode(&[0x92, 0xc3, 0x07]).unwrap());
+    assert!(decode(&[0x91, 0x01]).is_err());
+    assert!(decode(&[0xc3]).is_err());
+    assert!(decode(&[0x91]).is_err());
+    assert_eq!(
+        KvWriteReceipt { was_replay: false }.encode().unwrap(),
+        [0x91, 0xc2]
+    );
+    assert_eq!(
+        KvWriteReceipt { was_replay: true }.encode().unwrap(),
+        [0x91, 0xc3]
+    );
+}
+
+#[test]
+fn optional_response_rejects_malformed_data_wrappers() {
+    // `{Data: [true]}` without the compatibility header.
+    let mut content = vec![0x94, 0x01, 0x01, 0xc0, 0x81];
+    content.extend_from_slice(b"\xa4Data\x91\xc3");
+    assert!(decode_optional_response(&content, 1).is_err());
+    // A data wrapper that is not a map.
+    assert!(decode_optional_response(&[0x94, 0x01, 0x01, 0xc0, 0x91, 0xc3], 1).is_err());
+    // The wrong sequence.
+    let frame = main_fixture("mkdir-response-replay.frame");
+    assert!(matches!(
+        read_optional_response(&mut frame.as_slice(), DEFAULT_MAX_FRAME_LENGTH, 2),
+        Err(Error::Sequence { .. })
+    ));
 }
