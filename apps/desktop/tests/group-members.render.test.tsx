@@ -918,3 +918,20 @@ test('the link under Accounts names the invitation it opens', async () => {
       .getByRole('heading', { name: 'Invite a new user to Engineering' }),
   );
 });
+
+test('the remove alert names the rekey on its confirm button', async () => {
+  const rendered = await group(await fixture());
+  ui.fireEvent.click(
+    rendered.getByRole('button', { name: 'Actions for dana.okafor' }),
+  );
+  ui.fireEvent.click(menuItem('Remove…'));
+  await ui.act(async () => {});
+  const alert = rendered.getByRole('alertdialog');
+  // Removal rekeys the team; the button says so, as the typed confirmation
+  // before the redesign did. Cancel stays the default.
+  assert.ok(ui.within(alert).getByRole('button', { name: 'Remove and Rekey' }));
+  assert.equal(
+    document.activeElement,
+    ui.within(alert).getByRole('button', { name: 'Cancel' }),
+  );
+});

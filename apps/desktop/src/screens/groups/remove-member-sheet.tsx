@@ -50,7 +50,7 @@ export function RemoveMemberSheet({
       icon="users"
       title={title}
       message="Removing blocks future reads and rekeys the team. This user may retain a local copy of their current records."
-      confirmLabel="Remove"
+      confirmLabel="Remove and Rekey"
       busy={busy}
       confirmDisabled={Boolean(requiredFailure) || !actionable}
       onConfirm={() => void apply()}
