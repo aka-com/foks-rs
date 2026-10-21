@@ -85,13 +85,17 @@ func ReadPolicy(path string) (Policy, error) {
 			if current.upstream != "" {
 				policy.Services[current.upstream] = true
 			}
+		case "post_baseline_status":
+			if current.upstream != "" {
+				policy.Statuses[current.upstream] = true
+			}
 		}
 		current = block{}
 	}
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(strings.SplitN(scanner.Text(), "#", 2)[0])
-		if line == "[status_aliases]" || line == "[[protocol]]" || line == "[[service]]" || line == "[[route]]" {
+		if line == "[status_aliases]" || line == "[[protocol]]" || line == "[[service]]" || line == "[[route]]" || line == "[[post_baseline_status]]" {
 			flush()
 			current.kind = strings.Trim(line, "[]")
 			continue

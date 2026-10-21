@@ -61,6 +61,21 @@ team_adhoc_duplicate = "TEAM_ADHOC_DUPLICATE_ERROR"
 unsupported = "NOT_IMPLEMENTED"
 user_not_found = "USER_NOT_FOUND_ERROR"
 
+# Statuses upstream added after the pinned baseline. Values are explicit and
+# must not name or reuse a baseline status; entries move to `status_aliases`
+# when the baseline advances to a release that contains them.
+[[post_baseline_status]]
+alias = "team_vo_bearer_token_not_found"
+upstream = "TEAM_VO_BEARER_TOKEN_NOT_FOUND_ERROR"
+value = 7016
+source = "go-foks 5a9ff13 proto-src/lib/status.snowp"
+
+[[post_baseline_status]]
+alias = "rt_msg_replay_mismatch"
+upstream = "RT_MSG_REPLAY_MISMATCH"
+value = 12007
+source = "go-foks b41b354 proto-src/lib/status.snowp"
+
 [[protocol]]
 name = "Probe"
 upstream = "Probe"
