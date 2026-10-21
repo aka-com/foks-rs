@@ -205,3 +205,19 @@ test('a button that disables itself while it works gets the focus back', async (
     stop();
   }
 });
+
+test('a control removed with no replacement hands the focus to its neighbour', async () => {
+  page(
+    '<div class="group-card"><div class="set-row"><span class="a"><button id="check">Check</button><button id="manage">Manage ›</button></span></div></div>',
+  );
+  const stop = mountFocusKeeper();
+  try {
+    const check = document.getElementById('check')!;
+    check.focus();
+    check.remove();
+    await tick();
+    assert.equal(document.activeElement?.id, 'manage');
+  } finally {
+    stop();
+  }
+});

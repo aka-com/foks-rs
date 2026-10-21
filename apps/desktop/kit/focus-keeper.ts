@@ -61,6 +61,13 @@ interface Lost {
   taken?: boolean;
   /** The user moved the focus off it with a pointer press on blank space. */
   released?: boolean;
+  /**
+   * The control's nearest two containers, for a control that goes away with
+   * no replacement (a row's Check button that the result removes): the focus
+   * moves to the first control left in the closest one still on screen.
+   * Empty for list rows and in dialogs, which have their own landing rules.
+   */
+  around: HTMLElement[];
 }
 
 let last: Lost | null = null;
@@ -105,6 +112,23 @@ export function focusIdentity(element: Element): string[] {
       `[data-place=${quoted(place.getAttribute('data-place') ?? '')}]`,
     );
   return identity;
+}
+
+/** See `Lost.around`. */
+function containersOf(element: HTMLElement): HTMLElement[] {
+  if (element.closest('[role="option"], [role="treeitem"], [data-row-key]'))
+    return [];
+  // A dialog has its own landing rule (`DIALOG_LANDING`).
+  if (element.closest('[role="dialog"], [role="alertdialog"]')) return [];
+  const scope = element.closest<HTMLElement>('.main, .details');
+  const around: HTMLElement[] = [];
+  for (
+    let parent = element.parentElement;
+    parent && scope && parent !== scope && around.length < 2;
+    parent = parent.parentElement
+  )
+    around.push(parent);
+  return around;
 }
 
 /** Whether the focus has nowhere useful to be: `<body>`, or a dead element. */
@@ -214,7 +238,19 @@ function check(): void {
   const candidates: Candidate[] = [
     ...asked,
     ...(navigated ? (remembered.get(context) ?? []) : []),
+    // A control that was only disabled for a moment is still itself.
+    ...(last?.taken ? [last.element] : []),
     ...(last?.identity ?? []),
+    ...(last?.around ?? []).map(
+      (container) => () =>
+        container.isConnected
+          ? Array.from(
+              container.querySelectorAll<HTMLElement>(
+                'button, input, select, textarea, a[href], [tabindex="0"]',
+              ),
+            ).find(focusable)
+          : undefined,
+    ),
   ];
   for (const candidate of candidates) {
     const target = resolve(candidate);
@@ -274,7 +310,7 @@ export function mountFocusKeeper(
     // requests no longer apply.
     if (pressing) requested = [];
     const identity = focusIdentity(target);
-    last = { element: target, identity };
+    last = { element: target, identity, around: containersOf(target) };
     // Remember controls in the page's own columns; the sidebar keeps its
     // focus across navigation, and dialogs and popups do not survive it.
     if (target.closest('.main, .details')) remembered.set(context, identity);

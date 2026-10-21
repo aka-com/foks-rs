@@ -9,6 +9,7 @@ installDom({ url: 'http://localhost/', timers: true, act: true });
 let ui: typeof import('@testing-library/react');
 let vite: ViteDevServer;
 let components: typeof import('../src/components');
+let overlays: typeof import('../kit/overlay-primitives');
 test.before(async () => {
   ui = await import('@testing-library/react');
   vite = await createServer({
@@ -19,6 +20,9 @@ test.before(async () => {
   components = (await vite.ssrLoadModule(
     '/src/components/index.ts',
   )) as typeof components;
+  overlays = (await vite.ssrLoadModule(
+    '/kit/overlay-primitives.tsx',
+  )) as typeof overlays;
 });
 test.afterEach(() => ui.cleanup());
 test.after(async () => vite.close());
@@ -129,4 +133,59 @@ test('a field with an error is invalid and described by the message', () => {
   );
   assert.equal(message?.textContent, '/logins/github.com already exists.');
   assert.equal(message?.getAttribute('role'), 'alert');
+});
+
+test('a sheet that replaces another returns the focus to the first one’s opener', async () => {
+  const { SheetDialog, Button } = components;
+  const portalRoot = document.createElement('div');
+  document.body.append(portalRoot);
+  function Flow() {
+    const [step, setStep] = useState<'none' | 'choose' | 'pair'>('none');
+    return createElement(overlays.OverlayProvider, {
+      backgroundRef: { current: null },
+      portalRoot,
+      children: [
+        createElement(
+          'button',
+          { key: 'opener', id: 'add', onClick: () => setStep('choose') },
+          'Add a device',
+        ),
+        step === 'choose'
+          ? createElement(SheetDialog, {
+              key: 'choose',
+              title: 'Add a Device',
+              onClose: () => setStep('none'),
+              footer: createElement(
+                Button,
+                { variant: 'primary', onClick: () => setStep('pair') },
+                'Continue',
+              ),
+              children: null,
+            })
+          : null,
+        step === 'pair'
+          ? createElement(SheetDialog, {
+              key: 'pair',
+              title: 'Pair',
+              onClose: () => setStep('none'),
+              footer: createElement(
+                Button,
+                { onClick: () => setStep('none') },
+                'Close',
+              ),
+              children: null,
+            })
+          : null,
+      ],
+    });
+  }
+  ui.render(createElement(Flow));
+  const add = document.getElementById('add')!;
+  add.focus();
+  ui.act(() => add.click());
+  ui.act(() => ui.screen.getByRole('button', { name: 'Continue' }).click());
+  ui.act(() => ui.screen.getByRole('button', { name: 'Close' }).click());
+  await settle();
+  assert.equal(document.activeElement, add);
+  portalRoot.remove();
 });
