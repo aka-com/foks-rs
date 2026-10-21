@@ -106,6 +106,7 @@ import {
 import { useShellRuntime } from './shell-runtime';
 import { ShellSearch } from './shell-search';
 import { itemActionProblem } from '../screens/store-access';
+import { commandKey } from '/kit/keys';
 import { useWindowRuntime } from './window-runtime';
 
 function incompleteFirstRunCheckpoint(): FirstRunCheckpoint | null {
@@ -547,7 +548,8 @@ export function VaultShell({
   useEffect(() => {
     if (!selectedItem || chrome.blocked) return;
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== 'Backspace' || !event.metaKey || event.altKey) return;
+      if (event.key !== 'Backspace' || !commandKey(event) || event.altKey)
+        return;
       const target = event.target;
       if (
         target instanceof Element &&

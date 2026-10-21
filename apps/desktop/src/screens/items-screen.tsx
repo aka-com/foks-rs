@@ -17,6 +17,7 @@ import { CollectionStatus } from '../components/collection-status';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
+import { commandKey } from '/kit/keys';
 import { anyDialogOpen, ContextMenu, Menu } from '/kit/overlay-primitives';
 import { useDismissedOnboardingTip } from '../onboarding-tips';
 import { virtualListWindow } from '/kit/virtual-list';
@@ -322,9 +323,9 @@ function opensFolder(event: KeyboardEvent<HTMLElement>): boolean {
   if (event.target !== event.currentTarget) return false;
   return (
     ((event.key === 'Enter' || event.key === ' ') &&
-      !event.metaKey &&
+      !commandKey(event) &&
       !event.altKey) ||
-    (event.key === 'ArrowDown' && event.metaKey)
+    (event.key === 'ArrowDown' && commandKey(event))
   );
 }
 
@@ -1031,7 +1032,7 @@ export function ItemsScreen({
   const onListPaneKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
     folderMenu.handlers.onKeyDown(event);
     if (event.defaultPrevented) return;
-    if (event.key !== 'ArrowUp' || !event.metaKey || event.altKey) return;
+    if (event.key !== 'ArrowUp' || !commandKey(event) || event.altKey) return;
     if (!selectedStore || selected.path === '/') return;
     if (
       event.target instanceof Element &&
