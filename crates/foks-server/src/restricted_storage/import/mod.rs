@@ -178,8 +178,27 @@ fn set_fk(db: &scan::Database, on: bool) -> Result<()> {
     }
     Ok(())
 }
-fn integrity(db: &scan::Database) -> Result<()> {
-    db.control().statement()?;
+/// Maximum over all verified-schema tables of `1 + index_count + foreign_key_count`.
+/// Verified against the schema by a unit test.
+const MAXIMUM_TABLE_FANOUT: u64 = 10;
+/// Opcode budget per row per b-tree or foreign key. `integrity_check` executes
+/// roughly 12 opcodes per row per b-tree on the bundled SQLite;
+/// `foreign_key_check` and policy full-table scans execute fewer.
+const WHOLE_DATABASE_OPERATIONS_PER_ROW: u64 = 64;
+
+/// Returns the opcode budget for a statement that may scan every row in the
+/// database (`integrity_check`, `foreign_key_check`, and policy full-table
+/// scans). Keyset probes use `STATEMENT_OPERATIONS`, which `integrity_check`
+/// exceeds once the database reaches a few tens of thousands of rows.
+fn whole_database_operations(rows: u64) -> usize {
+    let operations = rows
+        .saturating_mul(WHOLE_DATABASE_OPERATIONS_PER_ROW * MAXIMUM_TABLE_FANOUT)
+        .saturating_add(super::STATEMENT_OPERATIONS as u64);
+    usize::try_from(operations).unwrap_or(usize::MAX)
+}
+
+fn integrity(db: &scan::Database, operations: usize) -> Result<()> {
+    db.control().statement_with_budget(operations)?;
     {
         let mut statement = db.connection().prepare("PRAGMA main.foreign_key_check")?;
         let mut rows = statement.query([])?;
@@ -187,7 +206,7 @@ fn integrity(db: &scan::Database) -> Result<()> {
             return Err(unsupported("import foreign key violation"));
         }
     }
-    db.control().statement()?;
+    db.control().statement_with_budget(operations)?;
     let mut stmt = db.connection().prepare("PRAGMA main.integrity_check(1)")?;
     let mut rows = stmt.query([])?;
     let row = rows
@@ -218,6 +237,16 @@ fn rescan(db: &scan::Database, package: &capture::Package) -> Result<StorageSumm
 }
 
 pub(crate) fn import_personal_list(
+    source: StorageScanComplete,
+    root_key: Zeroizing<[u8; 32]>,
+    config: foks_server_db::Config,
+    control: &ScanControl,
+) -> Result<NativePersonalListImport> {
+    let job = source._database.control();
+    import_source(source, root_key, config, control).map_err(|error| job.classify(error))
+}
+
+fn import_source(
     mut source: StorageScanComplete,
     root_key: Zeroizing<[u8; 32]>,
     config: foks_server_db::Config,
@@ -232,7 +261,8 @@ pub(crate) fn import_personal_list(
     if source.summary.external_chunk_references != 0 {
         return Err(unsupported("import external chunks"));
     }
-    policy::verify(&source._database)?;
+    let whole_database = whole_database_operations(source.summary.rows);
+    policy::verify(&source._database, whole_database)?;
     let source_coordinate = semantic::coordinate(&source._database)?;
     let directory = tempfile::Builder::new()
         .prefix("foks-personal-import-")
@@ -329,9 +359,9 @@ pub(crate) fn import_personal_list(
     job.statement()?;
     target.connection().execute_batch("COMMIT")?;
     set_fk(&target, true)?;
-    integrity(&target)?;
+    integrity(&target, whole_database)?;
     target.verify_schema()?;
-    policy::verify(&target)?;
+    policy::verify(&target, whole_database)?;
     let audited = rescan(&target, &source._package)?;
     if audited != source.summary {
         return Err(unsupported("import storage summary mismatch"));

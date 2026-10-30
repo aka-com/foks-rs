@@ -419,7 +419,7 @@ fn every_explicit_empty_table_family_is_rejected_without_payload_materialization
             .execute(&format!("DROP TRIGGER {}", copy::quote(&name)), [])
             .unwrap();
     }
-    policy::verify(&db).unwrap();
+    policy::verify(&db, whole_database_operations(0)).unwrap();
     for &name in policy::EMPTY {
         let table = HOSTED_SMALL_V1.table(Component::Foks, name).unwrap();
         let values = table
@@ -442,11 +442,14 @@ fn every_explicit_empty_table_family_is_rejected_without_payload_materialization
         db.connection()
             .execute(&sql, rusqlite::params_from_iter(&values))
             .unwrap();
-        assert!(policy::verify(&db).is_err(), "{name}");
+        assert!(
+            policy::verify(&db, whole_database_operations(0)).is_err(),
+            "{name}"
+        );
         db.connection()
             .execute(&format!("DELETE FROM {}", copy::quote(name)), [])
             .unwrap();
-        policy::verify(&db).unwrap();
+        policy::verify(&db, whole_database_operations(0)).unwrap();
     }
     db.connection()
         .pragma_update(None, "ignore_check_constraints", false)
@@ -1058,5 +1061,95 @@ fn certificate_inventory_cannot_refresh_cancellation_or_failed_memory_owner() {
     assert!(matches!(
         certificates::audit(&owner.database, &mut workspace),
         Err(ScanError::Allocation)
+    ));
+}
+
+#[test]
+fn whole_database_budget_covers_the_widest_table_of_the_schema() {
+    let f = Fixture::new();
+    let c = Connection::open(&f.database).unwrap();
+    let mut tables = c
+        .prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        .unwrap();
+    let mut widest = 0u64;
+    for name in tables
+        .query_map([], |r| r.get::<_, String>(0))
+        .unwrap()
+        .map(|name| name.unwrap())
+    {
+        let count = |sql: &str| -> u64 {
+            c.query_row(sql, [&name], |r| r.get::<_, i64>(0)).unwrap() as u64
+        };
+        let indexes = count("SELECT count(*) FROM pragma_index_list(?1)");
+        let keys = count("SELECT count(DISTINCT id) FROM pragma_foreign_key_list(?1)");
+        widest = widest.max(1 + indexes + keys);
+    }
+    assert!(widest > 1);
+    assert!(widest <= MAXIMUM_TABLE_FANOUT, "{widest}");
+}
+
+/// Populates `rows` rows in each of merkle_nodes, merkle_leaves and
+/// tree_locations of the fixture's single user.
+fn populate(f: &Fixture, uid: &[u8; 33], rows: u32) {
+    let mut db = Connection::open(&f.database).unwrap();
+    let transaction = db.transaction().unwrap();
+    for i in 0..rows {
+        let mut hash = [0u8; 32];
+        hash[..4].copy_from_slice(&i.to_be_bytes());
+        hash[4] = 0xa5;
+        transaction
+            .execute(
+                "INSERT INTO merkle_nodes(node_hash,exact_node) VALUES(?1,?2)",
+                params![hash.as_slice(), [0u8; 40].as_slice()],
+            )
+            .unwrap();
+        transaction
+            .execute(
+                "INSERT INTO merkle_leaves(leaf_key,leaf_value,epoch) VALUES(?1,?1,1)",
+                params![hash.as_slice()],
+            )
+            .unwrap();
+        hash[4] = 0x5a;
+        transaction
+            .execute(
+                "INSERT INTO tree_locations(uid,seqno,location) VALUES(?1,?2,?3)",
+                params![uid.as_slice(), i64::from(i) + 2, hash.as_slice()],
+            )
+            .unwrap();
+    }
+    transaction.commit().unwrap();
+}
+
+#[test]
+fn import_of_tens_of_thousands_of_rows_passes_whole_database_checks() {
+    let f = Fixture::new();
+    let uid = f.user(true, 1, 0);
+    populate(&f, &uid, 17_000);
+    let artifacts = f.backup("large");
+    let owner = run(&artifacts);
+    assert!(owner.qualification.rows > 51_000);
+    owner.verify_owned().unwrap();
+}
+
+#[test]
+fn whole_database_statement_over_its_budget_stops() {
+    let f = Fixture::new();
+    let uid = f.user(true, 1, 0);
+    populate(&f, &uid, 2_000);
+    let ctl = control();
+    let job = Control::new(&ctl).unwrap();
+    let db = scan::Database::private_target(Connection::open(&f.database).unwrap(), job).unwrap();
+    // The ordinary statement cap is enough for this size; a budget far below
+    // the measured cost must stop integrity_check.
+    integrity(&db, whole_database_operations(6_000)).unwrap();
+    assert!(matches!(
+        integrity(&db, 10_000),
+        Err(ScanError::Sql {
+            extended_code: Some(9)
+        })
+    ));
+    assert!(matches!(
+        db.control().check(),
+        Err(ScanError::Unsupported("SQLite operation/deadline limit"))
     ));
 }

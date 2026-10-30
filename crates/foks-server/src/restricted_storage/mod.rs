@@ -24,6 +24,9 @@ use std::sync::{
 const MAX_DATABASE: u64 = 64 * 1024 * 1024 * 1024;
 const MAX_KEYS: usize = 4096;
 const STEP_ROWS: usize = 128;
+/// Opcode budget of one ordinary statement: the scanner's and the import's
+/// keyset `LIMIT 1` probes and other bounded reads.
+const STATEMENT_OPERATIONS: usize = 1_000_000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ScanError {
@@ -131,10 +134,23 @@ impl StorageScanComplete {
     }
 }
 
+/// Cause recorded when the progress hook stops a statement. Keeping the first
+/// cause prevents a subsequent cancellation or deadline from overwriting a
+/// budget failure.
+#[derive(Clone)]
+enum Stop {
+    Budget,
+    Cancelled,
+    Deadline(foks_local_deadline::Error),
+    Failed,
+}
+
 struct Control {
     control: Mutex<ScanControl>,
     operations: AtomicUsize,
+    budget: AtomicUsize,
     interrupted: AtomicBool,
+    stop: Mutex<Option<Stop>>,
 }
 impl Control {
     fn new(value: &ScanControl) -> Result<Arc<Self>> {
@@ -142,17 +158,42 @@ impl Control {
         Ok(Arc::new(Self {
             control: Mutex::new(value.clone()),
             operations: AtomicUsize::new(0),
+            budget: AtomicUsize::new(STATEMENT_OPERATIONS),
             interrupted: AtomicBool::new(false),
+            stop: Mutex::new(None),
         }))
     }
     fn check(&self) -> Result<()> {
         if self.interrupted.load(Ordering::Acquire) {
-            return Err(ScanError::Unsupported("SQLite operation/deadline limit"));
+            return Err(self.stopped());
         }
+        self.job_check()
+    }
+    fn job_check(&self) -> Result<()> {
         self.control
             .lock()
             .map_err(|_| ScanError::Incomplete)?
             .check()
+    }
+    /// The error for the cause recorded when the hook stopped a statement.
+    fn stopped(&self) -> ScanError {
+        match self.stop.lock().ok().and_then(|stop| stop.clone()) {
+            Some(Stop::Cancelled) => ScanError::Cancelled,
+            Some(Stop::Deadline(error)) => ScanError::Deadline(error),
+            Some(Stop::Failed) => ScanError::Incomplete,
+            Some(Stop::Budget) | None => ScanError::Unsupported("SQLite operation/deadline limit"),
+        }
+    }
+    /// SQLite reports a statement stopped by the progress hook as
+    /// SQLITE_INTERRUPT. Replace that with the cause the hook recorded:
+    /// Cancelled, Deadline, or the operation limit.
+    fn classify(&self, error: ScanError) -> ScanError {
+        match error {
+            ScanError::Sql {
+                extended_code: Some(rusqlite::ffi::SQLITE_INTERRUPT),
+            } if self.interrupted.load(Ordering::Acquire) => self.stopped(),
+            error => error,
+        }
     }
     fn intersect(&self, value: &ScanControl) -> Result<()> {
         value.check()?;
@@ -164,17 +205,42 @@ impl Control {
         original.check()
     }
     fn statement(&self) -> Result<()> {
+        self.statement_with_budget(STATEMENT_OPERATIONS)
+    }
+    /// Starts a statement with `operations` as its opcode budget. The progress
+    /// hook still checks cancellation and the deadline regardless of the budget.
+    fn statement_with_budget(&self, operations: usize) -> Result<()> {
         self.check()?;
+        self.budget.store(operations, Ordering::Release);
         self.operations.store(0, Ordering::Release);
         Ok(())
     }
     fn progress(&self) -> bool {
-        let stop =
-            self.operations.fetch_add(1000, Ordering::AcqRel) >= 999_000 || self.check().is_err();
-        if stop {
-            self.interrupted.store(true, Ordering::Release);
+        if self.interrupted.load(Ordering::Acquire) {
+            return true;
         }
-        stop
+        let used = self
+            .operations
+            .fetch_add(1000, Ordering::AcqRel)
+            .saturating_add(1000);
+        let cause = if used >= self.budget.load(Ordering::Acquire) {
+            Some(Stop::Budget)
+        } else {
+            match self.job_check() {
+                Ok(()) => None,
+                Err(ScanError::Cancelled) => Some(Stop::Cancelled),
+                Err(ScanError::Deadline(error)) => Some(Stop::Deadline(error)),
+                Err(_) => Some(Stop::Failed),
+            }
+        };
+        let Some(cause) = cause else {
+            return false;
+        };
+        if let Ok(mut stop) = self.stop.lock() {
+            stop.get_or_insert(cause);
+        }
+        self.interrupted.store(true, Ordering::Release);
+        true
     }
 }
 
@@ -198,9 +264,13 @@ impl RestrictedScanner {
             return Err(ScanError::Unsupported("database capture ceiling"));
         }
         let control = Control::new(control)?;
-        let package = capture::Package::capture(artifacts, limits, &control)?;
-        let database = scan::Database::open(package.database(), control.clone())?;
-        database.verify_schema()?;
+        let package = capture::Package::capture(artifacts, limits, &control)
+            .map_err(|error| control.classify(error))?;
+        let database = scan::Database::open(package.database(), control.clone())
+            .map_err(|error| control.classify(error))?;
+        database
+            .verify_schema()
+            .map_err(|error| control.classify(error))?;
         Ok(Self {
             database,
             package,
@@ -244,14 +314,16 @@ impl RestrictedScanner {
         if result.is_err() {
             self.failed = true;
         }
-        result
+        result.map_err(|error| self.control.classify(error))
     }
     pub fn finish(mut self, control: &ScanControl) -> Result<StorageScanComplete> {
         if self.failed || !self.complete {
             return Err(ScanError::Incomplete);
         }
         self.control.intersect(control)?;
-        self.package.verify(&self.control)?;
+        self.package
+            .verify(&self.control)
+            .map_err(|error| self.control.classify(error))?;
         self.control.check()?;
         let digest = self.package.digest();
         Ok(StorageScanComplete {

@@ -55,8 +55,8 @@ pub(super) fn fingerprint() -> [u8; 32] {
     hash.update(b"generic=2/local-user;namespace=1/local-user/local-host;view-target=user;external=0;gen-each<=4096;hostchain<=4096/1048576;probe<=1048576;finite-real/bit-identical;UTF8;source=finalized-small-v1;fresh-incarnation;conditional-native-authority;existing-host-keys");
     hash.finalize().into()
 }
-fn none(db: &scan::Database, sql: &str) -> Result<()> {
-    db.control().statement()?;
+fn none(db: &scan::Database, sql: &str, operations: usize) -> Result<()> {
+    db.control().statement_with_budget(operations)?;
     if db
         .connection()
         .query_row(sql, [], |r| r.get::<_, bool>(0))?
@@ -65,7 +65,8 @@ fn none(db: &scan::Database, sql: &str) -> Result<()> {
     }
     Ok(())
 }
-pub(super) fn verify(db: &scan::Database) -> Result<()> {
+/// `operations` is the opcode budget of each full-table statement.
+pub(super) fn verify(db: &scan::Database, operations: usize) -> Result<()> {
     if !TABLES.split_whitespace().eq(HOSTED_SMALL_V1
         .descriptor(Component::Foks)
         .tables()
@@ -77,6 +78,7 @@ pub(super) fn verify(db: &scan::Database) -> Result<()> {
         none(
             db,
             &format!("SELECT EXISTS(SELECT 1 FROM main.{})", copy::quote(table)),
+            operations,
         )?;
     }
     for table in [
@@ -84,15 +86,15 @@ pub(super) fn verify(db: &scan::Database) -> Result<()> {
         "generic_chain_links",
         "generic_tree_locations",
     ] {
-        none(db,&format!("SELECT EXISTS(SELECT 1 FROM main.{} g WHERE g.chain_type!=2 OR NOT EXISTS(SELECT 1 FROM main.users u WHERE u.uid=g.entity_id))",copy::quote(table)))?;
+        none(db,&format!("SELECT EXISTS(SELECT 1 FROM main.{} g WHERE g.chain_type!=2 OR NOT EXISTS(SELECT 1 FROM main.users u WHERE u.uid=g.entity_id))",copy::quote(table)),operations)?;
     }
-    none(db,"SELECT EXISTS(SELECT 1 FROM main.subchain_tree_location_seeds s WHERE NOT EXISTS(SELECT 1 FROM main.users u WHERE u.uid=s.entity_id))")?;
-    none(db,"SELECT EXISTS(SELECT 1 FROM main.kv_namespaces n WHERE n.party_kind!=1 OR NOT EXISTS(SELECT 1 FROM main.users u WHERE u.uid=n.namespace_id) OR NOT EXISTS(SELECT 1 FROM main.host_metadata h WHERE h.singleton=1 AND h.host_id=n.host_id))")?;
+    none(db,"SELECT EXISTS(SELECT 1 FROM main.subchain_tree_location_seeds s WHERE NOT EXISTS(SELECT 1 FROM main.users u WHERE u.uid=s.entity_id))",operations)?;
+    none(db,"SELECT EXISTS(SELECT 1 FROM main.kv_namespaces n WHERE n.party_kind!=1 OR NOT EXISTS(SELECT 1 FROM main.users u WHERE u.uid=n.namespace_id) OR NOT EXISTS(SELECT 1 FROM main.host_metadata h WHERE h.singleton=1 AND h.host_id=n.host_id))",operations)?;
     for (table, column) in [
         ("users", "uid"),
         ("user_local_view_permissions", "target_id"),
     ] {
-        db.control().statement()?;
+        db.control().statement_with_budget(operations)?;
         let sql=format!("SELECT EXISTS(SELECT 1 FROM main.{} WHERE typeof({column})!='blob' OR length({column})!=33 OR substr({column},1,1)!=?1)",copy::quote(table),column=copy::quote(column));
         if db
             .connection()
@@ -106,8 +108,9 @@ pub(super) fn verify(db: &scan::Database) -> Result<()> {
     none(
         db,
         "SELECT EXISTS(SELECT 1 FROM main.chunk_storage_binding)",
+        operations,
     )?;
-    none(db,"SELECT EXISTS(SELECT 1 FROM main.kv_file_chunks WHERE external_object_id IS NOT NULL OR external_digest IS NOT NULL OR external_encoded_bytes IS NOT NULL)")?;
+    none(db,"SELECT EXISTS(SELECT 1 FROM main.kv_file_chunks WHERE external_object_id IS NOT NULL OR external_digest IS NOT NULL OR external_encoded_bytes IS NOT NULL)",operations)?;
     for table in ["host_key_generations", "capability_key_generations"] {
         db.control().statement()?;
         let count: i64 = db.connection().query_row(
