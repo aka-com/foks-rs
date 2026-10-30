@@ -7,7 +7,7 @@ use super::{
     publication::PrivatePublication,
     ClientStateMaintenanceGuard, StateInventoryReport,
 };
-use crate::{Error, Result};
+use crate::{encode_private_json, Error, Result};
 use foks_keystore::state_archive::{ArchiveWriter, StateTransferKey};
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
@@ -16,7 +16,6 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
 };
-use zeroize::Zeroizing;
 
 pub struct StateExportPreview {
     guard: ClientStateMaintenanceGuard,
@@ -81,7 +80,7 @@ impl StateExportAuthorization {
         let mut output = PrivatePublication::reserve(&destination)?;
         let snapshot = snapshot.normalize_trust(&mut guard)?;
         let manifest = ArchiveManifest::from_snapshot(&snapshot)?;
-        let bytes = Zeroizing::new(serde_json::to_vec(&manifest)?);
+        let bytes = encode_private_json(&manifest)?;
         let mut archive = ArchiveWriter::new(&mut output.file, key, &bytes)?;
         let archive_id = crate::hex(&archive.archive_id());
         for entry in &manifest.entries {
@@ -137,6 +136,7 @@ impl Read for HashReader {
 mod tests {
     use super::*;
     use foks_keystore::state_archive::ArchiveReader;
+    use zeroize::Zeroizing;
     fn enabled() -> bool {
         std::env::var_os("FOKS_TEST_NATIVE_PORTABILITY").is_some()
     }

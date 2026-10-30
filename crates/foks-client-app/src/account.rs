@@ -141,8 +141,7 @@ impl CheckedProfileSession<'_> {
         let host = self.pinned_host()?;
         let Some(operation) = pending.journal_operation(&host, &self.paths.hard_database)? else {
             let mut uid =
-                derive_shared_verify_key(&SecretSeed::new(pending.puk_seed), ENTITY_PUK_VERIFY)?
-                    .into_bytes();
+                derive_shared_verify_key(&pending.puk_seed.seed(), ENTITY_PUK_VERIFY)?.into_bytes();
             uid[0] = ENTITY_USER;
             if HardStateStore::open(&self.paths.hard_database)?
                 .sso_flows(host.host_id().as_bytes(), &uid)?
@@ -368,7 +367,7 @@ impl CheckedProfileSession<'_> {
         let provisioned = match result {
             Ok(provisioned) => provisioned,
             Err(error) => {
-                let device = derive_device_public(&SecretSeed::new(pending.device_seed))?;
+                let device = derive_device_public(&pending.device_seed.seed())?;
                 if HardStateStore::open(&self.paths.hard_database)?
                     .latest_mutation_for_binding(
                         host.host_id().as_bytes(),
@@ -437,7 +436,7 @@ impl CheckedProfileSession<'_> {
         let pending = vault.pending_device(target_alias)?;
         let source = vault.account(&pending.source_alias)?;
         let host = self.pinned_host()?;
-        let device_seed = SecretSeed::new(pending.device_seed);
+        let device_seed = pending.device_seed.seed();
         let device = derive_device_public(&device_seed)?;
         let Some(operation) = HardStateStore::open(&self.paths.hard_database)?
             .latest_mutation_for_binding(
@@ -564,14 +563,14 @@ impl CheckedProfileSession<'_> {
         let account = vault.account(account_alias)?;
         let offer = foks_client::KexProvisionOffer::generate(Role::OWNER)?;
         let phrase = offer.phrase().expose_joined();
-        let secret = *offer.into_secret_bytes();
+        let secret = offer.into_secret_bytes();
         vault.put_kex_offer(&StoredKexOffer {
             version: CREDENTIAL_VERSION,
             account_alias: account_alias.to_owned(),
-            secret,
+            secret: SecretArray::new(*secret),
         })?;
         let host = self.pinned_host()?;
-        let restored = foks_client::KexProvisionOffer::from_secret_bytes(secret, Role::OWNER)?;
+        let restored = foks_client::KexProvisionOffer::from_secret_bytes(*secret, Role::OWNER)?;
         self.client
             .publish_kex_provision_offer(&host, &account.credential, &restored)?;
         Ok(KexOfferReport {
@@ -588,7 +587,10 @@ impl CheckedProfileSession<'_> {
         self.profile.require(Capability::DeviceAdministration)?;
         let account = vault.account(account_alias)?;
         let stored = vault.kex_offer(account_alias)?;
-        let offer = foks_client::KexProvisionOffer::from_secret_bytes(stored.secret, Role::OWNER)?;
+        let offer = foks_client::KexProvisionOffer::from_secret_bytes(
+            *stored.secret.as_bytes(),
+            Role::OWNER,
+        )?;
         let phrase = offer.phrase().expose_joined();
         let host = self.pinned_host()?;
         self.client
@@ -608,7 +610,10 @@ impl CheckedProfileSession<'_> {
         self.profile.require(Capability::DeviceAdministration)?;
         let account = vault.account(account_alias)?;
         let stored = vault.kex_offer(account_alias)?;
-        let offer = foks_client::KexProvisionOffer::from_secret_bytes(stored.secret, Role::OWNER)?;
+        let offer = foks_client::KexProvisionOffer::from_secret_bytes(
+            *stored.secret.as_bytes(),
+            Role::OWNER,
+        )?;
         let host = self.pinned_host()?;
         let mut mutations = EncryptedFileMutationStore::open(
             &self.paths.protected_mutations,
@@ -671,7 +676,7 @@ impl CheckedProfileSession<'_> {
             target_alias: input.target_alias.clone(),
             device_name: input.device_name.clone(),
             serial: input.serial,
-            device_seed: random_array()?,
+            device_seed: SecretArray::random()?,
             phrase: input.phrase.clone(),
             source_candidate_id: source_candidate_id.map(str::to_owned),
             expected_user: expected_user.map(|user| user.to_vec()),
@@ -715,7 +720,7 @@ impl CheckedProfileSession<'_> {
             .transpose()?;
         if vault.account_record_exists(target_alias)? {
             let account = vault.account(target_alias)?;
-            let expected = derive_device_public(&SecretSeed::new(pending.device_seed))?;
+            let expected = derive_device_public(&pending.device_seed.seed())?;
             let actual = account.credential.public_material()?;
             if expected.id != actual.id
                 || bound_user
@@ -753,7 +758,7 @@ impl CheckedProfileSession<'_> {
             &pending.phrase,
             &pending.device_name,
             pending.serial,
-            SecretSeed::new(pending.device_seed),
+            pending.device_seed.seed(),
             expected_user,
             self.pairing_budget(),
         )?;
@@ -1228,14 +1233,8 @@ struct StoredAccount {
     alias: String,
     username: String,
     uid: Vec<u8>,
-    device_seed: [u8; 32],
+    device_seed: SecretArray<32>,
     certificate_chain: Vec<Vec<u8>>,
-}
-
-impl Drop for StoredAccount {
-    fn drop(&mut self) {
-        self.device_seed.zeroize();
-    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1243,17 +1242,9 @@ pub(super) struct PendingSignup {
     version: u32,
     alias: String,
     pub(super) username: String,
-    pub(super) device_seed: [u8; 32],
-    pub(super) puk_seed: [u8; 32],
-    self_token: [u8; 17],
-}
-
-impl Drop for PendingSignup {
-    fn drop(&mut self) {
-        self.device_seed.zeroize();
-        self.puk_seed.zeroize();
-        self.self_token.zeroize();
-    }
+    pub(super) device_seed: SecretArray<32>,
+    pub(super) puk_seed: SecretArray<32>,
+    self_token: SecretArray<17>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1263,21 +1254,15 @@ struct PendingDevice {
     target_alias: String,
     username: String,
     serial: u64,
-    device_seed: [u8; 32],
-    self_token: [u8; 17],
+    device_seed: SecretArray<32>,
+    self_token: SecretArray<17>,
 }
 
 #[derive(Deserialize, Serialize)]
 struct StoredKexOffer {
     version: u32,
     account_alias: String,
-    secret: [u8; foks_proto::KEX_SECRET_BYTES],
-}
-
-impl Drop for StoredKexOffer {
-    fn drop(&mut self) {
-        self.secret.zeroize();
-    }
+    secret: SecretArray<{ foks_proto::KEX_SECRET_BYTES }>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1286,7 +1271,7 @@ struct PendingKexAcceptance {
     target_alias: String,
     device_name: String,
     serial: u64,
-    device_seed: [u8; 32],
+    device_seed: SecretArray<32>,
     phrase: String,
     source_candidate_id: Option<String>,
     expected_user: Option<Vec<u8>>,
@@ -1294,7 +1279,6 @@ struct PendingKexAcceptance {
 
 impl Drop for PendingKexAcceptance {
     fn drop(&mut self) {
-        self.device_seed.zeroize();
         self.phrase.zeroize();
     }
 }
@@ -1304,11 +1288,9 @@ impl PendingDevice {
         if serial == 0 {
             return Err(Error::InvalidAccount("device serial is zero"));
         }
-        let mut device_seed = [0u8; 32];
-        let mut self_token = [0u8; 17];
-        getrandom::fill(&mut device_seed).map_err(|_| Error::Randomness)?;
-        getrandom::fill(&mut self_token).map_err(|_| Error::Randomness)?;
-        self_token[0] = 54;
+        let device_seed = SecretArray::random()?;
+        let mut self_token = SecretArray::<17>::random()?;
+        self_token.as_mut_bytes()[0] = 54;
         Ok(Self {
             version: CREDENTIAL_VERSION,
             source_alias: source_alias.to_owned(),
@@ -1321,14 +1303,7 @@ impl PendingDevice {
     }
 
     fn secrets(&self) -> NewSoftwareDeviceSecrets {
-        NewSoftwareDeviceSecrets::new(SecretSeed::new(self.device_seed), None, self.self_token)
-    }
-}
-
-impl Drop for PendingDevice {
-    fn drop(&mut self) {
-        self.device_seed.zeroize();
-        self.self_token.zeroize();
+        NewSoftwareDeviceSecrets::new(self.device_seed.seed(), None, *self.self_token.as_bytes())
     }
 }
 
@@ -1337,8 +1312,8 @@ struct PendingRecovery {
     version: u32,
     target_alias: String,
     serial: u64,
-    device_seed: [u8; 32],
-    self_token: [u8; 17],
+    device_seed: SecretArray<32>,
+    self_token: SecretArray<17>,
 }
 
 impl PendingRecovery {
@@ -1346,11 +1321,9 @@ impl PendingRecovery {
         if serial == 0 {
             return Err(Error::InvalidAccount("recovery device serial is zero"));
         }
-        let mut device_seed = [0u8; 32];
-        let mut self_token = [0u8; 17];
-        getrandom::fill(&mut device_seed).map_err(|_| Error::Randomness)?;
-        getrandom::fill(&mut self_token).map_err(|_| Error::Randomness)?;
-        self_token[0] = 54;
+        let device_seed = SecretArray::random()?;
+        let mut self_token = SecretArray::<17>::random()?;
+        self_token.as_mut_bytes()[0] = 54;
         Ok(Self {
             version: CREDENTIAL_VERSION,
             target_alias: target_alias.to_owned(),
@@ -1361,14 +1334,7 @@ impl PendingRecovery {
     }
 
     fn secrets(&self) -> NewSoftwareDeviceSecrets {
-        NewSoftwareDeviceSecrets::new(SecretSeed::new(self.device_seed), None, self.self_token)
-    }
-}
-
-impl Drop for PendingRecovery {
-    fn drop(&mut self) {
-        self.device_seed.zeroize();
-        self.self_token.zeroize();
+        NewSoftwareDeviceSecrets::new(self.device_seed.seed(), None, *self.self_token.as_bytes())
     }
 }
 
@@ -1385,10 +1351,10 @@ impl PendingSignup {
         host: &foks_client::PinnedHost,
         database: &Path,
     ) -> Result<Option<foks_client_db::MutationOperation>> {
-        let mut uid = derive_shared_verify_key(&SecretSeed::new(self.puk_seed), ENTITY_PUK_VERIFY)?
-            .into_bytes();
+        let mut uid =
+            derive_shared_verify_key(&self.puk_seed.seed(), ENTITY_PUK_VERIFY)?.into_bytes();
         uid[0] = ENTITY_USER;
-        let device = derive_device_public(&SecretSeed::new(self.device_seed))?;
+        let device = derive_device_public(&self.device_seed.seed())?;
         Ok(HardStateStore::open(database)?.latest_mutation_for_binding(
             host.host_id().as_bytes(),
             MutationKind::Signup,
@@ -1398,13 +1364,10 @@ impl PendingSignup {
     }
 
     pub(super) fn random(alias: &str, username: &str) -> Result<Self> {
-        let mut device_seed = [0u8; 32];
-        let mut puk_seed = [0u8; 32];
-        let mut self_token = [0u8; 17];
-        getrandom::fill(&mut device_seed).map_err(|_| Error::Randomness)?;
-        getrandom::fill(&mut puk_seed).map_err(|_| Error::Randomness)?;
-        getrandom::fill(&mut self_token).map_err(|_| Error::Randomness)?;
-        self_token[0] = 54;
+        let device_seed = SecretArray::random()?;
+        let puk_seed = SecretArray::random()?;
+        let mut self_token = SecretArray::<17>::random()?;
+        self_token.as_mut_bytes()[0] = 54;
         Ok(Self {
             version: CREDENTIAL_VERSION,
             alias: alias.to_owned(),
@@ -1418,9 +1381,9 @@ impl PendingSignup {
     pub(super) fn secrets(&self) -> Result<SoftwareAccountSecrets> {
         validate_pending(self)?;
         Ok(SoftwareAccountSecrets::new(
-            SecretSeed::new(self.device_seed),
-            SecretSeed::new(self.puk_seed),
-            self.self_token,
+            self.device_seed.seed(),
+            self.puk_seed.seed(),
+            *self.self_token.as_bytes(),
         ))
     }
 }
@@ -1672,7 +1635,7 @@ impl<'a> AccountVault<'a> {
         if offer.version != CREDENTIAL_VERSION {
             return Err(Error::InvalidAccount("KEX offer version is invalid"));
         }
-        let encoded = Zeroizing::new(serde_json::to_vec(offer)?);
+        let encoded = encode_private_json(offer)?;
         self.store
             .put(&kex_offer_key(&offer.account_alias), &encoded)?;
         Ok(())
@@ -1701,7 +1664,7 @@ impl<'a> AccountVault<'a> {
 
     fn put_pending_kex(&mut self, pending: &PendingKexAcceptance) -> Result<()> {
         validate_pending_kex(pending)?;
-        let encoded = Zeroizing::new(serde_json::to_vec(pending)?);
+        let encoded = encode_private_json(pending)?;
         self.store
             .put(&pending_kex_key(&pending.target_alias), &encoded)?;
         Ok(())
@@ -1748,7 +1711,7 @@ impl<'a> AccountVault<'a> {
             credential: DeviceCredential {
                 key_kind: foks_client::SoftwareKeyKind::Device,
                 uid: EntityId::from_bytes(stored.uid.clone())?,
-                seed: SecretSeed::new(stored.device_seed),
+                seed: stored.device_seed.seed(),
                 certificate_chain: stored.certificate_chain.clone(),
             },
         })
@@ -1773,7 +1736,7 @@ impl<'a> AccountVault<'a> {
 
     pub(super) fn put_pending(&mut self, pending: &PendingSignup) -> Result<()> {
         validate_pending(pending)?;
-        let encoded = Zeroizing::new(serde_json::to_vec(pending)?);
+        let encoded = encode_private_json(pending)?;
         self.store.put(&pending_key(&pending.alias), &encoded)?;
         Ok(())
     }
@@ -1804,7 +1767,7 @@ impl<'a> AccountVault<'a> {
 
     fn put_pending_device(&mut self, pending: &PendingDevice) -> Result<()> {
         validate_pending_device(pending)?;
-        let encoded = Zeroizing::new(serde_json::to_vec(pending)?);
+        let encoded = encode_private_json(pending)?;
         self.store
             .put(&pending_device_key(&pending.target_alias), &encoded)?;
         Ok(())
@@ -1836,7 +1799,7 @@ impl<'a> AccountVault<'a> {
 
     fn put_pending_recovery(&mut self, pending: &PendingRecovery) -> Result<()> {
         validate_pending_recovery(pending)?;
-        let encoded = Zeroizing::new(serde_json::to_vec(pending)?);
+        let encoded = encode_private_json(pending)?;
         self.store
             .put(&pending_recovery_key(&pending.target_alias), &encoded)?;
         Ok(())
@@ -1861,7 +1824,7 @@ impl<'a> AccountVault<'a> {
 
     fn put_backup(&mut self, backup: &StoredBackup) -> Result<()> {
         validate_stored_backup(backup, &backup.backup_alias)?;
-        let encoded = Zeroizing::new(serde_json::to_vec(backup)?);
+        let encoded = encode_private_json(backup)?;
         self.store
             .put(&backup_key(&backup.backup_alias), &encoded)?;
         Ok(())
@@ -1901,11 +1864,11 @@ impl<'a> AccountVault<'a> {
             alias: alias.to_owned(),
             username: username.to_owned(),
             uid: credential.uid.as_bytes().to_vec(),
-            device_seed: *credential.seed.as_bytes(),
+            device_seed: SecretArray::from_seed(&credential.seed),
             certificate_chain: credential.certificate_chain.clone(),
         };
         validate_account(&stored, alias)?;
-        let encoded = Zeroizing::new(serde_json::to_vec(&stored)?);
+        let encoded = encode_private_json(&stored)?;
         self.store.put(&account_key(alias), &encoded)?;
         Ok(())
     }
@@ -1936,7 +1899,7 @@ fn validate_account(account: &StoredAccount, expected_alias: &str) -> Result<()>
 }
 
 fn validate_pending(pending: &PendingSignup) -> Result<()> {
-    if pending.version != CREDENTIAL_VERSION || pending.self_token[0] != 54 {
+    if pending.version != CREDENTIAL_VERSION || pending.self_token.as_bytes()[0] != 54 {
         return Err(Error::InvalidAccount(
             "pending signup version or token is invalid",
         ));
@@ -1951,7 +1914,10 @@ fn validate_pending(pending: &PendingSignup) -> Result<()> {
 }
 
 fn validate_pending_device(pending: &PendingDevice) -> Result<()> {
-    if pending.version != CREDENTIAL_VERSION || pending.self_token[0] != 54 || pending.serial == 0 {
+    if pending.version != CREDENTIAL_VERSION
+        || pending.self_token.as_bytes()[0] != 54
+        || pending.serial == 0
+    {
         return Err(Error::InvalidAccount(
             "pending device version, token, or serial is invalid",
         ));
@@ -1993,7 +1959,10 @@ fn validate_pending_kex(pending: &PendingKexAcceptance) -> Result<()> {
 }
 
 fn validate_pending_recovery(pending: &PendingRecovery) -> Result<()> {
-    if pending.version != CREDENTIAL_VERSION || pending.self_token[0] != 54 || pending.serial == 0 {
+    if pending.version != CREDENTIAL_VERSION
+        || pending.self_token.as_bytes()[0] != 54
+        || pending.serial == 0
+    {
         return Err(Error::InvalidAccount(
             "pending recovery version, token, or serial is invalid",
         ));
@@ -2033,6 +2002,65 @@ mod tests {
     use foks_keystore::EncryptedFileSecretStore;
     use foks_server_testkit::TestEnvironment;
 
+    use crate::secret_record::{assert_debug_redacted, assert_json_round_trip, json_bytes};
+
+    #[test]
+    fn account_vault_records_keep_their_json_and_redact_secrets() {
+        let secret = |len| json_bytes(0xab, len);
+        let account: StoredAccount = assert_json_round_trip(&format!(
+            r#"{{"version":1,"alias":"a","username":"alice","uid":{uid},"device_seed":{seed},"certificate_chain":[[1,2]]}}"#,
+            uid = json_bytes(2, 33),
+            seed = secret(32),
+        ));
+        assert_eq!(account.device_seed.as_bytes(), &[0xab; 32]);
+        assert_debug_redacted(&account);
+
+        let signup: PendingSignup = assert_json_round_trip(&format!(
+            r#"{{"version":1,"alias":"a","username":"alice","device_seed":{seed},"puk_seed":{seed},"self_token":{token}}}"#,
+            seed = secret(32),
+            token = secret(17),
+        ));
+        assert_eq!(signup.puk_seed.as_bytes(), &[0xab; 32]);
+        assert_eq!(signup.self_token.as_bytes(), &[0xab; 17]);
+        assert_debug_redacted(&signup);
+
+        let device: PendingDevice = assert_json_round_trip(&format!(
+            r#"{{"version":1,"source_alias":"a","target_alias":"b","username":"alice","serial":2,"device_seed":{seed},"self_token":{token}}}"#,
+            seed = secret(32),
+            token = secret(17),
+        ));
+        assert_debug_redacted(&device);
+
+        let recovery: PendingRecovery = assert_json_round_trip(&format!(
+            r#"{{"version":1,"target_alias":"b","serial":2,"device_seed":{seed},"self_token":{token}}}"#,
+            seed = secret(32),
+            token = secret(17),
+        ));
+        assert_debug_redacted(&recovery);
+
+        let offer: StoredKexOffer = assert_json_round_trip(&format!(
+            r#"{{"version":1,"account_alias":"a","secret":{secret}}}"#,
+            secret = secret(foks_proto::KEX_SECRET_BYTES),
+        ));
+        assert_eq!(
+            offer.secret.as_bytes(),
+            &[0xab; foks_proto::KEX_SECRET_BYTES]
+        );
+
+        let kex: PendingKexAcceptance = assert_json_round_trip(&format!(
+            r#"{{"version":1,"target_alias":"b","device_name":"laptop","serial":2,"device_seed":{seed},"phrase":"words","source_candidate_id":null,"expected_user":null}}"#,
+            seed = secret(32),
+        ));
+        assert_eq!(kex.device_seed.as_bytes(), &[0xab; 32]);
+
+        let short_token = format!(
+            r#"{{"version":1,"target_alias":"b","serial":2,"device_seed":{seed},"self_token":{token}}}"#,
+            seed = secret(32),
+            token = secret(16),
+        );
+        assert!(serde_json::from_str::<PendingRecovery>(&short_token).is_err());
+    }
+
     #[test]
     fn pending_kex_retains_unicode_device_display_names() {
         let mut pending = PendingKexAcceptance {
@@ -2040,7 +2068,7 @@ mod tests {
             target_alias: "personal".into(),
             device_name: "é".repeat(200),
             serial: 1,
-            device_seed: [1; 32],
+            device_seed: SecretArray::new([1; 32]),
             phrase: foks_crypto::KexSecret::generate()
                 .unwrap()
                 .phrase()
@@ -2173,7 +2201,7 @@ mod tests {
                 assert!(vault.contains("owner")?);
                 assert!(!vault.account_record_exists("owner")?);
                 let pending = vault.pending("owner")?;
-                Ok::<_, Error>(derive_device_public(&SecretSeed::new(pending.device_seed))?.id)
+                Ok::<_, Error>(derive_device_public(&pending.device_seed.seed())?.id)
             })
             .unwrap();
 
@@ -2226,7 +2254,7 @@ mod tests {
                     .unwrap_err();
                 assert!(error.to_string().contains("interrupted credential commit"));
                 let pending = vault.pending_device("second")?;
-                Ok::<_, Error>(derive_device_public(&SecretSeed::new(pending.device_seed))?.id)
+                Ok::<_, Error>(derive_device_public(&pending.device_seed.seed())?.id)
             })
             .unwrap();
 

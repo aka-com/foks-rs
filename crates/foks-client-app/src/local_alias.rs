@@ -81,7 +81,7 @@ impl AccountVault<'_> {
                 label: label.to_owned(),
             };
             self.store
-                .put(&key(alias), &Zeroizing::new(serde_json::to_vec(&stored)?))?;
+                .put(&key(alias), &encode_private_json(&stored)?)?;
         }
         Ok(())
     }
