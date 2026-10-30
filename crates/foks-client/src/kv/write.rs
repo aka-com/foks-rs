@@ -289,7 +289,10 @@ impl KvWriteSession<'_> {
         if let Some(id) = expected_dirent_id {
             require_selected_entry(&tree, parent, name, id, options.expected_version)?;
         }
-        self.ensure_file_upload_claim(parent, name, expected_size, options, expected_dirent_id)?;
+        // An explicit identity was claimed before the first byte. An implicit
+        // one is claimed below, once the first chunk shows a large file: an
+        // inline write has nothing to resume, so it takes no receipt row and
+        // does not depend on the receipt clock.
         let (first, carry, first_is_final) = read_kv_upload_chunk(reader)?;
         let first_len = first.len();
         let node_type = if first_is_final && first.len() <= Self::SMALL_FILE_BYTES {
@@ -306,6 +309,13 @@ impl KvWriteSession<'_> {
             false,
         )?;
         if node_type == KvNodeType::File {
+            self.ensure_file_upload_claim(
+                parent,
+                name,
+                expected_size,
+                options,
+                expected_dirent_id,
+            )?;
             return self.prepare_and_submit_large_file(
                 parent,
                 name,
