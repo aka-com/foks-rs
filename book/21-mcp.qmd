@@ -196,7 +196,13 @@ from reopening handles that were already refused as stale. A wall-clock
 jump of more than five minutes, or a restart more than 24 hours past the
 last trusted floor, blocks new admission with `clock-untrusted` while status
 and recovery continue to work; an operator repairs the anchor with an
-explicit two-step command.
+explicit two-step command. Large-file uploads keep a separate receipt clock
+under the same rules (`kv_upload_clocks`), repaired with
+`retention reanchor --domain upload`. Only a write that needs a resumable
+upload identity consults the upload clock. A file write without an explicit
+upload handle claims an identity only once its first 4 MiB chunk shows a
+large file; a small file is written inline, takes no receipt row and is not
+refused by an untrusted upload clock.
 
 Cancellation is honored but does not undo remote work; a cancelled request
 answers "check mutation status before retrying." An interrupted upload may
