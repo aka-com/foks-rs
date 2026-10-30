@@ -11,6 +11,7 @@ import type {
 } from '../src/chat-contract';
 import type { useChatComposer as Hook } from '../src/chat/use-chat-composer';
 import type { useChatHistory as HistoryHook } from '../src/chat/use-chat-history';
+import { phaseOf, running } from '../src/chat/send/outgoing';
 
 installDom({ act: true, timers: true });
 let ui: typeof import('@testing-library/react');
@@ -168,7 +169,7 @@ function assertSent(
   assert.equal(current.messages.length, count);
   assert.ok(
     current.messages.every(
-      (message) => message.phase === 'sent' && !message.running,
+      (message) => phaseOf(message) === 'sent' && !running(message),
     ),
   );
   assert.equal(current.canSend, canSend);
@@ -204,7 +205,7 @@ test('confirmed delivery finishes while delayed history holds intent cleanup', a
     assert.equal(h.current.draft, 'second');
     // A held history refresh is not something the composer waits on.
     assert.equal(h.current.canSend, true);
-    assert.equal(h.current.messages[0].running, false);
+    assert.equal(running(h.current.messages[0]), false);
     await ui.act(async () => {
       history.resolve();
       await refresh;
@@ -329,13 +330,16 @@ test('ambiguous delivery can finish the composer while a read-only status check 
   try {
     await h.send('may have been delivered');
     await ui.waitFor(() => {
-      assert.equal(h.current.messages[0]?.running, false);
+      assert.equal(
+        h.current.messages[0] && running(h.current.messages[0]),
+        false,
+      );
       assert.ok(h.calls.some((action) => action.action === 'status'));
     });
     assert.equal(h.current.canSend, true);
     assert.equal(h.current.sendError, '');
     assert.equal(h.current.messages[0].error, 'Delivery unknown');
-    assert.equal(h.current.messages[0].phase, 'unconfirmed');
+    assert.equal(phaseOf(h.current.messages[0]), 'unconfirmed');
     assert.equal(
       h.calls.filter((action) => action.action === 'attempt').length,
       1,
@@ -383,12 +387,12 @@ test('an older delivery error belongs to its message, not a newer send', async (
     );
     await h.send('second');
     await ui.waitFor(() => {
-      assert.equal(h.current.messages[0].running, false);
-      assert.equal(h.current.messages[1].phase, 'sent');
+      assert.equal(running(h.current.messages[0]), false);
+      assert.equal(phaseOf(h.current.messages[1]), 'sent');
     });
     assert.equal(h.current.messages[0].error, 'older delivery failed');
     assert.equal(h.current.messages[1].error, '');
-    assert.equal(h.current.messages[1].phase, 'sent');
+    assert.equal(phaseOf(h.current.messages[1]), 'sent');
     assert.equal(h.current.sendError, '');
     assert.equal(h.current.canSend, true);
     assert.equal(attempts, 2);
@@ -416,7 +420,7 @@ test('the application service completes preparation after the composer unmounts'
       preparation.resolve();
     });
     await ui.waitFor(() =>
-      assert.equal(service.messages(storeId, channelId)[0].phase, 'sent'),
+      assert.equal(phaseOf(service.messages(storeId, channelId)[0]), 'sent'),
     );
     await h.show(true);
     assert.equal(h.current.service, service);
