@@ -87,6 +87,9 @@ pub struct ServerMetricsSnapshot {
     pub reclaimed_upload_chunks: u64,
     pub reclaimed_upload_bytes: u64,
     pub upload_cleanup_deferred_passes: u64,
+    /// Transient accept() failures across all listeners, indexed by
+    /// `AcceptErrorKind` discriminant.
+    pub accept_errors: [u64; crate::AcceptErrorKind::ALL.len()],
 }
 
 #[derive(Default)]
@@ -124,6 +127,7 @@ pub struct ServerMetrics {
     reclaimed_upload_chunks: AtomicU64,
     reclaimed_upload_bytes: AtomicU64,
     upload_cleanup_deferred_passes: AtomicU64,
+    accept_errors: [AtomicU64; crate::AcceptErrorKind::ALL.len()],
 }
 
 impl ServerMetrics {
@@ -203,6 +207,10 @@ impl ServerMetrics {
             upload_cleanup_deferred_passes: self
                 .upload_cleanup_deferred_passes
                 .load(Ordering::Relaxed),
+            accept_errors: self
+                .accept_errors
+                .each_ref()
+                .map(|count| count.load(Ordering::Relaxed)),
         }
     }
 
@@ -249,6 +257,10 @@ impl ServerMetrics {
             .active_realtime_polls
             .fetch_add(1, Ordering::Relaxed);
         RealtimePollGuard { metrics }
+    }
+
+    pub(crate) fn accept_failed(&self, kind: crate::net::AcceptErrorKind) {
+        self.accept_errors[kind as usize].fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn connection_rate_limited(&self) {

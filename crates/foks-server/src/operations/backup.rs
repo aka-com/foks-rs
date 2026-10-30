@@ -6,6 +6,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use crate::diagnostics::operational::{checked, Phase};
+use crate::fatal::{CoreThread, FatalSignal};
 use crate::{BackupSchedule, Error, Result, ServerMetrics};
 
 pub(crate) struct BackupScheduler {
@@ -34,6 +35,7 @@ impl BackupScheduler {
         chunk_store: Option<Arc<dyn crate::chunks::ChunkStore>>,
         clock: Arc<dyn foks_server_db::Clock>,
         metrics: Arc<ServerMetrics>,
+        fatal: FatalSignal,
     ) -> Result<Self> {
         schedule.validate()?;
         std::fs::create_dir_all(&schedule.directory)?;
@@ -54,6 +56,7 @@ impl BackupScheduler {
             clock,
         };
         let thread = thread::spawn(move || {
+            let exit = fatal.exit_guard(CoreThread::Backup);
             let mut sequence = 0_u64;
             loop {
                 match receiver.recv_timeout(schedule.interval) {
@@ -74,6 +77,7 @@ impl BackupScheduler {
                     }
                 }
             }
+            exit.end(true);
         });
         Ok(Self {
             stop,

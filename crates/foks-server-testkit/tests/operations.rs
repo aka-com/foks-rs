@@ -42,6 +42,8 @@ fn health_readiness_and_metrics_are_isolated_on_management_http() {
         "foks_checkpoint_duration_seconds_bucket",
         "foks_checkpoint_frame_counts_available",
         "foks_checkpoint_remaining_frames",
+        "foks_accept_errors_total{kind=\"emfile\"}",
+        "foks_accept_errors_total{kind=\"other\"}",
     ] {
         assert!(metrics.contains(name));
     }
@@ -68,6 +70,65 @@ fn health_readiness_and_metrics_are_isolated_on_management_http() {
     );
     assert!(get(address, "/missing").starts_with("HTTP/1.1 404 Not Found\r\n"));
     server.shutdown().unwrap();
+}
+
+#[test]
+fn writer_panic_fails_health_and_reports_a_fatal_exit() {
+    let environment = TestEnvironment::new().unwrap();
+    let server = environment.start_server().unwrap();
+    let address = server.management_address();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    server.on_fatal_exit(move |thread| {
+        let _ = sender.send(thread);
+    });
+    assert!(get(address, "/healthz").starts_with("HTTP/1.1 200 OK\r\n"));
+    let writer = server.writer_handle();
+    assert!(matches!(
+        writer.call::<_, ()>(|_| panic!("injected writer panic")),
+        Err(foks_server::Error::WriterQueue)
+    ));
+    // The foks-server binary closes its signal iterator from this observer
+    // and exits non-zero.
+    assert_eq!(
+        receiver.recv_timeout(Duration::from_secs(5)).unwrap(),
+        foks_server::CoreThread::Writer
+    );
+    assert_eq!(server.fatal_thread(), Some(foks_server::CoreThread::Writer));
+    let health = get(address, "/healthz");
+    assert!(health.starts_with("HTTP/1.1 503 Service Unavailable\r\n"));
+    assert!(health.ends_with("\r\n\r\nwriter thread exited\n"));
+    assert!(get(address, "/readyz").starts_with("HTTP/1.1 503 Service Unavailable\r\n"));
+    assert!(matches!(
+        writer.call(|_| -> foks_server::Result<()> { unreachable!("writer ran after a panic") }),
+        Err(foks_server::Error::WriterQueue)
+    ));
+    assert!(matches!(server.shutdown(), Err(foks_server::Error::Thread)));
+}
+
+#[test]
+fn orderly_shutdown_is_not_a_fatal_exit() {
+    let environment = TestEnvironment::with_profile(TestProfile::BackupAutomation).unwrap();
+    let server = environment.start_server().unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    server.on_fatal_exit(move |thread| {
+        let _ = sender.send(thread);
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while server.metrics().backup_successes == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "automatic backup did not complete"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    server.run_maintenance().unwrap();
+    assert_eq!(server.fatal_thread(), None);
+    server.shutdown().unwrap();
+    // Dropping the server drops the unused observer and its sender.
+    assert!(matches!(
+        receiver.recv_timeout(Duration::from_secs(1)),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+    ));
 }
 
 #[test]
