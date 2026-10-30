@@ -56,9 +56,8 @@ export function ServerAddressStep({
       }
     >
       <StepIntro>
-        <h1>
-          {path === 'invited' ? 'Select a server address' : 'Select a server'}
-        </h1>
+        {/* Use a consistent step heading across all paths to match the sidebar step list. */}
+        <h1>Select a server</h1>
         <p className="lead">
           FOKS synchronizes your account, teams, and encrypted vaults through a
           server.{' '}
@@ -76,6 +75,12 @@ export function ServerAddressStep({
             <input
               ref={inputRef}
               aria-label="Server address"
+              aria-invalid={state === 'error' || addressInvalid || undefined}
+              aria-describedby={
+                state === 'error' && !addressInvalid
+                  ? 'server-address-error'
+                  : undefined
+              }
               value={address}
               placeholder="e.g. foks.app:4430"
               onChange={(event) => {
@@ -95,7 +100,7 @@ export function ServerAddressStep({
         Use the Official FOKS Server
       </Button>
       {state === 'error' && !addressInvalid ? (
-        <div className="crit" role="alert">
+        <div className="crit" role="alert" id="server-address-error">
           <b>
             {serverCheckPresentation?.title ??
               message ??

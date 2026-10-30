@@ -11,6 +11,8 @@ import {
   Pane,
   StepIntro,
   FirstRunIntroSlot,
+  focusStepStart,
+  pressStepDefault,
 } from './first-run-view';
 export { FirstRunChecklistStatus } from './first-run-view';
 import {
@@ -289,10 +291,11 @@ function FirstRunSession({
     clearBackup,
     navigateBackup,
   } = useRecoveryBackup();
-  // The setup card's left panel, where each step's StepIntro is drawn.
+  // Portal target in the setup card's left panel where each step renders its StepIntro.
   const [introSlot, setIntroSlot] = useState<HTMLElement | null>(null);
-  // Pending path selection before confirmation.
-  const [pendingPath, setPendingPath] = useState<FirstRunPath | null>(null);
+  // Pending path selection before confirmation; defaults to 'own' so Continue
+  // and Return work immediately.
+  const [pendingPath, setPendingPath] = useState<FirstRunPath | null>('own');
   const [otherMutationBusy, setBusy] = useState(false);
   const [personalRefreshing, setPersonalRefreshing] = useState(false);
   const [personalRefreshError, setPersonalRefreshError] = useState<
@@ -1083,6 +1086,36 @@ function FirstRunSession({
       })
       .finally(() => setPersonalRefreshing(false));
   };
+
+  // Focus the initial control when a setup step mounts, or focus the invalid
+  // field after a failed submission re-enables the step controls.
+  const stepColumn = useRef<HTMLElement | null>(null);
+  const focusedStep = useRef<string | null>(null);
+  const setupCardStep = ![
+    'added',
+    'checklist-invited',
+    'checklist-own',
+  ].includes(state);
+  const stepKey = !agentReady && onRetryAgent ? 'service' : state;
+  useEffect(() => {
+    if (!setupCardStep) {
+      focusedStep.current = null;
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      const column = stepColumn.current;
+      if (!column || column.querySelector('[data-setup-controls][inert]'))
+        return;
+      // Skip step autofocus while a modal dialog is open.
+      if (document.querySelector('[aria-modal="true"]')) return;
+      const active = document.activeElement;
+      const lost = !active || active === document.body;
+      if (focusedStep.current === stepKey && !lost) return;
+      focusedStep.current = stepKey;
+      focusStepStart(column, introSlot);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [setupCardStep, stepKey, busy, message, introSlot]);
 
   let content: ReactNode;
   const reviewServerSettings = (
@@ -1985,8 +2018,12 @@ function FirstRunSession({
       .filter((item) => item.store === addedStore)
       .slice(0, 4);
     content = (
-      // The panel's bar names the team, so the page opens on the notice.
+      // Omit the pane header because the panel top bar already displays the team name.
       <Pane title={group} header={false} wide>
+        {/* Provide an offscreen h1 for screen readers since the topbar already displays the team name. */}
+        <h1 className="offscreen" tabIndex={-1}>
+          {group}
+        </h1>
         <Notice
           // The pane's title already names the team, so the notice states the
           // condition alone, in the same words the store access takeover uses.
@@ -2135,7 +2172,12 @@ function FirstRunSession({
     </div>
   ) : null;
   const mainColumn = (
-    <main className="main first-run-main" aria-busy={agentReady && busy}>
+    <main
+      ref={stepColumn}
+      className="main first-run-main"
+      aria-busy={agentReady && busy}
+      onKeyDown={appMode ? undefined : pressStepDefault}
+    >
       {appBar}
       {restartError ? (
         <p role="alert" className="crit">

@@ -242,10 +242,16 @@ export function serverDisplayLabel(
   return server.displayLabel ?? server.configuredEndpoint;
 }
 
+/**
+ * Returns the server's local display label, falling back to its configured
+ * endpoint before the first check, or "Loading…" when the server record is
+ * undefined.
+ */
 export function serverDisplayLabelOrLoading(
-  server: Pick<Server, 'displayLabel'> | undefined,
+  server: Pick<Server, 'displayLabel' | 'configuredEndpoint'> | undefined,
 ): string {
-  return server?.displayLabel?.trim() || 'Loading...';
+  if (!server) return 'Loading…';
+  return server.displayLabel?.trim() || server.configuredEndpoint;
 }
 
 export interface Account {

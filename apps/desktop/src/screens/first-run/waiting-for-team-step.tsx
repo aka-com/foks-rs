@@ -129,7 +129,7 @@ export function WaitingForTeamStep({
           </div>
         </div>
       ) : null}
-      <div className="setup-grid">
+      <div className="setup-grid waiting-grid">
         <div className="col">
           <div className="pcard">
             <h3>Message for {adminShort}</h3>
@@ -175,6 +175,7 @@ export function WaitingForTeamStep({
             <div className="checkrow">
               <Button
                 variant="primary"
+                data-dialog-autofocus="true"
                 disabled={busy}
                 onClick={() => void discover()}
               >

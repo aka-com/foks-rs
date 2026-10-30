@@ -166,6 +166,11 @@ export interface MenuButtonProps {
   'aria-label'?: string;
   /** Open on the first paint — the acceptance scene for a dropdown. */
   defaultOpen?: boolean;
+  /**
+   * Pass -1 for a trigger inside a list row so keyboard users reach its
+   * actions via the row's context menu rather than Tab.
+   */
+  tabIndex?: number;
   /** The menu's items, given a closer to call when one is taken. */
   children: MenuContent;
 }
@@ -183,6 +188,7 @@ export function MenuButton({
   title,
   'aria-label': ariaLabel,
   defaultOpen = false,
+  tabIndex,
   children,
 }: MenuButtonProps): ReactNode {
   const anchorRef = useRef<HTMLButtonElement>(null);
@@ -200,6 +206,7 @@ export function MenuButton({
         icon={icon}
         disabled={disabled}
         title={title}
+        tabIndex={tabIndex}
         aria-label={
           ariaLabel ?? (emptyLabel ? (title ?? menuLabel) : undefined)
         }

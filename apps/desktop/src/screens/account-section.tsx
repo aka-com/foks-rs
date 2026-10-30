@@ -59,6 +59,8 @@ import {
   accountStores,
   notesNow,
   plural,
+  SERVER_NOT_VERIFIED,
+  serverAvailability,
   serverDisplayLabel,
   serverDisplayLabelForStore,
   storeDescription,
@@ -242,6 +244,14 @@ export function unroutedNotices(snapshot: AgentSnapshot): Notification[] {
   );
 }
 
+/** Returns true if this device has verified the server's identity at least once. */
+function serverVerified(snapshot: AgentSnapshot, server: Server): boolean {
+  const availability = serverAvailability(snapshot, server);
+  return (
+    availability.available || availability.reason !== 'verification-required'
+  );
+}
+
 interface NeedsAttentionProps {
   snapshot: AgentSnapshot;
   /** Connected servers that have no paired account on this device. */
@@ -329,7 +339,12 @@ function NeedsAttention({
             action={<Button onClick={() => onPair(server)}>Pair</Button>}
           >
             {serverDisplayLabel(server)}{' '}
-            <span className="dim">Connected, not paired</span>
+            <span className="dim">
+              {/* Prefix the unpaired status with the server's verification state. */}
+              {serverVerified(snapshot, server)
+                ? 'Connected, not paired'
+                : `${SERVER_NOT_VERIFIED.state}, not paired`}
+            </span>
           </InsetRow>
         ))}
       </Inset>
@@ -861,6 +876,7 @@ function AccountPanel({
         className={`settings-inset middle wide${freshness.stale ? ' stale' : ''}`}
       >
         <InsetRow
+          className="account-username"
           label="Username"
           action={
             <>

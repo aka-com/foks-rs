@@ -1,9 +1,20 @@
 import { useLayoutEffect, useMemo } from 'react';
 
+/**
+ * Timestamp until which channel navigation preserves current focus so keyboard
+ * navigation in the channel list keeps focus on the active row.
+ */
+let keepFocusUntil = 0;
+
+/** Suppresses composer autofocus for the next channel navigation within 500ms. */
+export function keepFocusOnNextChannelVisit(): void {
+  keepFocusUntil = Date.now() + 500;
+}
+
 /** One focus opportunity per visit, including time spent discovering the channel. */
 export function useComposerAutofocus(channel: string | undefined) {
   const visit = useMemo(
-    () => ({ channel, pending: true, active: false }),
+    () => ({ channel, pending: Date.now() > keepFocusUntil, active: false }),
     [channel],
   );
   useLayoutEffect(() => {

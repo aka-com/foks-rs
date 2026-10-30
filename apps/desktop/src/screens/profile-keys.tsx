@@ -3,7 +3,7 @@ import { FreshnessCaption } from '../components/metadata-status';
 import { useMetadataQuery } from '../query-hooks';
 import { useState } from 'react';
 import type { Bridge } from '../bridge';
-import { Button, Inset, InsetRow, SectionLabel } from '../components';
+import { Button, Chip, Inset, InsetRow, SectionLabel } from '../components';
 import { WorkflowProvider, useWorkflowAccess } from '../workflow-context';
 import type { AgentSnapshot, Server } from '../model';
 import { YubiActionSheet } from './device-sheets';
@@ -41,7 +41,10 @@ export function ProfileKeys({
     <WorkflowProvider snapshot={snapshot}>
       <section aria-label="Security keys">
         <SectionLabel>Security keys</SectionLabel>
-        <Inset className={freshness.stale ? 'stale' : undefined}>
+        {/* Render each security key enrollment with its name, status chip, and trailing PIN actions. */}
+        <Inset
+          className={`settings-inset middle${freshness.stale ? ' stale' : ''}`}
+        >
           {!available ? (
             <InsetRow label="Unavailable">
               Restore access to this server to manage security keys.
@@ -129,7 +132,9 @@ export function ProfileKeys({
                   )
                 }
               >
-                {entry.state === 'complete' ? 'Enrolled' : 'Incomplete'}
+                <Chip tone={entry.state === 'complete' ? 'ok' : 'warn'}>
+                  {entry.state === 'complete' ? 'Enrolled' : 'Incomplete'}
+                </Chip>
               </InsetRow>
             ))
           )}

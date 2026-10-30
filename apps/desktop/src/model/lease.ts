@@ -728,6 +728,12 @@ export function notesNow(snapshot: AgentSnapshot): Notification[] {
   });
 }
 
+/** Status label and hint for an unverified server across Settings and Activity. */
+export const SERVER_NOT_VERIFIED = {
+  state: 'Not verified',
+  hint: 'Check this server before use',
+} as const;
+
 /** A server whose check-in has lapsed or whose trust has never been verified: the two reasons the Settings tab's orange dot answers for. */
 function serverFlaggedForSettings(availability: Availability): boolean {
   return (

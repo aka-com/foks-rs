@@ -92,7 +92,11 @@ export function ChannelInfoPanel({
       if (
         panel.current?.contains(target) ||
         toggleRef?.current?.contains(target) ||
-        target.closest('[role="dialog"], [role="menu"], [role="listbox"]')
+        // Ignore clicks inside popup listboxes, but allow clicks in the
+        // channel list to dismiss the panel.
+        target.closest(
+          '[role="dialog"], [role="menu"], [role="listbox"]:not(.chat-channel-options)',
+        )
       )
         return;
       onClose(false);

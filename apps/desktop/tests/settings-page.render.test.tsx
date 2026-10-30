@@ -607,9 +607,36 @@ test('Preferences holds desktop alert preferences and the accent color', async (
     [...accent.querySelectorAll('[role="radio"]')].map((swatch) =>
       swatch.getAttribute('aria-label'),
     ),
-    ['Blue', 'Iris', 'Sky', 'Slate'],
+    ['Blue', 'Purple', 'Pink', 'Green', 'Graphite'],
   );
   assert.equal(rendered.queryByText('Sidebar color'), null);
+});
+
+test('an accent stored by an earlier build reads as its current swatch', async () => {
+  // Legacy stored accent IDs ('iris', 'sky', 'slate') select their mapped swatches.
+  for (const [stored, label] of [
+    ['iris', 'Purple'],
+    ['sky', 'Blue'],
+    ['slate', 'Graphite'],
+  ] as const) {
+    window.localStorage.setItem('railColor', stored);
+    try {
+      const rendered = await renderSettings(await fixture(), {
+        where: { section: 'preferences' },
+      });
+      const accent = rendered.getByRole('radiogroup', { name: 'Accent color' });
+      assert.deepEqual(
+        [...accent.querySelectorAll('[aria-checked="true"]')].map((swatch) =>
+          swatch.getAttribute('aria-label'),
+        ),
+        [label],
+        stored,
+      );
+      rendered.unmount();
+    } finally {
+      window.localStorage.removeItem('railColor');
+    }
+  }
 });
 
 test('Preferences remains available without an account', async () => {
@@ -1069,9 +1096,9 @@ test('a lapsed server says its check-in expired and offers the check', async () 
     where: { profile: 'acme' },
   });
 
-  // The band leads with the condition, which the row's chip also names.
+  // The notice heading matches the server row's status chip label.
   assert.ok(
-    [...document.querySelectorAll('.band b')].some(
+    [...document.querySelectorAll('.notice.stop h2')].some(
       (node) => node.textContent === 'Check-in expired',
     ),
   );
@@ -1084,7 +1111,13 @@ test('a never-checked server says what a check would discover', async () => {
     where: { profile: 'partner' },
   });
 
-  assert.ok(rendered.getByText('Not checked yet'));
+  // Uses the same "Not verified" heading as the Servers list chip and Activity notice.
+  assert.ok(
+    [...document.querySelectorAll('.notice.info h2')].some(
+      (node) => node.textContent === 'Not verified',
+    ),
+  );
+  assert.ok(rendered.getByRole('button', { name: 'Check Now' }));
   assert.ok(rendered.getByText('Discovered upon first verification'));
   assert.ok(rendered.getByText('Not verified yet'));
 });

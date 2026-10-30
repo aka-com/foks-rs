@@ -348,7 +348,7 @@ test('recovery phrase commit shows a saving label while waiting for confirmation
   );
   ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Done' }));
   const saving = await rendered.view.findByRole('button', {
-    name: 'Saving...',
+    name: 'Saving…',
   });
   assert.equal((saving as HTMLButtonElement).disabled, true);
   await ui.act(async () => commit.resolve({ applied: true }));

@@ -46,6 +46,9 @@
   max-height: 100%;
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
+  /* Constrain the grid row to the card height so `.body` scrolls and `.pfoot`
+     remains visible when step content overflows. */
+  grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius-panel);
@@ -146,6 +149,7 @@
 
 /* --------------------------------------------------------------- right */
 .fr-card > .main.first-run-main {
+  min-height: 0;
   margin: 0;
   padding-top: 0;
   border-radius: 0;
@@ -376,7 +380,10 @@ button.check {
   line-height: 1.4;
 }
 
-.first-run-main .inset .fr input:not([type='checkbox']):not([type='radio']):focus,
+.first-run-main
+  .inset
+  .fr
+  input:not([type='checkbox']):not([type='radio']):focus,
 .first-run-main .inset .fr select:focus,
 .first-run-main .inset .fr textarea:focus {
   border-color: var(--accent);
@@ -388,4 +395,38 @@ button.check {
 .first-run-main .official-server {
   align-self: flex-start;
   width: auto;
+}
+
+/* Collapse the two-column waiting grid into a single column under 640px,
+   ordering the status checklist immediately after the admin message card. */
+@container (max-width: 639px) {
+  .fr-card .waiting-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .fr-card .waiting-grid > .col {
+    display: contents;
+  }
+  .fr-card .waiting-grid > .col > .pcard,
+  .fr-card .waiting-grid > .col > .checklist {
+    margin-top: 0;
+  }
+  .fr-card .waiting-grid > .col:first-child > .checklist {
+    order: 1;
+  }
+}
+
+/* Hide the default disclosure triangle because the summary renders a custom chevron icon. */
+.first-run-main details.dd > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  list-style: none;
+}
+
+.first-run-main details.dd > summary::-webkit-details-marker {
+  display: none;
+}
+
+.first-run-main details.dd:not([open]) > summary svg {
+  transform: rotate(-90deg);
 }

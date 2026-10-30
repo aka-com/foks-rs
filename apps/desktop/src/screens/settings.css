@@ -218,6 +218,21 @@
   min-width: 96px;
 }
 
+/* Keep the username row's action buttons on a single line by shrinking and
+   wrapping the username value first. */
+.subnav-page .settings-inset .fr.account-username {
+  flex-wrap: nowrap;
+}
+
+.subnav-page .settings-inset .fr.account-username .v {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.subnav-page .settings-inset .fr.account-username .a {
+  flex-wrap: nowrap;
+}
+
 .subnav-page .settings-inset .fr .v b {
   font-weight: var(--weight-label);
 }

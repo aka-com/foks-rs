@@ -52,3 +52,47 @@ test('appearance persists, follows system changes only in System mode, and syncs
     window.localStorage.removeItem('appearance');
   }
 });
+
+test('accent colors are distinct hues and retired choices map to their nearest one', async () => {
+  const { RAIL_COLORS, resolveRailColor } = await import('../src/rail-theme');
+  assert.deepEqual(
+    RAIL_COLORS.map((color) => color.label),
+    ['Blue', 'Purple', 'Pink', 'Green', 'Graphite'],
+  );
+  assert.equal(new Set(RAIL_COLORS.map((color) => color.fill)).size, 5);
+  // Legacy stored values map to their corresponding current accent IDs.
+  assert.equal(resolveRailColor('iris'), 'purple');
+  assert.equal(resolveRailColor('lavender'), 'purple');
+  assert.equal(resolveRailColor('sky'), 'default');
+  assert.equal(resolveRailColor('slate'), 'graphite');
+  assert.equal(resolveRailColor('pink'), 'pink');
+  assert.equal(resolveRailColor('nonsense'), 'default');
+  assert.equal(resolveRailColor(null), 'default');
+});
+
+test('a retired accent stored by an earlier build is drawn as its current choice', async () => {
+  const { applyRailColor, storedRailColor } = await import('../src/rail-theme');
+  const root = document.documentElement;
+  try {
+    for (const [stored, drawn] of [
+      ['iris', 'purple'],
+      ['lavender', 'purple'],
+      ['slate', 'graphite'],
+    ] as const) {
+      window.localStorage.setItem('railColor', stored);
+      assert.equal(storedRailColor(), drawn);
+      applyRailColor(storedRailColor());
+      assert.equal(root.dataset.rail, drawn, stored);
+    }
+    // 'sky' maps to the default accent, which removes data-rail.
+    window.localStorage.setItem('railColor', 'sky');
+    applyRailColor(storedRailColor());
+    assert.equal(root.dataset.rail, undefined);
+    // applyRailColor also resolves legacy IDs passed directly.
+    applyRailColor('iris');
+    assert.equal(root.dataset.rail, 'purple');
+  } finally {
+    window.localStorage.removeItem('railColor');
+    delete root.dataset.rail;
+  }
+});

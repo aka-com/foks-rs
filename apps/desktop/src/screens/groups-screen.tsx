@@ -471,6 +471,9 @@ function FederationEntryRow({
   const remoteName = remoteServer
     ? serverDisplayLabel(remoteServer)
     : entry.remote_profile;
+  // Use the local team store's display name when present on this device,
+  // falling back to the remote team alias.
+  const teamName = federatedTeamName(snapshot, entry);
   const memberReason =
     'Every member of a federated team holds the role shown on its row. They are managed on their own server and cannot be changed or removed one by one.';
   return (
@@ -478,14 +481,13 @@ function FederationEntryRow({
       className="set-row member-row"
       key={`${entry.remote_host_id_hex}|${entry.remote_team_id_hex}`}
     >
-      <TeamMark name={entry.remote_team_alias} />
+      <TeamMark name={teamName} />
       <span className="t">
         <b>
-          <span>{entry.remote_team_alias}</span>
+          <span>{teamName}</span>
         </b>
-        {/* The server the team lives on is what a reader of the roster
-            needs. The host and operation identifiers are for reporting a
-            failed member addition, so they are in the row's menu instead. */}
+        {/* Show the remote server name in the subtitle; host and operation IDs
+            are available via "Copy Membership Details" in the row menu. */}
         <small>team on {remoteName}</small>
       </span>
       <span className="a">
@@ -511,8 +513,8 @@ function FederationEntryRow({
           icon="ellipsis"
           trailingIcon={null}
           label=""
-          menuLabel={`Actions for ${entry.remote_team_alias}`}
-          aria-label={`Actions for ${entry.remote_team_alias}`}
+          menuLabel={`Actions for ${teamName}`}
+          aria-label={`Actions for ${teamName}`}
         >
           {(close) => (
             <>

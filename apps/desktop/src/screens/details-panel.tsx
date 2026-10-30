@@ -758,9 +758,11 @@ export function DetailsPanel({
       onCommandError(error, item);
     }
   };
+  // Clear both the revealed read value and any post-save field preview.
   const hide = (): void => {
     concealEpoch.current += 1;
     setRead(null);
+    setSaved(null);
   };
 
   const beginEdit = async (): Promise<void> => {
@@ -850,6 +852,10 @@ export function DetailsPanel({
       version: target.version,
       direntId: target.direntId,
     };
+    // Record the conceal epoch and item key so a save completing after window
+    // conceal or selection change does not display stale fields.
+    const epoch = concealEpoch.current;
+    const savedFrom = `${target.store}|${target.path}|${target.version}`;
     setSaving(true);
     try {
       if (fileMode) {
@@ -864,13 +870,17 @@ export function DetailsPanel({
         await bridge.editTextItem({ ...editRequest, value: editValue });
         const masked = maskedSaved(editValue);
         setSaved(
-          masked === null
+          masked === null ||
+            epoch !== concealEpoch.current ||
+            keyRef.current !== savedFrom
             ? null
             : {
                 key: `${target.store}|${target.path}|${target.version + 1}`,
                 value: masked,
               },
         );
+        // Clear the editor plaintext buffer after a successful write.
+        setEditValue('');
       }
       editBaseline.current = null;
       editTarget.current = null;
