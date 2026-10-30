@@ -168,6 +168,13 @@ pub trait ChunkStore: Send + Sync {
     fn delete_object(&self, _object: &ChunkObject) -> Result<()> {
         Err(Error::Chunk("collection is not qualified for this backend"))
     }
+    /// Removes temporary files that this backend's own interrupted writes left
+    /// in the namespace and returns how many it removed. Only collection calls
+    /// it, after the binding is verified and while it holds the installation
+    /// writer guard and the exclusive namespace lease, so no publisher can be
+    /// writing. Every implementation decides: a wrapper must forward it, and a
+    /// backend without local temporaries returns 0.
+    fn remove_stale_temporaries(&self) -> Result<u64>;
 }
 
 pub fn chunk_digest(bytes: &[u8]) -> [u8; 32] {
@@ -281,6 +288,10 @@ fn create_directory_durable(directory: &Path) -> Result<()> {
 
 const NAMESPACE_MARKER: &str = "_foks_namespace_v1";
 const NAMESPACE_LOCK: &str = "_foks_namespace_lock_v2";
+/// Prefix of the filesystem backend's temporaries before they are persisted
+/// under their final name. A process killed between create and persist leaves
+/// one behind; such a file is never an object.
+pub(crate) const TEMPORARY_PREFIX: &str = "_foks_tmp-";
 const MAXIMUM_MARKER_BYTES: usize = 1024;
 
 fn check_marker_size(bytes: &[u8]) -> Result<()> {
@@ -288,6 +299,14 @@ fn check_marker_size(bytes: &[u8]) -> Result<()> {
         return Err(Error::Chunk("invalid storage namespace marker size"));
     }
     Ok(())
+}
+
+impl FilesystemChunks {
+    fn temporary(&self) -> Result<tempfile::NamedTempFile> {
+        Ok(tempfile::Builder::new()
+            .prefix(TEMPORARY_PREFIX)
+            .tempfile_in(&self.directory)?)
+    }
 }
 
 impl ChunkStore for FilesystemChunks {
@@ -327,6 +346,34 @@ impl ChunkStore for FilesystemChunks {
 
     fn supports_collection(&self) -> bool {
         true
+    }
+    fn remove_stale_temporaries(&self) -> Result<u64> {
+        self.recheck()?;
+        let mut removed = 0;
+        for entry in std::fs::read_dir(&self.directory)? {
+            let entry = entry?;
+            if !entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(TEMPORARY_PREFIX))
+            {
+                continue;
+            }
+            let metadata = std::fs::symlink_metadata(entry.path())?;
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return Err(Error::Chunk("refusing to delete nonregular temporary"));
+            }
+            match std::fs::remove_file(entry.path()) {
+                Ok(()) => removed += 1,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        if removed != 0 {
+            std::fs::File::open(&self.directory)?.sync_all()?;
+        }
+        self.recheck()?;
+        Ok(removed)
     }
     fn delete_object(&self, object: &ChunkObject) -> Result<()> {
         object.validate_key()?;
@@ -394,7 +441,7 @@ impl ChunkStore for FilesystemChunks {
     fn create_namespace_marker_if_absent(&self, marker: &[u8]) -> Result<()> {
         check_marker_size(marker)?;
         self.recheck()?;
-        let mut temporary = tempfile::NamedTempFile::new_in(&self.directory)?;
+        let mut temporary = self.temporary()?;
         temporary.write_all(marker)?;
         temporary.as_file().sync_all()?;
         self.recheck()?;
@@ -422,7 +469,7 @@ impl ChunkStore for FilesystemChunks {
         verify(digest, bytes, length)?;
         self.recheck()?;
         let path = self.directory.join(&object.object_key);
-        let mut temporary = tempfile::NamedTempFile::new_in(&self.directory)?;
+        let mut temporary = self.temporary()?;
         temporary.write_all(bytes)?;
         temporary.as_file().sync_all()?;
         self.recheck()?;
@@ -699,6 +746,10 @@ async fn read_remote_marker(
 }
 
 impl ChunkStore for S3Chunks {
+    /// S3 puts are single requests with no temporary object.
+    fn remove_stale_temporaries(&self) -> Result<u64> {
+        Ok(0)
+    }
     fn publication_policy(&self) -> foks_server_db::ChunkPublicationPolicy {
         // object_store retries can leave an earlier physical PUT outstanding.
         // A later conditional-write conflict plus successful GET proves presence
@@ -864,6 +915,47 @@ mod tests {
     }
 
     #[test]
+    fn stale_temporaries_are_not_objects_and_offline_commands_remove_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let fs = FilesystemChunks::open(directory.path()).unwrap();
+        let temporary = fs.temporary().unwrap();
+        assert!(temporary
+            .path()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with(TEMPORARY_PREFIX));
+        drop(temporary);
+        fs.create_namespace_marker_if_absent(b"marker").unwrap();
+        // What a process killed between create and persist leaves behind.
+        let stale = directory.path().join("_foks_tmp-Ab12Cd");
+        std::fs::write(&stale, [7; 9]).unwrap();
+        assert!(fs.namespace_is_empty().unwrap());
+        let page = fs.inventory_page(None, 256).unwrap();
+        assert!(page.entries.is_empty() && page.next.is_none());
+        std::fs::write(directory.path().join("object"), [1; 3]).unwrap();
+        let page = fs.inventory_page(None, 256).unwrap();
+        assert_eq!(
+            page.entries
+                .iter()
+                .map(|e| e.key.as_str())
+                .collect::<Vec<_>>(),
+            ["object"]
+        );
+        assert_eq!(fs.remove_stale_temporaries().unwrap(), 1);
+        assert!(!stale.exists());
+        assert!(directory.path().join("object").exists());
+        assert_eq!(fs.remove_stale_temporaries().unwrap(), 0);
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("object", directory.path().join("_foks_tmp-link")).unwrap();
+            assert!(fs.remove_stale_temporaries().is_err());
+            assert!(directory.path().join("object").exists());
+        }
+    }
+
+    #[test]
     fn inventory_pages_count_unknown_objects_and_preserve_opaque_provider_tokens() {
         let directory = tempfile::tempdir().unwrap();
         let fs = FilesystemChunks::open(directory.path()).unwrap();
@@ -903,7 +995,9 @@ mod tests {
         assert!(store.namespace_is_empty().unwrap());
         {
             let mut objects = mock.state.objects.lock().unwrap();
-            for key in ["a", "b", "c", "d"] {
+            // An S3 object with the filesystem temporary prefix is foreign
+            // data, listed and charged like any other unknown object.
+            for key in ["_foks_tmp-synced", "a", "b", "c", "d"] {
                 objects.insert(format!("/test-bucket/tenant/chunks/{key}"), vec![1; 3]);
             }
             objects.insert("/test-bucket/another-tenant/secret".into(), vec![9; 9]);
@@ -921,7 +1015,8 @@ mod tests {
             }
             assert!(cursor.as_ref().unwrap().starts_with("opaque:"));
         }
-        assert_eq!(keys, ["a", "b", "c", "d"]);
+        assert_eq!(keys, ["_foks_tmp-synced", "a", "b", "c", "d"]);
+        assert_eq!(store.remove_stale_temporaries().unwrap(), 0);
         mock.state.redirect.store(true, Ordering::Release);
         assert!(store.inventory_page(None, 2).is_err());
     }
