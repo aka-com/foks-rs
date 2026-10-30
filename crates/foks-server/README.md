@@ -501,7 +501,16 @@ foks-server restore \
 Backup authenticates every encrypted key generation with the root key and
 uses a read-only source connection. Restore accepts only a complete manifest,
 integrity-checked database, and exact declared key set, and requires empty
-destination paths.
+destination paths. It also refuses a destination where any of the database's
+`-wal`, `-shm` or `-journal` sidecars exists: SQLite replays a leftover `-wal`
+into whichever database file sits next to it, so deleting only
+`foks-server.sqlite` and restoring into the same path would silently replace
+pages of the restored database. Remove the whole old database directory, or
+restore to a new path. The `.storage-lock` and `.writer-lock` files remain
+after a clean shutdown and do not block a restore, but restore refuses while
+either is held, so stop every server and offline command using the path
+first. Before checking the destination it takes whichever of the two lock
+files exist (read-only access is enough) and holds them until it finishes.
 
 Restore and retention validation also accept the same prior schemas as server
 startup (43 through 49, upgraded to 50). They copy the database and any WAL into
