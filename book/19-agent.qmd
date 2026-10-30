@@ -137,10 +137,18 @@ before a client with the same budget gives up, and another that admission
 errors are definite non-execution and never ambiguous timeouts.
 
 When an operation *does* exceed its deadline after starting, the agent
-closes the connection with the message that the deadline was exceeded and
-the connection was closed because completion is ambiguous. Closing is the
-honest signal: the caller cannot be told "it failed," because the
-mutation may have applied, and cannot be told "it succeeded." The
+answers `DeadlineExceeded` with the message that the deadline was exceeded
+and the connection was closed because completion is ambiguous, then closes
+the connection. Closing is the honest signal: the caller cannot be told
+"it failed," because the mutation may have applied, and cannot be told
+"it succeeded." That answer exists only once the request's deadline has
+passed, so it is written under its own 2-second budget rather than the
+request's; a refusal of work that never started is not, because its client
+has already given up. The same applies to a chat poll, a streaming upload
+(including one waiting on its worker to take the next chunk), a profile
+reconciliation and a lease refresh that reach their deadline. A result that
+completes but finds its deadline passed when it is written is erased and
+answered the same way, since its client may already have given up on it. The
 surviving blocking work keeps its worker permit until it exits, so a slow
 operation still counts against capacity. Cancellation is propagated into
 the synchronous network client, which polls its deadline and cancellation

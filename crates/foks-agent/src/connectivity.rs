@@ -274,6 +274,10 @@ pub(super) async fn renew_with_control(
     client: reqwest::Client,
     subscriber: &crate::request_control::RequestControl,
 ) -> ResponseResult {
+    #[cfg(test)]
+    if crate::held_dispatch(state_dir) {
+        std::future::pending::<()>().await;
+    }
     renew_observed(state_dir, profile, client, subscriber)
         .await
         .0
@@ -701,6 +705,10 @@ pub(super) async fn reconcile_with_control(
     subscriber: &crate::request_control::RequestControl,
     workers: Arc<Semaphore>,
 ) -> (serde_json::Value, ResponseTiming) {
+    #[cfg(test)]
+    if crate::held_dispatch(root) {
+        std::future::pending::<()>().await;
+    }
     let started = Instant::now();
     let compatibility = async {
         match compatibility_http_client(RENEWAL_JOB_CAP) {
