@@ -1,37 +1,29 @@
-.team-info {
-  position: absolute;
-  top: var(--topbar-h);
-  right: 0;
-  bottom: 0;
-  width: 320px;
-  max-width: calc(100% - var(--side-w));
-  z-index: 5;
+/* Team Info is the Files details column's content while it is open: the
+   column's 44px bar with its title and Close, then the summary. */
+.team-info .team-info-title {
+  font-size: 13px;
+  font-weight: var(--weight-label);
+}
+.team-info .bar .btn.icon {
+  margin-right: -6px;
+}
+.team-info .team-info-body {
+  flex: 1;
   min-height: 0;
   overflow: auto;
-  border-left: 1px solid var(--line-soft);
-  background: var(--surface);
-  box-shadow: var(--shadow-menu);
-}
-.team-info-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 11px 14px;
-  border-bottom: 1px solid var(--line-soft);
-}
-.team-info-head b {
-  flex: 1;
-  font-size: 13px;
+  padding: 4px 10px 24px;
 }
 .team-info section {
   padding: 12px 14px;
   border-bottom: 1px solid var(--line-soft);
 }
+.team-info section:last-child {
+  border-bottom: 0;
+}
 .team-info h3 {
   margin: 0 0 8px;
   font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-weight: var(--weight-label);
   color: var(--muted);
 }
 .team-info h2 {

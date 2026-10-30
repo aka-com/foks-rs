@@ -321,8 +321,9 @@ function memberVisibility(role: KvRoleInput): number {
 }
 
 /**
- * One access row: the role level as a menu, and for Member the visibility
- * level it applies at.
+ * One access row: the role level as a menu and, for Member, the visibility
+ * level it applies at as a number field beside it, so Read and Write fit the
+ * sheet at the window's 640px minimum height.
  */
 function RoleRow({
   label,
@@ -336,37 +337,38 @@ function RoleRow({
   const level = roleLevel(role);
   const visibility = memberVisibility(role);
   return (
-    <>
-      <InsetRow label={label}>
-        <select
-          aria-label={label}
-          value={level}
-          onChange={(event) => {
-            const next = event.target.value as RoleLevel;
-            onRole(next === 'Member' ? `Member:${visibility}` : next);
-          }}
-        >
-          <option value="Member">Member (visibility {visibility})</option>
-          <option value="Admin">Admin</option>
-          <option value="Owner">Owner</option>
-        </select>
-      </InsetRow>
+    <InsetRow label={label} valueClass="role-row">
+      <select
+        aria-label={label}
+        value={level}
+        onChange={(event) => {
+          const next = event.target.value as RoleLevel;
+          onRole(next === 'Member' ? `Member:${visibility}` : next);
+        }}
+      >
+        <option value="Member">Member</option>
+        <option value="Admin">Admin</option>
+        <option value="Owner">Owner</option>
+      </select>
       {level === 'Member' ? (
-        <Field
-          label={`${label} visibility`}
-          type="number"
-          mono
-          min={-32768}
-          max={32767}
-          value={String(visibility)}
-          onChange={(val) => {
-            const next = Number(val);
-            if (Number.isInteger(next) && next >= -32768 && next <= 32767)
-              onRole(`Member:${next}`);
-          }}
-        />
+        <label className="vis-field">
+          <span>Visibility</span>
+          <input
+            type="number"
+            className="mono"
+            aria-label={`${label} visibility`}
+            min={-32768}
+            max={32767}
+            value={String(visibility)}
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              if (Number.isInteger(next) && next >= -32768 && next <= 32767)
+                onRole(`Member:${next}`);
+            }}
+          />
+        </label>
       ) : null}
-    </>
+    </InsetRow>
   );
 }
 

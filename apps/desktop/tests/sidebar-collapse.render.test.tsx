@@ -162,8 +162,11 @@ test('selecting an item and closing its details leave the sidebar shown', async 
   assert.equal(hidden(), false);
   assert.equal(window.localStorage.getItem('sideCollapsed'), stored);
 
-  // An outside click clears the selection and closes the details.
-  ui.fireEvent.pointerDown(document.body, { button: 0 });
+  // Clicking empty space in the list clears the selection and closes the
+  // details panel.
+  ui.fireEvent.click(document.querySelector('.lpane .folder-body')!, {
+    button: 0,
+  });
   await ui.waitFor(() => {
     assert.equal(document.querySelector('.details:not(.details-empty)'), null);
   });

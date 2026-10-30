@@ -2,14 +2,14 @@
  * Folder context menu shared by the sidebar store tree and folder rows in the
  * Files list.
  *
- * Any element that carries `data-folder-store` and `data-folder-path` opens
- * it on a right click, the ContextMenu key or Shift-F10: New folder, Rename or
- * move…, Delete folder (stated as unsupported), and for a team its info and
- * membership commands. Opening it never changes the selection; closing it
- * returns the focus to the row it was opened from.
+ * Any element with `data-folder-store` and `data-folder-path` opens the menu on
+ * right-click, ContextMenu, or Shift-F10, offering New Folder, Rename or Move…,
+ * Delete Folder (disabled as unsupported), and team info and membership actions
+ * for team stores. Opening the menu preserves the current selection, and
+ * closing it restores focus to the trigger row.
  */
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import { anyDialogOpen, ContextMenu, Menu } from '/kit/overlay-primitives';
 import { useOptionalToast } from '/kit/toasts';
@@ -60,6 +60,12 @@ export function useFolderMenu(
   const toasts = useOptionalToast();
   const [open, setOpen] = useState<OpenMenu | null>(null);
   const anchor = useRef<HTMLElement>(null);
+  // Mark the trigger row with `.menu-target` while its context menu is open.
+  useEffect(() => {
+    const target = open?.trigger;
+    target?.classList.add('menu-target');
+    return () => target?.classList.remove('menu-target');
+  }, [open]);
 
   const show = (target: EventTarget, x: number, y: number): boolean => {
     if (!(target instanceof Element) || target.closest('[role="menu"]'))
@@ -151,10 +157,11 @@ export function useFolderMenu(
             onNewFolder?.(open.storeId, open.path);
           }}
         >
-          New folder
+          New Folder…
         </MenuItem>
         {open.path !== '/' && onMove ? (
           <MenuItem
+            icon="pencil"
             reason={
               folder
                 ? itemActionProblem(snapshot, folder, true, accessNow())
@@ -165,7 +172,7 @@ export function useFolderMenu(
               if (folder && allowMove(folder)) onMove(folder);
             }}
           >
-            Rename or move…
+            Rename or Move…
           </MenuItem>
         ) : null}
         {open.path !== '/' ? (
@@ -174,7 +181,7 @@ export function useFolderMenu(
             danger
             reason="Deleting folders is not supported by the desktop agent."
           >
-            Delete folder
+            Delete Folder
           </MenuItem>
         ) : null}
         {store?.kind === 'team' ? (
@@ -192,14 +199,14 @@ export function useFolderMenu(
                 onTeamInfo?.(store.id, open.trigger);
               }}
             >
-              Team info
+              Team Info
             </MenuItem>
             <div role="separator" className="menu-separator" />
             {(
               [
-                ['add', 'user', 'Add FOKS user…', 'roster'],
-                ['add-team', 'users', 'Add FOKS team…', 'federation'],
-                ['invite', 'door', 'Invite new user…', 'roster'],
+                ['add', 'user', 'Add FOKS User…', 'roster'],
+                ['add-team', 'users', 'Add FOKS Team…', 'federation'],
+                ['invite', 'door', 'Invite New User…', 'roster'],
               ] as const
             ).map(([intent, icon, label, source]) => (
               <MenuItem

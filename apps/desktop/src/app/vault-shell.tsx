@@ -46,7 +46,6 @@ import {
   applyLease,
   defaultCreateStore,
   settingsAlertSummary,
-  storeDescriptionState,
   storeOf,
   storeReadable,
   type AgentSnapshot,
@@ -114,6 +113,7 @@ import {
 } from './shell-overlays';
 import { useShellRuntime } from './shell-runtime';
 import { ShellSearch } from './shell-search';
+import { itemActionProblem } from '../screens/store-access';
 import { useWindowRuntime } from './window-runtime';
 
 function incompleteFirstRunCheckpoint(): FirstRunCheckpoint | null {
@@ -617,9 +617,10 @@ export function VaultShell({
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [chrome.blocked, locations, requestNewItem, toggleSidebar]);
-  // ⌘⌫ deletes the selected item, through the same alert the item's menu
-  // opens, and only while nothing else holds the keyboard: a text field, a
-  // menu or a dialog.
+  // ⌘⌫ opens the delete confirmation alert for the selected item when no text
+  // field, menu, or dialog is active and focus is in the Files list or details
+  // panel. If the account cannot delete the item, show a warning toast with
+  // the reason instead of opening the alert.
   const selectedItem =
     filesHere && state.selection
       ? shown.items.find(
@@ -632,9 +633,10 @@ export function VaultShell({
   useEffect(() => {
     if (!selectedItem || chrome.blocked) return;
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== 'Backspace' || !event.metaKey || event.altKey) return;
-      // The alert's own ⌘⌫ confirms it; by the time the key reaches the
-      // document the alert may be gone and the next row selected.
+      if (event.key !== 'Backspace' || !commandKey(event) || event.altKey)
+        return;
+      // Ignore events already handled by the delete alert's own ⌘⌫ listener,
+      // which may have closed the alert and advanced the selection.
       if (event.defaultPrevented) return;
       const target = event.target;
       if (
@@ -643,12 +645,24 @@ export function VaultShell({
       )
         return;
       if (anyDialogOpen() || anyPopupOpen()) return;
+      const focused = document.activeElement;
+      if (
+        focused &&
+        focused !== document.body &&
+        !focused.closest('.lpane, .details')
+      )
+        return;
       event.preventDefault();
+      const problem = itemActionProblem(shown, selectedItem, true, accessNow());
+      if (problem) {
+        toasts.show(problem, { tone: 'warning' });
+        return;
+      }
       setWorkflow({ kind: 'delete', item: selectedItem });
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [chrome.blocked, selectedItem, setWorkflow]);
+  }, [accessNow, chrome.blocked, selectedItem, setWorkflow, shown, toasts]);
   useEffect(() => {
     if (!bridge.native) return;
     let disposed = false;
@@ -703,23 +717,19 @@ export function VaultShell({
     agentLifecycle.state === 'ready' && agentCatalogReady && !chrome.blocked,
     concealSignal,
   );
-  // Files is a list beside its details: with nothing selected (or the
-  // details closed) the details column says No Selection rather than going
-  // away, so the list keeps its width.
+  // Keep the details column mounted on Files even when nothing is selected (or
+  // details are closed), displaying "No Selection" so the list column width
+  // remains stable.
   const teamInfoShown =
     !chrome.blocked && filesHere && !detailsShown && infoStore?.kind === 'team';
-  // A store page whose store is gone or cannot be used is a page of its own
-  // (the unavailable notice, the access takeover), not a list.
-  const herePage =
-    here.kind === 'store' &&
-    (() => {
-      const pageStore = storeOf(shown, here.ref);
-      return !pageStore || storeDescriptionState(shown, pageStore) !== 'normal';
-    })();
+  // A store page for a missing store renders a standalone unavailable view.
+  // An inaccessible store keeps the split list layout, showing the access
+  // notice in the list column and No Selection in the details column.
+  const herePage = here.kind === 'store' && !storeOf(shown, here.ref);
   const splitEmpty = filesHere && !herePage && !detailsShown && !teamInfoShown;
-  // What the hidden sidebar's badges would say, for the bar's expand
-  // control. Chat's unread count lives in the inbox, below this component;
-  // the Chat column itself shows it.
+  // Combine active sidebar badge descriptions for the topbar expand button
+  // tooltip when the sidebar is collapsed. ChatInboxProvider manages chat
+  // unread counts and displays them in the Chat column.
   const sidebarAttention = [
     activityBadge(shown, teamRequestCounts)?.description,
     devicesAlertSummary(shown, deviceAlerts)?.description,
@@ -772,6 +782,8 @@ export function VaultShell({
                 direction={state.sortDirection}
                 onSort={(sort, direction) => locations.setSort(sort, direction)}
                 locationSort={newSelection?.store === ALL_ITEMS}
+                kind={state.kind}
+                onKind={(kind) => locations.setKind(kind)}
                 disabled={chrome.blocked}
               />
             ),
@@ -799,6 +811,7 @@ export function VaultShell({
           'app',
           detailsShown ||
           splitEmpty ||
+          teamInfoShown ||
           here.kind === 'activity' ||
           here.kind === 'devices' ||
           (here.kind === 'first-run' && here.step === 'added')
@@ -1048,9 +1061,9 @@ export function VaultShell({
               revealRequest={revealRequest}
               onRevealHandled={() => setRevealRequest(null)}
               selection={state.selection}
-              onClose={() => {
-                locations.setDetails(false);
-              }}
+              // `locations.select` guards selection changes and prompts before
+              // discarding unsaved edits in the details panel.
+              onClose={() => locations.select(null, { closeDetails: true })}
               onMove={(item) => setWorkflow({ kind: 'move', item })}
               onOpenFolder={(storeId, path) =>
                 locations.openFiles(`${storeId}|${path}`, 'All')

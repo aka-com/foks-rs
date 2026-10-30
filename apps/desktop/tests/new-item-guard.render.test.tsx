@@ -179,7 +179,7 @@ test('the Files folder menu creates a folder in its selected vault path', async 
   );
   assert.ok(root);
   ui.fireEvent.contextMenu(root);
-  ui.fireEvent.click(rendered.getByRole('menuitem', { name: 'New folder' }));
+  ui.fireEvent.click(rendered.getByRole('menuitem', { name: 'New Folder…' }));
   await rendered.findByRole('dialog', { name: 'New Folder' });
   ui.fireEvent.change(rendered.getByLabelText('Name'), {
     target: { value: 'Projects' },
@@ -200,7 +200,7 @@ test('discarding a new folder clears its name before the next sheet', async () =
   assert.ok(root);
   const open = async () => {
     ui.fireEvent.contextMenu(root);
-    ui.fireEvent.click(rendered.getByRole('menuitem', { name: 'New folder' }));
+    ui.fireEvent.click(rendered.getByRole('menuitem', { name: 'New Folder…' }));
     return rendered.findByRole('dialog', { name: 'New Folder' });
   };
   const first = await open();

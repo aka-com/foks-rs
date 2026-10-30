@@ -272,22 +272,10 @@ export function DetailsPanel({
   accessTicket,
   resumeDraft = null,
 }: DetailsPanelProps): ReactNode {
+  // The details panel is a persistent column, not a popover, so clicks outside
+  // the panel do not close it. Pressing Escape inside the panel or clicking
+  // empty space in the list clears the selection via the guarded `onClose`.
   const panelRef = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const dismiss = (event: PointerEvent): void => {
-      const target = event.target;
-      if (!(target instanceof Element) || event.button !== 0) return;
-      if (
-        panelRef.current?.contains(target) ||
-        document.querySelector('[role="dialog"], [role="alertdialog"]') ||
-        target.closest('[role="menu"], [role="listbox"]')
-      )
-        return;
-      onClose();
-    };
-    document.addEventListener('pointerdown', dismiss);
-    return () => document.removeEventListener('pointerdown', dismiss);
-  }, [onClose]);
   const item: Item | undefined = selection
     ? snapshot.items.find(
         (candidate) =>
@@ -1161,6 +1149,7 @@ export function DetailsPanel({
                     </>
                   )}
                   <MenuItem
+                    icon="folder"
                     reason={readProblem}
                     onClick={() => void copyPath()}
                   >
@@ -1169,6 +1158,7 @@ export function DetailsPanel({
                   <div className="menu-separator" role="separator" />
                   {onMove ? (
                     <MenuItem
+                      icon="pencil"
                       reason={writeProblem}
                       onClick={() => {
                         if (requireAccess(true)) onMove(item);
@@ -1264,15 +1254,6 @@ export function DetailsPanel({
             >
               {blockingReason}
             </p>
-          ) : null}
-          {inlineEditing ? (
-            <div className="notice info">
-              <Icon name="info" />
-              <span className="t">
-                Saves a new version if no one else has changed this item since
-                version {item.version}.
-              </span>
-            </div>
           ) : null}
           <PropertyGroup className="content">{content}</PropertyGroup>
           {readError && readError !== blockingReason ? (
