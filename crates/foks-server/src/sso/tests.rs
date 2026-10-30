@@ -492,3 +492,21 @@ fn block_epoch_is_authenticated_in_session_envelopes() {
         .unwrap();
     assert!(service.browser_start(&state(&arg)).is_err());
 }
+
+#[test]
+fn writes_after_a_committed_refresh_claim_ignore_the_request_deadline() {
+    let fixture = Fixture::new();
+    let service = fixture.open();
+    let expired = crate::deadline::Deadline::at(std::time::Instant::now());
+    crate::deadline::scope(Some(expired), || {
+        // An ordinary write of the expired request is skipped.
+        assert!(matches!(
+            service.writer.call(|_| Ok(())),
+            Err(Error::DeadlineExceeded)
+        ));
+        // The write that records the outcome of a committed claim runs.
+        SsoService::after_claim(|| service.writer.call(|_| Ok(()))).unwrap();
+        // The request deadline applies again afterwards.
+        assert!(crate::deadline::check().is_err());
+    });
+}

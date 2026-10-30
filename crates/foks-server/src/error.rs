@@ -36,6 +36,8 @@ pub enum Error {
     Thread,
     #[error("SQLite writer queue is full or closed")]
     WriterQueue,
+    #[error("request deadline passed before the work started")]
+    DeadlineExceeded,
     #[error("SQLite reader pool is exhausted")]
     ReaderPool,
     #[error("request authorization changed before the queued write committed")]
@@ -103,9 +105,10 @@ mod tests {
         );
         let deadline = crate::deadline::Deadline::after(std::time::Duration::ZERO).unwrap();
         crate::deadline::scope(Some(deadline), || {
-            assert!(
-                matches!(crate::deadline::check(), Err(super::Error::Io(error)) if error.kind() == std::io::ErrorKind::TimedOut)
-            );
+            assert!(matches!(
+                crate::deadline::check(),
+                Err(super::Error::DeadlineExceeded)
+            ));
         });
         assert!(crate::deadline::check().is_ok());
     }

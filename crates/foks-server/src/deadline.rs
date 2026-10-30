@@ -1,9 +1,16 @@
 //! Server error adapters around the single shared monotonic request context.
+//!
+//! The request deadline starts at the first byte of a request frame and covers
+//! body reading, reader checkout, handler execution, queued writes and chunk
+//! transfers. An expired deadline is reported as
+//! [`crate::Error::DeadlineExceeded`]; framing reports it as a timed-out I/O
+//! error and closes the connection.
 pub(crate) use foks_hosted_transport::deadline::{current, scope, Deadline};
 
 pub(crate) fn expired() -> crate::Error {
-    foks_hosted_transport::deadline::expired().into()
+    crate::Error::DeadlineExceeded
 }
+
 pub(crate) fn check() -> crate::Result<()> {
-    foks_hosted_transport::deadline::check().map_err(Into::into)
+    foks_hosted_transport::deadline::check().map_err(|_| expired())
 }
