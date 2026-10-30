@@ -90,7 +90,7 @@ fn reason(error: &Error) -> Reason {
             _ => Reason::Storage,
         },
         Error::Database(Db::QuotaExceeded | Db::Capacity(_)) => Reason::Capacity,
-        Error::WriterQueue | Error::ReaderPool => Reason::Busy,
+        Error::WriterQueue | Error::DeadlineExceeded | Error::ReaderPool => Reason::Busy,
         Error::Key(_)
         | Error::KeyCrypto
         | Error::Config(_)

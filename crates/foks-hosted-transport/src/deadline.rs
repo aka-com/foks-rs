@@ -15,6 +15,12 @@ thread_local! {
 }
 
 impl Deadline {
+    /// Preserve an existing monotonic deadline, including one already expired.
+    /// This does not grant a new budget when an operation changes owners.
+    pub fn at(instant: Instant) -> Self {
+        Self(instant)
+    }
+
     pub fn after(budget: Duration) -> Result<Self> {
         Instant::now()
             .checked_add(budget)
@@ -67,6 +73,18 @@ pub fn scope<T>(deadline: Option<Deadline>, operation: impl FnOnce() -> T) -> T 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn absolute_deadline_preserves_original_instant_and_expiry() {
+        let original = Instant::now() + Duration::from_secs(60);
+        assert_eq!(Deadline::at(original).instant(), original);
+        let expired = Instant::now() - Duration::from_secs(1);
+        let deadline = Deadline::at(expired);
+        assert_eq!(deadline.instant(), expired);
+        assert!(deadline.remaining().is_err());
+        scope(Some(deadline), || assert!(check().is_err()));
+        assert!(current().is_none());
+    }
 
     #[test]
     fn expired_scope_rejects_new_work_and_nested_cleanup_restores_it() {

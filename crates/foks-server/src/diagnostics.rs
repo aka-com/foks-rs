@@ -48,6 +48,7 @@ pub(crate) fn classify(error: &Error) -> SessionErrorClass {
         Error::Database(_)
         | Error::Merkle(_)
         | Error::WriterQueue
+        | Error::DeadlineExceeded
         | Error::ReaderPool
         | Error::Chunk(_) => SessionErrorClass::Storage,
         Error::Certificate(_)

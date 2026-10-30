@@ -155,6 +155,19 @@ duration, saturation, backup outcomes, and transient `accept()` failures. They
 use fixed, non-user-derived names and never export paths, identities, request
 values, or key material.
 
+A request that reaches its deadline (`--request-timeout-seconds`) before its
+handler returns is closed without a response. If its write is still in the
+writer queue at that point, the writer does not run it: it opens no
+transaction for the job and counts it in `foks_writer_expired_total`. A write
+that the handler submits after that point is refused without entering the
+queue and is counted the same way. A write that has already started runs to
+completion, and so do the writes that settle an already published chunk and
+the write that records the outcome of a committed SSO access-refresh claim:
+skipping that one would leave the account in `Refreshing` after the provider
+has rotated its refresh token, and the user would have to sign in again. A
+rising count means that handlers, including their wait in the writer queue,
+take longer than the request timeout before their writes start.
+
 `/healthz` returns 200 while every core thread runs: the three RPC listeners,
 the SQLite writer, the maintenance loop, the automatic backup scheduler, the
 management listener, and the administration and OIDC listeners when they are
