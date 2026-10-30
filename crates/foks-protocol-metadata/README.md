@@ -9,3 +9,7 @@ This crate is publish-disabled, is not a default workspace member, and has no
 Go or network dependency. Normal Cargo builds consume checked Rust and data
 files. Go is used only by the explicit extractor and mainline audit in
 `tools/foks-protocol-sync`.
+
+Its `status_literals` test scans the workspace sources and rejects numeric
+FOKS status-code literals in comparisons and patterns, so status codes are
+compared through the generated `STATUS_*` constants.

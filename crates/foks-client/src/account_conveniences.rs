@@ -191,7 +191,11 @@ impl FoksClient {
                     if matches!(
                         &e,
                         Error::Rpc(foks_rpc::Error::RemoteStatus {
-                            code: 1023 | 1029 | 1030 | 1013 | 1069,
+                            code: foks_rpc::STATUS_USERNAME_IN_USE_ERROR
+                                | foks_rpc::STATUS_NO_CHANGE_ERROR
+                                | foks_rpc::STATUS_BAD_ARGS_ERROR
+                                | foks_rpc::STATUS_PERMISSION_ERROR
+                                | foks_rpc::STATUS_OAUTH2_AUTH_ERROR,
                             ..
                         })
                     ) {

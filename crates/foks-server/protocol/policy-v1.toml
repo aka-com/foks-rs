@@ -60,6 +60,8 @@ team_adhoc_invalid_change = "TEAM_ADHOC_INVALID_TEAM_CHANGE_ERROR"
 team_adhoc_duplicate = "TEAM_ADHOC_DUPLICATE_ERROR"
 unsupported = "NOT_IMPLEMENTED"
 user_not_found = "USER_NOT_FOUND_ERROR"
+protocol_not_found = "PROTO_NOT_FOUND_ERROR"
+web_session_not_found = "WEB_SESSION_NOT_FOUND_ERROR"
 
 [[protocol]]
 name = "Probe"

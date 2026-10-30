@@ -97,8 +97,65 @@ pub enum Error {
     Hostname,
 }
 
+/// Server-supplied status detail text, sanitized by
+/// [`sanitize_server_text`] and bounded to [`MAXIMUM_STATUS_DETAIL_BYTES`].
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct StatusDetail(Option<String>);
+
+/// Maximum byte length of server-supplied status detail text retained in an error.
+pub const MAXIMUM_STATUS_DETAIL_BYTES: usize = 256;
+
+/// SSO flow outcome classified from an `OAUTH2_ERROR` status detail.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OAuth2Outcome {
+    /// The user or identity provider denied authorization.
+    Denied,
+    /// The server could not reach the identity provider.
+    ProviderUnavailable,
+}
+
+/// Sanitizes untrusted server text for display. Replaces invalid UTF-8 with
+/// U+FFFD, replaces control characters, line and paragraph separators, and
+/// invisible formatting characters (soft hyphen, combining grapheme joiner,
+/// zero-width characters, bidirectional controls, byte-order mark,
+/// interlinear annotation controls, and tag characters) with spaces, truncates
+/// to `maximum_characters` characters and `maximum_bytes` bytes on a character
+/// boundary, and trims leading and trailing whitespace.
+pub fn sanitize_server_text(
+    bytes: &[u8],
+    maximum_characters: usize,
+    maximum_bytes: usize,
+) -> String {
+    let mut text = String::new();
+    for character in String::from_utf8_lossy(bytes)
+        .chars()
+        .take(maximum_characters)
+    {
+        let character = if character.is_control()
+            || matches!(
+                character,
+                '\u{00ad}'
+                    | '\u{034f}'
+                    | '\u{061c}'
+                    | '\u{180e}'
+                    | '\u{200b}'..='\u{200f}'
+                    | '\u{2028}'..='\u{202e}'
+                    | '\u{2060}'..='\u{206f}'
+                    | '\u{feff}'
+                    | '\u{fff9}'..='\u{fffb}'
+                    | '\u{e0000}'..='\u{e007f}'
+            ) {
+            ' '
+        } else {
+            character
+        };
+        if text.len() + character.len_utf8() > maximum_bytes {
+            break;
+        }
+        text.push(character);
+    }
+    text.trim().to_owned()
+}
 
 /// A plain phrase for the FOKS status codes a person can provoke, so the
 /// message names the refusal rather than only its number. Codes without a
@@ -145,15 +202,42 @@ fn describe_status(code: u64, detail: &StatusDetail) -> String {
 }
 
 impl StatusDetail {
+    /// Sanitizes and bounds server-supplied status detail text. Stores `None`
+    /// if the sanitized text is empty.
+    pub(crate) fn from_server(bytes: &[u8]) -> Self {
+        let text = sanitize_server_text(
+            bytes,
+            MAXIMUM_STATUS_DETAIL_BYTES,
+            MAXIMUM_STATUS_DETAIL_BYTES,
+        );
+        Self((!text.is_empty()).then_some(text))
+    }
+
     pub fn detail(&self) -> Option<&str> {
         self.0.as_deref()
+    }
+
+    /// Classifies an `OAUTH2_ERROR` status detail. Maps `"authorization denied"`
+    /// or details containing the OAuth 2.0 `access_denied` error code to
+    /// [`OAuth2Outcome::Denied`], and `"provider unavailable"` to
+    /// [`OAuth2Outcome::ProviderUnavailable`]. Returns `None` for other text.
+    pub fn oauth2_outcome(&self) -> Option<OAuth2Outcome> {
+        let detail = self.detail()?;
+        if detail == "authorization denied" || detail.contains("access_denied") {
+            Some(OAuth2Outcome::Denied)
+        } else if detail == "provider unavailable" {
+            Some(OAuth2Outcome::ProviderUnavailable)
+        } else {
+            None
+        }
     }
 }
 
 impl std::fmt::Display for StatusDetail {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Quote server-supplied detail text to distinguish it from client text.
         if let Some(detail) = &self.0 {
-            write!(formatter, ": {detail}")
+            write!(formatter, ": \"{detail}\"")
         } else {
             Ok(())
         }

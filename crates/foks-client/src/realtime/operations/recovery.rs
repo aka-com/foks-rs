@@ -95,7 +95,11 @@ pub(super) fn recovery_window<T>(mut read: impl FnMut(u64) -> Result<T>) -> Resu
     loop {
         match read(width) {
             Err(
-                Error::Rpc(foks_rpc::Error::RemoteStatus { code: 12001, .. }) | Error::ChatLimit(_),
+                Error::Rpc(foks_rpc::Error::RemoteStatus {
+                    code: foks_rpc::STATUS_RT_GENERIC_ERROR,
+                    ..
+                })
+                | Error::ChatLimit(_),
             ) if width > 1 => {
                 width = (width / 2).max(1);
             }

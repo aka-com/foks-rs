@@ -2786,7 +2786,10 @@ struct ScheduledFederationBinding {
 fn federation_client_rate_limited(error: &foks_client::Error) -> bool {
     matches!(
         error,
-        foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1012, .. })
+        foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
+            code: foks_rpc::STATUS_RATE_LIMIT_ERROR,
+            ..
+        })
     )
 }
 

@@ -130,7 +130,15 @@ impl ChatSession<'_> {
 fn definite_rejection(error: &Error) -> Option<i64> {
     match error {
         Error::Rpc(foks_rpc::Error::RemoteStatus { code, .. })
-            if matches!(*code, 1013 | 1030 | 12002 | 12003 | 12005 | 12006) =>
+            if matches!(
+                *code,
+                foks_rpc::STATUS_PERMISSION_ERROR
+                    | foks_rpc::STATUS_BAD_ARGS_ERROR
+                    | foks_rpc::STATUS_RT_CHANNEL_EXISTS_ERROR
+                    | foks_rpc::STATUS_RT_RACE
+                    | foks_rpc::STATUS_RT_NOT_FOUND_ERROR
+                    | foks_rpc::STATUS_RT_MSG_ORDER_ERROR
+            ) =>
         {
             Some(*code as i64)
         }

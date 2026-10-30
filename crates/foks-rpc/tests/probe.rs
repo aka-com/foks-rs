@@ -80,7 +80,10 @@ fn response_surfaces_typed_foks_status() {
         0x94, 0x01, 0x00, 0x92, 0x64, 0x81, 0xa1, b'0', 0xa4, b'n', b'o', b'p', b'e', 0x80,
     ];
     let error = decode_probe_response(&response, 0).unwrap_err();
-    assert_eq!(error.to_string(), "FOKS server returned status 100: nope");
+    assert_eq!(
+        error.to_string(),
+        "FOKS server returned status 100: \"nope\""
+    );
 }
 
 #[test]
