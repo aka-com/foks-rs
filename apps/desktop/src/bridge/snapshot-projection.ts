@@ -923,10 +923,19 @@ async function projectCatalogCounted(
         availableStores.add(store.id);
     }
   }
+  // Mock masked values apply only to the fixture version; omit `value` when
+  // an edit produces a newer version.
+  const mockMetadata = (item: Item): Partial<Item> | undefined => {
+    const base = baseItems.get(itemKey(item));
+    if (!base || base.version === item.version) return base;
+    const metadata = { ...base };
+    delete metadata.value;
+    return metadata;
+  };
   const items: Item[] = response.items
     .filter((item) => availableStores.has(item.store))
     .map((item) => ({
-      ...(bridge.native ? {} : baseItems.get(itemKey(item))),
+      ...(bridge.native ? {} : mockMetadata(item)),
       ...item,
     }));
   const itemKeys = new Set(items.map(itemKey));

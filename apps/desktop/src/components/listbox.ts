@@ -3,26 +3,32 @@
  * `tabIndex` across `option` rows, providing a single Tab stop and arrow-key
  * navigation.
  *
- * The hook does not own the selection. Up, Down, Home, End and type-select
- * call `onMove` with the row they reach; the caller selects it (selection
- * follows focus) or only lets focus move there (a folder row), and the hook
- * focuses that row once it has rendered. Rows are found by
- * `data-option-key` anywhere under the container, so section labels and
- * `role="group"` wrappers can sit between them.
+ * The caller owns selection state. Up, Down, Home, End, and type-select invoke
+ * `onMove` with the target row key; the caller can update selection (for item
+ * rows) or leave selection unchanged while moving focus (for folder rows), and
+ * the hook focuses the target row after render. The hook matches rows by
+ * `data-option-key` anywhere inside the container, allowing section headers
+ * and `role="group"` wrappers between options.
  *
- * Interactive content inside a row (hover actions) should carry
- * `tabIndex={-1}`: it is reached with the pointer or through the row's
- * context menu, not with Tab.
+ * PageUp and PageDown move by one viewport page (visible row count minus one)
+ * and scroll the target row into view. When `columns` is greater than 1,
+ * options render in a grid: Left and Right move by one card, and Up and Down
+ * move by one grid row (to the vertically aligned card, or by `columns`
+ * indices when the target row is unmounted).
+ *
+ * Interactive controls inside a row (such as hover actions) must set
+ * `tabIndex={-1}` to exclude them from the Tab order; users access them via
+ * pointer or the row context menu.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FocusEvent, KeyboardEvent, RefObject } from 'react';
 
-/** How the keyboard reached a row. */
-export type ListboxMove = 'arrow' | 'home' | 'end' | 'type';
+/** Navigation input that moved focus to a row. */
+export type ListboxMove = 'arrow' | 'page' | 'home' | 'end' | 'type';
 
 export interface ListboxOptions {
-  /** Every row's key, in the order the list draws them. */
+  /** Row keys in render order. */
   keys: readonly string[];
   /** Currently selected row key, or null. */
   selectedKey: string | null;
@@ -31,11 +37,16 @@ export interface ListboxOptions {
   /** Returns a row's label for type-select; omit to disable type-select. */
   labelOf?: (key: string) => string;
   /**
-   * The rows actually in the DOM, for a windowed list. When the row that
-   * should take Tab is not rendered, the first rendered row takes it so the
-   * list stays reachable.
+   * Keys currently mounted in the DOM for a virtualized list. When the
+   * preferred roving-tabindex row is unmounted, the first rendered row
+   * receives `tabIndex={0}` so the listbox remains focusable via Tab.
    */
   renderedKeys?: readonly string[];
+  /**
+   * Number of columns when rendering options as a grid; omit or pass 1 for a
+   * single-column list.
+   */
+  columns?: number;
 }
 
 export interface ListboxProps<E extends HTMLElement> {
@@ -74,6 +85,52 @@ function optionKey(
   return option.dataset.optionKey ?? null;
 }
 
+/** Returns the nearest vertically scrollable ancestor, or null. */
+function scroller(element: HTMLElement | null): HTMLElement | null {
+  for (let node = element; node; node = node.parentElement) {
+    const overflow = getComputedStyle(node).overflowY;
+    if (overflow === 'auto' || overflow === 'scroll') return node;
+  }
+  return null;
+}
+
+/**
+ * Finds the option on the adjacent grid row in `direction` (1 for down, -1
+ * for up) closest to the current option's horizontal center, or returns null
+ * if no rendered option matches or layout geometry is unavailable.
+ */
+function gridNeighbour(
+  container: HTMLElement | null,
+  current: HTMLElement | undefined,
+  direction: 1 | -1,
+): string | null {
+  if (!container || !current) return null;
+  const from = current.getBoundingClientRect();
+  if (!from.height) return null;
+  const centre = from.left + from.width / 2;
+  let best: { key: string; line: number; distance: number } | null = null;
+  for (const option of container.querySelectorAll<HTMLElement>(
+    '[data-option-key]',
+  )) {
+    const rect = option.getBoundingClientRect();
+    const line = direction * (rect.top - from.top);
+    if (line < from.height / 2 || !option.dataset.optionKey) continue;
+    // Prefer the nearest row, then the horizontally closest card; measure
+    // full-width section headers from their left edge.
+    const distance =
+      rect.width > from.width * 2
+        ? Math.abs(rect.left - from.left)
+        : Math.abs(rect.left + rect.width / 2 - centre);
+    if (
+      !best ||
+      line < best.line - 1 ||
+      (Math.abs(line - best.line) <= 1 && distance < best.distance)
+    )
+      best = { key: option.dataset.optionKey, line, distance };
+  }
+  return best?.key ?? null;
+}
+
 function findOption(
   container: HTMLElement | null,
   key: string,
@@ -89,10 +146,11 @@ export function useListbox<E extends HTMLElement = HTMLDivElement>({
   onMove,
   labelOf,
   renderedKeys,
+  columns = 1,
 }: ListboxOptions): Listbox<E> {
   const ref = useRef<E | null>(null);
-  // The row focus last rested on, when it is not the selected one (a folder
-  // row reached with the arrows). A new selection takes precedence.
+  // Last focused row key when focus differs from `selectedKey` (such as a
+  // folder row focused via arrow keys); resets when `selectedKey` changes.
   const [active, setActive] = useState<string | null>(null);
   useEffect(() => setActive(null), [selectedKey]);
   const pending = useRef<string | null>(null);
@@ -156,12 +214,51 @@ export function useListbox<E extends HTMLElement = HTMLDivElement>({
       move(key, how);
     };
     if (event.ctrlKey) return;
+    const grid = columns > 1;
+    /** Moves one row in a list or one row of cards in a grid. */
+    const line = (direction: 1 | -1): void => {
+      if (index < 0) return step(0, 'arrow');
+      if (!grid) return step(index + direction, 'arrow');
+      const drawn = gridNeighbour(
+        ref.current,
+        current ? findOption(ref.current, current) : undefined,
+        direction,
+      );
+      const to =
+        drawn === null ? index + direction * columns : keys.indexOf(drawn);
+      // Do not wrap or clamp across row boundaries at the first or last grid row.
+      if (to < 0 || to >= keys.length) {
+        event.preventDefault();
+        return;
+      }
+      step(to, 'arrow');
+    };
+    /** Number of options in one viewport page (visible rows minus one). */
+    const page = (): number => {
+      const option = current ? findOption(ref.current, current) : undefined;
+      const height = option?.getBoundingClientRect().height ?? 0;
+      const area = scroller(ref.current)?.clientHeight ?? 0;
+      const lines = height && area ? Math.floor(area / height) - 1 : 9;
+      return Math.max(1, lines) * columns;
+    };
     switch (event.key) {
       case 'ArrowDown':
-        step(index < 0 ? 0 : index + 1, 'arrow');
+        line(1);
         return;
       case 'ArrowUp':
-        step(index < 0 ? 0 : index - 1, 'arrow');
+        line(-1);
+        return;
+      case 'ArrowRight':
+        if (grid) step(index < 0 ? 0 : index + 1, 'arrow');
+        return;
+      case 'ArrowLeft':
+        if (grid) step(index < 0 ? 0 : index - 1, 'arrow');
+        return;
+      case 'PageDown':
+        step(index < 0 ? 0 : index + page(), 'page');
+        return;
+      case 'PageUp':
+        step(index < 0 ? 0 : index - page(), 'page');
         return;
       case 'Home':
         step(0, 'home');

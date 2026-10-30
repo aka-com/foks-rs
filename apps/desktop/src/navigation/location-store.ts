@@ -463,14 +463,19 @@ export class LocationStore {
   }
 
   /**
-   * Opens a Files place from the sidebar: All Items narrowed to one kind
-   * (`folder` empty), or a store or folder (`folder` as `store|/path`, the
-   * value an `all` location reads). A store page keeps its address when the
-   * folder is inside its own store; any other page navigates to All Items
-   * first, as one guarded move, so a guard that holds the navigation back
-   * also holds the folder and the kind.
+   * Opens a Files view from the sidebar: All Items filtered by kind (`folder`
+   * empty), or a specific store or folder (`folder` formatted as `store|/path`).
+   * A store route preserves its location when the target folder is in the same
+   * store; any other route navigates to All Items first in a single guarded
+   * transition so a guard blocking navigation also blocks the folder and kind
+   * update.
    */
-  openFiles(folder: string, kind: KindFilter, selection?: Selection): void {
+  openFiles(
+    folder: string,
+    kind: KindFilter,
+    selection?: Selection,
+    options: GuardedOptions = {},
+  ): void {
     const here = this.current.location;
     const apply = (): void => {
       this.dispatch({ type: 'folder', folder: this.folderAt(folder) });
@@ -482,9 +487,10 @@ export class LocationStore {
       here.kind === 'files' ||
       (here.kind === 'store' && folder.startsWith(`${here.ref}|`))
     ) {
-      // A new selection is guarded as one (an unsaved edit is asked about);
-      // a folder change alone is not.
-      if (selection) this.guarded({ kind: 'select', selection }, apply, {});
+      // Guard item selection changes (to prompt on unsaved edits), but allow
+      // folder-only changes without prompting.
+      if (selection)
+        this.guarded({ kind: 'select', selection }, apply, options);
       else apply();
       return;
     }
@@ -495,7 +501,7 @@ export class LocationStore {
         this.dispatch({ type: 'navigate', location });
         apply();
       },
-      {},
+      options,
     );
   }
 

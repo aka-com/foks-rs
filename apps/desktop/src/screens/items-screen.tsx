@@ -41,6 +41,7 @@ import type { FoksIconName } from '../icons';
 import {
   KINDS,
   catalog,
+  catalogFolders,
   defaultCreateStore,
   displayPathComponent,
   fmtSize,
@@ -677,6 +678,12 @@ export function ItemsScreen({
           query: '',
           location: { kind: 'all' },
         }).filter((item) => item.store === selectedStore.id),
+        // Exclude empty folders when filtering by a specific item kind.
+        state.kind === 'All'
+          ? catalogFolders(snapshot).filter(
+              (item) => item.store === selectedStore.id,
+            )
+          : [],
       )
     : undefined;
   const selectedNode = selectedRoot
@@ -784,6 +791,8 @@ export function ItemsScreen({
     renderedKeys: flatMode
       ? visibleRows.map((item) => `${item.store}|${item.path}`)
       : undefined,
+    // In grid view, Left/Right move by one card and Up/Down move by one row.
+    columns: view === 'grid' ? gridWindow.columns : 1,
     labelOf: (key) => {
       const entry = entryAt.get(key)?.entry;
       if (!entry) return '';

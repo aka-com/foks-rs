@@ -475,6 +475,7 @@ export function Topbar({
           onChange={onQuery ?? (() => undefined)}
           placeholder={tab === 'chat' ? 'Search channels' : 'Search'}
           disabled={!searchable}
+          results=".main [role='listbox']"
         />
       ) : (
         <span className="grow" data-tauri-drag-region="" />

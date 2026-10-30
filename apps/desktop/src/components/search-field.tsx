@@ -24,6 +24,12 @@ export interface SearchFieldProps {
   disabled?: boolean;
   /** Additional CSS class name for custom layout and positioning. */
   className?: string;
+  /**
+   * CSS selector for the listbox filtered by this input. Enables ArrowDown
+   * to focus and select the first option, Enter to select the first option,
+   * and Escape in an empty input to move focus back to the listbox.
+   */
+  results?: string;
 }
 
 export function SearchField({
@@ -34,6 +40,7 @@ export function SearchField({
   scope,
   disabled = false,
   className,
+  results,
 }: SearchFieldProps): ReactNode {
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -87,7 +94,41 @@ export function SearchField({
           if (event.key === 'Escape' && value) {
             event.stopPropagation();
             onChange('');
+            return;
           }
+          if (!results || event.nativeEvent.isComposing) return;
+          const plain =
+            !event.altKey &&
+            !event.shiftKey &&
+            !event.metaKey &&
+            !event.ctrlKey;
+          if (!plain) return;
+          const list = document.querySelector<HTMLElement>(results);
+          const options = [
+            ...(list?.querySelectorAll<HTMLElement>('[role="option"]') ?? []),
+          ];
+          const first = options[0];
+          if (event.key === 'Escape') {
+            // Focus the listbox's active roving-tabindex option, or the first option.
+            const stop =
+              options.find((option) => option.tabIndex === 0) ?? first;
+            if (!stop) return;
+            event.preventDefault();
+            event.stopPropagation();
+            stop.focus();
+            return;
+          }
+          if (!first || (event.key !== 'ArrowDown' && event.key !== 'Enter'))
+            return;
+          event.preventDefault();
+          if (event.key === 'ArrowDown') first.focus();
+          // Trigger click to select item rows; skip folder rows because
+          // clicking them navigates into the folder.
+          if (
+            first.getAttribute('aria-selected') !== 'true' &&
+            !first.hasAttribute('data-folder-path')
+          )
+            first.click();
         }}
       />
       {shortcut ? <kbd aria-hidden="true">{shortcutLabel('⌘F')}</kbd> : null}

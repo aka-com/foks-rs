@@ -339,6 +339,11 @@
   gap: 8px;
   padding: 0 10px 0 16px;
 }
+/* During inline editing, `.bar.after` follows the fields in DOM order for
+   Tab navigation and uses `order: -1` to render at the top of the panel. */
+.details > .bar.after {
+  order: -1;
+}
 .details .pathbar {
   display: flex;
   align-items: center;
@@ -366,9 +371,26 @@
   background: var(--hover);
   color: var(--ink);
 }
+/* Shrink intermediate folders first, then the immediate parent folder, and
+   the store badge and name last. */
+.details .pathbar > :not(:first-child, :last-child, .sep) {
+  flex-shrink: 100;
+}
+.details .pathbar > :last-child:not(:first-child) {
+  flex-shrink: 20;
+}
 .details .pathbar > :last-child {
-  flex: none;
   color: var(--ink-2);
+}
+/* In narrow panels during inline editing, hide folder segments and show only
+   the store name so Cancel and Save Changes fit without truncating both. */
+@container (max-width: 439px) {
+  .details > .bar.after .pathbar > :not(:first-child) {
+    display: none;
+  }
+  .details > .bar.after .pathbar > :first-child {
+    color: var(--ink-2);
+  }
 }
 .details .pathbar .t {
   min-width: 0;
@@ -521,7 +543,47 @@
   outline: 0;
 }
 
-/* Sharing: one muted note and the readers. */
+/* Team Info layout in the details column. Titled property groups render a
+   heading with a trailing action button. */
+.details .bar-title {
+  font-size: 13px;
+  font-weight: var(--weight-label);
+}
+.details .bar > .btn.icon:last-child {
+  margin-right: -6px;
+}
+.details .prop-group.titled > .prop-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.details .prop-label h3 {
+  margin: 0;
+  font: inherit;
+  color: inherit;
+}
+.details .prop-group > .note {
+  margin: 4px 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.details .prop-row .link {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent-ink);
+  font-size: 12.5px;
+  text-align: left;
+}
+.details .prop-row .link:hover {
+  text-decoration: underline;
+}
+
+/* Sharing section: summary note and reader roster. */
 .details .sharing .note {
   max-width: 560px;
   margin: 4px 0;
