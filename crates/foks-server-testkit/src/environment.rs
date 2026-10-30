@@ -207,6 +207,19 @@ impl TestEnvironment {
         )
     }
 
+    /// Open this sealed environment's owned database for writing, with the
+    /// compiled default limits. The caller must not run a server on it at the
+    /// same time.
+    #[doc(hidden)]
+    pub fn open_database_with_default_limits(
+        &self,
+    ) -> foks_server_db::Result<foks_server_db::Database> {
+        foks_server_db::Database::open(
+            self.inner.paths.database(),
+            foks_server_db::Config::default(),
+        )
+    }
+
     #[doc(hidden)]
     pub fn rotate_host_key(&self) -> foks_server::Result<foks_server::host::HostKeyRotationState> {
         if *self
