@@ -95,11 +95,11 @@ impl<B: Backend> ServerHandler for Session<B> {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        // The same context covers parsing, admission, scope resolution and all IPC calls.
-        let deadline = Deadline::capture(
-            std::time::Instant::now() + foks_agent_proto::DeadlineClass::Ordinary.cap(),
-        )
-        .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        // Bound the wait for an active-call slot separately. Start the execution
+        // deadline after acquiring the slot so queue wait time does not reduce
+        // the IPC timeout budget.
+        let admission_until =
+            tokio::time::Instant::now() + foks_agent_proto::DeadlineClass::Ordinary.cap();
         let invocation = match self.set.parse(
             self.read_only,
             &request.name,
@@ -114,12 +114,23 @@ impl<B: Backend> ServerHandler for Session<B> {
             }
             Err(error) => return Ok(tool_error(error.to_string()).into()),
         };
-        let permit = tokio::select! {
-            _ = tokio::time::sleep_until(deadline.instant().into()) => return Ok(tool_error("request deadline exceeded before dispatch").into()),
-            _ = self.lifetime.cancelled() => return Ok(tool_error("session closed").into()),
-            _ = context.ct.cancelled() => return Ok(tool_error("request cancelled").into()),
-            permit = self.active.clone().acquire_owned() => permit.map_err(|_| ErrorData::internal_error("server closing", None))?,
+        let permit = match acquire_active_slot(
+            self.active.clone(),
+            admission_until,
+            &self.lifetime,
+            &context.ct,
+        )
+        .await
+        {
+            Ok(permit) => permit,
+            Err(error @ AdmissionError::ServerClosing) => {
+                return Err(ErrorData::internal_error(error.to_string(), None));
+            }
+            Err(error) => return Ok(tool_error(error.to_string()).into()),
         };
+        // The same deadline covers scope resolution and every IPC call.
+        let deadline = invocation_deadline(&invocation)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         let backend = self.backend.clone();
         let cancellation = self.lifetime.child_token();
         let request_cancel = cancellation.clone();
@@ -169,6 +180,52 @@ impl<B: Backend> ServerHandler for Session<B> {
         }
         Ok(guarded.result.take().expect("owned worker result").into())
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum AdmissionError {
+    #[error("request deadline exceeded before dispatch")]
+    Deadline,
+    #[error("session closed")]
+    SessionClosed,
+    #[error("request cancelled")]
+    Cancelled,
+    #[error("server closing")]
+    ServerClosing,
+}
+
+async fn acquire_active_slot(
+    active: Arc<Semaphore>,
+    until: tokio::time::Instant,
+    lifetime: &CancellationToken,
+    request: &CancellationToken,
+) -> Result<tokio::sync::OwnedSemaphorePermit, AdmissionError> {
+    let permit = tokio::select! {
+        _ = tokio::time::sleep_until(until) => return Err(AdmissionError::Deadline),
+        _ = lifetime.cancelled() => return Err(AdmissionError::SessionClosed),
+        _ = request.cancelled() => return Err(AdmissionError::Cancelled),
+        permit = active.acquire_owned() => permit.map_err(|_| AdmissionError::ServerClosing)?,
+    };
+    // `select!` can poll `acquire_owned` first when both a permit and the timer
+    // are ready. Reject the permit if the admission deadline has already elapsed.
+    if tokio::time::Instant::now() >= until {
+        return Err(AdmissionError::Deadline);
+    }
+    Ok(permit)
+}
+
+/// Returns the deadline class for a tool invocation. `put` streams up to 4 MiB
+/// to the agent under `DeadlineClass::Bulk`; all other tools use
+/// `DeadlineClass::Ordinary`.
+fn invocation_class(invocation: &Invocation) -> foks_agent_proto::DeadlineClass {
+    match invocation {
+        Invocation::Put(_) => foks_agent_proto::DeadlineClass::Bulk,
+        _ => foks_agent_proto::DeadlineClass::Ordinary,
+    }
+}
+
+fn invocation_deadline(invocation: &Invocation) -> Result<Deadline, foks_local_deadline::Error> {
+    Deadline::capture(std::time::Instant::now() + invocation_class(invocation).cap())
 }
 
 fn spawn_worker<B: Backend>(
@@ -264,6 +321,36 @@ mod deadline_tests {
         time::{Duration, Instant},
     };
 
+    #[tokio::test]
+    async fn expired_admission_cannot_take_a_ready_slot() {
+        let active = Arc::new(Semaphore::new(1));
+        let lifetime = CancellationToken::new();
+        let request = CancellationToken::new();
+        let expired = tokio::time::Instant::now() - Duration::from_secs(1);
+        // Model a runtime resuming with both the timer and a permit ready.
+        // Repetition exercises select!'s randomized branch selection.
+        for _ in 0..128 {
+            let result = acquire_active_slot(active.clone(), expired, &lifetime, &request).await;
+            assert!(
+                matches!(result, Err(AdmissionError::Deadline)),
+                "{result:?}"
+            );
+            assert_eq!(active.available_permits(), 1);
+        }
+        // An unexpired acquisition holds the semaphore permit until dropped.
+        let permit = acquire_active_slot(
+            active.clone(),
+            tokio::time::Instant::now() + Duration::from_secs(30),
+            &lifetime,
+            &request,
+        )
+        .await
+        .unwrap();
+        assert_eq!(active.available_permits(), 0);
+        drop(permit);
+        assert_eq!(active.available_permits(), 1);
+    }
+
     struct PausedBackend {
         entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
         release: Mutex<mpsc::Receiver<()>>,
@@ -333,6 +420,29 @@ mod deadline_tests {
             drop(guarded);
             assert_eq!(admission.available_permits(), 1);
         }
+    }
+
+    /// A `put` streams its body under the bulk budget; the ordinary
+    /// 15-second cap would cancel a 4 MiB upload on a slow link.
+    #[test]
+    fn put_calls_get_the_bulk_budget_and_reads_the_ordinary_one() {
+        let parse = |name: &str, arguments: serde_json::Value| {
+            let serde_json::Value::Object(arguments) = arguments else {
+                unreachable!()
+            };
+            ToolSet::Kv.parse(false, name, arguments).ok().unwrap()
+        };
+        let ordinary = foks_agent_proto::DeadlineClass::Ordinary.cap();
+        let put = parse("put", serde_json::json!({"path": "/a", "content": "body"}));
+        let started = Instant::now();
+        let deadline = invocation_deadline(&put).unwrap();
+        assert!(deadline.instant() > started + ordinary);
+        assert!(
+            deadline.instant()
+                >= started + foks_agent_proto::DeadlineClass::Bulk.cap() - Duration::from_secs(1)
+        );
+        let get = parse("get", serde_json::json!({"path": "/a"}));
+        assert!(invocation_deadline(&get).unwrap().instant() <= Instant::now() + ordinary);
     }
 
     #[test]
