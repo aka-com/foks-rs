@@ -383,9 +383,9 @@ test('initials drop the mail domain and take at most two words', () => {
 });
 
 test('a name always gets the same avatar color', () => {
-  assert.equal(hue('sam.ortiz'), '#a2845e');
-  assert.equal(hue('vitalik'), '#34c759');
-  assert.equal(hue('deploy-bot'), '#a2845e');
+  assert.equal(hue('sam.ortiz'), 'var(--mark-brown)');
+  assert.equal(hue('vitalik'), 'var(--mark-green)');
+  assert.equal(hue('deploy-bot'), 'var(--mark-brown)');
   assert.equal(hue('sam.ortiz'), hue('sam.ortiz'));
 });
 

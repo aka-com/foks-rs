@@ -12,11 +12,11 @@ import {
   RadioGroup,
   SectionLabel,
   SheetDialog,
+  StoreMark,
 } from '../../components';
 import { groupDetailFailure, parseRole, partyName } from '../../model';
 import type { Party } from '../../model';
 import { markProfileRostersStale } from '../../roster-staleness';
-import { GroupMark } from '../group-mark';
 import {
   canTarget,
   demotionFor,
@@ -46,7 +46,7 @@ export function LowerRoleSheet({
   const { busy, write } = useSheetWrite(onApplied, onClose);
   const requiredFailure = groupDetailFailure(snapshot, store.id, 'roster');
   const name = target ? partyName(target) : 'them';
-  const title = `Lower ${target ? `${name}’s` : 'their'} role`;
+  const title = `Lower ${target ? `${name}’s` : 'Their'} Role`;
   const currentRole = target ? parseRole(target.destination_role) : null;
   // Members can only move to a lower visibility level. Admins and Owners may
   // move to any Member visibility level.
@@ -75,7 +75,7 @@ export function LowerRoleSheet({
     <SheetDialog
       onClose={onClose}
       dismissible={!busy}
-      glyph={<GroupMark store={store} />}
+      glyph={<StoreMark snapshot={snapshot} store={store} size="sheet" />}
       title={title}
       footer={
         <>
@@ -93,7 +93,7 @@ export function LowerRoleSheet({
             }
             onClick={() => void apply()}
           >
-            Change role
+            Change Role
           </Button>
         </>
       }

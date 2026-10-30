@@ -2,7 +2,7 @@ import type { ReactNode, RefObject } from 'react';
 import { Button, Icon, Inset, InsetRow, Toggle } from '../components';
 import type { FirstRunCheckpoint, FirstRunStateName } from '../first-run-state';
 import type { CheckedProfileResponse } from '../bridge';
-import { Pane, Foot } from './first-run-view';
+import { Pane, Foot, StepIntro } from './first-run-view';
 interface Props {
   checkpoint: FirstRunCheckpoint;
   state: FirstRunStateName;
@@ -40,11 +40,13 @@ export function ServerVerificationStep({
         </Foot>
       }
     >
-      <h1>Select a server</h1>
-      <p className="lead">
-        FOKS synchronizes your account, teams, and encrypted vaults through a
-        server.
-      </p>
+      <StepIntro>
+        <h1>Select a server</h1>
+        <p className="lead">
+          FOKS synchronizes your account, teams, and encrypted vaults through a
+          server.
+        </p>
+      </StepIntro>
       <Inset className="checked-address">
         <InsetRow
           label="Address"

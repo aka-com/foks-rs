@@ -1,603 +1,221 @@
-/* -------------------------------------------------- the Files browser --
-   The tree column carries the kind filter over the counts it changes, and
-   the list column carries its own title row. Search and New live in the
-   window header, so the band that used to hold them is gone. */
+/* -------------------------------------------------- the Files list --
+   List column of the raised panel. The sidebar store tree controls the active
+   scope; rows use the standard list row layout (`.rows .row` in shell.css), and
+   the cards view reuses the same row markup. */
 
-.folder-split {
-  grid-template-columns: var(--files-tree-w) minmax(0, 1fr);
+.lpane {
+  position: relative;
+  flex: 1;
+  min-height: 0;
 }
-
-.files-sidebar-resizer {
-  position: absolute;
-  z-index: 3;
-  inset-block: 0;
-  left: calc(var(--files-tree-w) - 3px);
-  width: 6px;
-  cursor: col-resize;
-  touch-action: none;
-  -webkit-app-region: no-drag;
-}
-.files-sidebar-resizer:hover,
-.files-sidebar-resizer:focus-visible,
-.files-sidebar-resizer.is-resizing {
-  background: var(--accent-border);
-}
-.files-sidebar-resizer:focus-visible {
-  outline: 1px solid var(--accent-ink);
-  outline-offset: -1px;
-}
-
-/* ---------------------------------------------------------- tree column */
-
-.folder-split > .tpane {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  padding: 0;
-  background: var(--surface);
-  border-right: 1px solid var(--line-soft);
-}
-.tpane > .filt {
-  flex: none;
-  padding: 8px 8px 6px;
-  border-bottom: 1px solid var(--line-soft);
-}
-.tpane > .filt .seg {
-  display: flex;
-  width: 100%;
-  height: 30px;
-}
-.tpane > .filt .seg button {
-  flex: 1 1 auto;
-  width: auto;
-  min-width: 0;
-  height: 26px;
-  padding: 0 6px;
-  justify-content: center;
-  font-size: 12px;
-}
-.tpane > .tscroll {
+.lpane > .folder-body {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 6px 8px 10px;
-}
-.tpane h6 {
-  display: flex;
-  align-items: center;
-  padding: 12px 8px 4px;
-  letter-spacing: 0.07em;
-}
-.tpane .fn + h6 {
-  padding-top: 12px;
-}
-.tpane h6 .plus {
-  margin-left: auto;
-  width: 18px;
-  height: 18px;
-  border-radius: 5px;
-  display: grid;
-  place-items: center;
-  color: var(--faint);
-  opacity: 0;
-}
-.tpane h6:hover .plus,
-.tpane h6:focus-within .plus {
-  opacity: 1;
-}
-.tpane h6 .plus:hover {
-  background: var(--hover);
-  color: var(--ink);
-}
-.tpane h6 .plus .ic {
-  font-size: 14px;
-}
-
-/* Rows indent 16px per depth; the twist cell is kept on every row, so the
-   names of a store and of a childless folder line up down the column. */
-.folder-split .tpane .fn,
-.folder-split .tpane .fn:has(> .twist) {
-  position: relative;
-  height: 30px;
-  gap: 6px;
-  border-radius: 7px;
-  padding-left: calc(6px + var(--d, 0) * 16px);
-}
-.folder-split .tpane .fn .fselect {
-  gap: 6px;
-  height: 30px;
-  padding: 0;
-}
-/* Keep keyboard focus inside clipped breadcrumbs and virtualized rows. */
-.crumbs button:focus-visible,
-.folder-split .row:focus-visible {
-  outline: 2px solid var(--accent-border);
-  outline-offset: -2px;
-}
-/* The selection button omits the twist and count; frame the whole tree row. */
-.folder-split .tpane .fn:has(> .fselect:focus-visible) {
-  outline: 2px solid var(--accent-border);
-  outline-offset: -2px;
-}
-.folder-split .tpane .fn .fselect:focus-visible {
-  outline: none;
-}
-.folder-split .tpane .fn > .c,
-.folder-split .tpane .fn > .warn {
-  flex: none;
-  margin-right: 8px;
-  text-align: right;
-}
-.folder-split .tpane .fn > .fact {
-  position: absolute;
-  z-index: 1;
-  right: 0;
-  margin-right: 0;
-}
-.folder-split .tpane .fn:has(> .warn) > .fact {
-  position: static;
-}
-.folder-split .tpane .fn:has(> .fact):hover > .c,
-.folder-split .tpane .fn:has(> .fact).on > .c,
-.folder-split .tpane .fn:has(> .fact):focus-within > .c {
-  visibility: hidden;
-}
-.folder-split .tpane .fn > .twist {
-  margin: 0;
-  width: 16px;
-  height: 16px;
-  font-size: 12px;
-}
-.folder-split .tpane .fn > .twist.none {
-  visibility: hidden;
-}
-.folder-split .tpane .fn .fselect > .av.team,
-.folder-split .tpane .fn .fselect > .kico.account {
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  font-size: var(--mark-type);
-  padding-bottom: 1px;
-  flex: none;
-}
-.folder-split .tpane .fn .fselect > .ic {
-  font-size: 15px;
-  color: var(--folder-amber);
-}
-.folder-split .tpane .fn.root .fselect > .ic,
-.folder-split .tpane .fn.quiet .fselect > .ic {
-  color: var(--muted);
-}
-.folder-split .tpane .fn.on .fselect > .ic {
-  color: var(--accent-ink);
-}
-.tpane .fn.quiet {
-  color: var(--faint);
-  font-weight: 400;
-  font-size: 12.5px;
-}
-.folder-split .tpane .fn.quiet .fselect > .ic {
-  font-size: 14px;
-  color: var(--faint);
-}
-/* A store whose server check-in lapsed states that instead of a count. */
-.tpane .fn .warn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex: none;
-  color: var(--amber-ink);
-  font-size: 12px;
-  font-weight: 600;
-}
-.tpane .fn .warn .ic {
-  font-size: 12px;
-}
-
-/* ---------------------------------------------------------- list column */
-
-.lpane > .lt {
-  height: 44px;
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--line-soft);
-}
-.lpane > .lt .back {
-  flex: none;
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  display: grid;
-  place-items: center;
-  color: var(--muted);
-}
-.lpane > .lt .back:hover {
-  background: var(--hover);
-  color: var(--ink);
-}
-.lpane > .lt .back .ic {
-  font-size: 15px;
-}
-.lpane > .lt .where {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 650;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.lpane > .lt .where .sub {
-  font-weight: 500;
-  color: var(--muted);
-}
-.lpane > .lt .where .search-scope {
-  margin-left: -1px;
-}
-.lpane > .lt .where .av.team,
-.lpane > .lt .where .kico.account {
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  font-size: var(--mark-type);
-  padding-bottom: 1px;
-  flex: none;
-}
-.lpane > .lt .sp {
-  flex: 1;
-}
-.lpane > .lt .seg {
-  flex: none;
-  height: 26px;
-}
-.lpane > .lt .seg button {
-  width: 26px;
-  height: 22px;
-  font-size: 14px;
-}
-.lpane > .lt .files-sort-control {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 26px;
-  color: var(--faint);
-  font-size: 12px;
-}
-.lpane > .lt .files-sort-control select {
-  width: 128px;
-  height: 26px;
-  padding: 0 22px 0 7px;
-  border: 1px solid var(--line-mid);
-  border-radius: var(--radius-md);
-  outline: 0;
-  background-color: var(--main-surface);
-  color: var(--ink);
-  font: inherit;
-  font-size: 12px;
-}
-.lpane > .lt .files-sort-control select:focus-visible {
-  outline: 2px solid var(--accent-border);
-  outline-offset: 1px;
-}
-.lpane > .folder-body {
-  display: flex;
-  flex-direction: column;
-  padding: 6px 12px 12px;
-}
-.lpane > .folder-body > * {
-  flex: none;
+  padding: 0 0 24px;
 }
 .lpane > .folder-body > .starter {
-  flex: 1;
+  padding: 20px 14px;
 }
-
-/* The list measures itself: beside an open inspector, or at the window's
-   narrowest, the folder path and the Location column give way so the name
-   keeps its room. */
-.lpane {
-  container-type: inline-size;
+.folder-body .list-window {
+  min-width: 0;
 }
-
-/* Name, Kind, (Location), Size. There is no Modified column: the catalog
-   carries no write timestamp. */
-.folder-body .hdr.cols,
-.folder-body .row.cols {
-  grid-template-columns: minmax(0, 1fr) 90px 66px;
-  gap: 10px;
-  padding: 0 10px;
-}
-.folder-body .hdr.cols.loc,
-.folder-body .row.cols.loc {
-  grid-template-columns: minmax(0, 1fr) 90px 140px 66px;
-}
-@container (max-width: 600px) {
-  .folder-body .row .name .fpath {
-    display: none;
-  }
-  .folder-body .hdr.cols.loc,
-  .folder-body .row.cols.loc {
-    grid-template-columns: minmax(0, 1fr) 90px 66px;
-  }
-  .folder-body .cols.loc > :nth-child(3) {
-    display: none;
-  }
-}
-
-.folder-body .hdr.cols {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  height: 28px;
-  margin-bottom: 0;
-  border-bottom: 0;
-  background: var(--main-surface);
-  font-size: 12px;
-  font-weight: 600;
+.folder-body .row.folder .r {
   color: var(--faint);
 }
-.folder-body .hdr.cols > * {
-  line-height: 18px;
+/* Reserve the actions' width beside the name so their transparent overlay
+   only replaces the size, without painting the row's translucent fill twice. */
+.folder-body .row.item .r {
+  min-width: 50px;
+  justify-content: flex-end;
 }
-.folder-body .hdr.cols button.on {
-  color: var(--ink);
-}
-.folder-body .row.one {
-  position: relative;
-  height: 38px;
-  border-radius: 8px;
-  cursor: pointer;
-}
-.folder-body .row.sel {
-  background: var(--accent-wash-2);
-}
-.folder-body .row.ro {
-  opacity: 0.75;
-}
-.folder-body .row .name {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  min-width: 0;
-  font-size: 13px;
-  line-height: 18px;
-  font-weight: 500;
-}
-.folder-body .row .cell {
-  font-size: 13px;
-  line-height: 18px;
-}
-.folder-body .row .name > .ic {
-  flex: none;
-  font-size: 16px;
-  color: var(--muted);
-}
-.folder-body .row .name > .ic.k {
-  color: var(--key-gold);
-}
-.folder-body .row .name > .ic.f {
-  color: var(--folder-amber);
-}
-.folder-body .row .name .nm {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-/* In "All items" the folder replaces the chip the row used to carry. */
-.folder-body .row .name .fpath {
-  min-width: 0;
-  font-weight: 400;
-  color: var(--faint);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.folder-body .row .cell.mark .kico.account,
-.folder-body .row .cell.mark .av.team {
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  font-size: var(--mark-type);
-  padding-bottom: 5px;
-  flex: none;
-}
-
-/* The row's own actions, floating over the Size cell they replace. */
 .folder-body .row .acts {
   position: absolute;
-  opacity: 0;
-  right: 8px;
-  top: 4px;
-  display: none;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
   gap: 2px;
-  padding: 1px;
-  border: 1px solid var(--line-mid);
-  border-radius: 7px;
-  background: var(--main-surface);
-  box-shadow: var(--shadow-xs);
+  opacity: 0;
+  pointer-events: none;
 }
 .folder-body .row:hover .acts,
-.folder-body .row:focus-within .acts,
-.folder-body .row.sel .acts {
-  display: flex;
+.folder-body .row:focus-within .acts {
   opacity: 1;
+  pointer-events: auto;
+}
+.folder-body .row.item:hover .r,
+.folder-body .row.item:focus-within .r {
+  visibility: hidden;
 }
 .folder-body .row .acts button {
-  width: 26px;
-  height: 26px;
-  border-radius: 5px;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
   display: grid;
   place-items: center;
   color: var(--muted);
-}
-.folder-body .row .acts button:hover {
-  background: var(--hover);
-  color: var(--ink);
-}
-.folder-body .row .acts .ic {
   font-size: 14px;
 }
-.folder-body .row:has(> .acts):hover .cell.num,
-.folder-body .row:has(> .acts).sel .cell.num {
-  visibility: hidden;
+.folder-body .row .acts button:hover {
+  background: var(--hover-2);
+  color: var(--ink);
+}
+.folder-body .row:hover {
+  background: var(--hover);
+}
+.folder-body .row.sel {
+  background: var(--row-sel);
 }
 
-/* Cards reuse the list's interactive rows and their actions. Fixed heights
-   match files-grid.ts, so a resized inspector can reflow virtual grid rows. */
+/* Cards reuse the list row markup: kind tile and size above the item name and
+   subtitle in a virtualized grid. Card heights and minimum width match
+   `FILES_CARD_*` in `files-grid.ts`. */
 .files-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 8px;
+  padding: 8px 14px;
 }
-.folder-body .files-grid .row.cols {
-  height: 98px;
-  min-width: 0;
+.folder-body .files-grid .row {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 6px;
+  height: 96px;
+  min-height: 0;
   padding: 10px;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-rows: 54px 18px;
-  align-items: center;
-  gap: 4px 8px;
-  border: 1px solid var(--line-soft);
-  border-radius: 10px;
-  background: var(--main-surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--card);
 }
-.folder-body .files-grid .row.cols.loc {
-  height: 120px;
-  grid-template-rows: 54px 18px 18px;
+.folder-body .files-grid.with-location .row {
+  height: 112px;
+}
+.folder-body .files-grid .row::after {
+  content: none;
 }
 .folder-body .files-grid .row:hover {
   background: var(--hover);
-  border-color: var(--line-mid);
 }
 .folder-body .files-grid .row.sel {
-  background: var(--accent-wash-2);
-  border-color: var(--accent-border);
+  background: var(--row-sel);
+  border-color: var(--line-mid);
 }
 .folder-body .files-grid .row .name {
-  display: grid;
-  grid-column: 1 / -1;
-  grid-row: 1;
-  grid-template-columns: 28px minmax(0, 1fr);
-  grid-template-rows: minmax(0, 36px) 16px;
-  column-gap: 8px;
-  row-gap: 2px;
-  align-self: stretch;
+  width: 100%;
+  margin-top: auto;
 }
-.folder-body .files-grid .row .name > .ic {
-  grid-column: 1;
-  grid-row: 1 / -1;
-  align-self: start;
-  font-size: 26px;
-  width: 28px;
-  height: 28px;
-}
-.folder-body .files-grid .row .name .nm {
-  grid-column: 2;
-  grid-row: 1;
+.folder-body .files-grid .row .name small {
   display: -webkit-box;
-  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
   white-space: normal;
-  overflow-wrap: anywhere;
-  align-self: start;
 }
-.folder-body .files-grid .row .name .fpath {
-  display: block;
-  grid-column: 2;
-  grid-row: 2;
-  font-size: 12px;
+.folder-body .files-grid.with-location .row .name small {
+  -webkit-line-clamp: 2;
 }
-.folder-body .files-grid .row .cell.kind {
-  grid-column: 1;
-  grid-row: 2;
-}
-.folder-body .files-grid .row .cell.num {
-  grid-column: 2;
-  grid-row: 2;
-  visibility: visible;
-}
-.folder-body
-  .files-grid
-  .row:has(> .acts):is(:hover, .sel, :focus-within)
-  .cell.num {
-  visibility: visible;
-}
-.folder-body .files-grid .row .cell.mark {
-  display: flex;
-  grid-column: 1 / -1;
-  grid-row: 3;
-}
-.folder-body .files-grid .row .cell.mark > :is(.kico.account, .av.team) {
-  /* Shift centered initials up 2px within the fixed-size avatar tile. */
-  padding-bottom: 4px;
-}
-.folder-body .files-grid .row .cell {
+.folder-body .files-grid .row .r {
+  position: absolute;
+  right: 10px;
+  top: 12px;
   font-size: 12px;
 }
 .folder-body .files-grid .row .acts {
-  top: 8px;
-  right: 8px;
+  top: 6px;
+  right: 6px;
+  transform: none;
 }
-/* Keep the drop affordance at the bottom of the Files pane. */
-.lpane > .dropzone {
+
+/* List footer: drop target hint and the store's Uploads… button. */
+.lpane > .list-foot {
   flex: none;
-  margin: 0 22px 12px;
-  padding: 10px;
-  border: 1.5px dashed var(--line-mid);
-  border-radius: 10px;
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: 8px;
+  height: 32px;
+  padding: 0 14px;
+  border-top: 1px solid var(--line-soft);
   color: var(--faint);
   font-size: 12px;
 }
-.lpane > .dropzone .ic {
-  font-size: 15px;
+.lpane > .list-foot .drop-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lpane > .list-foot .drop-hint .t {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lpane > .list-foot .drop-hint .ic {
+  flex: none;
+  font-size: 13px;
+}
+.lpane > .list-foot .sp {
+  flex: 1;
+}
+.lpane > .list-foot .uploads-open {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 12px;
+  font-weight: var(--weight-label);
+  color: var(--muted);
+}
+.lpane > .list-foot .uploads-open:hover {
+  color: var(--ink);
 }
 
+/* Onboarding tip banner: clicking the text opens the New Password sheet. */
 .folder-body .nextup {
-  margin-top: 12px;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
-  border: 1px solid var(--line-soft);
-  border-radius: 10px;
+  gap: 8px;
+  margin: 2px 14px 6px;
+  padding: 7px 8px 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
   background: var(--surface);
-  color: var(--muted);
+  color: var(--ink-2);
   font-size: 12.5px;
 }
 .folder-body .nextup > .ic {
   flex: none;
-  font-size: 15px;
+  font-size: 14px;
+  color: var(--amber-strong);
+}
+.folder-body .nextup .nt {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  text-align: left;
+}
+.folder-body .nextup .nt:hover {
   color: var(--accent-ink);
+  text-decoration: underline;
 }
 .folder-body .nextup .sp {
   flex: 1;
 }
-.folder-body .nextup .lnk {
-  color: var(--accent-ink);
-  font-weight: 600;
-  white-space: nowrap;
-}
 .folder-body .nextup .x {
-  flex: none;
-  width: 22px;
-  height: 22px;
-  border-radius: 5px;
-  display: grid;
-  place-items: center;
-  color: var(--faint);
+  width: 20px;
+  height: 20px;
 }
-.folder-body .nextup .x:hover {
-  background: var(--hover);
-  color: var(--ink);
+.folder-body .nextup .x .ic {
+  font-size: 12px;
 }
 
 /* A store that can still be read but no longer written. */
@@ -644,95 +262,81 @@
   background: var(--btn-hover);
 }
 
-/* ------------------------------------------------- empty and first run */
-
-.folder-body .empty {
-  padding: 48px 24px;
-}
-.folder-body .empty .big {
-  width: auto;
-  height: auto;
-  margin-bottom: 12px;
-  border-radius: 0;
-  background: none;
-  font-size: 36px;
-  color: var(--faint);
-}
-.folder-body .empty h2 {
-  font-size: 14px;
-  font-weight: 700;
-}
-.folder-body .empty p {
-  font-size: 13px;
-}
-.folder-body .empty .btn {
-  margin-top: 14px;
-}
+/* ------------------------------------------------- empty and first run
+   Empty vault state: heading and three action cards (New Password, Add
+   Document, and CLI import command). */
 
 .folder-body .starter {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 18px;
-  padding: 24px 24px 32px;
+  gap: 16px;
+  padding: 48px 20px 32px;
   text-align: center;
 }
 .folder-body .starter h2 {
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-size: 15px;
+  font-weight: var(--weight-title);
   color: var(--ink);
 }
 .folder-body .starter p {
   max-width: 44ch;
   margin-top: 4px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12.5px;
   line-height: 1.45;
 }
 .folder-body .cards {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  width: min(620px, 100%);
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+  width: min(560px, 100%);
 }
 .folder-body .card {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 8px;
-  min-height: 118px;
-  padding: 14px;
+  gap: 6px;
+  min-height: 112px;
+  padding: 12px;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--btn-bg);
+  border-radius: var(--radius-lg);
+  background: var(--card);
   text-align: left;
 }
 .folder-body button.card:hover {
-  border-color: var(--accent);
-  background: var(--accent-wash);
+  background: var(--hover);
 }
 .folder-body .card .ci {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 9px;
-  background: var(--accent-wash-2);
+  width: 24px;
+  height: 24px;
+  margin-bottom: 2px;
+  border-radius: var(--radius-md);
+  background: var(--chip-bg);
+  color: var(--ink-3);
+  font-size: 14px;
+}
+.folder-body .card .ci.pw {
+  background: var(--amber-wash);
+  color: var(--amber-strong);
+}
+.folder-body .card .ci.file {
+  background: var(--accent-wash);
   color: var(--accent-ink);
-  font-size: 17px;
 }
 .folder-body .card b {
   display: block;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: var(--weight-label);
   color: var(--ink);
 }
 .folder-body .card small {
   color: var(--muted);
   font-size: 12px;
-  line-height: 1.35;
+  line-height: 1.4;
 }
 .folder-body .card kbd,
 .folder-body .card .cli {
@@ -740,179 +344,253 @@
 }
 .folder-body .card kbd {
   padding: 0 5px;
-  border: 1px solid var(--line);
-  border-radius: 5px;
+  border: 1px solid var(--line-mid);
+  border-radius: var(--radius-sm);
   background: var(--btn-bg);
   font: 12px var(--sans);
   line-height: 1.5;
-  color: var(--faint);
+  color: var(--muted);
 }
 .folder-body .card .cli {
   max-width: 100%;
-  padding: 3px 7px;
-  border-radius: 5px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
   background: var(--chip-bg);
-  font: 12px var(--sans);
+  font: 12px var(--mono);
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* ------------------------------------------------------- details panel */
+/* ------------------------------------------------------- details panel
+   Details column: topbar with the item's breadcrumb path (store mark › folder
+   links) and More menu, followed by the hero header and hairline-divided
+   property rows (`PropertyGroup`/`PropertyRow`). The column establishes a
+   container query scope so property labels narrow with the column width. */
 
-.details .dh {
-  align-items: center;
-  padding: 12px 14px;
+.details .bar {
+  gap: 8px;
+  padding: 0 10px 0 16px;
 }
-.details .dh .kic {
-  width: 36px;
-  height: 36px;
-  border-radius: 9px;
-  border: 1px solid var(--line);
-  background: var(--btn-bg);
-  color: var(--muted);
-  font-size: 18px;
-}
-.details .dh .kic .ic {
-  font-size: 18px;
-}
-.details .dh h2 {
-  font-size: 14px;
-}
-.details .scroll {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 14px;
-}
-.details .scroll > * {
-  flex-shrink: 0;
-}
-.details .scroll > .sec {
-  margin: 0 0 -6px 2px;
-}
-.details .scroll > .pfn,
-.details .scroll > .action-error {
-  margin: 0 2px;
-}
-.details .scroll > .eact,
-.details .scroll > .detail-actions {
-  margin: 0;
-}
-.details .detail-actions {
-  gap: 6px;
-}
-.details .detail-actions .btn {
-  height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
-}
-.details .detail-actions .btn .ic {
-  font-size: 14px;
-}
-.details .prev .irow .a button.value-action,
-.details .inset.edit .fr .a button.value-action {
-  width: 24px;
-  padding: 0;
-  justify-content: center;
-}
-.details .scroll > .inset .fr {
-  min-height: 36px;
-  padding: 6px 12px;
-}
-.details .scroll > .inset .fr .k {
-  width: 78px;
-  font-size: 12px;
-}
-.details .scroll > .inset .fr .v {
-  font-size: 12.5px;
-}
-.details .scroll > .inset .fr .v.mark {
+.details .pathbar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-  overflow: hidden;
-}
-.details .scroll > .inset .fr .v.mark > span {
+  gap: 2px;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  margin-left: -6px;
+  font-size: 12.5px;
+  color: var(--muted);
 }
-.details .scroll > .inset .fr .v.mark .kico.account,
-.details .scroll > .inset .fr .v.mark .av.team {
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  font-size: var(--mark-type);
-  padding-bottom: 1px;
-  flex: none;
-}
-.details .prev .irow {
-  min-height: 36px;
-}
-.details .prev .irow .k {
-  width: 78px;
-  font-size: 12px;
-}
-.details .pillrow {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.details .pill {
+.details .pathbar > button,
+.details .pathbar > .step {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: 22px;
-  padding: 0 8px;
-  border-radius: var(--radius-pill);
-  background: var(--chip-bg);
-  font-size: 12px;
-  font-weight: 600;
+  gap: 6px;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-weight: var(--weight-label);
+  white-space: nowrap;
+}
+.details .pathbar > button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.details .pathbar > :last-child {
+  flex: none;
   color: var(--ink-2);
 }
-.details .pill.write-access .ic {
-  translate: 0 -1px;
-}
-.details .pill .ic {
-  font-size: 13px;
-}
-.details .filedoc {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px;
-}
-.details .filedoc .big {
-  display: grid;
-  place-items: center;
-  flex: none;
-  width: 40px;
-  height: 48px;
-  border: 1px solid var(--line-mid);
-  border-radius: 5px;
-  background: var(--surface);
-  color: var(--muted);
-  font-size: 20px;
-}
-.details .filedoc .t {
+.details .pathbar .t {
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.details .filedoc .t b {
+.details .pathbar .sep {
+  flex: none;
+  font-size: 12px;
+  color: var(--faint);
+}
+.details .bar .eact {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+}
+.details .bar .eact .btn {
+  height: var(--control-h);
+  font-size: 12.5px;
+}
+
+.details .scroll {
+  padding: 18px 24px 32px;
+}
+.details .scroll > * {
+  max-width: 760px;
+}
+.details .hero h2 {
+  font-size: 18px;
+  line-height: 1.3;
+}
+.details .hero p {
   display: block;
+  line-height: 1.4;
+}
+.details .hero .bigtile .ic {
+  font-size: 24px;
+  stroke-width: 1.5;
+}
+.hero .bigtile.pw,
+.sheet .hd .bigtile.pw {
+  background: var(--amber-wash);
+  color: var(--amber-strong);
+}
+.hero .bigtile.file,
+.sheet .hd .bigtile.file {
+  background: var(--accent-wash);
+  color: var(--accent-ink);
+}
+.hero .bigtile.text,
+.sheet .hd .bigtile.text {
+  background: var(--chip-bg);
+  color: var(--ink-3);
+}
+.details .hero-acts .btn .ic {
+  font-size: 14px;
+}
+.details .notice {
+  margin: 4px 0 10px;
+}
+.details .notice .t b {
+  display: block;
+  font-weight: var(--weight-label);
+  color: var(--ink);
+}
+.details .notice > .btn {
+  flex: none;
+  margin-left: auto;
+}
+.details .notice + .prop-group {
+  border-top: 0;
+}
+.details .scroll > .action-error {
+  margin: 4px 0 8px;
+}
+
+.details .prop-row .clip {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.details .prop-row .muted {
+  color: var(--muted);
+}
+.details .prop-row .masked {
   font-size: 13px;
-  font-weight: 600;
+}
+.details .prop-row .value-text {
+  font: 12.5px var(--mono);
+  color: var(--ink);
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.details .filedoc .t small {
-  display: block;
-  color: var(--muted);
-  font-size: 12px;
+.details .prop-row .fname {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
-.details .who {
-  margin: 0;
+.details .prop-row > .a .btn {
+  height: var(--control-h);
+  font-size: 12.5px;
+}
+.details .prop-row.top {
+  align-items: start;
+  padding-block: 8px;
+}
+.details .prop-row.top > .k {
+  padding-top: 5px;
+}
+.details .prop-row .inp {
+  width: 100%;
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 8px;
+  border: 1px solid var(--line-field);
+  border-radius: var(--radius-md);
+  background: var(--field-bg);
+  color: var(--ink);
+  font: 13px var(--sans);
+}
+.details .prop-row textarea.inp {
+  height: auto;
+  min-height: 88px;
+  padding: 5px 8px;
+  resize: vertical;
+  font: 12.5px/1.5 var(--mono);
+}
+.details .prop-row input.inp[type='password'] {
+  letter-spacing: 0.08em;
+}
+.details .prop-row .inp:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash-2);
+  outline: 0;
+}
+
+/* Sharing: one muted note and the readers. */
+.details .sharing .note {
+  max-width: 560px;
+  margin: 4px 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.details .sharing .note b {
+  font-weight: var(--weight-label);
+  color: var(--ink-2);
+}
+.details .roster {
+  display: grid;
+  margin-top: 4px;
+}
+.details .roster .party {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0;
+  border-top: 1px solid var(--line-soft);
+  font-size: 13px;
+}
+.details .roster .party:first-child {
+  border-top: 0;
+}
+.details .roster .party .kico.account {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: var(--mark-type);
+}
+.details .roster .party .store-mark {
+  width: 22px;
+  height: 22px;
+}
+.details .roster .party .nm {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.details .roster .party .nm .t {
+  flex: none;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .inset .appearance-picker {
@@ -921,32 +599,82 @@
   border-top: 0;
 }
 
-.folder-body .row:focus-within .cell.num {
-  visibility: hidden;
+.sheet .inset.file-uploads .fr .v {
+  display: grid;
+  gap: 1px;
 }
-
-@container (max-width: 700px) {
-  .folder-split {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .tpane,
-  .files-sidebar-resizer {
-    display: none;
-  }
-}
-
-.file-uploads {
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--line);
-}
-.file-uploads > div {
-  max-height: 220px;
-  overflow: auto;
-}
-.file-uploads li {
-  margin-block: 8px;
+.sheet .inset.file-uploads code {
+  font: 12px var(--mono);
   overflow-wrap: anywhere;
 }
-.file-uploads button {
-  margin-inline-end: 8px;
+.sheet .inset.file-uploads small {
+  font-size: 12px;
+  color: var(--muted);
+}
+.sheet .inset.file-uploads .fr .a {
+  display: flex;
+  gap: 6px;
+}
+
+/* ---------------------------------------------------------- item sheets
+   New Password / Document / Folder and Rename or Move sheets: 36px kind tile
+   and subtitle in the header, grouped bordered fields, and a compact single-line
+   vault selector. */
+
+.sheet .hd .bigtile {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-lg);
+  background: var(--chip-bg);
+  color: var(--ink-3);
+  font-size: 18px;
+}
+.sheet .sb > .inset.first {
+  margin-top: 8px;
+}
+.sheet .inset .fr select {
+  width: 100%;
+  min-width: 0;
+  font: 13px var(--sans);
+}
+.sheet .inset .fr .card-select.compact .card-select-trigger {
+  height: var(--control-h);
+  gap: 8px;
+  padding: 0 8px;
+  border: 1px solid var(--line-field);
+  border-radius: var(--radius-md);
+  background: var(--field-bg);
+  color: var(--ink);
+}
+.sheet .inset .fr .card-select.compact .card-select-trigger:hover {
+  background: var(--field-bg);
+}
+.sheet .inset .fr .card-select.compact .card-select-trigger:focus-visible,
+.sheet
+  .inset
+  .fr
+  .card-select.compact
+  .card-select-trigger[aria-expanded='true'] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash-2);
+  outline: 0;
+}
+.sheet .inset .fr .card-select.compact .t b {
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sheet .inset .fr .card-select.compact .card-select-trigger .t small {
+  display: none;
+}
+.sheet .inset .fr .card-select.compact .card-select-chevron {
+  font-size: 14px;
+  color: var(--muted);
+}
+.card-select-option .store-mark {
+  flex: none;
 }

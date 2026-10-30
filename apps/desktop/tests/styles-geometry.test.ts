@@ -15,6 +15,10 @@ const STYLES = [
   '../src/screens/files.css',
   '../src/screens/chat.css',
   '../src/screens/chat-picker.css',
+  '../src/screens/teams.css',
+  '../src/screens/devices.css',
+  '../src/screens/settings.css',
+  '../src/screens/first-run.css',
   '../src/shell/search-palette.css',
 ];
 const TOKEN_ONLY_COLORS = STYLES;
@@ -147,13 +151,32 @@ test('feature styles use design tokens for colors', async () => {
   }
 });
 
-test('reduced motion is enforced across every component stylesheet', async () => {
+test('reduced motion trades travel for fades across every component stylesheet', async () => {
   const css = await readSource(SHELL, import.meta.url);
   const policy = blockAfter(css, '@media (prefers-reduced-motion: reduce)');
   const values = declarations(blockAfter(policy, '*, *::before, *::after'));
 
   assert.equal(values.get('scroll-behavior'), 'auto !important');
-  assert.equal(values.get('animation-duration'), '0.01ms !important');
   assert.equal(values.get('animation-iteration-count'), '1 !important');
-  assert.equal(values.get('transition-duration'), '0.01ms !important');
+  // Transitions are restricted to color and opacity so state changes fade
+  // without animating layout or transform properties.
+  const properties = (values.get('transition-property') ?? '')
+    .replace('!important', '')
+    .split(',')
+    .map((property) => property.trim());
+  assert.ok(properties.includes('opacity'));
+  for (const moving of ['transform', 'left', 'top', 'width', 'height', 'all'])
+    assert.equal(properties.includes(moving), false, `${moving} still moves`);
+  // Overlay keyframes read `--rise` and `--settle-scale`, which are set to
+  // `0px` and `1` under `prefers-reduced-motion: reduce` so sheets, alerts, and
+  // toasts animate as opacity fades.
+  const tokens = await readSource(TOKENS, import.meta.url);
+  const reduced = declarations(
+    blockAfter(
+      blockAfter(tokens, '@media (prefers-reduced-motion: reduce)'),
+      ':root',
+    ),
+  );
+  assert.equal(reduced.get('--rise'), '0px');
+  assert.equal(reduced.get('--settle-scale'), '1');
 });

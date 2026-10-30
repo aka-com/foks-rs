@@ -7,7 +7,7 @@ import {
   type FirstRunStateName,
 } from '../../first-run-state';
 import type { Location } from '../../location';
-import { Pane } from '../first-run-view';
+import { Pane, StepIntro } from '../first-run-view';
 
 export function SetupChecklistStep({
   checkpoint,
@@ -45,12 +45,14 @@ export function SetupChecklistStep({
   // warning banner explains that unbacked accounts cannot be recovered.
   return (
     <Pane title="Get started" header={false}>
-      <h1>Get started</h1>
-      <p className="lead">
-        {stepsDone === stepsTotal
-          ? 'Your account is ready. Start using your Personal vault.'
-          : 'Completed steps are saved. Finish account recovery below, or start using your Personal vault.'}
-      </p>
+      <StepIntro>
+        <h1>Get started</h1>
+        <p className="lead">
+          {stepsDone === stepsTotal
+            ? 'Your account is ready. Start using your Personal vault.'
+            : 'Completed steps are saved. Finish account recovery below, or start using your Personal vault.'}
+        </p>
+      </StepIntro>
       {personalRefreshError ? (
         <p className="crit" role="alert">
           {personalRefreshError}

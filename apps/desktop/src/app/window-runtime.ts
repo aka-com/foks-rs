@@ -25,8 +25,8 @@ export function useWindowRuntime({
   useEffect(() => {
     applyRailColor(storedRailColor());
   }, []);
-  // The explicit rail/topbar toggle is the only interaction that changes the
-  // width, and the chosen width persists across navigation and item details.
+  // Only the sidebar toggle and topbar expand button change the collapsed
+  // state, and the preference persists across navigation.
   const toggleSidebar = useCallback(() => {
     const collapsed = !sideCollapsed;
     setSideCollapsed(collapsed);
@@ -81,20 +81,21 @@ export function useWindowRuntime({
     };
   }, [bridge]);
 
-  // The checklist screens draw the shell's own rail, collapse toggle and all.
-  // The setup steps draw a rail with no toggle, which stays open.
+  // Checklist screens render the standard collapsible sidebar; setup steps
+  // render a non-collapsible sidebar that stays open.
   const firstRunRailCollapsible =
     here.kind === 'first-run' &&
     ['added', 'checklist-invited', 'checklist-own'].includes(here.step ?? '');
   const railCollapsed =
     sideCollapsed && (here.kind !== 'first-run' || firstRunRailCollapsible);
-  const trafficLightsVisible = !railCollapsed;
+  // Keep native traffic lights visible when the sidebar is collapsed: the
+  // topbar reserves the 52px header height and leading space, so traffic lights
+  // never need to be hidden. Calling `setTrafficLightsVisible(true)` also
+  // restores visibility after upgrading from builds that hid them.
   useEffect(() => {
     if (bridge.native)
-      void bridge
-        .setTrafficLightsVisible(trafficLightsVisible)
-        .catch(commandError);
-  }, [bridge, commandError, trafficLightsVisible]);
+      void bridge.setTrafficLightsVisible(true).catch(commandError);
+  }, [bridge, commandError]);
   // Scrollbars show while a pane is scrolling and for 700ms after. Scroll
   // events do not bubble, so the listener is capture-phase; that also covers
   // keyboard scrolling, which no pointer event would report.

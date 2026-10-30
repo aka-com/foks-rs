@@ -16,6 +16,7 @@ import type { ReactNode } from 'react';
 import {
   Button,
   CardSelect,
+  Icon,
   Inset,
   InsetRow,
   RadioCard,
@@ -430,6 +431,11 @@ export function NewChatSheet({
   }, [creationId, chosen, creations, setSaved]);
   return (
     <SheetDialog
+      glyph={
+        <span className="kic chat-create-glyph" aria-hidden="true">
+          <Icon name="hash" />
+        </span>
+      }
       title="Create channel"
       onClose={close}
       dismissible

@@ -1,4 +1,6 @@
+import { createContext, useContext } from 'react';
 import type { ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Button,
   Chip,
@@ -12,7 +14,7 @@ import type { AgentSnapshot, RoleWire } from '../model';
 import { displayPath, fmtSize, kindOf, parseRole, formatRole } from '../model';
 import type { FilterKind } from '../components';
 import type { Location } from '../location';
-import { NavRow, Sidebar, TrafficStrip } from '../shell/sidebar';
+import { NavRow, Sidebar } from '../shell/sidebar';
 import type { RailAgentState } from '../shell/sidebar';
 import { PageHeader } from '../shell/page-header';
 import {
@@ -24,6 +26,23 @@ import {
   type FirstRunPath,
   type FirstRunStateName,
 } from '../first-run-state';
+/**
+ * Portal target for the setup card's left panel, where a step renders its title
+ * and lead text above the step list. `undefined` indicates no setup card is
+ * present (checklist screens or standalone step renders), so `StepIntro`
+ * renders inline; `null` indicates the card container has not mounted yet.
+ */
+export const FirstRunIntroSlot = createContext<HTMLElement | null | undefined>(
+  undefined,
+);
+
+/** Renders a step's title and lead text into the setup card's left panel. */
+export function StepIntro({ children }: { children: ReactNode }): ReactNode {
+  const slot = useContext(FirstRunIntroSlot);
+  if (slot === undefined) return children;
+  return slot ? createPortal(children, slot) : null;
+}
+
 export const stepOf = (state: FirstRunStateName): number => {
   if (state === 'boot') return 0;
   if (state === 'local') return 0;
@@ -58,7 +77,6 @@ const localStepOf = (state: FirstRunStateName): number => {
 export function SetupSidebar({
   checkpoint,
   pendingPath,
-  native = false,
   onCancel,
   cancelDisabled = false,
   onRestart,
@@ -68,10 +86,11 @@ export function SetupSidebar({
   onRecoverAccount,
   recoverEnabled = false,
   blocked = false,
+  introRef,
 }: {
+  /** Ref callback receiving the portal target for the active step's `StepIntro`. */
+  introRef?: (element: HTMLElement | null) => void;
   checkpoint: FirstRunCheckpoint;
-  /** The OS draws the window controls over the step list's own drag strip. */
-  native?: boolean;
   /** Path selected on the 'who' screen before confirmation. */
   pendingPath?: FirstRunPath | null;
   onCancel?: () => void;
@@ -105,8 +124,8 @@ export function SetupSidebar({
     const current = localStepOf(checkpoint.state);
     const labels = ['Local server', 'Create account', 'Account recovery'];
     return (
-      <nav className="side rail setup-side" aria-label="Setup steps">
-        <TrafficStrip native={native} />
+      <nav className="side setup-side" aria-label="Setup steps">
+        <div className="fr-intro" ref={introRef} />
         <div className={`setup-steps${blocked ? ' is-blocked' : ''}`}>
           {labels.map((label, index) => (
             <div
@@ -179,8 +198,8 @@ export function SetupSidebar({
     'Complete',
   ];
   return (
-    <nav className="side rail setup-side" aria-label="Setup steps">
-      <TrafficStrip native={native} />
+    <nav className="side setup-side" aria-label="Setup steps">
+      <div className="fr-intro" ref={introRef} />
       <div className={`setup-steps${blocked ? ' is-blocked' : ''}`}>
         {labels.map((label, index) => (
           <div

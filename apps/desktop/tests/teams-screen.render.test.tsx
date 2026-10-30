@@ -141,8 +141,8 @@ async function roundTrip(store: LocationStore): Promise<void> {
 }
 
 for (const { intent, heading } of [
-  { intent: 'create' as const, heading: 'Create a team' },
-  { intent: 'join' as const, heading: 'Join a team' },
+  { intent: 'create' as const, heading: 'Create a Team' },
+  { intent: 'join' as const, heading: 'Join a Team' },
 ]) {
   test(`a closed ${intent} sheet opened by the address does not come back with the tab`, async () => {
     const { store } = await setup({ kind: 'teams', open: intent });
@@ -175,7 +175,7 @@ test('a link that names the scene and the sheet still spends the intent once', a
   // sheet must still be opened against the canonical address, so that closing
   // it leaves no saved record behind.
   const { store } = await setup({ kind: 'teams', open: 'create' }, 'create');
-  assert.ok(ui.screen.getByRole('heading', { name: 'Create a team' }));
+  assert.ok(ui.screen.getByRole('heading', { name: 'Create a Team' }));
   assert.equal(
     (store.getSnapshot().location as { open?: string }).open,
     undefined,
@@ -186,7 +186,7 @@ test('a link that names the scene and the sheet still spends the intent once', a
     ui.fireEvent.keyDown(dialog, { key: 'Escape' });
   });
   assert.equal(
-    ui.screen.queryByRole('heading', { name: 'Create a team' }),
+    ui.screen.queryByRole('heading', { name: 'Create a Team' }),
     null,
   );
   assert.equal(store.getSnapshot().sheet, undefined);
@@ -194,9 +194,9 @@ test('a link that names the scene and the sheet still spends the intent once', a
 
 test('a sheet the reader left open is still restored with the tab', async () => {
   const { store } = await setup({ kind: 'teams', open: 'create' });
-  assert.ok(ui.screen.getByRole('heading', { name: 'Create a team' }));
+  assert.ok(ui.screen.getByRole('heading', { name: 'Create a Team' }));
   await roundTrip(store);
-  assert.ok(ui.screen.getByRole('heading', { name: 'Create a team' }));
+  assert.ok(ui.screen.getByRole('heading', { name: 'Create a Team' }));
 });
 
 for (const legacy of [false, true]) {
@@ -230,7 +230,7 @@ for (const legacy of [false, true]) {
     assert.equal(document.querySelector('[role="dialog"]'), null);
     await ui.act(async () => {
       ui.fireEvent.click(
-        ui.screen.getByRole('button', { name: 'Create a team' }),
+        ui.screen.getByRole('button', { name: 'Create a Team…' }),
       );
     });
     assert.equal(store.getAccount(), 'acct:work');
@@ -254,7 +254,7 @@ for (const target of [
     assert.equal(
       ui.screen
         .getByRole('button', {
-          name: 'Join a team…',
+          name: 'Join a Team…',
         })
         .hasAttribute('disabled'),
       true,
@@ -262,7 +262,7 @@ for (const target of [
     assert.equal(
       ui.screen
         .getByRole('button', {
-          name: 'Create a team',
+          name: 'Create a Team…',
         })
         .hasAttribute('disabled'),
       true,

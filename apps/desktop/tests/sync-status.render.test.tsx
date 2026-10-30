@@ -1,11 +1,11 @@
 /**
- * The topbar's refresh control: one square button, and the Refresh status
- * popover it opens on hover.
+ * Sidebar sync status control tests: verifies the status button and the
+ * per-server Refresh status popover opened on hover or focus.
  *
- * The popover is portaled, so the pointer leaves the button's wrapper on its
- * way into the popover. The control tracks the pointer on both and defers the
- * close, and these tests hold that: crossing into the popover must not close
- * it, and leaving both must.
+ * Because the popover is portaled outside the button wrapper, pointer enter and
+ * leave events are tracked across both elements with a close delay so moving
+ * the pointer from the button into the popover keeps it open, while leaving
+ * both closes it.
  */
 
 import assert from 'node:assert/strict';
@@ -27,6 +27,7 @@ let vite: ViteDevServer;
 let OverlayProvider: typeof import('../kit/overlay-primitives').OverlayProvider;
 let DesktopReconciliation: typeof import('../src/desktop-reconciliation').DesktopReconciliation;
 let Topbar: typeof import('../src/shell/topbar').Topbar;
+let SyncControls: typeof import('../src/shell/sync-status').SyncControls;
 let FIXTURE: typeof import('../src/fixture').FIXTURE;
 
 test.before(async () => {
@@ -45,6 +46,9 @@ test.before(async () => {
   ({ Topbar } = (await vite.ssrLoadModule(
     '/src/shell/topbar.tsx',
   )) as typeof import('../src/shell/topbar'));
+  ({ SyncControls } = (await vite.ssrLoadModule(
+    '/src/shell/sync-status.tsx',
+  )) as typeof import('../src/shell/sync-status'));
   ({ FIXTURE } = (await vite.ssrLoadModule(
     '/src/fixture.ts',
   )) as typeof import('../src/fixture'));
@@ -81,18 +85,16 @@ function Harness({
     createElement(OverlayProvider, {
       backgroundRef: background,
       portalRoot: document.body,
-      children: createElement(Topbar, {
+      children: createElement(SyncControls, {
         // These tests isolate refresh work; no chat provider is mounted.
         snapshot: {
           ...FIXTURE,
           stores: FIXTURE.stores.filter((store) => store.kind !== 'team'),
         },
-        location: { kind: 'files' },
-        onNavigate: () => {},
-        collapsed: false,
+        service,
         refreshing,
+        blocked: false,
         onRefresh: () => {},
-        syncService: service,
       }),
     }),
   );
@@ -293,38 +295,7 @@ test('the refresh control reads out the state it shows and stops while it runs',
   assert.equal(button.getAttribute('aria-busy'), 'true');
 });
 
-test('Chat with no team that has chat offers a team and disables the field', () => {
-  const navigations: unknown[] = [];
-  const background = { current: null } as { current: HTMLElement | null };
-  ui.render(
-    createElement(
-      'div',
-      null,
-      createElement(OverlayProvider, {
-        backgroundRef: background,
-        portalRoot: document.body,
-        children: createElement(Topbar, {
-          snapshot: FIXTURE,
-          location: { kind: 'chat' },
-          onNavigate: (location) => navigations.push(location),
-          collapsed: false,
-          query: '',
-          onQuery: () => {},
-          onNewChat: () => {},
-          chatTeamCount: 0,
-        }),
-      }),
-    ),
-  );
-  const field = document.querySelector<HTMLInputElement>('.topsearch input');
-  assert.ok(field);
-  assert.equal(field.disabled, true);
-  assert.equal(ui.screen.queryByRole('button', { name: 'New chat' }), null);
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New team' }));
-  assert.deepEqual(navigations, [{ kind: 'teams', open: 'create' }]);
-});
-
-test('Chat with teams keeps New chat and a live field', () => {
+test('Chat with no team that has chat disables the field and draws no add control of its own', () => {
   const background = { current: null } as { current: HTMLElement | null };
   ui.render(
     createElement(
@@ -340,8 +311,36 @@ test('Chat with teams keeps New chat and a live field', () => {
           collapsed: false,
           query: '',
           onQuery: () => {},
-          onNewChat: () => {},
+          chatTeamCount: 0,
+        }),
+      }),
+    ),
+  );
+  const field = document.querySelector<HTMLInputElement>('.topsearch input');
+  assert.ok(field);
+  assert.equal(field.disabled, true);
+  // The Chat tab passes its own add control (New channel, or New team).
+  assert.equal(ui.screen.queryByRole('button', { name: /^New/ }), null);
+});
+
+test('Chat with teams keeps a live field and draws the add control it is given', () => {
+  const background = { current: null } as { current: HTMLElement | null };
+  ui.render(
+    createElement(
+      'div',
+      null,
+      createElement(OverlayProvider, {
+        backgroundRef: background,
+        portalRoot: document.body,
+        children: createElement(Topbar, {
+          snapshot: FIXTURE,
+          location: { kind: 'chat' },
+          onNavigate: () => {},
+          collapsed: false,
+          query: '',
+          onQuery: () => {},
           chatTeamCount: 2,
+          add: createElement('button', { type: 'button' }, 'New channel'),
         }),
       }),
     ),
@@ -349,68 +348,35 @@ test('Chat with teams keeps New chat and a live field', () => {
   const field = document.querySelector<HTMLInputElement>('.topsearch input');
   assert.ok(field);
   assert.equal(field.disabled, false);
-  assert.ok(ui.screen.getByRole('button', { name: 'New chat' }));
+  assert.ok(ui.screen.getByRole('button', { name: 'New channel' }));
 });
 
-for (const location of [
-  { kind: 'chat', ref: 'team:eng', channel: 'general' },
-  { kind: 'settings', section: 'account', profile: 'acme' },
-] as const) {
-  test(`the intermediate ${location.kind} breadcrumb navigates to its parent`, async () => {
-    const navigations: unknown[] = [];
-    const { ChatInboxProvider } = (await vite.ssrLoadModule(
-      '/src/chat/inbox-provider.tsx',
-    )) as typeof import('../src/chat/inbox-provider');
-    const { mockBridge } = (await vite.ssrLoadModule(
-      '/src/mock-bridge.ts',
-    )) as typeof import('../src/mock-bridge');
-    const snapshot = {
-      ...FIXTURE,
-      servers: FIXTURE.servers.map((server) => ({
-        ...server,
-        services: { ...server.services, chat: true },
-      })),
-    };
-    const bridge = mockBridge(snapshot);
-    let target: import('../src/location').Location = location;
-    if (location.kind === 'chat') {
-      const reply = await bridge.chat(location.ref, {
-        action: 'sync-inbox',
-        blocked_channels: [],
-      });
-      assert.equal(reply.result.kind, 'inbox');
-      if (reply.result.kind !== 'inbox') return;
-      target = {
-        ...location,
-        channel: reply.result.conversations[0].channel.id,
-      };
-    }
-    ui.render(
-      createElement(ChatInboxProvider, {
-        snapshot,
-        bridge,
-        children: createElement(Topbar, {
-          snapshot,
-          location: target,
-          collapsed: false,
-          onNavigate: (next) => navigations.push(next),
-        }),
+// Settings names only itself in the bar: the sub-navigation names the
+// section, and a server page carries its own way back to Account.
+test('the settings bar names only Settings, even on a server page', async () => {
+  const { ChatInboxProvider } = (await vite.ssrLoadModule(
+    '/src/chat/inbox-provider.tsx',
+  )) as typeof import('../src/chat/inbox-provider');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  ui.render(
+    createElement(ChatInboxProvider, {
+      snapshot: FIXTURE,
+      bridge: mockBridge(FIXTURE),
+      children: createElement(Topbar, {
+        snapshot: FIXTURE,
+        location: { kind: 'settings', section: 'account', profile: 'acme' },
+        collapsed: false,
+        onNavigate: () => {},
       }),
-    );
-    await ui.waitFor(() =>
-      assert.equal(document.querySelectorAll('.crumbs button').length, 3),
-    );
-    const crumbs =
-      document.querySelectorAll<HTMLButtonElement>('.crumbs button');
-    assert.equal(crumbs.length, 3);
-    ui.fireEvent.click(crumbs[1]);
-    assert.deepEqual(navigations, [
-      location.kind === 'chat'
-        ? { kind: 'chat', ref: 'team:eng' }
-        : { kind: 'settings', section: 'account' },
-    ]);
-  });
-}
+    }),
+  );
+  const crumbs = document.querySelectorAll<HTMLButtonElement>('.crumbs button');
+  assert.equal(crumbs.length, 1);
+  assert.equal(crumbs[0].textContent, 'Settings');
+  assert.equal(crumbs[0].getAttribute('aria-current'), 'page');
+});
 
 test('an unavailable team retains its settings action in the takeover band', async () => {
   const { StoreAccessTakeover } = (await vite.ssrLoadModule(

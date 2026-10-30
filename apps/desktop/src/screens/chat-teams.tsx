@@ -307,6 +307,8 @@ export interface ChatTeamColumnProps {
    * own; it narrows to the teams and channels this matches.
    */
   query?: string;
+  /** Panel topbar rendered above the column (search field and New channel button). */
+  bar?: ReactNode;
 }
 
 export function ChatTeamColumn({
@@ -321,6 +323,7 @@ export function ChatTeamColumn({
   onTeams,
   onAddPeople,
   query: search = '',
+  bar,
 }: ChatTeamColumnProps): ReactNode {
   const { service, snapshot: inbox } = useChatInbox();
   const { controller } = useChannelCreation();
@@ -470,6 +473,7 @@ export function ChatTeamColumn({
       {/* Screen reader status announcement for search filtering results.
           The element is rendered persistently to ensure aria-live announcements
           fire. */}
+      {bar}
       <p className="offscreen" role="status">
         {query
           ? `${listed + dimmed.length} of ${teams.length + withoutChat.length} teams and ${listedChannels} of ${allChannels} channels match ${filter}.`
@@ -491,27 +495,10 @@ export function ChatTeamColumn({
             <span>Teams appear here with their channels.</span>
           </div>
         ) : null}
-        {/* The heading draws only once there is a team under it: a search
-            that clears every team drops the heading with it. The "+" it
-            carries is the column's one action, and it opens the same channel
-            creation the conversation pane does. */}
+        {/* Render the section heading only when at least one team matches the
+            filter. The New channel action is in the topbar above. */}
         {teamRows.length > 0 && (
-          <SectionLabel
-            className="chat-inbox-label"
-            action={
-              <button
-                type="button"
-                className="chat-inbox-add"
-                aria-label="New channel"
-                title="New channel"
-                onClick={onNewChat}
-              >
-                <Icon name="plus" size={14} />
-              </button>
-            }
-          >
-            Teams
-          </SectionLabel>
+          <SectionLabel className="chat-inbox-label">Teams</SectionLabel>
         )}
         {teamRows}
         {query &&

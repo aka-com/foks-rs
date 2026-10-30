@@ -91,7 +91,7 @@ test('an edit conflict with a deleted item preserves a new-item draft', async ()
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
   const username = await rendered.findByLabelText('User name');
   ui.fireEvent.change(username, { target: { value: 'kept-draft' } });
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Save changes' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Save Changes' }));
 
   // The sheet does not claim to know whether the item changed or went away.
   await rendered.findByText('Item changed elsewhere');
@@ -104,7 +104,7 @@ test('an edit conflict with a deleted item preserves a new-item draft', async ()
 
   // With nothing left to review, the edit is kept as a new password at the
   // same path, its fields carried over, and the toast says why.
-  await rendered.findByText('New password');
+  await rendered.findByText('New Password');
   await ui.waitFor(() =>
     assert.equal(
       (rendered.getByLabelText('User name') as HTMLInputElement).value,
@@ -126,7 +126,7 @@ test('an edit conflict with an existing item resumes against the refreshed versi
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
   const username = await rendered.findByLabelText('User name');
   ui.fireEvent.change(username, { target: { value: 'kept-draft' } });
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Save changes' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Save Changes' }));
   await rendered.findByText('Item changed elsewhere');
   await ui.act(async () => {
     ui.fireEvent.click(
@@ -134,11 +134,19 @@ test('an edit conflict with an existing item resumes against the refreshed versi
     );
   });
   await ui.waitFor(() => assert.match(toasts(), /Review your draft/));
-  assert.equal(rendered.queryByText('New password'), null);
+  assert.equal(rendered.queryByText('New Password'), null);
   assert.ok(document.querySelector('.details'));
 });
 
 /** The confirmation's own Delete, not the details panel's. */
+/** Runs an action from the details panel's More menu. */
+async function itemMenuAction(label: string): Promise<void> {
+  ui.fireEvent.click(
+    await ui.screen.findByRole('button', { name: 'More actions' }),
+  );
+  ui.fireEvent.click(await ui.screen.findByRole('menuitem', { name: label }));
+}
+
 function confirmDelete(): HTMLButtonElement {
   const dialog = document.querySelector('[role="alertdialog"]');
   assert.ok(dialog, 'the delete confirmation is up');
@@ -169,7 +177,7 @@ test('delete conflicts distinguish modified and deleted items', async () => {
       return base.removeItem(request);
     },
   }));
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Delete' }));
+  await itemMenuAction('Delete…');
   await ui.waitFor(() => confirmDelete());
   await ui.act(async () => {
     ui.fireEvent.click(confirmDelete());
@@ -179,8 +187,10 @@ test('delete conflicts distinguish modified and deleted items', async () => {
   );
 
   gone = true;
-  await ui.waitFor(() => rendered.getByRole('button', { name: 'Delete' }));
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Delete' }));
+  await ui.waitFor(() =>
+    rendered.getByRole('button', { name: 'More actions' }),
+  );
+  await itemMenuAction('Delete…');
   await ui.waitFor(() => confirmDelete());
   await ui.act(async () => {
     ui.fireEvent.click(confirmDelete());

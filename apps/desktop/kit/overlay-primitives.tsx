@@ -72,6 +72,13 @@ export function anyDialogOpen(): boolean {
   return mountedDialogs.size > 0;
 }
 
+/**
+ * The control a menu returns the focus to, while one of its items is being
+ * chosen. A dialog the item opens takes it as its own opener, so the focus
+ * goes back to the menu's trigger once every overlay has closed.
+ */
+let menuOpener: HTMLElement | null = null;
+
 const OverlayContext = createContext<OverlayEnvironment | null>(null);
 const OverlayBlockingContext = createContext(false);
 
@@ -179,15 +186,23 @@ export function Dialog({
   const environment = useOverlayEnvironment();
   const { dialogs } = environment;
   const dialogRef = useRef<HTMLDivElement>(null);
+  // Focus return target for the dialog. Preserved across effect remounts
+  // (such as React development double-mounting) when focus has already moved
+  // to the dialog's first control.
+  const openerRef = useRef<HTMLElement | null>(null);
 
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
-    const opener =
+    if (
       document.activeElement instanceof HTMLElement &&
-      document.activeElement !== document.body
-        ? document.activeElement
-        : null;
+      document.activeElement !== document.body &&
+      !dialog.contains(document.activeElement)
+    )
+      openerRef.current = document.activeElement;
+    else if (!openerRef.current && menuOpener?.isConnected)
+      openerRef.current = menuOpener;
+    const opener = openerRef.current;
     const releases = [
       ...(environment.backgroundRef.current
         ? [isolate(environment.backgroundRef.current)]
@@ -252,15 +267,22 @@ export function Dialog({
   );
 }
 
+/**
+ * Portaled dialog that closes on Escape. Because sheets and alerts are
+ * window-modal, clicking the backdrop is ignored unless `dismissOnBackdrop` is
+ * enabled (used for transient surfaces such as the search palette).
+ */
 export function DismissibleDialog({
   onDismiss,
   dismissible = true,
+  dismissOnBackdrop = false,
   onMouseDown,
   onKeyDown,
   ...props
 }: DialogProps & {
   onDismiss: () => void;
   dismissible?: boolean;
+  dismissOnBackdrop?: boolean;
 }): ReactNode {
   const { portalRoot } = useOverlayEnvironment();
   return createPortal(
@@ -270,6 +292,7 @@ export function DismissibleDialog({
         onMouseDown?.(event);
         if (
           !dismissible ||
+          !dismissOnBackdrop ||
           event.defaultPrevented ||
           event.target !== event.currentTarget
         )
@@ -411,7 +434,9 @@ function RovingCollection({
     if (!target?.closest(itemSelector)) return;
     const anchor = anchorRef.current;
     const collection = event.currentTarget;
+    menuOpener = anchor;
     queueMicrotask(() => {
+      if (menuOpener === anchor) menuOpener = null;
       if (!collection.isConnected && canRestoreFocus(anchor, dialogs))
         anchor.focus();
     });

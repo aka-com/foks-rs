@@ -34,6 +34,7 @@ import {
   applyLease,
   defaultCreateStore,
   settingsAlertSummary,
+  storeDescriptionState,
   storeOf,
   storeReadable,
   type AgentSnapshot,
@@ -61,8 +62,11 @@ import {
 } from '../screens/write-workflows';
 import { useSearchShortcut } from '../shell/search-palette';
 import { Sidebar } from '../shell/sidebar';
-import { Topbar } from '../shell/topbar';
-import { requestNewChat } from '../screens/chat-tab';
+import { Topbar, type TopbarProps } from '../shell/topbar';
+import { BarActionsSlot, DetailsSlot } from '../shell/page-slots';
+import { activityBadge } from '../activity';
+import { FilesViewMenu } from '../shell/files-view-menu';
+import { PlainSyncStatus, SyncControls } from '../shell/sync-status';
 import { chatTeams } from '../screens/chat-teams';
 import { useAccessRuntime } from './access-runtime';
 import { AccessLifetime } from './access-lifetime';
@@ -364,15 +368,18 @@ export function VaultShell({
   }, [infoStore, teamInfo]);
 
   const pendingFirstRun = incompleteFirstRunCheckpoint();
+  const [setupLater, setSetupLater] = useState(false);
+  // Portal target elements for page-specific topbar actions and details columns
+  // (`shell/page-slots.tsx`).
+  const [barSlot, setBarSlot] = useState<HTMLElement | null>(null);
+  const [detailsSlot, setDetailsSlot] = useState<HTMLElement | null>(null);
   const detailsShown =
     state.details &&
     listsItems(here) &&
     !(here.kind === 'store' && !storeReadable(shown, here.ref)) &&
     !(state.selection && !storeReadable(shown, state.selection.store));
-  // Where the header's New control saves, and whether it can. The items
-  // screen settles the same destination from the same tree selection; this
-  // reads that selection rather than a second source of truth, and falls back
-  // to the account the screen would fall back to.
+  // Resolve the target store and folder for the topbar New menu. This uses the
+  // same tree selection and default-store fallback as ItemsScreen.
   const filesHere = listsItems(here);
   const newSelection = filesHere ? folderSelection(here, state.folder) : null;
   const newStore =
@@ -509,6 +516,35 @@ export function VaultShell({
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [openNewItem]);
+  // ⌘⌫ deletes the selected item, through the same alert the item's menu
+  // opens, and only while nothing else holds the keyboard: a text field, a
+  // menu or a dialog.
+  const selectedItem =
+    filesHere && state.selection
+      ? shown.items.find(
+          (item) =>
+            item.store === state.selection?.store &&
+            item.path === state.selection.path &&
+            item.kind !== 'Folder',
+        )
+      : undefined;
+  useEffect(() => {
+    if (!selectedItem || chrome.blocked) return;
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Backspace' || !event.metaKey || event.altKey) return;
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest('input, textarea, select, [contenteditable="true"]')
+      )
+        return;
+      if (anyDialogOpen() || document.querySelector('[role="menu"]')) return;
+      event.preventDefault();
+      setWorkflow({ kind: 'delete', item: selectedItem });
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [chrome.blocked, selectedItem, setWorkflow]);
   useEffect(() => {
     if (!bridge.native) return;
     let disposed = false;
@@ -528,10 +564,96 @@ export function VaultShell({
       stop?.();
     };
   }, [bridge, openNewItem]);
+  const refreshShell = (): void =>
+    refreshAll(() => {
+      reconciliation.scheduler.requestAll('manual', [
+        'discovery',
+        'metadata',
+        'registry',
+        'connectivity',
+      ]);
+    }, commandError);
+  const openServer = (profile: string): void =>
+    locations.navigate({ kind: 'settings', section: 'account', profile });
   const chatMigration = useChatMigration(
     bridge,
     agentLifecycle.state === 'ready' && agentCatalogReady && !chrome.blocked,
     concealSignal,
+  );
+  // Files is a list beside its details: with nothing selected (or the
+  // details closed) the details column says No Selection rather than going
+  // away, so the list keeps its width.
+  const teamInfoShown =
+    !chrome.blocked && filesHere && !detailsShown && infoStore?.kind === 'team';
+  // A store page whose store is gone or cannot be used is a page of its own
+  // (the unavailable notice, the access takeover), not a list.
+  const herePage =
+    here.kind === 'store' &&
+    (() => {
+      const pageStore = storeOf(shown, here.ref);
+      return !pageStore || storeDescriptionState(shown, pageStore) !== 'normal';
+    })();
+  const splitEmpty = filesHere && !herePage && !detailsShown && !teamInfoShown;
+  // Chat draws this bar over its own resizable channel column, with the
+  // column's add control passed in, so the conversation beside it can carry
+  // a bar of its own; every other place draws it across the top of the panel.
+  const renderTopbar = (extra?: Partial<TopbarProps>): ReactNode => (
+    <Topbar
+      blocked={chrome.blocked}
+      deviceLabel={deviceLabel}
+      snapshot={shown}
+      location={here}
+      folder={state.folder}
+      onNavigate={(location) => locations.navigate(location)}
+      onSetFolder={(folder) => locations.setFolder(folder)}
+      // Shared search input for views that filter a list.
+      actionsSlot={setBarSlot}
+      {...(filesHere ||
+      here.kind === 'chat' ||
+      here.kind === 'activity' ||
+      here.kind === 'devices'
+        ? {
+            query: state.query,
+            onQuery: (query: string) => locations.search(query),
+          }
+        : {})}
+      {...(here.kind === 'chat'
+        ? { chatTeamCount: chatTeams(shown).length }
+        : {})}
+      {...(filesHere && newStore
+        ? {
+            onNew: (itemKind: Exclude<KindFilter, 'All'>) =>
+              void openNewItem(itemKind),
+            onNewFolder: () =>
+              setWorkflow({
+                kind: 'new-folder',
+                storeId: newStore.id,
+                initialFolder:
+                  newSelection && newSelection.store !== ALL_ITEMS
+                    ? newSelection.path
+                    : '/',
+              }),
+            newBlocked: writeBlockReason(shown, newStore),
+          }
+        : {})}
+      {...(filesHere
+        ? {
+            actions: (
+              <FilesViewMenu
+                sort={state.sort}
+                direction={state.sortDirection}
+                onSort={(sort, direction) => locations.setSort(sort, direction)}
+                locationSort={newSelection?.store === ALL_ITEMS}
+                disabled={chrome.blocked}
+              />
+            ),
+          }
+        : {})}
+      collapsed={sideCollapsed}
+      onToggleCollapsed={toggleSidebar}
+      nativeChrome={bridge.native}
+      {...extra}
+    />
   );
   const shell = (
     <div
@@ -546,12 +668,16 @@ export function VaultShell({
       <div
         className={[
           'app',
-          detailsShown || (here.kind === 'first-run' && here.step === 'added')
+          detailsShown ||
+          splitEmpty ||
+          here.kind === 'activity' ||
+          here.kind === 'devices' ||
+          (here.kind === 'first-run' && here.step === 'added')
             ? 'with-details'
             : '',
-          // The setup steps replace the rail with one that has no toggle; the
-          // checklist screens draw the rail itself and collapse with it.
-          railCollapsed ? 'side-narrow' : '',
+          // The setup steps replace the sidebar with one that has no toggle;
+          // the checklist screens draw the sidebar itself and hide with it.
+          railCollapsed ? 'no-side' : '',
         ]
           .filter(Boolean)
           .join(' ')}
@@ -611,6 +737,7 @@ export function VaultShell({
                 account={locations.getAccount()}
                 attention={unroutedNotices(shown).length}
                 teamRequests={teamRequestsBadge(shown, teamRequestCounts)}
+                activity={activityBadge(shown, teamRequestCounts)}
                 devicesAlert={devicesAlertSummary(shown, deviceAlerts)}
                 settingsAlert={settingsAlertSummary(shown)}
                 onTabNavigate={(tab) => locations.navigateTab(tab)}
@@ -618,10 +745,11 @@ export function VaultShell({
                   locations.navigate(location);
                 }}
                 onLock={lockFromMenu}
-                // Setup progress is the rail's card, not a row: the card
-                // names what comes next and continues where setup stopped.
+                // Render incomplete setup progress as a sidebar footer card that
+                // shows the next step and resumes setup where it left off.
                 setup={
                   pendingFirstRun &&
+                  !setupLater &&
                   completedFirstRunSteps(pendingFirstRun) <
                     firstRunStepCount(pendingFirstRun)
                     ? {
@@ -634,78 +762,68 @@ export function VaultShell({
                             step: pendingFirstRun.state,
                             path: pendingFirstRun.path,
                           }),
+                        // Dismiss the card for the current session while keeping
+                        // the persisted checkpoint for the next launch.
+                        onLater: () => setSetupLater(true),
                       }
                     : undefined
                 }
                 onToggleCollapsed={toggleSidebar}
                 collapsed={sideCollapsed}
-                // The lifecycle is the rail's own authority for whether the
-                // agent is gone, whichever path raised the disconnect.
+                files={{
+                  folder: state.folder,
+                  kind: state.kind,
+                  onOpen: (folder, kind) => locations.openFiles(folder, kind),
+                  accessNow,
+                  folderActions: {
+                    onNewFolder: (storeId, initialFolder) =>
+                      setWorkflow({
+                        kind: 'new-folder',
+                        storeId,
+                        initialFolder,
+                      }),
+                    onMove: (item) => setWorkflow({ kind: 'move', item }),
+                    // Offer Team Info only while the Files list is active, since
+                    // it renders in the details column beside the list.
+                    ...(filesHere
+                      ? {
+                          onTeamInfo: (
+                            storeId: string,
+                            trigger?: HTMLElement,
+                          ) => {
+                            locations.setDetails(false);
+                            setTeamInfo({ storeId, trigger });
+                          },
+                        }
+                      : {}),
+                  },
+                }}
+                // Pass the lifecycle agent status as the authoritative indicator
+                // of agent disconnection.
                 agent={chrome.agent}
+                statusLine={
+                  bridge.native ? (
+                    <SyncControls
+                      snapshot={shown}
+                      service={reconciliation}
+                      refreshing={refreshingSnapshot}
+                      blocked={chrome.blocked}
+                      onRefresh={refreshShell}
+                      onOpenServers={openServer}
+                    />
+                  ) : (
+                    <PlainSyncStatus
+                      refreshing={refreshingSnapshot}
+                      blocked={chrome.blocked}
+                      onRefresh={refreshShell}
+                    />
+                  )
+                }
                 nativeChrome={bridge.native}
                 blocked={chrome.blocked}
               />
               <main className="main">
-                <Topbar
-                  blocked={chrome.blocked}
-                  deviceLabel={deviceLabel}
-                  snapshot={shown}
-                  location={here}
-                  folder={state.folder}
-                  onNavigate={(location) => locations.navigate(location)}
-                  onSetFolder={(folder) => locations.setFolder(folder)}
-                  // One field for the shell: on the views that list items it
-                  // drives the same query the browser reads.
-                  {...(filesHere || here.kind === 'chat'
-                    ? {
-                        query: state.query,
-                        onQuery: (query: string) => locations.search(query),
-                      }
-                    : {})}
-                  {...(here.kind === 'chat'
-                    ? {
-                        onNewChat: requestNewChat,
-                        chatTeamCount: chatTeams(shown).length,
-                      }
-                    : {})}
-                  {...(filesHere && newStore
-                    ? {
-                        onNew: (itemKind: Exclude<KindFilter, 'All'>) =>
-                          void openNewItem(itemKind),
-                        newBlocked: writeBlockReason(shown, newStore),
-                      }
-                    : {})}
-                  detailsOpen={detailsShown}
-                  {...(filesHere
-                    ? {
-                        onToggleDetails: () => {
-                          if (detailsShown) locations.setDetails(false);
-                          else if (state.selection) locations.setDetails(true);
-                        },
-                      }
-                    : {})}
-                  collapsed={sideCollapsed}
-                  onToggleCollapsed={toggleSidebar}
-                  refreshing={refreshingSnapshot}
-                  onRefresh={() =>
-                    refreshAll(() => {
-                      reconciliation.scheduler.requestAll('manual', [
-                        'discovery',
-                        'metadata',
-                        'registry',
-                        'connectivity',
-                      ]);
-                    }, commandError)
-                  }
-                  syncService={bridge.native ? reconciliation : undefined}
-                  onOpenServers={(profile) =>
-                    locations.navigate({
-                      kind: 'settings',
-                      section: 'account',
-                      profile,
-                    })
-                  }
-                />
+                {here.kind === 'chat' ? null : renderTopbar()}
                 {chatMigration.notice}
                 {/* Reset screen failures when the location changes while keeping
                     the rail and topbar outside the error boundary. */}
@@ -713,34 +831,39 @@ export function VaultShell({
                   key={screenBoundaryKey(here)}
                   identity={screenIdentity(here)}
                 >
-                  <ScreenRouter
-                    shown={shown}
-                    bridge={bridge}
-                    state={state}
-                    locations={locations}
-                    enteredScene={enteredScene}
-                    namedState={namedState}
-                    concealSignal={concealSignal}
-                    hardwareRefresh={hardwareRefresh}
-                    setDeviceLabel={setDeviceLabel}
-                    setRevealRequest={setRevealRequest}
-                    workflow={workflow}
-                    setWorkflow={setWorkflow}
-                    refresh={refresh}
-                    refreshSnapshot={refreshSnapshot}
-                    commandError={commandError}
-                    mutationError={mutationError}
-                    onLock={onLock}
-                    agentLifecycle={agentLifecycle}
-                    recoverAgentReadiness={recoverAgentReadiness}
-                    uploadDroppedFile={uploadDroppedFile}
-                    accessNow={accessNow}
-                    accessGenerations={accessGenerations}
-                    onTeamInfo={(storeId, trigger) => {
-                      locations.setDetails(false);
-                      setTeamInfo({ storeId, trigger });
-                    }}
-                  />
+                  <BarActionsSlot.Provider value={barSlot}>
+                    <DetailsSlot.Provider value={detailsSlot}>
+                      <ScreenRouter
+                        shown={shown}
+                        bridge={bridge}
+                        state={state}
+                        locations={locations}
+                        enteredScene={enteredScene}
+                        namedState={namedState}
+                        concealSignal={concealSignal}
+                        hardwareRefresh={hardwareRefresh}
+                        setDeviceLabel={setDeviceLabel}
+                        setRevealRequest={setRevealRequest}
+                        workflow={workflow}
+                        setWorkflow={setWorkflow}
+                        refresh={refresh}
+                        refreshSnapshot={refreshSnapshot}
+                        commandError={commandError}
+                        mutationError={mutationError}
+                        onLock={onLock}
+                        agentLifecycle={agentLifecycle}
+                        recoverAgentReadiness={recoverAgentReadiness}
+                        uploadDroppedFile={uploadDroppedFile}
+                        accessNow={accessNow}
+                        accessGenerations={accessGenerations}
+                        onTeamInfo={(storeId, trigger) => {
+                          locations.setDetails(false);
+                          setTeamInfo({ storeId, trigger });
+                        }}
+                        renderBar={renderTopbar}
+                      />
+                    </DetailsSlot.Provider>
+                  </BarActionsSlot.Provider>
                 </ScreenErrorBoundary>
               </main>
             </>
@@ -764,6 +887,26 @@ export function VaultShell({
               }}
             />
           ) : null}
+          {splitEmpty ? (
+            <section className="details details-empty" aria-label="Details">
+              {chrome.blocked ? null : (
+                <>
+                  <div className="bar" data-tauri-drag-region="" />
+                  <div className="empty">
+                    <b>No Selection</b>
+                  </div>
+                </>
+              )}
+            </section>
+          ) : null}
+          {here.kind === 'activity' || here.kind === 'devices' ? (
+            // Details column portal target for Activity and Devices.
+            <section
+              ref={setDetailsSlot}
+              className={`details ${here.kind}-details`}
+              aria-label="Details"
+            />
+          ) : null}
           {here.kind !== 'first-run' && detailsShown ? (
             <DetailsPanel
               snapshot={shown}
@@ -775,6 +918,10 @@ export function VaultShell({
                 locations.setDetails(false);
               }}
               onMove={(item) => setWorkflow({ kind: 'move', item })}
+              onOpenFolder={(storeId, path) =>
+                locations.openFiles(`${storeId}|${path}`, 'All')
+              }
+              onOpenServer={openServer}
               onDelete={(item) => setWorkflow({ kind: 'delete', item })}
               onConflict={(item, draft, operation) =>
                 setWorkflow({ kind: 'conflict', item, draft, operation })

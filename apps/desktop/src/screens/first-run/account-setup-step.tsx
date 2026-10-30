@@ -12,7 +12,7 @@ import type {
   FirstRunCheckpoint,
   FirstRunStateName,
 } from '../../first-run-state';
-import { Foot, Pane } from '../first-run-view';
+import { Foot, Pane, StepIntro } from '../first-run-view';
 import { StepLabel } from './step-label';
 
 /** Account choice and form layout; provisioning and SSO ownership stay in the session. */
@@ -136,21 +136,23 @@ export function AccountSetupStep({
         </Foot>
       }
     >
-      <h1>Set up your account</h1>
-      <p className="lead">
-        {signingIn ? (
-          <>
-            Your account already exists on {profile?.canonicalName}. Recover it
-            with your recovery phrase
-            {goCandidatePresent
-              ? ' or connect using the official FOKS CLI'
-              : ''}
-            .
-          </>
-        ) : (
-          'Your account keys are generated on this device; only the public keys are sent to the server.'
-        )}
-      </p>
+      <StepIntro>
+        <h1>Set up your account</h1>
+        <p className="lead">
+          {signingIn ? (
+            <>
+              Your account already exists on {profile?.canonicalName}. Recover
+              it with your recovery phrase
+              {goCandidatePresent
+                ? ' or connect using the official FOKS CLI'
+                : ''}
+              .
+            </>
+          ) : (
+            'Your account keys are generated on this device; only the public keys are sent to the server.'
+          )}
+        </p>
+      </StepIntro>
       <StepLabel n={1}>Setup method</StepLabel>
       <Inset>
         <RadioGroup label="Account setup">

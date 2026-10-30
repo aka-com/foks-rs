@@ -326,7 +326,7 @@ test('ready catalog partials preload devices but startup waits for both reads', 
     assert.equal(mounted(), false);
     await ui.act(async () => releaseDevices());
     await ui.waitFor(() =>
-      assert.ok(document.querySelector('.side.rail .who .t')),
+      assert.ok(document.querySelector('.side .who .t')),
     );
     assert.ok(mounted());
   } finally {

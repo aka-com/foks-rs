@@ -32,6 +32,9 @@ async function mount(accessNow?: () => number) {
   const { ItemsScreen } = (await vite.ssrLoadModule(
     '/src/screens/items-screen.tsx',
   )) as typeof import('../src/screens/items-screen');
+  const { FilesTree } = (await vite.ssrLoadModule(
+    '/src/shell/files-tree.tsx',
+  )) as typeof import('../src/shell/files-tree');
   const { FIXTURE } = (await vite.ssrLoadModule(
     '/src/fixture.ts',
   )) as typeof import('../src/fixture');
@@ -76,22 +79,38 @@ async function mount(accessNow?: () => number) {
       locations.subscribe,
       locations.getSnapshot,
     );
-    return createElement(ItemsScreen, {
-      snapshot,
-      bridge,
-      state,
-      locations,
-      accessNow,
-      onReveal: (item: Item) => reveals.push(item),
-      onDelete: (item: Item) => deletions.push(item),
-      onNew: () => {},
-      onResume: async () => {},
-      onSettings: () => {},
-      onNewFolder: (storeId: string, path: string) =>
-        folders.push({ storeId, path }),
-      onTeamInfo: (storeId: string) => teamInfo.push(storeId),
-      onCommandError: (error: unknown) => failures.push(error),
-    });
+    const onNewFolder = (storeId: string, path: string) =>
+      folders.push({ storeId, path });
+    const onTeamInfo = (storeId: string) => teamInfo.push(storeId);
+    // The sidebar's store tree and the list share the folder menu.
+    return createElement(
+      'div',
+      null,
+      createElement(FilesTree, {
+        snapshot,
+        location: state.location,
+        folder: state.folder,
+        onOpen: (folder: string) => locations.openFiles(folder, 'All'),
+        onNavigate: (location) => locations.navigate(location),
+        folderActions: { onNewFolder, onTeamInfo },
+        accessNow,
+      }),
+      createElement(ItemsScreen, {
+        snapshot,
+        bridge,
+        state,
+        locations,
+        accessNow,
+        onReveal: (item: Item) => reveals.push(item),
+        onDelete: (item: Item) => deletions.push(item),
+        onNew: () => {},
+        onResume: async () => {},
+        onSettings: () => {},
+        onNewFolder,
+        onTeamInfo,
+        onCommandError: (error: unknown) => failures.push(error),
+      }),
+    );
   }
   const view = (snapshot: AgentSnapshot, blocking = false) =>
     createElement(OverlayProvider, {
@@ -119,6 +138,14 @@ async function mount(accessNow?: () => number) {
   };
 }
 
+/** Switches the Files view to card layout. */
+async function cards(): Promise<void> {
+  const { setFilesView } = (await vite.ssrLoadModule(
+    '/src/files-view-pref.ts',
+  )) as typeof import('../src/files-view-pref');
+  ui.act(() => setFilesView('grid'));
+}
+
 function row(name: string): HTMLElement {
   const row = [...document.querySelectorAll<HTMLElement>('.lpane .row')].find(
     (element) => element.querySelector('.nm')?.textContent === name,
@@ -134,7 +161,9 @@ test('item menus use the existing read actions and restore keyboard focus', asyn
   assert.equal(mounted.locations.getSnapshot().selection, null);
   assert.equal(mounted.copies.length, 0);
   assert.equal(ui.screen.queryByRole('menuitem', { name: 'Download' }), null);
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Copy' }));
+  ui.fireEvent.click(
+    ui.screen.getByRole('menuitem', { name: 'Copy Password' }),
+  );
   assert.deepEqual(mounted.copies, [
     { storeId: 'acct:personal', path: '/logins/github.com', version: 9 },
   ]);
@@ -142,7 +171,7 @@ test('item menus use the existing read actions and restore keyboard focus', asyn
   await ui.waitFor(() => assert.ok(document.activeElement === password));
 
   ui.fireEvent.keyDown(password, { key: 'F10', shiftKey: true });
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Reveal' }));
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Show Value' }));
   assert.equal(mounted.reveals[0]?.path, '/logins/github.com');
   assert.deepEqual(mounted.locations.getSnapshot().selection, {
     store: 'acct:personal',
@@ -150,7 +179,10 @@ test('item menus use the existing read actions and restore keyboard focus', asyn
   });
 
   ui.fireEvent.contextMenu(row('passport-scan.pdf'));
-  assert.equal(ui.screen.queryByRole('menuitem', { name: 'Copy' }), null);
+  assert.equal(
+    ui.screen.queryByRole('menuitem', { name: /^Copy (Password|Value)$/ }),
+    null,
+  );
   ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Download' }));
   assert.equal(mounted.downloads[0]?.path, '/documents/passport-scan.pdf');
   assert.equal(mounted.failures.length, 0);
@@ -160,7 +192,7 @@ test('details and deletion target the context item, not the current selection', 
   const mounted = await mount();
   ui.fireEvent.click(row('github.com'));
   ui.fireEvent.contextMenu(row('passport-scan.pdf'));
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Delete' }));
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Delete…' }));
   assert.equal(mounted.deletions[0]?.path, '/documents/passport-scan.pdf');
   assert.equal(
     mounted.locations.getSnapshot().selection?.path,
@@ -169,7 +201,7 @@ test('details and deletion target the context item, not the current selection', 
   assert.equal(ui.screen.queryByRole('menu'), null);
 
   ui.fireEvent.contextMenu(row('passport-scan.pdf'));
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Show details' }));
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Show Details' }));
   assert.equal(
     mounted.locations.getSnapshot().selection?.path,
     '/documents/passport-scan.pdf',
@@ -188,7 +220,7 @@ test('an open menu rechecks changed write permission and modal blocking dismisse
     ),
   };
   mounted.update(snapshot);
-  const deletion = ui.screen.getByRole('menuitem', { name: 'Delete' });
+  const deletion = ui.screen.getByRole('menuitem', { name: 'Delete…' });
   assert.equal(deletion.getAttribute('aria-disabled'), 'true');
   assert.ok(deletion.getAttribute('aria-describedby'));
   ui.fireEvent.click(deletion);
@@ -226,7 +258,7 @@ test('read actions recheck a lease that expires while the menu is open', async (
   assert.equal(lease.status, 'required');
   if (lease.status !== 'required') return;
   ui.fireEvent.contextMenu(row('production-token'));
-  const copy = ui.screen.getByRole('menuitem', { name: 'Copy' });
+  const copy = ui.screen.getByRole('menuitem', { name: 'Copy Value' });
   assert.equal(copy.getAttribute('aria-disabled'), null);
   now = lease.expiresAt + 1;
   ui.fireEvent.click(copy);
@@ -237,7 +269,7 @@ test('read actions recheck a lease that expires while the menu is open', async (
 test('vault and team roots expose scoped folder creation and team info without selection changes', async () => {
   const mounted = await mount();
   const vault = document.querySelector<HTMLElement>(
-    '[data-folder-store="acct:personal"][data-folder-path="/"]',
+    '.side-tree [data-folder-store="acct:personal"][data-folder-path="/"]',
   )!;
   ui.fireEvent.contextMenu(vault);
   assert.equal(
@@ -253,7 +285,7 @@ test('vault and team roots expose scoped folder creation and team info without s
   assert.deepEqual(mounted.folders, [{ storeId: 'acct:personal', path: '/' }]);
   const before = mounted.locations.getSnapshot();
   const team = document.querySelector<HTMLElement>(
-    '[data-folder-store="team:eng"][data-folder-path="/"] .fselect',
+    '.side-tree [data-folder-store="team:eng"][data-folder-path="/"] .fselect',
   )!;
   ui.fireEvent.keyDown(team, { key: 'F10', shiftKey: true });
   ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Team info' }));
@@ -279,8 +311,14 @@ test('vault and team roots expose scoped folder creation and team info without s
 
 test('tree and content folders target their own path and explain unsupported deletion', async () => {
   const mounted = await mount();
+  // Folders show once their store is open in the tree.
+  ui.fireEvent.click(
+    document.querySelector<HTMLElement>(
+      '.side-tree [data-folder-store="acct:personal"][data-folder-path="/"] .twist',
+    )!,
+  );
   const folder = document.querySelector<HTMLElement>(
-    '.tpane [data-folder-store="acct:personal"][data-folder-path="/logins"] .fselect',
+    '.side-tree [data-folder-store="acct:personal"][data-folder-path="/logins"] .fselect',
   )!;
   ui.fireEvent.contextMenu(folder);
   const deletion = ui.screen.getByRole('menuitem', { name: 'Delete folder' });
@@ -310,7 +348,7 @@ test('tree and content folders target their own path and explain unsupported del
 
 test('grid cards keep item selection, quick actions, and keyboard context menus', async () => {
   const mounted = await mount();
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Grid view' }));
+  await cards();
   const password = row('github.com');
   assert.ok(password.closest('.files-grid'));
   ui.fireEvent.keyDown(password, { key: ' ' });
@@ -320,7 +358,7 @@ test('grid cards keep item selection, quick actions, and keyboard context menus'
   );
   assert.equal(mounted.copies[0]?.path, '/logins/github.com');
   ui.fireEvent.keyDown(password, { key: 'F10', shiftKey: true });
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Reveal' }));
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Show Value' }));
   assert.equal(mounted.reveals[0]?.path, '/logins/github.com');
   await ui.waitFor(() => assert.ok(document.activeElement === password));
   const file = row('passport-scan.pdf');
@@ -332,7 +370,7 @@ test('grid cards keep item selection, quick actions, and keyboard context menus'
     '/logins/github.com',
   );
   ui.fireEvent.contextMenu(file);
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Show details' }));
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Show Details' }));
   assert.equal(
     mounted.locations.getSnapshot().selection?.path,
     '/documents/passport-scan.pdf',
@@ -342,7 +380,7 @@ test('grid cards keep item selection, quick actions, and keyboard context menus'
 test('grid folder menus preserve their scope for right click and Shift+F10', async () => {
   const mounted = await mount();
   ui.act(() => mounted.locations.setFolder('acct:personal|/'));
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Grid view' }));
+  await cards();
   const folder = row('logins');
   for (const open of [
     () => ui.fireEvent.contextMenu(folder),

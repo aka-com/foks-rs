@@ -193,6 +193,7 @@ export function decodeProductionLocation(search: string): Location | null {
       : null;
   }
   if (state === 'files') return { kind: 'files' };
+  if (state === 'activity') return { kind: 'activity' };
   if (state === 'teams') {
     const ref = params.get('ref') ?? undefined;
     const store = params.get('store') ?? undefined;

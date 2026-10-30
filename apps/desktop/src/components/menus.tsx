@@ -30,8 +30,30 @@ export interface MenuItemProps {
   icon?: FoksIconName;
   /** What the item says when it applies. */
   title?: string;
+  /**
+   * The key equivalent, drawn at the trailing edge in macOS notation
+   * ("⌘N", "⇧⌘N", "⌘⌫"). It states a binding that exists elsewhere — the
+   * native menu or a shell handler — and binds nothing itself.
+   */
+  shortcut?: string;
   onClick?: () => void;
   children: ReactNode;
+}
+
+const SHORTCUT_KEYS: Readonly<Record<string, string>> = {
+  '⌘': 'Meta',
+  '⇧': 'Shift',
+  '⌥': 'Alt',
+  '⌃': 'Control',
+  '⌫': 'Backspace',
+  '↩': 'Enter',
+};
+
+/** "⇧⌘N" as `aria-keyshortcuts` spells it: "Shift+Meta+N". */
+export function ariaShortcut(shortcut: string): string {
+  return [...shortcut]
+    .map((key) => SHORTCUT_KEYS[key] ?? key.toUpperCase())
+    .join('+');
 }
 
 export function MenuItem({
@@ -39,6 +61,7 @@ export function MenuItem({
   danger = false,
   icon,
   title,
+  shortcut,
   onClick,
   children,
 }: MenuItemProps): ReactNode {
@@ -53,10 +76,16 @@ export function MenuItem({
         aria-describedby={inert ? descriptionId : undefined}
         tabIndex={inert ? -1 : undefined}
         title={reason ?? title}
+        aria-keyshortcuts={shortcut ? ariaShortcut(shortcut) : undefined}
         onClick={inert ? undefined : onClick}
       >
         {icon ? <Icon name={icon} /> : null}
         {children}
+        {shortcut ? (
+          <span className="sc" aria-hidden="true">
+            {shortcut}
+          </span>
+        ) : null}
       </button>
       {reason ? (
         <span id={descriptionId} className="offscreen">

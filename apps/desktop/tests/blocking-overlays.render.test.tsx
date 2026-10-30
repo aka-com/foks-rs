@@ -423,7 +423,7 @@ async function shellOverlay(
   };
   const rendered = ui.render(createElement(App, { bridge }));
   await ui.waitFor(() => {
-    assert.ok(document.querySelector('.side.rail .who .t'));
+    assert.ok(document.querySelector('.side .who .t'));
   });
   current = snapshot;
   await ui.act(async () => {
@@ -604,7 +604,8 @@ test('locked startup outranks maintenance and keeps unlock errors in its card', 
   assert.ok(dialog.classList.contains('lock-back'));
   assert.equal(dialog.parentElement, document.querySelector('.window'));
   assert.equal(document.querySelector('.stopcard'), null);
-  assert.equal(Boolean(document.querySelector('.side.rail .status')), false);
+  // The sidebar status line displays the agent status while the lock overlay is active.
+  assert.ok(document.querySelector('.side .side-status'));
   await ui.act(async () => {
     rendered.getByRole('button', { name: 'Unlock' }).click();
     await Promise.resolve();
@@ -641,8 +642,8 @@ test('boot error retry restarts startup', async () => {
   await ui.waitFor(() =>
     assert.equal(document.querySelector('.takeover'), null),
   );
-  assert.ok(document.querySelector('.side.rail'));
-  assert.equal(Boolean(document.querySelector('.side.rail .status')), false);
+  assert.ok(document.querySelector('.side'));
+  assert.equal(Boolean(document.querySelector('.side .status')), false);
   assert.ok(statusCalls >= 2);
   rendered.unmount();
 });
@@ -912,9 +913,9 @@ test('in-shell stop notice renders outside the inert main container', async () =
   );
   assert.equal(dialog.closest('[aria-hidden="true"]'), null);
   assert.ok(document.querySelector('.window > .stopveil'));
-  // The rail and topbar beside the veil are dimmed and disabled.
-  assert.ok(document.querySelector('.rail-body.is-blocked'));
-  for (const tab of document.querySelectorAll('.rail-tabs .nav'))
+  // The sidebar and topbar beside the veil are dimmed and disabled.
+  assert.ok(document.querySelector('.side-scroll.is-blocked'));
+  for (const tab of document.querySelectorAll('.side .nav[data-place]'))
     assert.ok(tab.hasAttribute('disabled'));
   rendered.unmount();
 });
@@ -925,8 +926,8 @@ test('lost-connection dialog renders beside a dimmed navigation rail', async () 
   assert.ok(dialog);
   assert.equal(dialog.closest('[aria-hidden="true"]'), null);
   assert.ok(document.querySelector('.window > .stopwrap'));
-  assert.ok(document.querySelector('.side.rail .rail-tabs'));
-  assert.ok(document.querySelector('.rail-body.is-blocked'));
+  assert.ok(document.querySelector('.side .side-scroll'));
+  assert.ok(document.querySelector('.side-scroll.is-blocked'));
   assert.ok(
     document
       .querySelector('.topbar .topsearch input')
@@ -968,11 +969,10 @@ test('agent loss preserves a new password draft through retry', async () => {
   ui.fireEvent.change(username, { target: { value: 'draft-user' } });
   ui.fireEvent.change(password, { target: { value: 'draft-password' } });
   ui.fireEvent.change(website, { target: { value: 'https://draft.example' } });
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Path' }));
   const path = rendered.getByLabelText('Path') as HTMLInputElement;
   ui.fireEvent.change(path, { target: { value: '/logins/preserved' } });
   site.focus();
-  const sheet = document.querySelector('[aria-label="New password"]');
+  const sheet = document.querySelector('[aria-label="New Password"]');
   const app = document.querySelector<HTMLElement>('.app');
   assert.ok(sheet);
   assert.ok(app);
@@ -984,7 +984,7 @@ test('agent loss preserves a new password draft through retry', async () => {
   const blocker = await rendered.findByRole('alertdialog', {
     name: 'Connection to background service lost',
   });
-  assert.equal(document.querySelector('[aria-label="New password"]'), sheet);
+  assert.equal(document.querySelector('[aria-label="New Password"]'), sheet);
   assert.equal(rendered.getByLabelText('Site'), site);
   assert.deepEqual(
     [site.value, username.value, password.value, website.value, path.value],
@@ -1016,7 +1016,7 @@ test('agent loss preserves a new password draft through retry', async () => {
     await Promise.resolve();
   });
   assert.equal(document.querySelector('.stopwrap'), null);
-  assert.equal(document.querySelector('[aria-label="New password"]'), sheet);
+  assert.equal(document.querySelector('[aria-label="New Password"]'), sheet);
   assert.equal(rendered.getByLabelText('Site'), site);
   assert.deepEqual(
     [site.value, username.value, password.value, website.value, path.value],
@@ -1037,14 +1037,15 @@ test('agent loss preserves a new password draft through retry', async () => {
   assert.equal(document.activeElement, site);
   assert.equal(writes, 0);
 
-  ui.fireEvent.mouseDown(sheet);
+  // Sheets ignore backdrop clicks; pressing Escape opens the discard confirmation prompt.
+  ui.fireEvent.keyDown(sheet, { key: 'Escape' });
   const discard = await rendered.findByRole('button', { name: 'Discard' });
   await ui.act(async () => {
     discard.click();
     await Promise.resolve();
   });
   await ui.waitFor(() =>
-    assert.equal(document.querySelector('[aria-label="New password"]'), null),
+    assert.equal(document.querySelector('[aria-label="New Password"]'), null),
   );
   assert.equal(document.querySelector('.app'), app);
   assert.equal(app.inert, false);
@@ -1099,8 +1100,8 @@ test('catalog failure after reconnect reports a toast with the agent ready', asy
     await Promise.resolve();
   });
   await rendered.findByText('The catalog could not be refreshed.');
-  assert.ok(document.querySelector('.side.rail'));
-  assert.equal(Boolean(document.querySelector('.side.rail .status')), false);
+  assert.ok(document.querySelector('.side'));
+  assert.equal(Boolean(document.querySelector('.side .status')), false);
   assert.equal(document.querySelector('.stopwrap'), null);
   rendered.unmount();
 });
@@ -1133,7 +1134,7 @@ test('agent loss from the reconnect catalog restores the takeover', async () => 
   });
   assert.notEqual(second, first);
   assert.match(second.textContent ?? '', /disconnected during catalog refresh/);
-  assert.equal(Boolean(document.querySelector('.side.rail .status')), false);
+  assert.equal(Boolean(document.querySelector('.side .status')), false);
   rendered.unmount();
 });
 
@@ -1251,7 +1252,7 @@ test('takeover transitions restore focus without releasing retained isolation', 
   };
   const rendered = ui.render(createElement(App, { bridge }));
   const input = await rendered.findByLabelText('Site');
-  const sheet = input.closest<HTMLElement>('[aria-label="New password"]');
+  const sheet = input.closest<HTMLElement>('[aria-label="New Password"]');
   assert.ok(sheet);
   await ui.act(async () => {
     connectionLoss.resolve('The agent socket closed.');
@@ -1337,10 +1338,10 @@ test('command-only agent loss preserves the active write workflow', async () => 
   const rendered = ui.render(createElement(App, { bridge }));
   const site = (await rendered.findByLabelText('Site')) as HTMLInputElement;
   ui.fireEvent.change(site, { target: { value: 'command.example' } });
-  const sheet = document.querySelector('[aria-label="New password"]');
+  const sheet = document.querySelector('[aria-label="New Password"]');
   assert.ok(sheet);
   await ui.act(async () => {
-    rendered.getByRole('button', { name: 'Create item' }).click();
+    rendered.getByRole('button', { name: 'Create' }).click();
     await Promise.resolve();
   });
   await rendered.findByRole('alertdialog', {
@@ -1350,8 +1351,8 @@ test('command-only agent loss preserves the active write workflow', async () => 
     document.querySelector('.stopwrap')?.textContent ?? '',
     /create command/,
   );
-  assert.equal(Boolean(document.querySelector('.side.rail .status')), false);
-  assert.equal(document.querySelector('[aria-label="New password"]'), sheet);
+  assert.equal(Boolean(document.querySelector('.side .status')), false);
+  assert.equal(document.querySelector('[aria-label="New Password"]'), sheet);
   assert.equal(rendered.getByLabelText('Site'), site);
   assert.equal(site.value, 'command.example');
   rendered.unmount();
@@ -1433,7 +1434,7 @@ test('agent loss closes the new-item store popover without replacing its draft',
   const rendered = ui.render(createElement(App, { bridge }));
   const input = (await rendered.findByLabelText('Site')) as HTMLInputElement;
   ui.fireEvent.change(input, { target: { value: 'retained.example' } });
-  const sheet = input.closest('[aria-label="New password"]');
+  const sheet = input.closest('[aria-label="New Password"]');
   const trigger = rendered.getByRole('button', { name: 'Save in vault' });
   const selected = trigger.textContent;
   assert.ok(sheet);
@@ -1447,7 +1448,7 @@ test('agent loss closes the new-item store popover without replacing its draft',
     assert.equal(document.querySelector('[role="listbox"]'), null),
   );
   const retry = await rendered.findByRole('button', { name: 'Retry' });
-  assert.equal(document.querySelector('[aria-label="New password"]'), sheet);
+  assert.equal(document.querySelector('[aria-label="New Password"]'), sheet);
   assert.equal(rendered.getByLabelText('Site'), input);
   assert.equal(input.value, 'retained.example');
   assert.equal(retry.closest('[inert]'), null);

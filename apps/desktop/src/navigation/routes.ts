@@ -78,6 +78,8 @@ export function railTabOf(location: Location): RailTab | null {
     case 'teams':
     case 'group-settings':
       return 'teams';
+    case 'activity':
+      return 'activity';
     case 'devices':
       return 'devices';
     case 'settings':

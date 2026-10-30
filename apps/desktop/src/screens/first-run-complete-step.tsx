@@ -3,7 +3,7 @@ import { Button, Icon } from '../components';
 import { storeDescription, plural, type AgentSnapshot } from '../model';
 import type { Location } from '../location';
 import type { CheckedProfileResponse } from '../bridge';
-import { Pane, Foot } from './first-run-view';
+import { Pane, Foot, StepIntro } from './first-run-view';
 interface Props {
   personalAvailable: boolean;
   accountStoreRecord: AgentSnapshot['stores'][number] | undefined;
@@ -79,18 +79,20 @@ export function LocalCompleteStep({
         <span className="local-success-mark" aria-hidden="true">
           ✓
         </span>
-        <h1>
-          {personalAvailable
-            ? 'Your Personal vault is ready'
-            : 'Setup is complete'}
-        </h1>
-        <p className="lead">
-          {personalAvailable
-            ? 'Your account is connected to the local server on this device.'
-            : accountStoreRecord
-              ? `Your Personal vault is unavailable (${storeDescription(snapshot, accountStoreRecord).toLowerCase()}). Your setup progress is saved. Check server settings to restore access.`
-              : 'FOKS could not load your Personal vault. Your setup progress is saved. Retry loading the vault to continue.'}
-        </p>
+        <StepIntro>
+          <h1>
+            {personalAvailable
+              ? 'Your Personal vault is ready'
+              : 'Setup is complete'}
+          </h1>
+          <p className="lead">
+            {personalAvailable
+              ? 'Your account is connected to the local server on this device.'
+              : accountStoreRecord
+                ? `Your Personal vault is unavailable (${storeDescription(snapshot, accountStoreRecord).toLowerCase()}). Your setup progress is saved. Check server settings to restore access.`
+                : 'FOKS could not load your Personal vault. Your setup progress is saved. Retry loading the vault to continue.'}
+          </p>
+        </StepIntro>
         {personalRefreshError ? (
           <p className="crit" role="alert">
             {personalRefreshError}

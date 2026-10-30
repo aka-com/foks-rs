@@ -10,6 +10,7 @@ import {
   RadioCard,
   RadioGroup,
   SheetDialog,
+  StoreMark,
 } from '../../components';
 import {
   groupDetailFailure,
@@ -19,7 +20,6 @@ import {
 } from '../../model';
 import type { Party } from '../../model';
 import { markProfileRostersStale } from '../../roster-staleness';
-import { GroupMark } from '../group-mark';
 import {
   canTarget,
   DetailUnavailable,
@@ -60,7 +60,7 @@ export function RaiseRoleSheet({
   const failure = groupDetailFailure(snapshot, store.id, 'roster');
   const actionable = Boolean(target && canTarget(snapshot, target) && initial);
   const name = target ? partyName(target) : 'member';
-  const title = `Raise ${name}’s role`;
+  const title = `Raise ${name}’s Role`;
   const minimum = (current?.visibility ?? 0) + 1;
   const apply = (): Promise<void> => {
     if (failure || !target || !actionable || !destination)
@@ -83,7 +83,7 @@ export function RaiseRoleSheet({
     <SheetDialog
       onClose={onClose}
       dismissible={!busy}
-      glyph={<GroupMark store={store} />}
+      glyph={<StoreMark snapshot={snapshot} store={store} size="sheet" />}
       title={title}
       footer={
         <>
@@ -95,7 +95,7 @@ export function RaiseRoleSheet({
             disabled={busy || Boolean(failure) || !actionable || !destination}
             onClick={() => void apply()}
           >
-            Change role
+            Change Role
           </Button>
         </>
       }

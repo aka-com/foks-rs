@@ -89,7 +89,7 @@ const radioTitles = (label: string): string[] =>
 
 test('lowering a role states the present role and offers only the roles below it', async () => {
   const r = await sheet('demote', 'priya.n');
-  assert.ok(r.getByRole('heading', { name: 'Lower priya.n’s role' }));
+  assert.ok(r.getByRole('heading', { name: 'Lower priya.n’s Role' }));
   // The current role is displayed as context, not as a disabled option.
   const fact = document.querySelector('.sheet .inset .fr');
   assert.ok(fact);
@@ -99,7 +99,7 @@ test('lowering a role states the present role and offers only the roles below it
   // Member is the only lower role for an Admin.
   assert.deepEqual(radioTitles('New role'), ['Member']);
   assert.equal(
-    (r.getByRole('button', { name: 'Change role' }) as HTMLButtonElement)
+    (r.getByRole('button', { name: 'Change Role' }) as HTMLButtonElement)
       .disabled,
     false,
   );
@@ -111,13 +111,13 @@ test('lowering a role states the present role and offers only the roles below it
 
 test('an Admin can raise member access without offering Owner', async () => {
   const r = await sheet('promote', 'dana.okafor');
-  assert.ok(r.getByRole('heading', { name: 'Raise dana.okafor’s role' }));
+  assert.ok(r.getByRole('heading', { name: 'Raise dana.okafor’s Role' }));
   assert.deepEqual(radioTitles('New role'), [
     'Admin',
     'Higher member visibility',
   ]);
   assert.equal(
-    (r.getByRole('button', { name: 'Change role' }) as HTMLButtonElement)
+    (r.getByRole('button', { name: 'Change Role' }) as HTMLButtonElement)
       .disabled,
     false,
   );
@@ -139,7 +139,7 @@ test('an Admin cannot offer a higher role to another Admin', async () => {
   const r = await sheet('promote', 'priya.n');
   assert.deepEqual(radioTitles('New role'), []);
   assert.equal(
-    (r.getByRole('button', { name: 'Change role' }) as HTMLButtonElement)
+    (r.getByRole('button', { name: 'Change Role' }) as HTMLButtonElement)
       .disabled,
     true,
   );
@@ -147,16 +147,16 @@ test('an Admin cannot offer a higher role to another Admin', async () => {
 
 test('creating a team opens on its kind, with nothing behind a disclosure', async () => {
   const r = await sheet('create');
-  assert.ok(r.getByRole('heading', { name: 'Create a team' }));
+  assert.ok(r.getByRole('heading', { name: 'Create a Team' }));
   const groups = [
     ...document.querySelectorAll('.sheet [role="radiogroup"]'),
   ].map((node) => node.getAttribute('aria-label'));
   assert.deepEqual(groups, ['Kind', 'Server and account']);
   assert.deepEqual(radioTitles('Kind'), ['Named team', 'Ad-hoc share']);
   assert.equal(document.querySelector('.sheet details'), null);
-  assert.ok(r.getByRole('button', { name: 'Create team' }));
+  assert.ok(r.getByRole('button', { name: 'Create Team' }));
   ui.fireEvent.click(r.getByRole('radio', { name: /Ad-hoc share/ }));
-  assert.ok(r.getByRole('button', { name: 'Create share' }));
+  assert.ok(r.getByRole('button', { name: 'Create Share' }));
   ui.fireEvent.change(r.getByLabelText('Name'), {
     target: { value: 'Q3 launch files' },
   });

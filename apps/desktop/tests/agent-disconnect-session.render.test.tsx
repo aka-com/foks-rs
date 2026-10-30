@@ -159,7 +159,7 @@ test('a loss pending prior to subscription is captured during initial check', as
     },
   };
   const rendered = ui.render(createElement(App, { bridge }));
-  await ui.waitFor(() => assert.ok(document.querySelector('.side.rail')));
+  await ui.waitFor(() => assert.ok(document.querySelector('.side')));
   // The error flag is not read until the listener is attached, avoiding dropped events.
   assert.equal(reads, 0);
 
@@ -278,7 +278,7 @@ test('an agent quarantine discards the session', async () => {
   const site = (await rendered.findByLabelText('Site')) as HTMLInputElement;
   ui.fireEvent.change(site, { target: { value: 'quarantine.example' } });
   await ui.act(async () => {
-    rendered.getByRole('button', { name: 'Create item' }).click();
+    rendered.getByRole('button', { name: 'Create' }).click();
     await Promise.resolve();
   });
 

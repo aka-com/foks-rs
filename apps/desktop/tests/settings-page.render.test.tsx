@@ -539,7 +539,7 @@ test('walking the sub-navigation by keyboard keeps focus on the section it selec
   const preferences = rendered.getByRole('tab', { name: 'Preferences' });
   assert.equal(preferences.getAttribute('aria-selected'), 'true');
   assert.equal(document.activeElement, preferences);
-  assert.ok(rendered.getByRole('heading', { name: 'Preferences' }));
+  assert.ok(rendered.getByRole('tabpanel', { name: 'Preferences' }));
 });
 
 test('a section address opens that page, each with the sub-navigation beside it', async () => {
@@ -551,10 +551,13 @@ test('a section address opens that page, each with the sub-navigation beside it'
     const rendered = await renderSettings(await fixture(), {
       where: { section },
     });
+    // The bar names Settings and the tab names the section, so the page
+    // carries no third title: it is the panel its tab labels.
     assert.ok(
-      rendered.getByRole('heading', { level: 1, name: heading }),
+      rendered.getByRole('tabpanel', { name: heading }),
       `${section} opens on its own page`,
     );
+    assert.equal(rendered.queryByRole('heading', { level: 1 }), null);
     assert.equal(
       rendered
         .getByRole('navigation', { name: 'Settings sections' })

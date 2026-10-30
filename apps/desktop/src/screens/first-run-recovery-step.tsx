@@ -8,7 +8,7 @@ import {
   SheetDialog,
 } from '../components';
 import type { FirstRunCheckpoint, FirstRunStateName } from '../first-run-state';
-import { Pane, Foot } from './first-run-view';
+import { Pane, Foot, StepIntro } from './first-run-view';
 interface Props {
   state: 'protect' | 'phrase';
   checkpoint: FirstRunCheckpoint;
@@ -82,11 +82,13 @@ export function RecoveryStep({
           </Foot>
         }
       >
-        <h1>Set up account recovery</h1>
-        <p className="lead">
-          Set up a recovery phrase now so you can recover your account if this
-          device is lost.
-        </p>
+        <StepIntro>
+          <h1>Set up account recovery</h1>
+          <p className="lead">
+            Set up a recovery phrase now so you can recover your account if this
+            device is lost.
+          </p>
+        </StepIntro>
         <div className="local-recovery-card">
           <div className="local-recovery-head">
             <h2>Recovery phrase</h2>
@@ -158,11 +160,13 @@ export function RecoveryStep({
           </Foot>
         }
       >
-        <h1>Save recovery phrase</h1>
-        <p className="lead">
-          The keys controlling this account are only saved on this device. We
-          recommend adding at least one recovery method now.
-        </p>
+        <StepIntro>
+          <h1>Save recovery phrase</h1>
+          <p className="lead">
+            The keys controlling this account are only saved on this device. We
+            recommend adding at least one recovery method now.
+          </p>
+        </StepIntro>
         <div className="setup-grid">
           <div className="pcard">
             <h3>Recovery phrase</h3>

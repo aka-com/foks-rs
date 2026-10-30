@@ -42,4 +42,11 @@ export type FoksIconName =
   | 'panelLeftClose'
   | 'panelLeftOpen'
   | 'pawPrint'
-  | 'plug';
+  | 'plug'
+  | 'activity'
+  | 'chevronsUpDown'
+  | 'fileText'
+  | 'lock'
+  | 'panelLeft'
+  | 'userPlus'
+  | 'warning';

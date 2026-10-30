@@ -6,6 +6,7 @@ import { storeOf } from '../model';
 import type { AgentSnapshot, DeviceLabel } from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { markProfileRostersStale } from '../roster-staleness';
+import { ActivityScreen } from '../screens/activity-screen';
 import { ChatTab } from '../screens/chat-tab';
 import { DevicesScreen } from '../screens/devices-screen';
 import { GroupSettingsScreen } from '../screens/groups-screen';
@@ -15,6 +16,7 @@ import { listsItems } from '../screens/scope';
 import { SettingsScreen } from '../screens/settings-screen';
 import { TeamsScreen } from '../screens/teams-screen';
 import type { WriteWorkflow } from '../screens/write-workflows';
+import type { TopbarProps } from '../shell/topbar';
 import type { CommandErrorHandler } from './catalog-runtime';
 
 export function ScreenRouter({
@@ -41,8 +43,14 @@ export function ScreenRouter({
   accessNow,
   accessGenerations,
   onTeamInfo,
+  renderBar,
 }: {
   onTeamInfo: (storeId: string, trigger?: HTMLElement) => void;
+  /**
+   * Renders the panel's primary topbar. Chat renders this bar over its channel
+   * column and passes the column's add control.
+   */
+  renderBar?: (extra?: Partial<TopbarProps>) => ReactNode;
   shown: AgentSnapshot;
   bridge: Bridge;
   state: ReturnType<LocationStore['getSnapshot']>;
@@ -140,6 +148,7 @@ export function ScreenRouter({
       accessGenerations={accessGenerations}
       query={state.query}
       onNavigate={(location, options) => locations.navigate(location, options)}
+      renderBar={renderBar}
     />
   ) : here.kind === 'group-settings' ? (
     <GroupSettingsScreen
@@ -186,12 +195,24 @@ export function ScreenRouter({
       onRefreshSnapshot={refreshSnapshot}
       onError={commandError}
       onMutationError={mutationError}
+      query={state.query}
     />
   ) : here.kind === 'settings' ? (
     <SettingsScreen
       key={`settings:${concealSignal}`}
       {...settingsProps}
       location={here}
+    />
+  ) : here.kind === 'activity' ? (
+    <ActivityScreen
+      key={`activity:${concealSignal}`}
+      snapshot={shown}
+      bridge={bridge}
+      query={state.query}
+      onNavigate={(location) => locations.navigate(location)}
+      onApplied={refresh}
+      onError={commandError}
+      onMutationError={mutationError}
     />
   ) : (
     <PlaceholderScreen location={here} />

@@ -253,7 +253,11 @@ function dialog(): HTMLElement | null {
 }
 
 function dialogButton(label: string): HTMLButtonElement {
-  const found = [...document.querySelectorAll<HTMLButtonElement>('.ft .btn')];
+  const found = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      '.alert .btns .btn, .ft .btn',
+    ),
+  ];
   const target = found.find((node) => node.textContent === label);
   assert.ok(target, `the dialog offers ${label}`);
   return target;
@@ -639,11 +643,11 @@ test('a half-finished new channel names itself and Discard makes the move', asyn
   const panel = dialog();
   assert.ok(panel, 'the confirmation is up');
   assert.equal(
-    panel.querySelector('.hd h2')?.textContent,
+    panel.querySelector('.alert h2')?.textContent,
     'Discard the new channel?',
   );
   assert.equal(
-    panel.querySelector('.sb p')?.textContent,
+    panel.querySelector('.alert > p')?.textContent,
     '#drawings has not been created and will be lost.',
   );
   // Nothing has moved while the question is open.

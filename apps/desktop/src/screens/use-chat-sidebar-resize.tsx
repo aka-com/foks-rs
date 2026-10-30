@@ -7,7 +7,7 @@ export function useChatSidebarResize() {
     cssVariable: '--chat-inbox-w',
     className: 'chat-sidebar-resizer',
     label: 'Chat',
-    defaultWidth: 264,
-    compactWidth: 220,
+    defaultWidth: 300,
+    compactWidth: 260,
   });
 }
