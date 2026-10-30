@@ -253,14 +253,7 @@ impl FoksClient {
                 receiver,
             })
             .collect::<Vec<_>>();
-        let randomness = (0..box_inputs.len())
-            .map(|_| {
-                Ok(PukBoxRandomness {
-                    kem_message: random_bytes()?,
-                    nonce: random_bytes()?,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let randomness = PukBoxRandomness::generate_many(box_inputs.len())?;
         let puk_boxes = match existing {
             FederationCredential::Software(c) => foks_crypto::seal_software_puk_boxes_mixed(
                 host.host_id(),
@@ -268,10 +261,7 @@ impl FoksClient {
                 random_bytes()?,
                 &box_inputs,
                 &randomness,
-                foks_crypto::SoftwarePukBoxSetRandomness {
-                    ephemeral_secret: crate::device::random_nonzero_p256_secret()?,
-                    time: now_milliseconds()?,
-                },
+                foks_crypto::SoftwarePukBoxSetRandomness::generate(now_milliseconds()?)?,
             )?,
             FederationCredential::Yubi(c) => {
                 let inputs = box_inputs
@@ -289,10 +279,7 @@ impl FoksClient {
                     random_bytes()?,
                     &inputs,
                     &randomness,
-                    foks_crypto::YubiPukBoxSetRandomness {
-                        ephemeral_secret: crate::device::random_nonzero_p256_secret()?,
-                        time: now_milliseconds()?,
-                    },
+                    foks_crypto::YubiPukBoxSetRandomness::generate(now_milliseconds()?)?,
                 )?
             }
         };

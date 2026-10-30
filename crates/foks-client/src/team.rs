@@ -2715,14 +2715,7 @@ impl FoksClient {
                 receiver_generation: owner.generation,
             })
             .collect::<Vec<_>>();
-        let randomness = (0..box_inputs.len())
-            .map(|_| {
-                Ok(PukBoxRandomness {
-                    kem_message: random_bytes()?,
-                    nonce: random_bytes()?,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let randomness = PukBoxRandomness::generate_many(box_inputs.len())?;
         let boxes = seal_shared_key_boxes(
             host.host_id(),
             &owner.seed,

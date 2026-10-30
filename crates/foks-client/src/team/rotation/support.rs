@@ -10,7 +10,7 @@ use foks_verify::{
     VerifiedSharedKey, VerifiedTeamMemberState, VerifiedTeamState, VerifiedUserState,
 };
 
-use super::super::membership::{current_team_private_key, random_box_randomness};
+use super::super::membership::current_team_private_key;
 use super::super::AuthenticatedTeamOutcome;
 use super::{
     Receiver, RotationBinding, TeamMemberKeyRefresh, TeamMemberSelector, TeamPtkRotationSeed,
@@ -610,9 +610,7 @@ pub(super) fn seal_ptk_inputs(
     actor_seed: &foks_proto::SecretSeed,
     inputs: &[SharedKeyBoxInput<'_>],
 ) -> Result<foks_proto::SharedKeyBoxSet> {
-    let randomness = (0..inputs.len())
-        .map(|_| random_box_randomness())
-        .collect::<Result<Vec<PukBoxRandomness>>>()?;
+    let randomness = PukBoxRandomness::generate_many(inputs.len())?;
     let sender_type = match actor.entity_type() {
         foks_proto::ENTITY_USER => ENTITY_PUK_VERIFY,
         foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM => ENTITY_PTK_VERIFY,

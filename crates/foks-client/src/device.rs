@@ -250,14 +250,7 @@ impl FoksClient {
                 receiver,
             })
             .collect::<Vec<_>>();
-        let randomness = (0..box_inputs.len())
-            .map(|_| {
-                Ok(PukBoxRandomness {
-                    kem_message: random_bytes()?,
-                    nonce: random_bytes()?,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let randomness = PukBoxRandomness::generate_many(box_inputs.len())?;
         let puk_boxes = seal_software_puk_boxes(
             host.host_id(),
             &existing.seed,
@@ -411,10 +404,7 @@ impl FoksClient {
         let subkey_box = seal_yubi_subkey_box(
             parent,
             &secrets.subkey_seed,
-            YubiSubkeyBoxRandomness {
-                kem_message: random_bytes()?,
-                nonce: random_bytes()?,
-            },
+            YubiSubkeyBoxRandomness::generate()?,
         )?;
         let puk_boxes = seal_software_puk_box_to_yubi(
             host.host_id(),
@@ -426,12 +416,7 @@ impl FoksClient {
                 role: puk.role,
                 receiver: &material.device,
             },
-            YubiPukBoxRandomness {
-                ephemeral_secret: random_nonzero_p256_secret()?,
-                kem_message: random_bytes()?,
-                nonce: random_bytes()?,
-                time: now_milliseconds()?,
-            },
+            YubiPukBoxRandomness::generate(now_milliseconds()?)?,
         )?;
         let encoded = Zeroizing::new(encode_provision_device_request(&ProvisionDeviceArgument {
             link: &material.link,
@@ -772,14 +757,7 @@ impl FoksClient {
                 });
             }
         }
-        let randomness = (0..box_inputs.len())
-            .map(|_| {
-                Ok(PukBoxRandomness {
-                    kem_message: random_bytes()?,
-                    nonce: random_bytes()?,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let randomness = PukBoxRandomness::generate_many(box_inputs.len())?;
         let puk_boxes = if box_inputs.is_empty() {
             foks_proto::SharedKeyBoxSet::new([0; 16], Vec::new(), None)?
         } else {
@@ -789,10 +767,7 @@ impl FoksClient {
                 random_bytes()?,
                 &box_inputs,
                 &randomness,
-                SoftwarePukBoxSetRandomness {
-                    ephemeral_secret: random_nonzero_p256_secret()?,
-                    time: now_milliseconds()?,
-                },
+                SoftwarePukBoxSetRandomness::generate(now_milliseconds()?)?,
             )?
         };
         let mut seed_chain = Vec::with_capacity(rotations.len());
@@ -1055,24 +1030,14 @@ impl FoksClient {
                 });
             }
         }
-        let randomness = (0..box_inputs.len())
-            .map(|_| {
-                Ok(PukBoxRandomness {
-                    kem_message: random_bytes()?,
-                    nonce: random_bytes()?,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let randomness = PukBoxRandomness::generate_many(box_inputs.len())?;
         let puk_boxes = seal_software_puk_boxes_mixed(
             host.host_id(),
             &signer_credential.seed,
             random_bytes()?,
             &box_inputs,
             &randomness,
-            SoftwarePukBoxSetRandomness {
-                ephemeral_secret: random_nonzero_p256_secret()?,
-                time: now_milliseconds()?,
-            },
+            SoftwarePukBoxSetRandomness::generate(now_milliseconds()?)?,
         )?;
         let mut seed_chain = Vec::with_capacity(rotations.len());
         for rotation in rotations {
@@ -1391,24 +1356,14 @@ impl FoksClient {
                 });
             }
         }
-        let randomness = (0..box_inputs.len())
-            .map(|_| {
-                Ok(PukBoxRandomness {
-                    kem_message: random_bytes()?,
-                    nonce: random_bytes()?,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let randomness = PukBoxRandomness::generate_many(box_inputs.len())?;
         let puk_boxes = seal_yubi_puk_boxes(
             host.host_id(),
             credential.parent,
             random_bytes()?,
             &box_inputs,
             &randomness,
-            YubiPukBoxSetRandomness {
-                ephemeral_secret: random_bytes()?,
-                time: now_milliseconds()?,
-            },
+            YubiPukBoxSetRandomness::generate(now_milliseconds()?)?,
         )?;
         let mut seed_chain = Vec::with_capacity(rotations.len());
         for rotation in rotations {
@@ -2456,19 +2411,6 @@ fn decode_persisted_puk_rotation(
     }
     foks_rpc::arguments::decode_revoke_device(call.argument())
         .map_err(|_| Error::OperationBinding("persisted PUK rotation is malformed"))
-}
-
-pub(crate) fn random_nonzero_p256_secret() -> Result<[u8; 32]> {
-    loop {
-        let mut bytes: [u8; 32] = random_bytes()?;
-        // Any nonzero value below 2^255 is a valid P-256 scalar. Sacrificing
-        // one bit avoids a platform-version-dependent rejection loop in the
-        // public cryptographic API while retaining 255 bits of entropy.
-        bytes[0] &= 0x7f;
-        if bytes != [0; 32] {
-            return Ok(bytes);
-        }
-    }
 }
 
 #[cfg(test)]

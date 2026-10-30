@@ -210,11 +210,7 @@ impl FoksClient {
             host.host_id(),
             &secrets.device_seed,
             &secrets.puk_seed,
-            InitialPukBoxRandomness {
-                box_id: random_bytes()?,
-                kem_message: random_bytes()?,
-                nonce: random_bytes()?,
-            },
+            InitialPukBoxRandomness::generate()?,
         )?;
         let passphrase = request
             .passphrase

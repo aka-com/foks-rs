@@ -144,10 +144,7 @@ impl FoksClient {
             role,
             receiver: &backup_public,
         }];
-        let randomness = [PukBoxRandomness {
-            kem_message: random_bytes()?,
-            nonce: random_bytes()?,
-        }];
+        let randomness = [PukBoxRandomness::generate()?];
         let puk_boxes = seal_software_puk_boxes(
             host.host_id(),
             &existing.seed,
@@ -442,10 +439,7 @@ impl FoksClient {
             role: request.role,
             receiver: &new_device,
         }];
-        let randomness = [PukBoxRandomness {
-            kem_message: random_bytes()?,
-            nonce: random_bytes()?,
-        }];
+        let randomness = [PukBoxRandomness::generate()?];
         let boxes = seal_backup_puk_boxes_from_credential(
             host.host_id(),
             &backup.key,

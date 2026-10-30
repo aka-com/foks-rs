@@ -91,7 +91,7 @@ impl FoksClient {
             &key.seed,
             &preview.advertised,
             &payload,
-            &super::membership::random_box_randomness()?,
+            &foks_crypto::PukBoxRandomness::generate()?,
         )?;
         let home_link = self.prepare_requested_team_membership(
             home,

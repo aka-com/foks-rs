@@ -360,10 +360,7 @@ fn build_update(
     };
     let ephemeral_seed = SecretSeed::new(random_array()?);
     let ephemeral_public = derive_public_material(&ephemeral_seed, foks_proto::ENTITY_DEVICE)?;
-    let hybrid_randomness = PukBoxRandomness {
-        kem_message: random_array()?,
-        nonce: random_array()?,
-    };
+    let hybrid_randomness = PukBoxRandomness::generate()?;
     let exact_payload = Zeroizing::new(payload.encoded()?);
     let passphrase_box = PpePassphraseBox {
         hybrid: seal_hybrid_payload(
