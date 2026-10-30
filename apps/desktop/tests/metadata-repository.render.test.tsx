@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import { installDom } from './lib/dom-harness';
-import { QueryRepository } from '../src/query-repository';
-import type { MetadataQuery } from '../src/query-repository';
+import { MetadataRepository } from '../src/metadata-repository';
+import type { MetadataQuery } from '../src/metadata-repository';
 import { useMetadataQuery } from '../src/query-hooks';
 
 installDom({ url: 'http://localhost/', timers: true, act: true });
@@ -34,7 +34,7 @@ function View({
 }
 
 test('mounted subscribers share invalidation reloads and report one failed read', async () => {
-  const repository = new QueryRepository();
+  const repository = new MetadataRepository();
   let calls = 0;
   let fail = false;
   const query = repository.query(['devices', 'profile'], async () => {
@@ -70,7 +70,7 @@ test('mounted enabled readers reconcile without background error toasts and disa
   let now = 0;
   let calls = 0;
   let fail = false;
-  const repository = new QueryRepository(() => now);
+  const repository = new MetadataRepository(() => now);
   const query = repository.query(
     ['metadata'],
     async () => {
@@ -110,7 +110,7 @@ test('mounted enabled readers reconcile without background error toasts and disa
 });
 
 test('changing identity clears the displayed old account before either late reply arrives', async () => {
-  const repository = new QueryRepository();
+  const repository = new MetadataRepository();
   const old = deferred<string>();
   const next = deferred<string>();
   const a = repository.query(['devices', 'old'], () => old.promise);
@@ -139,7 +139,7 @@ test('changing identity clears the displayed old account before either late repl
 });
 
 test('an access reset reloads subscribers and discards a prior epoch failure', async () => {
-  const repository = new QueryRepository();
+  const repository = new MetadataRepository();
   const old = deferred<string>();
   let calls = 0;
   const query = repository.query(['devices', 'profile'], () =>

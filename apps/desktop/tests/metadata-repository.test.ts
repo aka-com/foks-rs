@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { QueryRepository, RetiredQueryError } from '../src/query-repository';
+import {
+  MetadataRepository,
+  RetiredQueryError,
+} from '../src/metadata-repository';
 import { ReadRecoveryCoordinator } from '../src/query-read-recovery';
 import {
   invitationRecoveryQuery,
@@ -28,7 +31,7 @@ const catalogMissing = {
 };
 
 test('metadata singleflight publishes immutable detached data through stable snapshots', async () => {
-  const repository = new QueryRepository();
+  const repository = new MetadataRepository();
   const reply = deferred<{ rows: { name: string }[] }>();
   let calls = 0;
   const query = repository.query(['devices', 'p', 'a'], () => {
@@ -59,7 +62,7 @@ test('metadata singleflight publishes immutable detached data through stable sna
 
 test('targeted invalidation preserves stale data and failures do not erase accepted values', async () => {
   let now = 0;
-  const repository = new QueryRepository(() => now);
+  const repository = new MetadataRepository(() => now);
   let value = 'first';
   let failure = false;
   let profileReads = 0;
@@ -87,7 +90,7 @@ test('targeted invalidation preserves stale data and failures do not erase accep
 });
 
 test('access reset drops old replies; a retired scope cannot restart reads', async () => {
-  const repository = new QueryRepository();
+  const repository = new MetadataRepository();
   const old = deferred<string>();
   let calls = 0;
   const query = repository.query(['metadata', 'p'], () =>
@@ -108,7 +111,7 @@ test('access reset drops old replies; a retired scope cannot restart reads', asy
 });
 
 test('an invalidated in-flight read cannot replace a newer resource generation', async () => {
-  const repository = new QueryRepository();
+  const repository = new MetadataRepository();
   const old = deferred<string>();
   let calls = 0;
   const query = repository.query(['metadata', 'p'], () =>
@@ -131,7 +134,7 @@ test('an invalidated in-flight read cannot replace a newer resource generation',
 });
 
 test('catalog repair is shared by concurrent and delayed failures from the same read generation', async () => {
-  const repository = new QueryRepository();
+  const repository = new MetadataRepository();
   const recovery = new ReadRecoveryCoordinator();
   const secondRead = deferred<string>();
   let firstCalls = 0;
@@ -160,7 +163,7 @@ test('catalog repair is shared by concurrent and delayed failures from the same 
 });
 
 test('read repair happens at most once and never replays ambiguous operations', async () => {
-  const repository = new QueryRepository();
+  const repository = new MetadataRepository();
   const recovery = new ReadRecoveryCoordinator();
   let calls = 0;
   let refreshes = 0;
@@ -192,7 +195,7 @@ test('read repair happens at most once and never replays ambiguous operations', 
 });
 
 test('retirement while catalog repair is outstanding prevents its read retry', async () => {
-  const repository = new QueryRepository();
+  const repository = new MetadataRepository();
   const repaired = deferred<void>();
   let calls = 0;
   const query = repository.query(['read'], async () => {
@@ -211,7 +214,7 @@ test('retirement while catalog repair is outstanding prevents its read retry', a
 });
 
 test('invitation queries retain only recovery counts and pending metadata stays profile-scoped', async () => {
-  const repository = new QueryRepository();
+  const repository = new MetadataRepository();
   const bridge = {
     invitation: async (
       _profile: string,
@@ -255,7 +258,7 @@ test('invitation queries retain only recovery counts and pending metadata stays 
 });
 
 test('aggregate diagnostics omit identities and values and cannot affect read outcomes', async () => {
-  const repository = new QueryRepository();
+  const repository = new MetadataRepository();
   const events: unknown[] = [];
   repository.observe((event) => {
     events.push(event);
@@ -291,7 +294,7 @@ test('aggregate diagnostics omit identities and values and cannot affect read ou
 
 test('reconciliation refreshes only due subscribed metadata and records attempt and success times', async () => {
   let now = 0;
-  const repository = new QueryRepository(() => now);
+  const repository = new MetadataRepository(() => now);
   let calls = 0;
   const query = repository.query(['observed'], async () => ++calls, 100);
   let unseenCalls = 0;
@@ -321,7 +324,7 @@ test('reconciliation failures retain historical metadata with capped exponential
   let now = 0;
   let calls = 0;
   let fail = false;
-  const repository = new QueryRepository(() => now);
+  const repository = new MetadataRepository(() => now);
   const query = repository.query(
     ['metadata'],
     async () => {
@@ -363,7 +366,7 @@ test('reconciliation failures retain historical metadata with capped exponential
 });
 
 test('reconciliation coalesces passes, caps concurrency and skips readers removed while waiting', async () => {
-  const repository = new QueryRepository();
+  const repository = new MetadataRepository();
   const replies = Array.from({ length: 5 }, () => deferred<number>());
   const calls: number[] = [];
   let active = 0;
@@ -398,7 +401,7 @@ test('reconciliation coalesces passes, caps concurrency and skips readers remove
 });
 
 test('a failed reconciliation reader does not stop other readers or release the pass early', async () => {
-  const repository = new QueryRepository();
+  const repository = new MetadataRepository();
   const slow = deferred<number>();
   let thirdCalls = 0;
   const failed = repository.query(['failed'], async () => {
@@ -419,7 +422,7 @@ test('a failed reconciliation reader does not stop other readers or release the 
 });
 
 test('polling skips active invalidated work and does not request overlapping or extra reloads', async () => {
-  const repository = new QueryRepository();
+  const repository = new MetadataRepository();
   const reply = deferred<string>();
   let calls = 0;
   const query = repository.query(['metadata'], () =>
@@ -442,7 +445,7 @@ test('polling skips active invalidated work and does not request overlapping or 
 
 test('clear cancels queued reconciliation work and drops timestamps without losing outstanding reads', async () => {
   let now = 10;
-  const repository = new QueryRepository(() => now);
+  const repository = new MetadataRepository(() => now);
   const replies = [deferred<number>(), deferred<number>()];
   const calls: number[] = [];
   const queries = [0, 1, 2].map((index) =>
@@ -472,7 +475,7 @@ test('clear cancels queued reconciliation work and drops timestamps without losi
 });
 
 test('retirement cancels a trailing reload and prevents later reconciliation', async () => {
-  const repository = new QueryRepository();
+  const repository = new MetadataRepository();
   const reply = deferred<number>();
   let calls = 0;
   const query = repository.query(['metadata'], () => {
@@ -497,7 +500,7 @@ test('retirement cancels a trailing reload and prevents later reconciliation', a
 });
 
 test('view recovery cannot bypass the session-wide repair admission policy', async () => {
-  const repository = new QueryRepository();
+  const repository = new MetadataRepository();
   let allowed = true;
   let repairs = 0;
   const response = deferred<number>();
@@ -520,7 +523,7 @@ test('view recovery cannot bypass the session-wide repair admission policy', asy
 });
 
 test('a hidden metadata pass finishes active reads without dispatching the remaining readers', async () => {
-  const repository = new QueryRepository();
+  const repository = new MetadataRepository();
   const reply = deferred<number>();
   let visible = true,
     calls = 0;
@@ -546,7 +549,7 @@ test('a hidden metadata pass finishes active reads without dispatching the remai
 test('clock rollback cannot keep metadata fresh indefinitely', async () => {
   let now = 100_000,
     calls = 0;
-  const repository = new QueryRepository(() => now);
+  const repository = new MetadataRepository(() => now);
   const query = repository.query(['devices'], async () => ++calls);
   query.subscribe(() => {});
   await query.load();
