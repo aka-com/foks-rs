@@ -434,6 +434,16 @@ not configure bucket lifecycle deletion. Monitor physical object growth; current
 quota charging does not include orphan objects. History pruning and deletion
 need coordinated writers, reads and backups before they are safe to enable.
 
+A filesystem write that a process kill interrupts can leave a temporary file
+named `_foks_tmp-*` in the directory. Inventory and the empty-namespace check
+skip these files, so they are never recorded or charged. `collect-chunk-store`
+removes them when it is allowed to delete (not with `--dry-run`, and only with
+a matching authority identity), after it has verified the binding and while it
+holds the exclusive namespace lease. Temporaries left by earlier releases are
+named `.tmp` followed by six random characters; they are indistinguishable
+from foreign objects, so inventory records them as unknown objects that stay
+charged against physical capacity, and nothing deletes them automatically.
+
 To convert existing inline chunks, stop the server and run:
 
 ```sh
