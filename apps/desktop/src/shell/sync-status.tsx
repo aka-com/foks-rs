@@ -1,11 +1,12 @@
 /**
- * The sync status line at the foot of the sidebar: one worded button that
- * refreshes on click, with the per-server Refresh status popover it opens on
- * hover or focus.
+ * Sidebar footer sync status control: a button that triggers a refresh on
+ * click and opens the per-server Refresh status popover on hover or focus.
  *
- * It reads "Synced" with a green dot when every server is current, and says
- * the state in words otherwise: Syncing…, Check-in expired, Refresh failed or
- * Disconnected. The popover holds the per-server detail.
+ * When all servers are current, it displays a green dot and "Connected"
+ * (design A-10). Otherwise, it displays the active status label: Syncing…,
+ * Check-in expired, Refresh failed, or Disconnected. The popover shows
+ * per-server sync details. When the shell is blocked (agent disconnected or
+ * busy), the button displays Disconnected.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -42,7 +43,7 @@ export function syncFace(
     case 'lost':
       return { className: 'sync bad', icon: 'plug', label: 'Disconnected' };
     default:
-      return { className: 'sync', icon: 'refresh', label: 'Synced' };
+      return { className: 'sync', icon: 'refresh', label: 'Connected' };
   }
 }
 
@@ -196,7 +197,7 @@ export function SyncControls({
         onClick={spinning ? undefined : onRefresh}
       >
         {face.icon === 'refresh' ? null : <Icon name={face.icon} />}
-        {face.label === 'Synced' ? (
+        {face.label === 'Connected' ? (
           <span className="dot ok" aria-hidden="true" />
         ) : null}
         {face.label === 'Refresh failed' ? null : (
@@ -236,25 +237,33 @@ export function PlainSyncStatus({
   blocked: boolean;
   onRefresh: () => void;
 }): ReactNode {
+  const face = syncFace(blocked ? 'lost' : refreshing ? 'syncing' : 'synced');
   return (
     <button
       type="button"
-      className={`global-refresh ${syncFace(refreshing ? 'syncing' : 'synced').className}`}
-      aria-label={
+      className={`global-refresh ${face.className}`}
+      aria-label={`${face.label} — ${
         refreshing
-          ? 'Syncing… — refreshing vaults, teams and devices'
-          : 'Synced — refresh vaults, teams and devices'
-      }
+          ? 'refreshing vaults, teams and devices'
+          : 'refresh vaults, teams and devices'
+      }`}
       title={
         refreshing
           ? 'Refreshing vaults, teams, and devices'
           : 'Refresh vaults and teams'
       }
-      disabled={refreshing || blocked}
-      onClick={onRefresh}
+      // Busy, not disabled: a disabled button drops the keyboard focus.
+      aria-busy={refreshing || undefined}
+      aria-disabled={refreshing || undefined}
+      disabled={blocked}
+      onClick={refreshing ? undefined : onRefresh}
     >
-      {refreshing ? null : <span className="dot ok" aria-hidden="true" />}
-      <span className="t">{refreshing ? 'Syncing…' : 'Synced'}</span>
+      {face.label === 'Connected' ? (
+        <span className="dot ok" aria-hidden="true" />
+      ) : face.icon === 'refresh' ? null : (
+        <Icon name={face.icon} />
+      )}
+      <span className="t">{face.label}</span>
     </button>
   );
 }

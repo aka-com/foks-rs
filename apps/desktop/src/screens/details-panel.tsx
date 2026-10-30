@@ -1,12 +1,13 @@
 /**
  * Details panel displaying item metadata, content preview, sharing roster, and item actions.
  *
- * Its first bar is the item's location (store › folders, each a link to that
- * folder) and the More menu; under it the hero (kind tile, name, kind and
- * server, the primary actions) and form-style property rows in groups divided
- * by hairlines.
+ * The topbar renders the item's breadcrumb path (store › folders, each linking
+ * to that folder) and the More actions menu. Below the topbar are the hero
+ * header (kind tile, item name, kind and server subtitle, and primary actions)
+ * and hairline-divided groups of form-style property rows.
  */
 
+import { restoreFocusIfLost, rowByKey } from '/kit/focus-keeper';
 import {
   Fragment,
   useCallback,
@@ -39,7 +40,7 @@ import {
   displayPath,
   displayPathComponent,
   fmtSize,
-  formatRole,
+  roleChipLabel,
   hue as nameHue,
   isLogin,
   kindLabel,
@@ -125,10 +126,13 @@ function assertExactRead(
   }
 }
 
-/** "Owner" / "Member · visibility 0", from either shape of the wire. */
+/**
+ * Formats a wire role as a chip label (e.g. "Owner" or "Member · sees level 0"),
+ * matching the role chip labels on the team page (`roleChipLabel`).
+ */
 function roleText(wire: RoleWire): string {
   const role = parseRole(wire);
-  if (role) return formatRole(role);
+  if (role) return roleChipLabel(role);
   return typeof wire === 'string' ? wire : wire.role;
 }
 
@@ -871,19 +875,27 @@ export function DetailsPanel({
     );
   };
 
+  // Show and Hide share `data-focus-key="reveal"` so keyboard focus remains on
+  // the button when toggling. While reading, mark the button busy rather than
+  // disabled (so it retains focus) and ignore repeat clicks.
   const showButton = (
     <Button
+      data-focus-key="reveal"
       aria-label={reading ? 'Reading…' : 'Show'}
-      disabled={reading || Boolean(readProblem)}
+      aria-busy={reading || undefined}
+      aria-disabled={reading || undefined}
+      disabled={Boolean(readProblem)}
       title={readProblem ?? (reading ? 'Reading…' : 'Show')}
       aria-describedby={describedBy(readProblem)}
-      onClick={() => void show()}
+      onClick={() => {
+        if (!reading) void show();
+      }}
     >
       Show
     </Button>
   );
   const hideButton = (
-    <Button title="Hide" onClick={hide}>
+    <Button data-focus-key="reveal" title="Hide" onClick={hide}>
       Hide
     </Button>
   );
@@ -1043,16 +1055,25 @@ export function DetailsPanel({
         className="details"
         aria-label={`Details for ${name}`}
         onKeyDown={(event) => {
-          // Escape from anywhere in the panel clears the selection, as an
-          // outside click does, unless a field or the editor holds it.
-          if (event.key !== 'Escape' || event.defaultPrevented || editing)
+          if (event.key !== 'Escape' || event.defaultPrevented) return;
+          // Escape in the inline editor is its Cancel: the editor closes and
+          // the focus returns to Edit.
+          if (inlineEditing && !saving) {
+            event.preventDefault();
+            focusActionsOnClose.current = true;
+            clearEdit();
             return;
+          }
+          // Outside form controls and the inline editor, Escape clears the
+          // selection and returns focus to the item row in the list (`kit/focus-keeper.ts`).
+          if (editing) return;
           if (
             event.target instanceof Element &&
             event.target.closest('input, textarea, select')
           )
             return;
           event.preventDefault();
+          restoreFocusIfLost(rowByKey(`${item.store}|${item.path}`));
           onClose();
         }}
       >

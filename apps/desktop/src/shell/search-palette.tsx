@@ -31,6 +31,7 @@ import {
 } from '/kit/overlay-primitives';
 import { Icon } from '../components/icon';
 import { ariaShortcut } from '../components/menus';
+import { commandKey, shortcutLabel } from '/kit/keys';
 import { StoreMark } from '../components/store-mark';
 import type { FoksIconName } from '../icons';
 import {
@@ -45,6 +46,7 @@ import {
   roleName,
   serverDisplayLabelForStore,
   storeDescription,
+  storeDescriptionState,
   storeNavigationOrder,
   storeOf,
 } from '../model';
@@ -353,18 +355,20 @@ export function searchResults(
 /* -------------------------------------------------------------- shortcut -- */
 
 /**
- * Opens the palette on ⌘K, or Ctrl-K away from a Mac.
+ * Opens the search palette on ⌘K (or Ctrl+K on non-macOS platforms via `commandKey`).
  *
- * The shortcut is not suppressed inside a text field. ⌘K types nothing, so
- * taking it never interrupts typing, and the field a reader is most likely to
- * be in when they reach for it is the palette's own.
+ * The shortcut remains active when a text field is focused because ⌘K does
+ * not insert text, and the palette's own search input is the most common
+ * focused field when invoking it.
  */
 export function useSearchShortcut(onOpen: () => void): void {
   const onOpenRef = useRef(onOpen);
   onOpenRef.current = onOpen;
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+      // On macOS, require Command+K so Control+K retains its
+      // kill-to-end-of-line behavior in text inputs.
+      if (!commandKey(event) || event.altKey) return;
       if (event.key.toLowerCase() !== 'k') return;
       // This listener runs on document, beyond a dialog's event boundary.
       // Disable the shortcut while any dialog is open, including the palette
@@ -541,8 +545,15 @@ function SearchSheet({
   ]);
   const peopleReadiness = combineReadiness([
     inventory,
+    // Include only active teams with readable rosters; inactive or incomplete
+    // teams have no searchable roster and should not report a search error.
     ...snapshot.stores
-      .filter((store) => store.kind === 'team')
+      .filter(
+        (store) =>
+          store.kind === 'team' &&
+          store.active !== false &&
+          storeDescriptionState(snapshot, store) === 'normal',
+      )
       .map((store) => groupDetailReadiness(snapshot, store.id, 'roster')),
   ]);
   const readiness = combineReadiness([
@@ -741,7 +752,7 @@ function SearchSheet({
                     <b>{place.name}</b>
                   </span>
                   {place.shortcut ? (
-                    <kbd className="where">{place.shortcut}</kbd>
+                    <kbd className="where">{shortcutLabel(place.shortcut)}</kbd>
                   ) : null}
                 </div>
               ))}

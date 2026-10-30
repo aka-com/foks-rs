@@ -4,11 +4,12 @@
  * sidebar, list rows, details header, and sheets for consistent visual
  * identification.
  *
- * An account vault is marked with its username's initial and hue, the same
- * hue the account's avatar uses; a team with its own name's initial and the
- * hue `storeHues` assigns it. An inactive team draws the faint ink.
+ * Account vaults use the username's initial and avatar hue; teams use the team
+ * name's initial and the hue assigned by `storeHues`. Inactive teams use the
+ * muted `--faint` color.
  */
 
+import { createContext } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import {
   storeHues,
@@ -50,6 +51,26 @@ export function Mark({
     >
       {children}
     </span>
+  );
+}
+
+/**
+ * Context mapping store IDs to mark hues for components without direct access
+ * to the snapshot (`GroupMark`). The shell populates this from `storeMarkFace`
+ * so each team renders with a consistent color across views.
+ */
+export const StoreHueContext = createContext<ReadonlyMap<
+  string,
+  string
+> | null>(null);
+
+/** Builds a map of store ID to mark hue for all stores in `snapshot`. */
+export function storeMarkHues(snapshot: AgentSnapshot): Map<string, string> {
+  return new Map(
+    snapshot.stores.map((store) => [
+      store.id,
+      storeMarkFace(snapshot, store).hue,
+    ]),
   );
 }
 

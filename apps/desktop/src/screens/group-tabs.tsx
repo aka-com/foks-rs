@@ -335,7 +335,7 @@ export function IncompleteGroupPage({
         label={copy.title}
         action={
           <Button size="sm" onClick={onFinish} disabled={copy.actionDisabled}>
-            {copy.actionLabel ?? 'Finish setup'}
+            {copy.actionLabel ?? 'Finish Setup'}
           </Button>
         }
       >

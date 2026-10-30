@@ -2,13 +2,25 @@ import { TeamInfoPanel } from '../screens/team-info';
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
 } from 'react';
-import { anyDialogOpen, OverlayProvider } from '/kit/overlay-primitives';
+import {
+  anyDialogOpen,
+  anyPopupOpen,
+  OverlayProvider,
+} from '/kit/overlay-primitives';
+import {
+  focusWhenRendered,
+  mountFocusKeeper,
+  rowByKey,
+  setFocusContext,
+} from '/kit/focus-keeper';
+import { commandKey, isMac } from '/kit/keys';
 import { ToastController, ToastProvider } from '/kit/toasts';
 import type { AgentLifecycleController } from '../agent-lifecycle';
 import type { Bridge } from '../bridge';
@@ -51,6 +63,7 @@ import {
   devicesAlertSummary,
 } from '../screens/device-alert';
 import { DetailsPanel } from '../screens/details-panel';
+import { StoreHueContext, storeMarkHues } from '../components/store-mark';
 import { FirstRunExperience } from '../screens/first-run-screen';
 import { unroutedNotices } from '../screens/account-section';
 import { ALL_ITEMS, folderSelection, listsItems } from '../screens/scope';
@@ -61,8 +74,9 @@ import {
   type WriteWorkflow,
 } from '../screens/write-workflows';
 import { useSearchShortcut } from '../shell/search-palette';
+import { FIND_EVENT } from '../components/search-field';
 import { Sidebar } from '../shell/sidebar';
-import { Topbar, type TopbarProps } from '../shell/topbar';
+import { placeTitle, Topbar, type TopbarProps } from '../shell/topbar';
 import { BarActionsSlot, DetailsSlot } from '../shell/page-slots';
 import { activityBadge } from '../activity';
 import { FilesViewMenu } from '../shell/files-view-menu';
@@ -352,6 +366,29 @@ export function VaultShell({
     ).blocked,
   });
   const here = state.location;
+  // Ensure focus never rests on <body>: when a focused control unmounts, focus
+  // moves to its replacement or to the active view's list (`kit/focus-keeper.ts`).
+  // Each view has its own focus context so Back restores the last focused control.
+  useEffect(() => mountFocusKeeper(), []);
+  const focusContext = JSON.stringify([here, state.folder, state.kind]);
+  useLayoutEffect(() => setFocusContext(focusContext), [focusContext]);
+  // Update the window title to match the active location for the Window menu
+  // and VoiceOver ("Engineering — FOKS").
+  const title = placeTitle(here, shown, state.folder, state.kind);
+  useEffect(() => {
+    document.title = title ? `${title} — FOKS` : 'FOKS';
+  }, [title]);
+  // Render an offscreen h1 for VoiceOver heading navigation on views without a
+  // visible page heading (where the topbar provides the visual title). Team,
+  // Settings, and first-run screens render their own `h1`.
+  const shellHeading =
+    here.kind === 'all' ||
+    here.kind === 'files' ||
+    here.kind === 'store' ||
+    here.kind === 'activity' ||
+    here.kind === 'devices' ||
+    here.kind === 'chat' ||
+    (here.kind === 'teams' && !here.ref);
   const [teamInfo, setTeamInfo] = useState<{
     storeId: string;
     trigger?: HTMLElement;
@@ -457,6 +494,8 @@ export function VaultShell({
     deviceAlertRegistry(bridge).getSnapshot,
   );
   const appRef = useRef<HTMLDivElement>(null);
+  // Shared store hue map used across all store and group marks.
+  const storeHues = useMemo(() => storeMarkHues(shown), [shown]);
   const portalRoot = useMemo(
     () =>
       typeof document === 'undefined'
@@ -501,21 +540,83 @@ export function VaultShell({
     },
     [chrome.blocked, filesHere, newSelection, newStore, setWorkflow, shown],
   );
+  // ⌘N and ⇧⌘N, and File ▸ New Password / New Document, work from every
+  // place: outside Files they open All Items first, then the sheet for the
+  // default vault. A navigation a guard holds back for a prompt is not
+  // followed by the sheet; the reader asks again once it has settled.
+  const pendingNewItem = useRef<Exclude<KindFilter, 'All'> | null>(null);
+  const requestNewItem = useCallback(
+    (itemKind: Exclude<KindFilter, 'All'>): boolean => {
+      if (filesHere) return openNewItem(itemKind);
+      if (chrome.blocked || anyDialogOpen() || anyPopupOpen()) return false;
+      locations.openFiles('', 'All');
+      if (listsItems(locations.getSnapshot().location))
+        pendingNewItem.current = itemKind;
+      return true;
+    },
+    [chrome.blocked, filesHere, locations, openNewItem],
+  );
+  useEffect(() => {
+    const itemKind = pendingNewItem.current;
+    pendingNewItem.current = null;
+    if (itemKind && filesHere) openNewItem(itemKind);
+  }, [filesHere, openNewItem]);
+  const openNewFolder = useCallback((): boolean => {
+    if (
+      chrome.blocked ||
+      !filesHere ||
+      !newStore ||
+      writeBlockReason(shown, newStore) ||
+      anyDialogOpen()
+    )
+      return false;
+    setWorkflow({
+      kind: 'new-folder',
+      storeId: newStore.id,
+      initialFolder:
+        newSelection && newSelection.store !== ALL_ITEMS
+          ? newSelection.path
+          : '/',
+    });
+    return true;
+  }, [chrome.blocked, filesHere, newSelection, newStore, setWorkflow, shown]);
+  // The window's key equivalents that have no control of their own to bind
+  // them: ⌘N / ⇧⌘N, ⌃⌘S (Toggle Sidebar) and, off a Mac where the native
+  // menu does not exist, Ctrl+, for Settings. ⌘F belongs to the list bar's
+  // search field, ⌘K to the palette, ⌘⌫ to the selection.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (
-        !(event.metaKey || event.ctrlKey) ||
-        event.altKey ||
-        event.key.toLowerCase() !== 'n' ||
-        document.querySelector('[role="menu"], [role="listbox"]')
-      )
+      if (event.defaultPrevented) return;
+      const key = event.key.toLowerCase();
+      if (commandKey(event) && !event.altKey && key === 'n') {
+        if (anyPopupOpen()) return;
+        if (requestNewItem(event.shiftKey ? 'Document' : 'Password'))
+          event.preventDefault();
         return;
-      if (openNewItem(event.shiftKey ? 'Document' : 'Password'))
+      }
+      const toggleKeys = isMac()
+        ? event.metaKey && event.ctrlKey
+        : event.ctrlKey && event.altKey;
+      if (toggleKeys && key === 's' && !event.shiftKey) {
+        if (chrome.blocked || anyDialogOpen()) return;
         event.preventDefault();
+        toggleSidebar();
+        return;
+      }
+      if (
+        !isMac() &&
+        event.ctrlKey &&
+        !event.altKey &&
+        key === ',' &&
+        !anyDialogOpen()
+      ) {
+        event.preventDefault();
+        locations.navigate({ kind: 'settings' });
+      }
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [openNewItem]);
+  }, [chrome.blocked, locations, requestNewItem, toggleSidebar]);
   // ⌘⌫ deletes the selected item, through the same alert the item's menu
   // opens, and only while nothing else holds the keyboard: a text field, a
   // menu or a dialog.
@@ -532,13 +633,16 @@ export function VaultShell({
     if (!selectedItem || chrome.blocked) return;
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Backspace' || !event.metaKey || event.altKey) return;
+      // The alert's own ⌘⌫ confirms it; by the time the key reaches the
+      // document the alert may be gone and the next row selected.
+      if (event.defaultPrevented) return;
       const target = event.target;
       if (
         target instanceof Element &&
         target.closest('input, textarea, select, [contenteditable="true"]')
       )
         return;
-      if (anyDialogOpen() || document.querySelector('[role="menu"]')) return;
+      if (anyDialogOpen() || anyPopupOpen()) return;
       event.preventDefault();
       setWorkflow({ kind: 'delete', item: selectedItem });
     };
@@ -548,22 +652,41 @@ export function VaultShell({
   useEffect(() => {
     if (!bridge.native) return;
     let disposed = false;
-    let stop: (() => void) | undefined;
+    const stops: (() => void)[] = [];
+    const keep = (unlisten: () => void): void => {
+      if (disposed) unlisten();
+      else stops.push(unlisten);
+    };
     void bridge
       .onNewItem((kind) => {
-        if (!document.querySelector('[role="menu"], [role="listbox"]'))
-          openNewItem(kind);
+        if (!anyPopupOpen()) requestNewItem(kind);
       })
-      .then((unlisten) => {
-        if (disposed) unlisten();
-        else stop = unlisten;
+      .then(keep)
+      .catch(() => undefined);
+    void bridge
+      .onMenuCommand((command) => {
+        if (anyDialogOpen()) return;
+        switch (command) {
+          case 'find':
+            window.dispatchEvent(new Event(FIND_EVENT));
+            return;
+          case 'search':
+            setSearchOpen(true);
+            return;
+          case 'toggle-sidebar':
+            if (!chrome.blocked) toggleSidebar();
+            return;
+          case 'new-folder':
+            openNewFolder();
+        }
       })
+      .then(keep)
       .catch(() => undefined);
     return () => {
       disposed = true;
-      stop?.();
+      for (const stop of stops) stop();
     };
-  }, [bridge, openNewItem]);
+  }, [bridge, chrome.blocked, openNewFolder, requestNewItem, toggleSidebar]);
   const refreshShell = (): void =>
     refreshAll(() => {
       reconciliation.scheduler.requestAll('manual', [
@@ -594,9 +717,22 @@ export function VaultShell({
       return !pageStore || storeDescriptionState(shown, pageStore) !== 'normal';
     })();
   const splitEmpty = filesHere && !herePage && !detailsShown && !teamInfoShown;
-  // Chat draws this bar over its own resizable channel column, with the
-  // column's add control passed in, so the conversation beside it can carry
-  // a bar of its own; every other place draws it across the top of the panel.
+  // What the hidden sidebar's badges would say, for the bar's expand
+  // control. Chat's unread count lives in the inbox, below this component;
+  // the Chat column itself shows it.
+  const sidebarAttention = [
+    activityBadge(shown, teamRequestCounts)?.description,
+    devicesAlertSummary(shown, deviceAlerts)?.description,
+    settingsAlertSummary(shown)?.description,
+    unroutedNotices(shown).length
+      ? `${unroutedNotices(shown).length} ${unroutedNotices(shown).length === 1 ? 'notice needs' : 'notices need'} attention`
+      : undefined,
+  ]
+    .filter((reason): reason is string => Boolean(reason))
+    .join('; ');
+  // Chat renders this topbar above its resizable channel column (passing its add
+  // control) so the adjacent conversation column can render its own header; all
+  // other screens render it across the top of the main panel.
   const renderTopbar = (extra?: Partial<TopbarProps>): ReactNode => (
     <Topbar
       blocked={chrome.blocked}
@@ -624,15 +760,7 @@ export function VaultShell({
         ? {
             onNew: (itemKind: Exclude<KindFilter, 'All'>) =>
               void openNewItem(itemKind),
-            onNewFolder: () =>
-              setWorkflow({
-                kind: 'new-folder',
-                storeId: newStore.id,
-                initialFolder:
-                  newSelection && newSelection.store !== ALL_ITEMS
-                    ? newSelection.path
-                    : '/',
-              }),
+            onNewFolder: () => void openNewFolder(),
             newBlocked: writeBlockReason(shown, newStore),
           }
         : {})}
@@ -651,6 +779,7 @@ export function VaultShell({
         : {})}
       collapsed={sideCollapsed}
       onToggleCollapsed={toggleSidebar}
+      sidebarAttention={sideCollapsed ? sidebarAttention : undefined}
       nativeChrome={bridge.native}
       {...extra}
     />
@@ -822,7 +951,12 @@ export function VaultShell({
                 nativeChrome={bridge.native}
                 blocked={chrome.blocked}
               />
-              <main className="main">
+              <main className="main" tabIndex={-1}>
+                {shellHeading && title ? (
+                  <h1 className="offscreen" tabIndex={-1}>
+                    {title}
+                  </h1>
+                ) : null}
                 {here.kind === 'chat' ? null : renderTopbar()}
                 {chatMigration.notice}
                 {/* Reset screen failures when the location changes while keeping
@@ -946,12 +1080,16 @@ export function VaultShell({
             open={searchOpen}
             onClose={() => setSearchOpen(false)}
             onNavigate={(location) => locations.navigate(location)}
-            onOpenItem={(storeId, path) =>
-              locations.navigateAndSelect(
-                { kind: 'store', ref: storeId },
-                { store: storeId, path },
-              )
-            }
+            onOpenItem={(storeId, path) => {
+              // Open the item's parent folder and select and focus its row so
+              // the item is visible in both the list and details columns.
+              const folder = path.slice(0, path.lastIndexOf('/')) || '/';
+              locations.openFiles(`${storeId}|${folder}`, 'All', {
+                store: storeId,
+                path,
+              });
+              focusWhenRendered(rowByKey(`${storeId}|${path}`));
+            }}
           />
         </ChatInboxProvider>
       </div>
@@ -979,17 +1117,19 @@ export function VaultShell({
   );
 
   const withToasts = (
-    <ToastProvider controller={toasts} portalRoot={portalRoot}>
-      <NavigationGuardProvider store={locations}>
-        <MetadataRepositoryContext.Provider value={deviceCache.repository}>
-          <DeviceCacheContext.Provider value={deviceCache}>
-            <DeviceMetadataContext.Provider value={deviceMetadata}>
-              {shell}
-            </DeviceMetadataContext.Provider>
-          </DeviceCacheContext.Provider>
-        </MetadataRepositoryContext.Provider>
-      </NavigationGuardProvider>
-    </ToastProvider>
+    <StoreHueContext.Provider value={storeHues}>
+      <ToastProvider controller={toasts} portalRoot={portalRoot}>
+        <NavigationGuardProvider store={locations}>
+          <MetadataRepositoryContext.Provider value={deviceCache.repository}>
+            <DeviceCacheContext.Provider value={deviceCache}>
+              <DeviceMetadataContext.Provider value={deviceMetadata}>
+                {shell}
+              </DeviceMetadataContext.Provider>
+            </DeviceCacheContext.Provider>
+          </MetadataRepositoryContext.Provider>
+        </NavigationGuardProvider>
+      </ToastProvider>
+    </StoreHueContext.Provider>
   );
   if (!portalRoot) return withToasts;
   return (

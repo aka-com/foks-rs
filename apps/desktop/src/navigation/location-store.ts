@@ -470,18 +470,22 @@ export class LocationStore {
    * first, as one guarded move, so a guard that holds the navigation back
    * also holds the folder and the kind.
    */
-  openFiles(folder: string, kind: KindFilter): void {
+  openFiles(folder: string, kind: KindFilter, selection?: Selection): void {
     const here = this.current.location;
     const apply = (): void => {
       this.dispatch({ type: 'folder', folder: this.folderAt(folder) });
       this.dispatch({ type: 'kind', kind });
+      if (selection) this.dispatch({ type: 'select', selection });
     };
     if (
       here.kind === 'all' ||
       here.kind === 'files' ||
       (here.kind === 'store' && folder.startsWith(`${here.ref}|`))
     ) {
-      apply();
+      // A new selection is guarded as one (an unsaved edit is asked about);
+      // a folder change alone is not.
+      if (selection) this.guarded({ kind: 'select', selection }, apply, {});
+      else apply();
       return;
     }
     const location: Location = { kind: 'all' };

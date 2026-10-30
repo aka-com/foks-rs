@@ -454,7 +454,7 @@ function DeviceSection({
                 );
               }}
             >
-              Lock now
+              Lock Now
             </Button>
           }
         >
@@ -545,7 +545,7 @@ function DeviceSection({
                 maintain('relocate', () => bridge.relocateClientState())
               }
             >
-              Choose folder…
+              Choose Folder…
             </Button>
           }
         >
@@ -594,7 +594,7 @@ function DeviceSection({
                 maintain('verify', () => bridge.maintainClientState('verify'))
               }
             >
-              Verify online
+              Verify Online
             </Button>
           }
         >

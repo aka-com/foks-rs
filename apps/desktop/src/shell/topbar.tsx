@@ -2,19 +2,20 @@
  * Primary 44px topbar in the main panel, aligned with the traffic lights'
  * centerline.
  *
- * On Files, Chat, Activity and Devices it is the list column's bar: the search
- * field and the column's add control (Chat places the bar over its own,
- * resizable column and passes that control in as `add`). On every other page
- * it names the page with the crumbs, led by Back on a page inside an area (a
- * team), and ends with the page's own commands (`BarActions`). Its empty parts
- * are the window's drag region. While the sidebar is hidden the bar
- * also carries the control that shows it again, after the traffic lights.
+ * On Files, Chat, Activity, and Devices, it renders the list column's search
+ * field and add button (Chat renders the bar above its resizable channel column
+ * and passes its add control via `add`). On all other screens, it renders
+ * breadcrumbs (preceded by a Back button on nested pages such as a team page)
+ * and trailing page actions (`BarActions`). Unoccupied regions act as a window
+ * drag handle. When the sidebar is collapsed, the bar also renders the traffic
+ * lights and the sidebar expand button at the leading edge.
  */
 
-import { Fragment } from 'react';
+import { Fragment, useId } from 'react';
 import type { ReactNode } from 'react';
 
 import { Icon, SearchField, StoreMark } from '../components';
+import { ariaShortcut } from '../components/menus';
 import { NewItemButton } from './toolbar';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import { channelLabel } from '../chat/presentation';
@@ -157,7 +158,42 @@ export function scopeLabel(
   return labels.length ? labels[labels.length - 1] : TAB_LABEL[tab];
 }
 
+/**
+ * Returns the active location's title for the window title and page heading:
+ * the folder or store name on Files (or All Items, Passwords, Documents), the
+ * team name on a team page, All Teams on the teams index, and the final
+ * breadcrumb label elsewhere.
+ */
+export function placeTitle(
+  location: Location,
+  snapshot?: AgentSnapshot,
+  folder = '',
+  kind: KindFilter = 'All',
+): string {
+  const tab = railTabOf(location);
+  if (!tab) return '';
+  if (tab === 'files') {
+    const labels = filesFolderCrumb(snapshot, location, folder).labels;
+    if (labels.length) return labels[labels.length - 1];
+    if (location.kind === 'store')
+      return (snapshot && storeOf(snapshot, location.ref)?.name) ?? 'Files';
+    return kind === 'Password'
+      ? 'Passwords'
+      : kind === 'Document'
+        ? 'Documents'
+        : 'All Items';
+  }
+  if (location.kind === 'teams' && !location.ref) return 'All Teams';
+  return crumbTrail(location, snapshot).at(-1) ?? TAB_LABEL[tab];
+}
+
 export interface TopbarProps {
+  /**
+   * Combined badge summary when the sidebar is collapsed (pending requests,
+   * device alerts, settings alerts, or unrouted notices). When set, the
+   * sidebar expand button renders a warning dot and announces this description.
+   */
+  sidebarAttention?: string;
   /** Absent while the agent is starting; the crumbs then name the tab alone. */
   snapshot?: AgentSnapshot;
   deviceLabel?: DeviceLabel | null;
@@ -286,11 +322,12 @@ export function Topbar({
   chatTeamCount,
   blocked = false,
   nativeChrome = false,
+  sidebarAttention,
 }: TopbarProps): ReactNode {
+  const attentionId = useId();
   const inbox = useSidebarInbox();
-  // The channel's own name, where the shell already knows it: the inbox is
-  // loaded for the sidebar's badge, and the crumb reads it rather than
-  // loading anything of its own.
+  // Read the active channel name from the shared sidebar inbox cache without
+  // issuing a separate read.
   const open =
     location.kind === 'chat' && location.ref && location.channel
       ? inbox
@@ -352,13 +389,28 @@ export function Topbar({
         <button
           type="button"
           className="tbtn side-expand"
+          data-focus-key="sidebar-toggle"
+          aria-keyshortcuts={ariaShortcut('⌃⌘S')}
           aria-expanded="false"
           aria-label="Expand sidebar"
-          title="Expand sidebar"
+          aria-describedby={sidebarAttention ? attentionId : undefined}
+          title={
+            sidebarAttention
+              ? `Expand sidebar: ${sidebarAttention}`
+              : 'Expand sidebar'
+          }
           disabled={blocked}
           onClick={onToggleCollapsed}
         >
           <Icon name="panelLeft" />
+          {sidebarAttention ? (
+            <>
+              <span className="dot warn" aria-hidden="true" />
+              <span id={attentionId} className="offscreen">
+                {sidebarAttention}
+              </span>
+            </>
+          ) : null}
         </button>
       ) : null}
       {parent ? (
@@ -415,8 +467,6 @@ export function Topbar({
           onChange={onQuery ?? (() => undefined)}
           placeholder={tab === 'chat' ? 'Search channels' : 'Search'}
           disabled={!searchable}
-          shortcut={false}
-          kbd
         />
       ) : (
         <span className="grow" data-tauri-drag-region="" />

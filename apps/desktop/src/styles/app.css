@@ -156,6 +156,13 @@
   font-size: 15px;
 }
 
+/* Sidebar footer account avatar (22px). */
+.side .who .kico.round {
+  width: 22px;
+  height: 22px;
+  font-size: var(--mark-type);
+}
+
 /* Roster footnote */
 .roster p.fn {
   font-size: 12.5px;

@@ -87,7 +87,12 @@ export function useSidebarResize(enabled: boolean) {
               aria-valuemin={MIN_WIDTH}
               aria-valuemax={MAX_WIDTH}
               aria-valuenow={width}
-              tabIndex={0}
+              // Exclude from the Tab order (matching NSSplitView dividers):
+              // because the handle portals to the end of `.app`, Tab from the
+              // main panel would otherwise land on it. It remains focusable via
+              // pointer or VoiceOver for arrow-key resizing; ⌃⌘S toggles the
+              // sidebar from the keyboard.
+              tabIndex={-1}
               onPointerDown={(event) => {
                 if (event.button !== 0) return;
                 event.preventDefault();

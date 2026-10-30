@@ -21,9 +21,19 @@ import { inventoryReadiness, itemsReadiness } from '../model';
  * button after the traffic lights.
  */
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FocusEvent as ReactFocusEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import { Menu, Popover, anyDialogOpen } from '/kit/overlay-primitives';
 import { Icon } from '../components';
+import { ariaShortcut } from '../components/menus';
 import { useSidebarResize } from './use-sidebar-resize';
 import { FilesTree, type FilesTreeProps } from './files-tree';
 import {
@@ -215,9 +225,95 @@ export function NavRow({
     >
       {glyph}
       <span className="t">{name}</span>
+      {tail ? <TailSeparator /> : null}
       {tail}
     </button>
   );
+}
+
+/**
+ * Offscreen comma separator between a row's name and its trailing count or
+ * status dot so VoiceOver announces "Activity, 3 requests" instead of "Activity3".
+ */
+export function TailSeparator(): ReactNode {
+  return <span className="offscreen">, </span>;
+}
+
+/**
+ * Manages roving-tabindex keyboard navigation for the sidebar source list:
+ * a single Tab stop, ArrowUp/ArrowDown/Home/End to move focus between rows,
+ * and Enter or Space to activate a row. Moving focus does not trigger
+ * navigation because opening a location is guarded and may prompt or initiate
+ * reads; store tree rows add ArrowRight and ArrowLeft (`files-tree.tsx`).
+ * The active Tab stop is the focused row, or the row with `aria-current`, or
+ * the first enabled row.
+ */
+function useSourceListKeys(root: RefObject<HTMLElement | null>): {
+  onKeyDown: (event: ReactKeyboardEvent<HTMLElement>) => void;
+  onFocus: (event: ReactFocusEvent<HTMLElement>) => void;
+} {
+  const rows = (): HTMLButtonElement[] =>
+    Array.from(
+      root.current?.querySelectorAll<HTMLButtonElement>(
+        'button.nav:not(:disabled)',
+      ) ?? [],
+    );
+  const rove = (focused?: Element | null): void => {
+    const all = rows();
+    const current =
+      all.find((row) => row === focused) ??
+      all.find((row) => row === document.activeElement) ??
+      all.find((row) => row.hasAttribute('aria-current')) ??
+      all[0];
+    for (const row of all) row.tabIndex = row === current ? 0 : -1;
+  };
+  // Recompute the active Tab stop whenever rows mount/unmount (such as
+  // expanding a tree or adding a store) or `aria-current` / `disabled` changes.
+  useLayoutEffect(() => {
+    const element = root.current;
+    if (!element) return;
+    rove();
+    const observer = new MutationObserver(() => rove());
+    observer.observe(element, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['aria-current', 'disabled'],
+    });
+    return () => observer.disconnect();
+  });
+  return {
+    onFocus: (event) => {
+      if (
+        event.target instanceof HTMLButtonElement &&
+        event.target.matches('button.nav')
+      )
+        rove(event.target);
+    },
+    onKeyDown: (event) => {
+      if (
+        !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) ||
+        event.altKey ||
+        event.metaKey ||
+        event.ctrlKey ||
+        !(event.target instanceof HTMLElement) ||
+        !event.target.matches('button.nav')
+      )
+        return;
+      const all = rows();
+      const at = all.indexOf(event.target as HTMLButtonElement);
+      const next =
+        event.key === 'Home'
+          ? all[0]
+          : event.key === 'End'
+            ? all[all.length - 1]
+            : all[at + (event.key === 'ArrowDown' ? 1 : -1)];
+      event.preventDefault();
+      if (!next) return;
+      next.focus();
+      next.scrollIntoView?.({ block: 'nearest' });
+    },
+  };
 }
 
 /** Configuration and action callbacks for the sidebar setup card. */
@@ -464,6 +560,8 @@ export function AccountHeader({
                         <div key={store.id}>
                           <button
                             type="button"
+                            role="menuitemradio"
+                            aria-checked={store.id === active?.id}
                             className={[
                               'acct',
                               store.id === active?.id ? 'on' : '',
@@ -486,11 +584,7 @@ export function AccountHeader({
                               className={
                                 store.id === active?.id ? 'tick' : 'tick off'
                               }
-                              aria-label={
-                                store.id === active?.id
-                                  ? 'Current account'
-                                  : undefined
-                              }
+                              aria-hidden="true"
                             >
                               <Icon name="check" />
                             </span>
@@ -637,6 +731,7 @@ function NavTail({
   return (
     <span
       className={`nav-tail ${kind}`}
+      role="img"
       aria-label={description}
       title={description}
     >
@@ -755,6 +850,28 @@ export function Sidebar({
   blocked = false,
 }: SidebarProps): ReactNode {
   const resize = useSidebarResize(!collapsed && !blocked);
+  const sourceList = useSourceListKeys(resize.ref);
+  // Track whether the navigation list overflows above the footer (for example,
+  // in a 640px window with an expanded tree) to show a bottom divider and
+  // scroll the active row into view.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [overflows, setOverflows] = useState(false);
+  const measureOverflow = (): void => {
+    const element = scrollRef.current;
+    if (!element) return;
+    setOverflows(
+      element.scrollHeight - element.scrollTop - element.clientHeight > 1,
+    );
+  };
+  useLayoutEffect(measureOverflow);
+  const currentFolder = files?.folder;
+  useEffect(() => {
+    // Scroll only when the active location or folder changes so badge updates
+    // do not reset the user's scroll position.
+    scrollRef.current
+      ?.querySelector<HTMLElement>('.nav[aria-current]')
+      ?.scrollIntoView?.({ block: 'nearest' });
+  }, [location, currentFolder]);
   const chatInbox = useSidebarInbox();
   const unread = snapshot ? chatUnread(snapshot, chatInbox) : null;
   const here = railTabOf(location);
@@ -862,6 +979,8 @@ export function Sidebar({
         .join(' ')}
       hidden={collapsed}
       aria-label="Main Navigation"
+      onKeyDown={sourceList.onKeyDown}
+      onFocus={sourceList.onFocus}
     >
       {resize.handle}
       <TrafficStrip native={nativeChrome}>
@@ -870,6 +989,10 @@ export function Sidebar({
           <button
             type="button"
             className="tbtn side-collapse"
+            // Share `data-focus-key` with the topbar expand button so focus
+            // transfers to it when collapsing the sidebar (`focus-keeper`).
+            data-focus-key="sidebar-toggle"
+            aria-keyshortcuts={ariaShortcut('⌃⌘S')}
             aria-expanded="true"
             aria-label="Collapse sidebar"
             title="Collapse sidebar"
@@ -880,7 +1003,17 @@ export function Sidebar({
           </button>
         ) : null}
       </TrafficStrip>
-      <div className={blocked ? 'side-scroll is-blocked' : 'side-scroll'}>
+      <div
+        ref={scrollRef}
+        className={[
+          'side-scroll',
+          blocked ? 'is-blocked' : '',
+          overflows ? 'overflows' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+        onScroll={measureOverflow}
+      >
         <div className="nav-group">{KIND_ROWS.map(kindRow)}</div>
         {snapshot ? (
           <FilesTree

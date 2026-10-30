@@ -506,7 +506,7 @@ test('a retired Servers address opens the list at the bottom of Account', async 
     rendered.queryByRole('button', { name: 'Change passphrase…' }),
     null,
   );
-  assert.equal(rendered.queryByRole('button', { name: 'Lock now' }), null);
+  assert.equal(rendered.queryByRole('button', { name: 'Lock Now' }), null);
   assert.equal(rendered.queryByText('Danger zone'), null);
   assert.ok(rendered.getByText('Username'));
 });
@@ -798,7 +798,7 @@ test('a profile address opens that server instead of the page', async () => {
       .getByRole('tab', { name: 'Storage' }),
   );
   assert.equal(rendered.queryByRole('button', { name: 'Reset…' }), null);
-  assert.equal(rendered.queryByRole('button', { name: 'Lock now' }), null);
+  assert.equal(rendered.queryByRole('button', { name: 'Lock Now' }), null);
   // The audit log reads the two numbers the agent reports, not a date.
   assert.ok(rendered.getByText(/12 entries · Checkpoint 4821/));
 });
@@ -1097,12 +1097,12 @@ test('Device displays application, agent, and data sections above local reset', 
     ['Application', 'Agent', 'FOKS data', 'Danger zone'],
   );
   assert.ok(rendered.getByText(/^FOKS Desktop /));
-  assert.ok(rendered.getByRole('button', { name: 'Lock now' }));
+  assert.ok(rendered.getByRole('button', { name: 'Lock Now' }));
   assert.ok(rendered.getByRole('button', { name: 'Copy' }));
   assert.ok(rendered.getByRole('button', { name: 'Export…' }));
   assert.ok(rendered.getByRole('button', { name: 'Import…' }));
-  assert.ok(rendered.getByRole('button', { name: 'Verify online' }));
-  assert.ok(rendered.getByRole('button', { name: 'Choose folder…' }));
+  assert.ok(rendered.getByRole('button', { name: 'Verify Online' }));
+  assert.ok(rendered.getByRole('button', { name: 'Choose Folder…' }));
   assert.ok(rendered.getByRole('button', { name: 'Reset…' }));
   assert.ok(
     rendered.getByText(

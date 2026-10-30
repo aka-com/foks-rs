@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { anyDialogOpen } from '/kit/overlay-primitives';
+import { anyDialogOpen, anyPopupOpen } from '/kit/overlay-primitives';
 import type { ToastController } from '/kit/toasts';
 import {
   sceneHref,
@@ -105,7 +105,7 @@ export function useShellNavigation({
       !blocked &&
       !anyDialogOpen() &&
       locations.getSnapshot().location.kind !== 'first-run' &&
-      !document.querySelector('[role="menu"], [role="listbox"]');
+      !anyPopupOpen();
     const stopSwipe = mountSwipeBack({
       target: (direction) =>
         direction === 'back'

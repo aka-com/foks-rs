@@ -1583,6 +1583,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
     onChatNotification: async () => () => {},
     onOpenSettings: async () => () => {},
     onNewItem: async () => () => {},
+    onMenuCommand: async () => () => {},
     onMaintenanceStatus: async () => () => {},
     onExitState: async () => () => {},
   };
