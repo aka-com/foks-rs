@@ -86,15 +86,22 @@ impl Borrowed<'_> {
         })
     }
 }
+/// Decodes the `CAST(x AS TEXT)` representation of an INTEGER cell. Non-UTF-8
+/// bytes, values outside `i64`, and non-canonical decimal strings all return
+/// `Error::Storage`. The caller enforces the 20-byte length bound and returns
+/// `Error::Bounds` when exceeded.
+pub(super) fn integer_text(bytes: &[u8]) -> Result<i64> {
+    let text = std::str::from_utf8(bytes).map_err(|_| Error::Storage)?;
+    let n: i64 = text.parse().map_err(|_| Error::Storage)?;
+    if Decimal::new(n).bytes() != bytes {
+        return Err(Error::Storage);
+    }
+    Ok(n)
+}
 fn borrowed(value: ValueRef<'_>, kind: Kind) -> Result<Borrowed<'_>> {
     Ok(match (value, kind) {
         (ValueRef::Text(bytes), Kind::Integer) if bytes.len() <= 20 => {
-            let text = std::str::from_utf8(bytes).map_err(|_| Error::Storage)?;
-            let n: i64 = text.parse().map_err(|_| Error::IntegerRange)?;
-            if Decimal::new(n).bytes() != bytes {
-                return Err(Error::Storage);
-            }
-            Borrowed::Integer(n)
+            Borrowed::Integer(integer_text(bytes)?)
         }
         (ValueRef::Blob(b), Kind::Blob | Kind::NullableBlob) if b.len() <= MAX_BLOB_BYTES => {
             Borrowed::Blob(b)

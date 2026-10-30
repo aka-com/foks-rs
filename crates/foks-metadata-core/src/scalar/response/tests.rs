@@ -384,3 +384,13 @@ fn refused_admission_is_distinct_from_fallible_allocator_failure() {
         }
     }
 }
+
+#[test]
+fn input_buffer_reservation_failure_is_a_refusal_not_an_abort() {
+    assert_eq!(zeroed_input(16), Some(vec![0; 16]));
+    assert_eq!(zeroed_input(0), Some(Vec::new()));
+    // Capacity overflow: `vec![0; usize::MAX]` panics here, and in the Wasm
+    // module an allocation failure aborts and traps the instance.
+    assert_eq!(zeroed_input(usize::MAX), None);
+    assert_eq!(zeroed_input_with(16, |_, _| Err(())), None);
+}

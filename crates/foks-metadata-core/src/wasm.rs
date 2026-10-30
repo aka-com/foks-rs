@@ -123,8 +123,16 @@ pub extern "C" fn input_alloc(length: u32) -> u32 {
     }
     INPUT.with(|buffer| {
         let mut b = buffer.borrow_mut();
-        *b = vec![0; length as usize];
-        b.as_mut_ptr() as u32
+        // Free the previous request buffer before reserving the new one so a
+        // failed allocation leaves `INPUT` empty and returns 0.
+        *b = Vec::new();
+        match response::zeroed_input(length as usize) {
+            Some(input) => {
+                *b = input;
+                b.as_mut_ptr() as u32
+            }
+            None => 0,
+        }
     })
 }
 #[no_mangle]
