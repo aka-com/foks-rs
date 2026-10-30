@@ -11,7 +11,7 @@ use foks_yubi::{
     SlotId, YubiDeviceLocator, YubiProvider,
 };
 use serde::{Deserialize, Serialize};
-use zeroize::{Zeroize as _, Zeroizing};
+use zeroize::Zeroize as _;
 
 use super::account::validate_certificates;
 use super::*;
@@ -518,7 +518,7 @@ impl AccountVault<'_> {
 
     fn put_pending_yubi(&mut self, pending: &PendingYubiAccount) -> Result<()> {
         validate_pending_yubi(pending)?;
-        let bytes = Zeroizing::new(serde_json::to_vec(pending)?);
+        let bytes = encode_private_json(pending)?;
         self.store.put(&pending_yubi_key(&pending.alias), &bytes)?;
         Ok(())
     }
@@ -718,7 +718,7 @@ impl AccountVault<'_> {
 
     fn put_stored_yubi(&mut self, stored: &StoredYubiAccount) -> Result<()> {
         validate_stored_yubi(stored, &stored.alias)?;
-        let bytes = Zeroizing::new(serde_json::to_vec(stored)?);
+        let bytes = encode_private_json(stored)?;
         self.store.put(&yubi_account_key(&stored.alias), &bytes)?;
         Ok(())
     }

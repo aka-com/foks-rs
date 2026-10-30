@@ -75,10 +75,8 @@ impl AccountVault<'_> {
     pub(crate) fn update_bot_label(&mut self, alias: &str, username: &str) -> Result<()> {
         let mut p = self.bot_selection(alias)?.ok_or(Error::AccountMissing)?;
         p.username = username.into();
-        self.store.put(
-            &selection_key(alias),
-            &Zeroizing::new(serde_json::to_vec(&p)?),
-        )?;
+        self.store
+            .put(&selection_key(alias), &encode_private_json(&p)?)?;
         Ok(())
     }
 }
@@ -119,10 +117,9 @@ impl CheckedProfileSession<'_> {
                 "token does not match the original selected bot",
             ));
         }
-        vault.store.put(
-            &selection_key(alias),
-            &Zeroizing::new(serde_json::to_vec(&p)?),
-        )?;
+        vault
+            .store
+            .put(&selection_key(alias), &encode_private_json(&p)?)?;
         Ok(LoadedAccount {
             alias: alias.into(),
             username,

@@ -464,9 +464,7 @@ impl CheckedProfileSession<'_> {
                     });
                     reports.push(report);
                 }
-                vault
-                    .store
-                    .put(&key, &Zeroizing::new(serde_json::to_vec(&handles)?))?;
+                vault.store.put(&key, &encode_private_json(&handles)?)?;
                 Ok(serde_json::json!({"rows":reports,"possibly_truncated":possibly_truncated}))
             }
             InvitationAction::Approve {

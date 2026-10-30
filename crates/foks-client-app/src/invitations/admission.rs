@@ -238,7 +238,7 @@ impl CheckedProfileSession<'_> {
                 target_source_role: StoredTeamRole::from_role(plan.target_source_role),
                 destination_role: StoredTeamRole::from_role(plan.destination_role),
                 removal_key_commitment: plan.removal_key_commitment,
-                removal_key: *removal.as_bytes(),
+                removal_key: SecretArray::from_seed(&removal),
                 expected_seqno: plan.expected_seqno,
                 operation_id: plan.operation_id,
                 active: false,

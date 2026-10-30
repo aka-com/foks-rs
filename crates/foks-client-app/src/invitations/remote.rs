@@ -12,12 +12,6 @@ impl std::fmt::Debug for StoredInvitationMembership {
         f.write_str("StoredInvitationMembership { [REDACTED] }")
     }
 }
-impl Drop for StoredInvitationMembership {
-    fn drop(&mut self) {
-        use zeroize::Zeroize as _;
-        self.membership.removal_key.zeroize();
-    }
-}
 impl CheckedProfileSession<'_> {
     #[allow(clippy::too_many_arguments)]
     pub fn remote_invitation_action(
