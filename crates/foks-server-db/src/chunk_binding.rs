@@ -141,7 +141,17 @@ impl Database {
             [],
             |r| r.budgeted_get(0),
         )?;
-        if let Some(binding) = &current {
+        // Replace a PendingNew binding with no verified objects when the
+        // locator changes, so an unactivated binding does not lock the
+        // database to an unusable store (such as the source installation's
+        // store after backup restore).
+        let replaceable = current.as_ref().is_some_and(|binding| {
+            binding.state == ChunkStorageBindingState::PendingNew
+                && binding.verified_objects == 0
+                && binding.locator.as_deref() != Some(locator)
+                && binding.host_id.as_ref().map(|v| v.as_slice()) == Some(host.as_slice())
+        });
+        if let Some(binding) = current.as_ref().filter(|_| !replaceable) {
             if binding.state != ChunkStorageBindingState::Legacy {
                 if binding.authority_identity.is_some()
                     && binding.authority_identity != authority_identity
@@ -171,7 +181,10 @@ impl Database {
             [],
             |r| r.budgeted_get(0),
         )?;
-        let legacy = external || current.is_some();
+        let legacy = external
+            || current
+                .as_ref()
+                .is_some_and(|binding| binding.state == ChunkStorageBindingState::Legacy);
         if legacy && !adopt {
             return Err(Error::Invalid("chunk storage adoption required"));
         }
@@ -336,10 +349,10 @@ mod tests {
                 .unwrap(),
             first
         );
+        db.activate_chunk_storage_binding(&first).unwrap();
         assert!(db
             .prepare_chunk_storage_binding(&[5; 16], "store-b", false)
             .is_err());
-        db.activate_chunk_storage_binding(&first).unwrap();
         assert_eq!(
             db.chunk_storage_binding().unwrap().unwrap().state,
             ChunkStorageBindingState::Active
@@ -347,6 +360,42 @@ mod tests {
         assert!(db.activate_chunk_storage_binding(&first).is_err());
         db.clear_private_chunk_storage_binding().unwrap();
         assert!(db.chunk_storage_binding().unwrap().is_none());
+    }
+
+    #[test]
+    fn never_activated_binding_is_replaced_by_another_locator() {
+        let (_temp, mut db) = fixture();
+        let first = db
+            .prepare_chunk_storage_binding_with_authority(&[4; 16], "old-store", false, None)
+            .unwrap();
+        assert_eq!(first.state, ChunkStorageBindingState::PendingNew);
+        let replaced = db
+            .prepare_chunk_storage_binding_with_authority(
+                &[5; 16],
+                "new-store",
+                false,
+                Some([6; 32]),
+            )
+            .unwrap();
+        assert_eq!(replaced.state, ChunkStorageBindingState::PendingNew);
+        assert_eq!(replaced.locator.as_deref(), Some("new-store"));
+        assert_eq!(replaced.namespace_id, Some([5; 16]));
+        assert_eq!(replaced.authority_identity, Some([6; 32]));
+        // Preparing with the same locator enforces the recorded authority_identity.
+        assert!(db
+            .prepare_chunk_storage_binding_with_authority(&[7; 16], "new-store", false, None)
+            .is_err());
+        // Existing external chunk references prevent replacing the binding without adoption.
+        insert(&db, 0);
+        assert!(db
+            .prepare_chunk_storage_binding_with_authority(
+                &[8; 16],
+                "third-store",
+                false,
+                Some([6; 32])
+            )
+            .is_err());
+        assert_eq!(db.chunk_storage_binding().unwrap().unwrap(), replaced);
     }
 
     #[test]

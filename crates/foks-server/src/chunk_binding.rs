@@ -60,6 +60,46 @@ fn verify(
     Ok(())
 }
 
+/// Returns true when the database has no binding or has an unactivated
+/// `PendingNew` binding for a different locator. Because no objects are written
+/// before activation, `Database::prepare_chunk_storage_binding_with_authority`
+/// replaces that pending binding with a new namespace at `locator`.
+fn starts_fresh(binding: Option<&ChunkStorageBinding>, locator: &str) -> bool {
+    binding.is_none_or(|binding| {
+        binding.state == State::PendingNew
+            && binding.verified_objects == 0
+            && binding.locator.as_deref() != Some(locator)
+    })
+}
+
+/// Rejects a chunk store that already contains a namespace marker before
+/// writing a new binding row, so a restored database is not bound to the
+/// source installation's store and can be started with a different store.
+fn refuse_marked_namespace(store: &dyn ChunkStore) -> Result<()> {
+    if store.read_namespace_marker()?.is_some() {
+        return Err(Error::Chunk(FOREIGN_NAMESPACE));
+    }
+    Ok(())
+}
+
+const FOREIGN_NAMESPACE: &str =
+    "chunk store namespace belongs to another binding; configure a new empty directory or prefix";
+
+/// Writes the namespace marker for a pending binding. If the store already
+/// has a different marker (for example, when an earlier release wrote a
+/// `PendingNew` row before checking the store from which a backup was
+/// restored), returns `FOREIGN_NAMESPACE` instead of a generic marker mismatch.
+fn publish_marker(store: &dyn ChunkStore, binding: &ChunkStorageBinding) -> Result<()> {
+    let expected = marker(binding)?;
+    if store
+        .read_namespace_marker()?
+        .is_some_and(|present| present != expected)
+    {
+        return Err(Error::Chunk(FOREIGN_NAMESPACE));
+    }
+    store.create_namespace_marker_if_absent(&expected)
+}
+
 /// Validate a snapshot before it can be served or hydrated. No snapshot is held
 /// by this function; metadata is copied before the remote marker read.
 pub(crate) fn verify_reader(
@@ -108,10 +148,19 @@ pub(crate) fn initialize_online(
     let mut namespace = [0; 16];
     crate::OsEntropy.fill(&mut namespace)?;
     let authority = source.authority_identity()?;
-    let needs_empty = writer.call(|db| Ok(db.chunk_storage_binding()?.is_none()))?;
-    let empty = !needs_empty || store.namespace_is_empty()?;
+    let fresh_locator = locator.clone();
+    let fresh = writer.call(move |db| {
+        Ok(starts_fresh(
+            db.chunk_storage_binding()?.as_ref(),
+            &fresh_locator,
+        ))
+    })?;
+    if fresh {
+        refuse_marked_namespace(store)?;
+    }
+    let empty = !fresh || store.namespace_is_empty()?;
     let binding = writer.call(move |db| {
-        let requested = if db.chunk_storage_binding()?.is_none() && !empty {
+        let requested = if starts_fresh(db.chunk_storage_binding()?.as_ref(), &locator) && !empty {
             None
         } else {
             authority
@@ -130,7 +179,7 @@ pub(crate) fn initialize_online(
             source,
         )?;
     } else {
-        store.create_namespace_marker_if_absent(&marker(&binding)?)?;
+        publish_marker(store, &binding)?;
         writer.call(move |db| {
             db.activate_chunk_storage_binding(&binding)?;
             Ok(())
@@ -146,17 +195,18 @@ pub(crate) fn initialize_offline(
 ) -> Result<()> {
     let mut namespace = [0; 16];
     crate::OsEntropy.fill(&mut namespace)?;
-    let authority = if database.chunk_storage_binding()?.is_none() && !store.namespace_is_empty()? {
+    let locator = store.locator()?;
+    let fresh = starts_fresh(database.chunk_storage_binding()?.as_ref(), &locator);
+    if fresh {
+        refuse_marked_namespace(store)?;
+    }
+    let authority = if fresh && !store.namespace_is_empty()? {
         None
     } else {
         source.authority_identity()?
     };
-    let binding = database.prepare_chunk_storage_binding_with_authority(
-        &namespace,
-        &store.locator()?,
-        false,
-        authority,
-    )?;
+    let binding = database
+        .prepare_chunk_storage_binding_with_authority(&namespace, &locator, false, authority)?;
     source.verify_authority(binding.authority_identity)?;
     if binding.state == State::Active {
         verify(
@@ -168,7 +218,7 @@ pub(crate) fn initialize_offline(
             source,
         )?;
     } else {
-        store.create_namespace_marker_if_absent(&marker(&binding)?)?;
+        publish_marker(store, &binding)?;
         database.activate_chunk_storage_binding(&binding)?;
     }
     crate::chunk_ledger::initialize_offline(database, store)
@@ -436,6 +486,112 @@ mod tests {
             false
         )
         .is_err());
+    }
+
+    #[test]
+    fn unbound_database_refuses_a_marked_namespace_without_pinning_it() {
+        let (dir, path, old_store) = authority_fixture();
+        old_store
+            .create_namespace_marker_if_absent(b"marker of the installation that was backed up")
+            .unwrap();
+        let writer =
+            crate::Writer::start(path.clone(), foks_server_db::Config::default(), 4).unwrap();
+        let source =
+            crate::storage_lease::StorageLease::with_store(&path, Some(old_store.as_ref()), false)
+                .unwrap();
+        assert!(matches!(
+            initialize_online(&writer.handle(), Some(old_store.as_ref()), &source),
+            Err(Error::Chunk(FOREIGN_NAMESPACE))
+        ));
+        assert!(writer
+            .call(|db| Ok(db.chunk_storage_binding()?))
+            .unwrap()
+            .is_none());
+        drop(source);
+        let new_store = crate::chunks::ChunkStoreConfig::Filesystem {
+            directory: dir.path().join("new-objects"),
+        }
+        .build()
+        .unwrap();
+        let source =
+            crate::storage_lease::StorageLease::with_store(&path, Some(new_store.as_ref()), false)
+                .unwrap();
+        initialize_online(&writer.handle(), Some(new_store.as_ref()), &source).unwrap();
+        let binding = writer
+            .call(|db| Ok(db.chunk_storage_binding()?.unwrap()))
+            .unwrap();
+        assert_eq!(binding.state, State::Active);
+        assert_eq!(binding.locator, Some(new_store.locator().unwrap()));
+        assert!(binding.authority_identity.is_some());
+        writer.shutdown().unwrap();
+        drop(source);
+        // initialize_offline also rejects the marked store without recording a binding.
+        let unbound = dir.path().join("unbound");
+        drop(Database::open(&unbound, foks_server_db::Config::default()).unwrap());
+        let c = rusqlite::Connection::open(&unbound).unwrap();
+        c.execute(
+            "INSERT INTO host_metadata VALUES(1,?1,'test',X'',X'')",
+            [[3u8; 33].as_slice()],
+        )
+        .unwrap();
+        drop(c);
+        let source = crate::storage_lease::StorageLease::with_store(
+            &unbound,
+            Some(old_store.as_ref()),
+            false,
+        )
+        .unwrap();
+        let mut db = Database::open(&unbound, foks_server_db::Config::default()).unwrap();
+        assert!(initialize_offline(&mut db, old_store.as_ref(), &source).is_err());
+        assert!(db.chunk_storage_binding().unwrap().is_none());
+    }
+
+    #[test]
+    fn never_activated_binding_to_a_marked_store_moves_to_a_new_store() {
+        let (dir, path, old_store) = authority_fixture();
+        old_store
+            .create_namespace_marker_if_absent(b"marker of the installation that was backed up")
+            .unwrap();
+        // Simulate a database where an earlier release recorded a PendingNew
+        // binding to a store whose marker belongs to another binding.
+        let mut db = Database::open(&path, foks_server_db::Config::default()).unwrap();
+        db.prepare_chunk_storage_binding_with_authority(
+            &[7; 16],
+            &old_store.locator().unwrap(),
+            false,
+            None,
+        )
+        .unwrap();
+        drop(db);
+        let writer =
+            crate::Writer::start(path.clone(), foks_server_db::Config::default(), 4).unwrap();
+        let source =
+            crate::storage_lease::StorageLease::with_store(&path, Some(old_store.as_ref()), false)
+                .unwrap();
+        // Starting with the same marked store returns FOREIGN_NAMESPACE
+        // rather than a generic marker conflict.
+        assert!(matches!(
+            initialize_online(&writer.handle(), Some(old_store.as_ref()), &source),
+            Err(Error::Chunk(FOREIGN_NAMESPACE))
+        ));
+        drop(source);
+        let new_store = crate::chunks::ChunkStoreConfig::Filesystem {
+            directory: dir.path().join("new-objects"),
+        }
+        .build()
+        .unwrap();
+        let source =
+            crate::storage_lease::StorageLease::with_store(&path, Some(new_store.as_ref()), false)
+                .unwrap();
+        initialize_online(&writer.handle(), Some(new_store.as_ref()), &source).unwrap();
+        let binding = writer
+            .call(|db| Ok(db.chunk_storage_binding()?.unwrap()))
+            .unwrap();
+        assert_eq!(binding.state, State::Active);
+        assert_eq!(binding.locator, Some(new_store.locator().unwrap()));
+        assert_ne!(binding.namespace_id, Some([7; 16]));
+        assert!(binding.authority_identity.is_some());
+        writer.shutdown().unwrap();
     }
 
     #[test]
