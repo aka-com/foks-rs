@@ -48,6 +48,32 @@ fn head(c: &Connection, number: u64, version: i64) {
     .unwrap();
 }
 fn invariant(c: &Connection) {
+    projection(c);
+    assert_eq!(dirent_count(c), (heads(c), heads(c)));
+}
+/// Returns `(kv_namespaces.dirent_count, kv_dirent_heads row count)`, or
+/// `(heads, heads)` if the namespace row does not exist.
+fn dirent_count(c: &Connection) -> (i64, i64) {
+    let heads = heads(c);
+    let stored: Option<i64> = c
+        .query_row(
+            "SELECT dirent_count FROM kv_namespaces WHERE namespace_id=?1",
+            [UID],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap();
+    (stored.unwrap_or(heads), heads)
+}
+fn heads(c: &Connection) -> i64 {
+    c.query_row(
+        "SELECT count(*) FROM kv_dirent_heads WHERE uid=?1",
+        [UID],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+fn projection(c: &Connection) {
     let expected = "SELECT d.uid,d.parent_id,d.dirent_id,d.version,d.name_mac,d.creation_time,d.node_id
         FROM kv_dirent_heads h JOIN kv_dirents d ON d.uid=h.uid AND d.parent_id=h.parent_id AND d.dirent_id=h.dirent_id AND d.version=h.version
         WHERE substr(d.node_id,1,1)!=X'00'";
@@ -144,19 +170,30 @@ fn live_projection_tracks_head_history_mutation_cascade_and_rollback() {
 
 #[test]
 fn replace_head_with_tombstone_clears_projection_without_recursive_delete_triggers() {
-    let c = connection();
-    c.pragma_update(None, "recursive_triggers", false).unwrap();
-    history(&c, 1, 1, 2, true);
-    head(&c, 1, 1);
-    history(&c, 1, 2, 2, false);
-    c.execute(
-        "INSERT OR REPLACE INTO kv_dirent_heads VALUES(?1,?2,?3,2)",
-        params![UID, PARENT, id(1)],
-    )
-    .unwrap();
-    invariant(&c);
-    assert!(!conflict(&c, 2, 2));
-    assert!(exact(&c, None, 1).is_empty());
+    for recursive in [false, true] {
+        let c = connection();
+        c.pragma_update(None, "recursive_triggers", recursive)
+            .unwrap();
+        history(&c, 1, 1, 2, true);
+        head(&c, 1, 1);
+        history(&c, 1, 2, 2, false);
+        c.execute(
+            "INSERT OR REPLACE INTO kv_dirent_heads VALUES(?1,?2,?3,2)",
+            params![UID, PARENT, id(1)],
+        )
+        .unwrap();
+        // The current projection is REPLACE-safe in either mode.
+        projection(&c);
+        assert!(!conflict(&c, 2, 2));
+        assert!(exact(&c, None, 1).is_empty());
+        // Namespace counters require `recursive_triggers`: without it, the
+        // implicit delete during `INSERT OR REPLACE` does not fire the
+        // `AFTER DELETE` trigger, so `dirent_count` is not decremented for the
+        // replaced row. Production queries use `ON CONFLICT DO UPDATE` instead
+        // of `REPLACE`.
+        let expected = if recursive { (1, 1) } else { (2, 1) };
+        assert_eq!(dirent_count(&c), expected, "recursive_triggers={recursive}");
+    }
 }
 
 #[test]

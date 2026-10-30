@@ -150,16 +150,17 @@ fn observed_cancellation_and_deadline_leave_the_next_call_healthy() {
         let socket = directory.path().join("agent.sock");
         let listener = UnixListener::bind(&socket).unwrap();
         std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let signal = cancelled.clone();
+        // Write only two bytes of the four-byte length prefix.
+        let written = Arc::new(AtomicBool::new(false));
+        let signal = written.clone();
         let server = std::thread::spawn(move || {
             let (mut first, _) = listener.accept().unwrap();
             let request = read_socket_request(&mut first);
             assert!(matches!(request.operation, Operation::Ping));
             first.write_all(&[0, 0]).unwrap();
-            if !deadline {
-                signal.store(true, Ordering::Release);
-            }
+            signal.store(true, Ordering::Release);
+            // The client consumed the partial prefix before closing the socket,
+            // so the server reads EOF.
             assert_eq!(first.read(&mut [0; 1]).unwrap(), 0);
             let (mut second, _) = listener.accept().unwrap();
             let request = read_socket_request(&mut second);
@@ -179,9 +180,22 @@ fn observed_cancellation_and_deadline_leave_the_next_call_healthy() {
             .client
             .set_timeout(Duration::from_millis(500))
             .unwrap();
+        // The client checks `cancelled` before each readiness wait and before
+        // each response read. After the server writes the two-byte prefix, the
+        // client drains those bytes after the first or second check, so
+        // cancelling on the third check interrupts the call mid-prefix.
+        // Cancelling before the client reads those bytes can close the socket
+        // with unread data and cause the server read to fail with ECONNRESET
+        // instead of returning EOF.
+        let checks = AtomicUsize::new(0);
+        let cancelled = || {
+            !deadline
+                && written.load(Ordering::Acquire)
+                && checks.fetch_add(1, Ordering::AcqRel) >= 2
+        };
         let result = handle
             .transport()
-            .call_cancellable(Operation::Ping, &|| cancelled.load(Ordering::Acquire));
+            .call_cancellable(Operation::Ping, &cancelled);
         if deadline {
             assert!(matches!(result, Err(DesktopAgentError::DeadlineExceeded)));
         } else {

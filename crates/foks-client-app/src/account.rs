@@ -1,11 +1,15 @@
 use super::*;
 
+// Thread-local fault-injection flags for backup tests. When set, a flag fails
+// the next backup enrollment or revocation on the current thread after the
+// remote step completes, without affecting concurrent tests on other threads.
 #[cfg(test)]
-static TEST_FAIL_AFTER_BACKUP_ENROLLMENT: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-#[cfg(test)]
-static TEST_FAIL_AFTER_BACKUP_REVOCATION: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+thread_local! {
+    static TEST_FAIL_AFTER_BACKUP_ENROLLMENT: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+    static TEST_FAIL_AFTER_BACKUP_REVOCATION: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
 
 impl CheckedProfileSession<'_> {
     pub(super) fn with_account_credential<T>(
@@ -822,7 +826,7 @@ impl CheckedProfileSession<'_> {
                 .enroll_backup_key(&host, &loaded.credential, Role::OWNER, &backup)?;
 
         #[cfg(test)]
-        if TEST_FAIL_AFTER_BACKUP_ENROLLMENT.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        if TEST_FAIL_AFTER_BACKUP_ENROLLMENT.replace(false) {
             return Err(Error::InvalidAccount(
                 "test interrupted backup enrollment before local completion",
             ));
@@ -911,7 +915,7 @@ impl CheckedProfileSession<'_> {
         };
 
         #[cfg(test)]
-        if TEST_FAIL_AFTER_BACKUP_REVOCATION.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        if TEST_FAIL_AFTER_BACKUP_REVOCATION.replace(false) {
             return Err(Error::InvalidAccount(
                 "test interrupted backup revocation before local completion",
             ));
@@ -2249,6 +2253,25 @@ mod tests {
             .unwrap();
     }
 
+    /// Verify that backup failpoints are thread-local and do not affect other
+    /// threads.
+    #[test]
+    fn backup_failpoints_stay_on_the_arming_thread() {
+        TEST_FAIL_AFTER_BACKUP_ENROLLMENT.set(true);
+        TEST_FAIL_AFTER_BACKUP_REVOCATION.set(true);
+        let elsewhere = std::thread::spawn(|| {
+            (
+                TEST_FAIL_AFTER_BACKUP_ENROLLMENT.replace(false),
+                TEST_FAIL_AFTER_BACKUP_REVOCATION.replace(false),
+            )
+        })
+        .join()
+        .unwrap();
+        assert_eq!(elsewhere, (false, false));
+        assert!(TEST_FAIL_AFTER_BACKUP_ENROLLMENT.replace(false));
+        assert!(TEST_FAIL_AFTER_BACKUP_REVOCATION.replace(false));
+    }
+
     #[test]
     fn backup_prepare_is_ephemeral_and_commit_reconciles_after_interruption() {
         let environment = TestEnvironment::new().unwrap();
@@ -2315,7 +2338,7 @@ mod tests {
 
                 let phrase = session.prepare_owner_backup("personal", "paper", &mut vault)?;
                 let joined = phrase.expose_joined();
-                TEST_FAIL_AFTER_BACKUP_ENROLLMENT.store(true, std::sync::atomic::Ordering::SeqCst);
+                TEST_FAIL_AFTER_BACKUP_ENROLLMENT.set(true);
                 session
                     .commit_owner_backup(
                         "personal",
@@ -2398,7 +2421,7 @@ mod tests {
                 assert!(vault.backup("paper")?.is_some());
                 assert_eq!(session.list_devices("personal", &mut vault)?.len(), 2);
 
-                TEST_FAIL_AFTER_BACKUP_REVOCATION.store(true, std::sync::atomic::Ordering::SeqCst);
+                TEST_FAIL_AFTER_BACKUP_REVOCATION.set(true);
                 session
                     .revoke_owner_backup(
                         "personal",
