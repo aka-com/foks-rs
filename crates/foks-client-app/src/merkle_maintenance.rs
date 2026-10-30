@@ -181,6 +181,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
     fn rejected_rollback_admission_does_not_collect() {
         let f = AccountFixture::start_native();
         f.run(|s, _, _| {
@@ -205,6 +206,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
     fn crash_after_collection_before_checkpoint_publication_reopens() {
         let f = AccountFixture::start_native();
         f.run(|s, _, _| {
