@@ -18,9 +18,11 @@ pub use chunk_ledger::{inventory_chunk_store, ChunkCapacityConfig};
 pub mod chunks;
 mod config;
 mod deadline;
+mod descriptors;
 mod diagnostics;
 mod entropy;
 mod error;
+mod fatal;
 mod fault;
 pub mod host;
 mod identity;
@@ -45,9 +47,13 @@ mod writer;
 
 pub use chunk_storage::externalize_chunks;
 pub use config::{Config, ReadDatabaseConfig, SessionLimits};
+#[cfg(unix)]
+pub use descriptors::raise_descriptor_limit;
+pub use descriptors::{descriptor_budget, DescriptorLimit};
 pub use diagnostics::{SessionDiagnostics, SessionErrorClass, StderrSessionDiagnostics};
 pub use entropy::{Entropy, OsEntropy};
 pub use error::{Error, Result};
+pub use fatal::CoreThread;
 #[doc(hidden)]
 pub use fault::{SessionFaultPoint, SessionFaults};
 pub use metrics::{
@@ -55,7 +61,7 @@ pub use metrics::{
     KexMetricsSnapshot, RealtimeMetricsSnapshot, ReconcileMetricsSnapshot, ServerMetrics,
     ServerMetricsSnapshot,
 };
-pub use net::{start, RunningServer, ServerAddresses};
+pub use net::{start, AcceptErrorKind, RunningServer, ServerAddresses};
 pub use rate_limit::RateLimitConfig;
 pub use standalone::{
     backup_standalone_installation, backup_standalone_installation_with_chunk_store,

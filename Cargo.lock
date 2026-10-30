@@ -2276,6 +2276,7 @@ dependencies = [
  "reqwest",
  "rsa",
  "rusqlite",
+ "rustix",
  "rustls",
  "rustls-pki-types",
  "serde",

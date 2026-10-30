@@ -1,6 +1,7 @@
 //! Bounded loopback adapter. Request targets, cookies and form values are never logged.
 use super::{render, service::*, WebAdminService};
-use crate::{Error, Result};
+use crate::fatal::{CoreThread, FatalSignal};
+use crate::{Error, Result, ServerMetrics};
 use http_body_util::{BodyExt, Full};
 use hyper::{
     body::{Bytes, Incoming},
@@ -33,6 +34,20 @@ pub struct WebAdminHttpServer {
 }
 impl WebAdminHttpServer {
     pub fn start(service: Arc<WebAdminService>) -> Result<Self> {
+        Self::start_monitored(
+            service,
+            Arc::new(ServerMetrics::default()),
+            FatalSignal::default(),
+        )
+    }
+
+    /// Starts the listener, counts transient accept() failures in `metrics`
+    /// and reports an exit other than a requested shutdown to `fatal`.
+    pub(crate) fn start_monitored(
+        service: Arc<WebAdminService>,
+        metrics: Arc<ServerMetrics>,
+        fatal: FatalSignal,
+    ) -> Result<Self> {
         let listener = TcpListener::bind(service.config.listen)?;
         listener.set_nonblocking(true)?;
         let address = listener.local_addr()?;
@@ -43,6 +58,7 @@ impl WebAdminHttpServer {
             .name("foks-admin-http".into())
             .spawn(move || {
                 let _readiness = ReadinessGuard(worker.clone());
+                let exit = fatal.exit_guard(CoreThread::Administration);
                 let runtime = tokio::runtime::Builder::new_multi_thread()
                     .worker_threads(2)
                     .max_blocking_threads(16)
@@ -60,7 +76,13 @@ impl WebAdminHttpServer {
                             _ = &mut stopped => break,
                             Some(_) = connections.join_next(), if !connections.is_empty() => {},
                             accepted = listener.accept() => {
-                                let (stream, peer) = accepted?;
+                                let (stream, peer) = match accepted {
+                                    Ok(accepted) => accepted,
+                                    Err(error) => {
+                                        crate::net::retry_accept(error, &metrics).await?;
+                                        continue;
+                                    }
+                                };
                                 if !peer.ip().is_loopback() {
                                     continue;
                                 }
@@ -89,6 +111,8 @@ impl WebAdminHttpServer {
                     while connections.join_next().await.is_some() {}
                     Ok(())
                 });
+                // The loop returns Ok only when shutdown was requested.
+                exit.end(outcome.is_ok());
                 runtime.shutdown_timeout(Duration::from_secs(30));
                 outcome
             })?;

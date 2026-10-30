@@ -10,7 +10,7 @@ celld-proof = ["foks-metadata-core/native", "foks-hosted-transport/qualification
 
 [dependencies]
 foks-hosted-transport = { workspace = true }
-nix = { version = "0.30", default-features = false, features = ["time", "fs", "dir"] }
+nix = { version = "0.30", default-features = false, features = ["resource", "time", "fs", "dir"] }
 base64 = { workspace = true }
 foks-oidc = { workspace = true }
 serde_json = { workspace = true }
