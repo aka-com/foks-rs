@@ -134,7 +134,7 @@ export function BotPanel({
           disabled={busy || eligibility('list').disabled}
           onClick={() => void run({ action: 'list' })}
         >
-          Show pending enrollments
+          Show Pending Enrollments
         </Button>
         <Button
           variant="primary"
@@ -148,7 +148,7 @@ export function BotPanel({
             })
           }
         >
-          Enroll bot
+          Enroll Bot
         </Button>
       </>
     ) : pane === 'load' ? (
@@ -170,7 +170,7 @@ export function BotPanel({
           }
           onClick={() => void run({ action: 'load-file' }, alias)}
         >
-          Load from file
+          Load from File
         </Button>
       </>
     ) : revokeConfirmed ? (
@@ -183,7 +183,7 @@ export function BotPanel({
           void run({ action: 'revoke', device_id: target, pin: null });
         }}
       >
-        Confirm revocation
+        Confirm Revocation
       </Button>
     ) : (
       <Button
@@ -371,7 +371,7 @@ export function BotPanel({
                   })
                 }
               >
-                Check status
+                Check Status
               </Button>
             )}
             {p.export_available && (
@@ -386,7 +386,7 @@ export function BotPanel({
                   })
                 }
               >
-                Export token
+                Export Token
               </Button>
             )}
             {p.state === 'complete' && (

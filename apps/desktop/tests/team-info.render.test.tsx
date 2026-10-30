@@ -86,19 +86,19 @@ test('Team info consolidates identity, membership, files and requests with exist
   assert.ok(ui.within(panel).getByRole('heading', { name: /^Members ·/ }));
   assert.ok(ui.screen.getByText('2 pending requests'));
   assert.ok(ui.screen.getByText('Machine'));
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Manage members' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Manage Members' }));
   ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Open team files' }),
+    ui.screen.getByRole('button', { name: 'Open Team Files' }),
   );
   ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Review requests' }),
+    ui.screen.getByRole('button', { name: 'Review Requests' }),
   );
   assert.deepEqual(mounted.navigations, [
     { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
     { kind: 'store', ref: 'team:eng' },
     { kind: 'group-settings', ref: 'team:eng', tab: 'requests' },
   ]);
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Copy team ID' }));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Copy Team ID' }));
   assert.deepEqual(mounted.copies, [mounted.store.team_id_hex]);
 });
 
@@ -123,7 +123,7 @@ test('ordinary members see no request administration', async () => {
   }));
   assert.equal(ui.screen.queryByRole('heading', { name: 'Requests' }), null);
   assert.equal(
-    ui.screen.queryByRole('button', { name: 'Review requests' }),
+    ui.screen.queryByRole('button', { name: 'Review Requests' }),
     null,
   );
 });

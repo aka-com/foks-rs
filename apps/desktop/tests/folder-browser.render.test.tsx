@@ -268,7 +268,7 @@ test('an empty team displays shared-item details and its Manage command', async 
     document.querySelector('.lpane .access-notice h2')?.textContent,
     'Setup incomplete',
   );
-  assert.ok(ui.screen.getByRole('button', { name: 'Finish setup' }));
+  assert.ok(ui.screen.getByRole('button', { name: 'Finish Setup' }));
   // A team's head offers its page.
   ui.fireEvent.click(treeRow('Household'));
   await ui.waitFor(() => assert.equal(currentTitle(), 'Household'));
@@ -485,10 +485,10 @@ test('typing a query leaves the folder tree unchanged', async () => {
 });
 
 test('a missing store renders the unavailable state', async () => {
-  await mount({ kind: 'store', ref: 'acct:gone' }, undefined, '.notice');
+  await mount({ kind: 'store', ref: 'acct:gone' }, undefined, '.main .empty');
   assert.match(
-    document.querySelector('.notice')?.textContent ?? '',
-    /Vault no longer available/,
+    document.querySelector('.main .empty')?.textContent ?? '',
+    /Vault Unavailable.*no longer on this device/,
   );
   // Neither the empty-folder invitation nor an empty list.
   assert.equal(document.querySelector('.list-window'), null);
@@ -550,28 +550,76 @@ function actionsOf(row: Element): (string | null)[] {
   );
 }
 
-test('the tree’s New team button lands on Teams with the create sheet up', async () => {
-  const { store } = await mount({ kind: 'all' });
+async function openTeamsPlus(): Promise<void> {
   const plus = document.querySelector<HTMLButtonElement>(
-    '.side-tree button.plus[aria-label="New team"]',
+    '.side-tree .nav-h button[aria-label="Create or join a team"]',
   );
-  assert.ok(plus, 'the Teams heading carries a New team button');
+  assert.ok(plus, 'the Teams heading carries a create-or-join menu');
+  assert.equal(plus.getAttribute('aria-haspopup'), 'menu');
   await ui.act(async () => {
     ui.fireEvent.click(plus);
     await Promise.resolve();
   });
-  // The sheet the button promises is open on the page it navigated to.
-  await ui.waitFor(() =>
-    assert.ok(
-      [...document.querySelectorAll('.sheet [role="heading"], .sheet h2')].some(
-        (node) => node.textContent === 'Create a Team',
-      ),
-      'the create sheet is open',
-    ),
+}
+
+test('the tree’s Teams menu offers Create, Join and Show All Teams', async () => {
+  await mount({ kind: 'all' });
+  await openTeamsPlus();
+  const menu = await ui.screen.findByRole('menu', {
+    name: 'Create or join a team',
+  });
+  assert.deepEqual(
+    [...menu.querySelectorAll('button')].map((item) => item.textContent),
+    ['Create a Team…', 'Join a Team…', 'Show All Teams'],
   );
-  // And the intent is spent: the address left behind is the plain list, so
-  // the sheet is not reopened by a later render or by coming back.
-  const { location } = store.getSnapshot();
-  assert.equal(location.kind, 'teams');
-  assert.equal(location.kind === 'teams' ? location.open : 'unset', undefined);
+});
+
+for (const [item, heading] of [
+  ['Create a Team…', 'Create a Team'],
+  ['Join a Team…', 'Join a Team'],
+] as const) {
+  test(`the tree’s Teams menu: ${item} lands on Teams with its sheet up`, async () => {
+    const { store } = await mount({ kind: 'all' });
+    await openTeamsPlus();
+    const menu = await ui.screen.findByRole('menu', {
+      name: 'Create or join a team',
+    });
+    await ui.act(async () => {
+      ui.fireEvent.click(ui.within(menu).getByText(item));
+      await Promise.resolve();
+    });
+    // Selecting the menu item navigates to Teams and opens the target sheet.
+    await ui.waitFor(() =>
+      assert.ok(
+        [...document.querySelectorAll('.sheet h2')].some(
+          (node) => node.textContent === heading,
+        ),
+        `the ${heading} sheet is open`,
+      ),
+    );
+    // Consuming `open` leaves the plain Teams location so re-rendering or
+    // navigating back does not reopen the sheet.
+    const { location } = store.getSnapshot();
+    assert.equal(location.kind, 'teams');
+    assert.equal(
+      location.kind === 'teams' ? location.open : 'unset',
+      undefined,
+    );
+  });
+}
+
+test('the tree’s Teams menu: Show All Teams opens Teams with no sheet', async () => {
+  const { store } = await mount({ kind: 'all' });
+  await openTeamsPlus();
+  const menu = await ui.screen.findByRole('menu', {
+    name: 'Create or join a team',
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(ui.within(menu).getByText('Show All Teams'));
+    await Promise.resolve();
+  });
+  await ui.waitFor(() =>
+    assert.equal(store.getSnapshot().location.kind, 'teams'),
+  );
+  assert.equal(document.querySelector('.sheet'), null);
 });

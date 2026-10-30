@@ -208,7 +208,7 @@ for (const legacy of [false, true]) {
     });
     assert.ok(
       ui.screen.getByRole('heading', {
-        name: 'Invite a new user to Engineering',
+        name: 'Invite a New User to Engineering',
       }),
     );
     assert.deepEqual(store.getSnapshot().location, {

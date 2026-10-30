@@ -408,9 +408,12 @@ for (const kind of ['Password', 'Document']) {
     const write = ui.within(sheet).getByLabelText<HTMLSelectElement>('Write');
     assert.equal(read.value, 'Member');
     assert.equal(write.value, 'Admin');
-    assert.ok(ui.within(sheet).getByLabelText('Read visibility'));
+    assert.ok(ui.within(sheet).getByLabelText('Read: Member sees level'));
     ui.fireEvent.change(read, { target: { value: 'Owner' } });
-    assert.equal(ui.within(sheet).queryByLabelText('Read visibility'), null);
+    assert.equal(
+      ui.within(sheet).queryByLabelText('Read: Member sees level'),
+      null,
+    );
   });
 }
 

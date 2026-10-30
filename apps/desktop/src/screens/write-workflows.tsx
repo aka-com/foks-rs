@@ -321,9 +321,10 @@ function memberVisibility(role: KvRoleInput): number {
 }
 
 /**
- * One access row: the role level as a menu and, for Member, the visibility
- * level it applies at as a number field beside it, so Read and Write fit the
- * sheet at the window's 640px minimum height.
+ * Access role row: renders the role level select and, for `Member`, an inline
+ * visibility level number input ("Member · sees level 0", matching the details
+ * panel and team page) so the Read and Write rows fit within the 640px minimum
+ * window height.
  */
 function RoleRow({
   label,
@@ -352,11 +353,11 @@ function RoleRow({
       </select>
       {level === 'Member' ? (
         <label className="vis-field">
-          <span>Visibility</span>
+          <span>sees level</span>
           <input
             type="number"
             className="mono"
-            aria-label={`${label} visibility`}
+            aria-label={`${label}: Member sees level`}
             min={-32768}
             max={32767}
             value={String(visibility)}
@@ -1078,7 +1079,7 @@ function ExistsSheet({
               })
             }
           >
-            Change path
+            Change Path
           </Button>
           <Button
             variant="primary"
@@ -1086,7 +1087,7 @@ function ExistsSheet({
               void onOpenExisting(workflow).then(close, onError);
             }}
           >
-            Open existing item
+            Open Existing Item
           </Button>
         </>
       }
@@ -1289,7 +1290,7 @@ function ConflictSheet({
                 {replacing ? 'Keep replacing' : 'Keep editing'}
               </Button>
               <Button variant="primary" danger onClick={onDiscardConflict}>
-                Discard changes
+                Discard Changes
               </Button>
             </>
           }
@@ -1309,11 +1310,11 @@ function ConflictSheet({
     >
       <Sheet
         glyph={<BigTile face={itemTile(workflow.item)} />}
-        title="Item changed elsewhere"
+        title="Item Changed Elsewhere"
         footer={
           <>
             <Button onClick={() => setConfirmingDiscard(true)}>
-              {replacing ? 'Discard replacement' : 'Discard my edit'}
+              {replacing ? 'Discard Replacement' : 'Discard My Edit'}
             </Button>
             <Button
               variant="primary"
@@ -1330,7 +1331,7 @@ function ConflictSheet({
                 );
               }}
             >
-              Refresh and review
+              Refresh and Review
             </Button>
           </>
         }

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { installDom, settle } from './lib/dom-harness';
+import { installDom, nativeSetTimeout, settle } from './lib/dom-harness';
 import {
+  holdFocusForReturn,
   mountFocusKeeper,
   restoreFocusIfLost,
   setFocusContext,
@@ -129,3 +130,172 @@ test('a window whose focus was never placed is left alone as its list renders', 
     stop();
   }
 });
+
+test('a place the window settles on before any input is not a navigation', async () => {
+  page('<div class="rows"></div>');
+  setFocusContext('opening');
+  const stop = mountFocusKeeper();
+  try {
+    // Resolve the initial location once the snapshot arrives.
+    setFocusContext('opening, completed');
+    document.querySelector('.rows')!.innerHTML =
+      '<div tabindex="0" data-row-key="one">one</div>';
+    await tick();
+    assert.equal(document.activeElement, document.body);
+    // After user input, context changes count as navigations.
+    document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Tab' }));
+    setFocusContext('next');
+    await tick();
+    assert.equal(document.activeElement?.getAttribute('data-row-key'), 'one');
+  } finally {
+    stop();
+  }
+});
+
+test('a lost focus in a dialog lands on the invalid field, else the body, else the footer', async () => {
+  page('');
+  document.body.insertAdjacentHTML(
+    'beforeend',
+    '<div role="dialog" aria-modal="true" tabindex="-1"><div class="sheet"><div class="sb"><input id="path"><button id="start">Start</button></div><div class="ft"><button class="btn" id="cancel">Cancel</button><button class="btn primary" id="go">Move</button></div></div></div>',
+  );
+  const stop = mountFocusKeeper();
+  try {
+    const go = document.getElementById('go') as HTMLButtonElement;
+    go.focus();
+    // Submission fails: mark the field invalid and disable the submit button.
+    document.getElementById('path')!.setAttribute('aria-invalid', 'true');
+    go.disabled = true;
+    go.blur();
+    await tick();
+    assert.equal(document.activeElement?.id, 'path');
+
+    // When a body control unmounts and no field is invalid, focus the first body control.
+    document.getElementById('path')!.removeAttribute('aria-invalid');
+    const start = document.getElementById('start')!;
+    start.focus();
+    start.remove();
+    await tick();
+    assert.equal(document.activeElement?.id, 'path');
+
+    // When all body controls and the primary button are disabled, focus Cancel.
+    const path = document.getElementById('path') as HTMLInputElement;
+    path.disabled = true;
+    path.blur();
+    await tick();
+    assert.equal(document.activeElement?.id, 'cancel');
+  } finally {
+    stop();
+    document.querySelector('[role="dialog"]')?.remove();
+  }
+});
+
+test('a button that disables itself while it works gets the focus back', async () => {
+  page('<button id="check">Check</button><button id="other">Other</button>');
+  const stop = mountFocusKeeper();
+  try {
+    const check = document.getElementById('check') as HTMLButtonElement;
+    check.focus();
+    check.disabled = true;
+    check.blur();
+    // Re-enabled before the keeper check runs; focus returns to this button.
+    check.disabled = false;
+    await tick();
+    assert.equal(document.activeElement?.id, 'check');
+  } finally {
+    stop();
+  }
+});
+
+test('a control removed with no replacement hands the focus to its neighbour', async () => {
+  page(
+    '<div class="group-card"><div class="set-row"><span class="a"><button id="check">Check</button><button id="manage">Manage ›</button></span></div></div>',
+  );
+  const stop = mountFocusKeeper();
+  try {
+    const check = document.getElementById('check')!;
+    check.focus();
+    check.remove();
+    await tick();
+    assert.equal(document.activeElement?.id, 'manage');
+  } finally {
+    stop();
+  }
+});
+
+test('Back finds a control with no key by its label, the same one of several', async () => {
+  page(
+    '<div class="group-card"><button>Manage ›</button><button>Manage ›</button></div>',
+  );
+  const stop = mountFocusKeeper();
+  try {
+    setFocusContext('account');
+    await tick();
+    document.querySelectorAll<HTMLElement>('.main button')[1].focus();
+    setFocusContext('server');
+    document.querySelector('.main')!.innerHTML =
+      '<h1 tabindex="-1">Server</h1>';
+    await tick();
+    setFocusContext('account');
+    document.querySelector('.main')!.innerHTML =
+      '<div class="group-card"><button id="m1">Manage ›</button><button id="m2">Manage ›</button></div>';
+    await tick();
+    assert.equal(document.activeElement?.id, 'm2');
+  } finally {
+    stop();
+  }
+});
+
+test('a landing on a control both places share gives way to the remembered one', async () => {
+  page(
+    '<div role="tablist"><button role="tab" aria-selected="true" id="tab">Account</button></div><div class="body"><button id="manage">Manage ›</button></div>',
+  );
+  const stop = mountFocusKeeper();
+  try {
+    setFocusContext('account');
+    await tick();
+    document.getElementById('manage')!.focus();
+    setFocusContext('server');
+    document.querySelector('.body')!.innerHTML = '<p>Server</p>';
+    await tick();
+    // Fallback focus lands on the shared tab control.
+    assert.equal(document.activeElement?.id, 'tab');
+    setFocusContext('account');
+    document.querySelector('.body')!.innerHTML =
+      '<button id="manage">Manage ›</button>';
+    await tick();
+    assert.equal(document.activeElement?.id, 'manage');
+  } finally {
+    stop();
+  }
+});
+
+test('the shell coming back after the lock screen gets its focus back', async () => {
+  page(
+    '<div class="rows"><div tabindex="0" data-row-key="a">a</div><div tabindex="0" data-row-key="b">b</div></div>',
+  );
+  let stop = mountFocusKeeper();
+  document.querySelector<HTMLElement>('[data-row-key="b"]')!.focus();
+  // Lock screen replaces the shell.
+  holdFocusForReturn();
+  stop();
+  document.body.innerHTML =
+    '<div class="takeover"><button id="unlock">Unlock</button></div>';
+  document.getElementById('unlock')!.focus();
+  // Unlock remounts the shell and renders its rows asynchronously.
+  document.body.innerHTML = '';
+  stop = mountFocusKeeper();
+  try {
+    page(
+      '<div class="rows"><div tabindex="0" data-row-key="a">a</div><div tabindex="0" data-row-key="b">b</div></div>',
+    );
+    await polled();
+    assert.equal(document.activeElement?.getAttribute('data-row-key'), 'b');
+  } finally {
+    stop();
+  }
+});
+
+async function polled(): Promise<void> {
+  // `focusWhenRendered` polls every 16ms.
+  await new Promise((resolve) => nativeSetTimeout(resolve, 60));
+}

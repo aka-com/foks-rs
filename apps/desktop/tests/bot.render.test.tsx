@@ -40,7 +40,7 @@ async function overlay(children: ReactNode) {
 }
 
 const presentation = {
-  title: 'Bot accounts',
+  title: 'Bot Accounts',
   subtitle: 'ada on Example',
   onClose: () => {},
 };
@@ -112,7 +112,7 @@ test('hardware-needed enrollment stays passive until a PIN is explicitly supplie
     ),
   );
   assert.equal(actions.length, 0);
-  ui.fireEvent.click(r.getByText('Enroll bot'));
+  ui.fireEvent.click(r.getByText('Enroll Bot'));
   await ui.waitFor(() => assert.ok(r.queryByText('Confirm')));
   assert.equal((r.getByText('Confirm') as HTMLButtonElement).disabled, true);
   assert.equal(scans, 0);
@@ -172,7 +172,7 @@ test('explicit role, confirmation and unknown recovery never export or replay', 
       target: { value: '654321' },
     },
   );
-  ui.fireEvent.click(r.getByText('Enroll bot'));
+  ui.fireEvent.click(r.getByText('Enroll Bot'));
   await ui.waitFor(() => assert.ok(r.queryByText('Confirm')));
   assert.deepEqual(actions[0], {
     action: 'prepare',
@@ -189,8 +189,8 @@ test('explicit role, confirmation and unknown recovery never export or replay', 
   );
   ui.fireEvent.click(r.getByText('Confirm'));
   await ui.waitFor(() => assert.ok(r.queryByText('Confirm') === null));
-  assert.ok(r.queryByText('Export token') === null);
-  ui.fireEvent.click(r.getByText('Check status'));
+  assert.ok(r.queryByText('Export Token') === null);
+  ui.fireEvent.click(r.getByText('Check Status'));
   await ui.waitFor(() => assert.equal(actions.length, 3));
   assert.equal(actions[2].action, 'status');
   r.rerender(
@@ -204,7 +204,7 @@ test('explicit role, confirmation and unknown recovery never export or replay', 
       }),
     ),
   );
-  await ui.waitFor(() => assert.ok(r.queryByText('Check status') === null));
+  await ui.waitFor(() => assert.ok(r.queryByText('Check Status') === null));
 });
 
 test('revocation accepts a security key PIN directly in the Revoke pane', async () => {
@@ -246,7 +246,7 @@ test('revocation accepts a security key PIN directly in the Revoke pane', async 
     { target: { value: '654321' } },
   );
   ui.fireEvent.click(r.getAllByRole('button', { name: 'Revoke' }).at(-1)!);
-  ui.fireEvent.click(r.getByRole('button', { name: 'Confirm revocation' }));
+  ui.fireEvent.click(r.getByRole('button', { name: 'Confirm Revocation' }));
   await ui.waitFor(() => assert.equal(actions.length, 1));
   assert.deepEqual(actions[0], {
     action: 'revoke',

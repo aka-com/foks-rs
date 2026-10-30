@@ -167,7 +167,7 @@ test('the join sheet confirms the resolved team, then prepares and sends in one 
   );
   // Step one commits to nothing: the request cannot be reached, and the step
   // cannot be left, until an invitation is typed.
-  assert.equal(r.queryByText('Request membership'), null);
+  assert.equal(r.queryByText('Request Membership'), null);
   assert.ok(r.getByText('Step 1 of 3'));
   assert.equal((r.getByText('Continue') as HTMLButtonElement).disabled, true);
   ui.fireEvent.change(r.getByLabelText('Invitation'), {
@@ -186,7 +186,7 @@ test('the join sheet confirms the resolved team, then prepares and sends in one 
   );
   assert.equal(r.queryByLabelText('Team to add'), null);
   assert.equal(
-    (r.getByText('Request membership') as HTMLButtonElement).disabled,
+    (r.getByText('Request Membership') as HTMLButtonElement).disabled,
     false,
   );
   // Back returns to the invitation without sending anything.
@@ -194,14 +194,14 @@ test('the join sheet confirms the resolved team, then prepares and sends in one 
   assert.ok(r.getByText('Step 1 of 3'));
   assert.deepEqual(actions, ['preview']);
   ui.fireEvent.click(r.getByText('Continue'));
-  await ui.waitFor(() => assert.ok(r.getByText('Request membership')));
+  await ui.waitFor(() => assert.ok(r.getByText('Request Membership')));
   // One action prepares and submits the request. Step three displays the
   // submission-unknown response used by this test.
-  ui.fireEvent.click(r.getByText('Request membership'));
+  ui.fireEvent.click(r.getByText('Request Membership'));
   await ui.waitFor(() => assert.ok(r.getByText('Step 3 of 3')));
   assert.deepEqual(actions, ['preview', 'preview', 'accept', 'attempt']);
   assert.ok(r.getByText(/server response was not received/));
-  ui.fireEvent.click(r.getByText('Check status'));
+  ui.fireEvent.click(r.getByText('Check Status'));
   await ui.waitFor(() =>
     assert.deepEqual(actions, [
       'preview',
@@ -256,7 +256,7 @@ test('a team the account administers is picked from a list and sent by its alias
   ui.fireEvent.click(r.getByRole('radio', { name: /A team I administer/ }));
   // Selecting team-based membership requires a specific team.
   assert.equal(
-    (r.getByText('Request membership') as HTMLButtonElement).disabled,
+    (r.getByText('Request Membership') as HTMLButtonElement).disabled,
     true,
   );
   const picker = r.getByLabelText('Team to add') as HTMLSelectElement;
@@ -268,7 +268,7 @@ test('a team the account administers is picked from a list and sent by its alias
   ui.fireEvent.change(r.getByLabelText('Your role in it'), {
     target: { value: 'owner' },
   });
-  ui.fireEvent.click(r.getByText('Request membership'));
+  ui.fireEvent.click(r.getByText('Request Membership'));
   await ui.waitFor(() => assert.ok(r.getByText('Step 3 of 3')));
   assert.deepEqual(seen.at(-1), {
     action: 'accept-team',
@@ -382,7 +382,7 @@ test('Invite new user prepares and submits in one press, then shares the token',
   ui.fireEvent.change(r.getByLabelText('For'), {
     target: { value: 'Sam, new contractor' },
   });
-  ui.fireEvent.click(r.getByText('Create invitation'));
+  ui.fireEvent.click(r.getByText('Create Invitation'));
   await ui.waitFor(() => assert.ok(r.getByLabelText('Shareable invitation')));
   assert.deepEqual(actions, ['list', 'create', 'attempt']);
   assert.ok(r.getByText('Step 2 of 2'));
@@ -441,7 +441,7 @@ test('Invite new user asks for the security key PIN only when the key requires i
     ),
   );
   assert.equal(r.queryByLabelText('Security key PIN'), null);
-  ui.fireEvent.click(r.getByText('Create invitation'));
+  ui.fireEvent.click(r.getByText('Create Invitation'));
   await ui.waitFor(() => assert.ok(r.getByLabelText('Security key PIN')));
   assert.deepEqual(received, [
     ['create', null],
@@ -450,7 +450,7 @@ test('Invite new user asks for the security key PIN only when the key requires i
   ui.fireEvent.change(r.getByLabelText('Security key PIN'), {
     target: { value: '123456' },
   });
-  ui.fireEvent.click(r.getByText('Finish creating'));
+  ui.fireEvent.click(r.getByText('Finish Creating'));
   await ui.waitFor(() => assert.ok(r.getByLabelText('Shareable invitation')));
   assert.deepEqual(received.at(-1), ['attempt', '123456']);
 });
@@ -493,7 +493,7 @@ test('a resumed hardware-key request can receive its PIN on step one', async () 
       }),
     ),
   );
-  ui.fireEvent.click(r.getByText('Resume a pending request'));
+  ui.fireEvent.click(r.getByText('Resume a Pending Request'));
   await ui.waitFor(() => assert.ok(r.getByText('Submit')));
   ui.fireEvent.click(r.getByText('Submit'));
   await ui.waitFor(() => assert.equal(received.length, 1));
@@ -569,11 +569,11 @@ test('an invitation action discards the profile’s journal of unfinished operat
   ui.fireEvent.click(r.getByText('Continue'));
   await ui.waitFor(() =>
     assert.equal(
-      (r.getByText('Request membership') as HTMLButtonElement).disabled,
+      (r.getByText('Request Membership') as HTMLButtonElement).disabled,
       false,
     ),
   );
-  ui.fireEvent.click(r.getByText('Request membership'));
+  ui.fireEvent.click(r.getByText('Request Membership'));
   await ui.waitFor(() => assert.ok(r.getByText('Submit')));
   // Well inside the journal's freshness window, so only the invalidation the
   // admission made can be what reads it again.
@@ -776,9 +776,9 @@ test('a failed invitation submission retries the original operation', async () =
       }),
     ),
   );
-  ui.fireEvent.click(r.getByText('Create invitation'));
+  ui.fireEvent.click(r.getByText('Create Invitation'));
   await ui.waitFor(() => assert.ok(r.getByText('Connection lost')));
-  ui.fireEvent.click(r.getByText('Finish creating'));
+  ui.fireEvent.click(r.getByText('Finish Creating'));
   await ui.waitFor(() =>
     assert.equal(
       r.getByLabelText('Shareable invitation').textContent,
@@ -844,10 +844,10 @@ for (const state of ['prepared', 'submission-unknown'] as const) {
     );
     await ui.waitFor(() => assert.ok(r.getByText('Invitation not finished')));
     ui.fireEvent.click(
-      r.getByText(state === 'prepared' ? 'Finish creating' : 'Check status'),
+      r.getByText(state === 'prepared' ? 'Finish Creating' : 'Check Status'),
     );
     await ui.waitFor(() => assert.ok(r.getByRole('alert')));
-    ui.fireEvent.click(r.getByText('Finish creating'));
+    ui.fireEvent.click(r.getByText('Finish Creating'));
     await ui.waitFor(() => assert.ok(r.getByLabelText('Shareable invitation')));
     assert.deepEqual(actions, [
       { action: 'list' },
@@ -896,7 +896,7 @@ test('an acknowledged invitation is finalized and refresh failure preserves succ
       }),
     ),
   );
-  ui.fireEvent.click(r.getByText('Create invitation'));
+  ui.fireEvent.click(r.getByText('Create Invitation'));
   await ui.waitFor(() =>
     assert.match(
       r.getByRole('alert').textContent ?? '',
@@ -944,8 +944,8 @@ test('delivered requests remain reachable pending membership approval', async ()
       }),
     ),
   );
-  ui.fireEvent.click(r.getByText('Resume a pending request'));
-  await ui.waitFor(() => assert.ok(r.queryByText('Check status')));
+  ui.fireEvent.click(r.getByText('Resume a Pending Request'));
+  await ui.waitFor(() => assert.ok(r.queryByText('Check Status')));
 });
 
 for (const remoteRequest of [false, true]) {
@@ -994,19 +994,19 @@ for (const remoteRequest of [false, true]) {
         r.getByPlaceholderText('For teams on another server'),
         { target: { value: 'unrelated-server' } },
       );
-      ui.fireEvent.click(r.getByText('Resume a pending request'));
+      ui.fireEvent.click(r.getByText('Resume a Pending Request'));
       await ui.waitFor(() =>
         assert.ok(
-          r.queryByText(state === 'prepared' ? 'Submit' : 'Check status'),
+          r.queryByText(state === 'prepared' ? 'Submit' : 'Check Status'),
         ),
       );
       await ui.act(async () => {
         ui.fireEvent.click(
-          r.getByText(state === 'prepared' ? 'Submit' : 'Check status'),
+          r.getByText(state === 'prepared' ? 'Submit' : 'Check Status'),
         );
       });
       await ui.act(async () => {
-        ui.fireEvent.click(r.getByText('Check status'));
+        ui.fireEvent.click(r.getByText('Check Status'));
       });
       const operation = remoteRequest
         ? { operation_id: row.operation_id, remote_profile: 'destination' }

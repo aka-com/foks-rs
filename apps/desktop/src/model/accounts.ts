@@ -7,7 +7,6 @@
  */
 
 import { storeOperationAvailability, storeDescription } from './lease';
-import { serverDisplayLabelForStore } from './server-name';
 export { serverDisplayLabelForStore } from './server-name';
 import type { AccountStore, AgentSnapshot } from './types';
 import type { StoreOperation } from './lease';
@@ -25,20 +24,6 @@ export function usernameOf(
   store: AccountStore,
 ): string | undefined {
   return snapshot.accounts.find((entry) => entry.store === store.id)?.username;
-}
-
-/**
- * The line under a sheet title: who the workflow acts as, and where. The
- * title itself never carries the account alias.
- */
-export function accountSubtitle(
-  snapshot: AgentSnapshot,
-  store: AccountStore,
-): string {
-  return `${usernameOf(snapshot, store) ?? store.account} on ${serverDisplayLabelForStore(
-    snapshot,
-    store,
-  )}`;
 }
 
 /**

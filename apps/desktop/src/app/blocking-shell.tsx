@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { holdFocusForReturn } from '/kit/focus-keeper';
 import { Dialog, useHasOverlayProvider } from '/kit/overlay-primitives';
 import { normalizeCommandError, type Bridge } from '../bridge';
 import {
@@ -161,7 +162,7 @@ export function AgentStopCard({
     ) : lifecycle.state === 'restoration-failed' ? (
       <>
         <Button variant="primary" onClick={onRetryRestoration}>
-          Restart service
+          Restart Service
         </Button>
         {quit}
       </>
@@ -285,6 +286,23 @@ export function Takeover({
   children?: ReactNode;
 }): ReactNode {
   const modal = useHasOverlayProvider();
+  const plain = useRef<HTMLDivElement>(null);
+  const locked = block.kind === 'locked';
+  // Preserve the shell's focused control before mounting the lock screen so
+  // unlocking restores focus to it (`kit/focus-keeper.ts`).
+  useLayoutEffect(() => {
+    if (locked) holdFocusForReturn();
+  }, [locked]);
+  // When no overlay provider is mounted (before the shell mounts), this card
+  // is the only interactive surface in the window. Focus its first control so
+  // Return triggers unlock or retry and VoiceOver announces it.
+  useLayoutEffect(() => {
+    const card = plain.current;
+    if (!card || card.contains(document.activeElement)) return;
+    card
+      .querySelector<HTMLElement>('button:not(:disabled), input, [href]')
+      ?.focus();
+  }, [block.kind]);
   const identity =
     block.kind === 'stop'
       ? `${block.kind}:${block.lifecycle.state}:${block.lifecycle.generation}`
@@ -325,7 +343,27 @@ export function Takeover({
   // Before the shell mounts there is no overlay environment to isolate the
   // background from, and the frame behind this card is already inert.
   return (
-    <div className={className} role={role} aria-modal="true" aria-label={label}>
+    <div
+      ref={plain}
+      onKeyDown={(event) => {
+        // Trap Tab within the card while the background frame is inert.
+        if (event.key !== 'Tab') return;
+        const controls = Array.from(
+          event.currentTarget.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), input, [href]',
+          ),
+        );
+        if (!controls.length) return;
+        event.preventDefault();
+        const at = controls.indexOf(document.activeElement as HTMLElement);
+        const step = event.shiftKey ? -1 : 1;
+        controls[(at + step + controls.length) % controls.length].focus();
+      }}
+      className={className}
+      role={role}
+      aria-modal="true"
+      aria-label={label}
+    >
       {children}
     </div>
   );

@@ -2,6 +2,7 @@ import { chatAvailable, combineReadiness } from '../model';
 import type { CollectionReadiness } from '../model';
 import { useMemo, type ReactNode } from 'react';
 import { useSidebarInbox } from '../chat/inbox-provider';
+import { channelLabel } from '../chat/presentation';
 import type { Location } from '../location';
 import type { AgentSnapshot } from '../model';
 import { SearchPalette, type SearchChannel } from '../shell/search-palette';
@@ -31,7 +32,7 @@ export function ShellSearch({
         if (conversation.hidden) continue;
         found.push({
           store,
-          name: conversation.channel.name,
+          name: channelLabel(conversation.channel),
           id: conversation.channel.id,
         });
       }

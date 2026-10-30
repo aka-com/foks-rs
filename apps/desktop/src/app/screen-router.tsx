@@ -11,7 +11,6 @@ import { ChatTab } from '../screens/chat-tab';
 import { DevicesScreen } from '../screens/devices-screen';
 import { GroupSettingsScreen } from '../screens/groups-screen';
 import { ItemsScreen, type DropUpload } from '../screens/items-screen';
-import { PlaceholderScreen } from '../screens/placeholder-screen';
 import { listsItems } from '../screens/scope';
 import { SettingsScreen } from '../screens/settings-screen';
 import { TeamsScreen } from '../screens/teams-screen';
@@ -214,7 +213,5 @@ export function ScreenRouter({
       onError={commandError}
       onMutationError={mutationError}
     />
-  ) : (
-    <PlaceholderScreen location={here} />
-  );
+  ) : null;
 }

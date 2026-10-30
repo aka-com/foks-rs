@@ -702,7 +702,7 @@ test('removing an unfinished group is confirmed by its stored alias', async () =
   await ui.act(async () => {
     ui.fireEvent.click(rendered.getByRole('button', { name: 'Remove Team…' }));
   });
-  const confirm = rendered.getByRole('button', { name: 'Remove team' });
+  const confirm = rendered.getByRole('button', { name: 'Remove Team' });
   // Nothing is removed until the alias is typed back.
   assert.equal(confirm.hasAttribute('disabled'), true);
   await ui.act(async () => {
@@ -717,7 +717,7 @@ test('removing an unfinished group is confirmed by its stored alias', async () =
     ui.fireEvent.change(field, { target: { value: 'homelab' } });
   });
   await ui.act(async () => {
-    ui.fireEvent.click(rendered.getByRole('button', { name: 'Remove team' }));
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Remove Team' }));
   });
   assert.deepEqual(abandoned, ['team:homelab']);
 });
@@ -742,7 +742,7 @@ test('Finish setup resumes the existing incomplete group', async () => {
 
 test('an unavailable group displays its status and retains parent navigation', async () => {
   const rendered = await group('team:removed', 'people');
-  assert.ok(rendered.getByRole('heading', { name: 'Team unavailable' }));
+  assert.ok(rendered.getByRole('heading', { name: 'Team Unavailable' }));
   // The topbar derives parent navigation from the location.
   const { parentLocation } = await import('../src/location');
   assert.deepEqual(

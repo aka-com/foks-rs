@@ -171,14 +171,14 @@ test('consent, signed completion and usable access are distinct; no automatic op
     ),
   );
   ui.fireEvent.click(r.getByText('Sign in'));
-  await ui.waitFor(() => assert.ok(r.getByText('Open sign-in browser')));
+  await ui.waitFor(() => assert.ok(r.getByText('Open Sign-In Browser')));
   assert.equal(opened, 0);
-  ui.fireEvent.click(r.getByText('Open sign-in browser'));
+  ui.fireEvent.click(r.getByText('Open Sign-In Browser'));
   await ui.waitFor(() => assert.equal(opened, 1));
-  ui.fireEvent.click(r.getByText('Check sign-in'));
-  await ui.waitFor(() => assert.ok(r.getByText('Finish sign-in')));
+  ui.fireEvent.click(r.getByText('Check Sign-In'));
+  await ui.waitFor(() => assert.ok(r.getByText('Finish Sign-In')));
   assert.equal(complete, 0);
-  ui.fireEvent.click(r.getByText('Finish sign-in'));
+  ui.fireEvent.click(r.getByText('Finish Sign-In'));
   await ui.waitFor(() =>
     assert.ok(r.getByText('The signed account operation was accepted.')),
   );
@@ -212,7 +212,7 @@ test('a response for another account never updates the displayed flow', async ()
   );
   ui.fireEvent.click(r.getByText('Sign in'));
   await ui.waitFor(() => assert.ok(r.getByRole('alert')));
-  assert.equal(r.queryByText('Open sign-in browser'), null);
+  assert.equal(r.queryByText('Open Sign-In Browser'), null);
 });
 
 test('account linkage status chooses explicit first-link action and preserves lockout messaging', async () => {
@@ -262,12 +262,12 @@ test('account linkage status chooses explicit first-link action and preserves lo
       }),
     ),
   );
-  ui.fireEvent.click(r.getByText('Check linkage'));
+  ui.fireEvent.click(r.getByText('Check Linkage'));
   await ui.waitFor(() =>
     assert.ok(r.getByText(/Organization sign-in is enforced/)),
   );
   ui.fireEvent.click(r.getByText('Link existing account'));
-  await ui.waitFor(() => assert.ok(r.getByText('Open sign-in browser')));
+  await ui.waitFor(() => assert.ok(r.getByText('Open Sign-In Browser')));
   assert.deepEqual(
     actions.map((a) => a.action),
     ['account-status', 'begin'],
@@ -354,12 +354,12 @@ test('the sign-in sheet runs in two steps with one primary action each', async (
   // Opening the browser is primary before launch; checking status is primary
   // afterward.
   assert.ok(r.getByRole('heading', { name: 'Finish in your browser' }));
-  assert.deepEqual(primaries(), ['Open sign-in browser']);
-  ui.fireEvent.click(r.getByText('Open sign-in browser'));
-  await ui.waitFor(() => assert.deepEqual(primaries(), ['Check sign-in']));
-  ui.fireEvent.click(r.getByText('Check sign-in'));
+  assert.deepEqual(primaries(), ['Open Sign-In Browser']);
+  ui.fireEvent.click(r.getByText('Open Sign-In Browser'));
+  await ui.waitFor(() => assert.deepEqual(primaries(), ['Check Sign-In']));
+  ui.fireEvent.click(r.getByText('Check Sign-In'));
   await ui.waitFor(() =>
     assert.ok(r.getByRole('heading', { name: 'Browser sign-in verified' })),
   );
-  assert.deepEqual(primaries(), ['Finish sign-in']);
+  assert.deepEqual(primaries(), ['Finish Sign-In']);
 });

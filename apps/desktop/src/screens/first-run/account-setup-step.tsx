@@ -106,7 +106,7 @@ export function AccountSetupStep({
         >
           {signingIn ? (
             checkpoint.account ? (
-              <Button onClick={() => go('protect')}>Skip to latest step</Button>
+              <Button onClick={() => go('protect')}>Skip to Latest Step</Button>
             ) : (
               signinPrimary
             )

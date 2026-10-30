@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { anyDialogOpen, anyPopupOpen } from '/kit/overlay-primitives';
+import { focusWhenRendered, rowByKey } from '/kit/focus-keeper';
 import type { ToastController } from '/kit/toasts';
 import {
   sceneHref,
@@ -81,16 +82,32 @@ export function useShellNavigation({
     }
   }, [state, lease]);
 
-  // Escape clears search first, then closes the active item and its pane.
+  // Escape clears search first, then closes the active item and details pane.
+  // Ignore Escape when focus is in the sidebar or topbar (the search field
+  // handles its own Escape). When Escape clears the selection while focus is
+  // on `<body>`, focus the previously selected row.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return;
       // Ignore Escape events already handled by open modal dialogs.
       if (event.defaultPrevented) return;
+      const target = event.target instanceof Element ? event.target : null;
+      const onBlank =
+        !target ||
+        target === document.body ||
+        target === document.documentElement;
+      if (
+        !onBlank &&
+        (!target.closest('.main, .details') || target.closest('.topbar'))
+      )
+        return;
       const current = locations.getSnapshot();
       if (current.query) locations.search('');
-      else if (current.selection)
+      else if (current.selection) {
+        const { store, path } = current.selection;
         locations.select(null, { closeDetails: true });
+        if (onBlank) focusWhenRendered(rowByKey(`${store}|${path}`));
+      }
     };
     document.addEventListener('keydown', onKeyDown);
     return () => {

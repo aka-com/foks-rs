@@ -141,7 +141,7 @@ test('web admin needs user-sync, not device administration, and rechecks submit'
   });
   const view = ui.render(await overlay(panel, current));
   ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Open admin panel' }),
+    ui.screen.getByRole('button', { name: 'Open Admin Panel' }),
   );
   await ui.waitFor(() => assert.equal(opened, 1));
   const denied = structuredClone(current);
@@ -150,7 +150,7 @@ test('web admin needs user-sync, not device administration, and rechecks submit'
   assert.equal(
     ui.screen
       .getByRole('button', {
-        name: 'Open admin panel',
+        name: 'Open Admin Panel',
       })
       .hasAttribute('disabled'),
     true,

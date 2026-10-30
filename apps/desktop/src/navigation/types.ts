@@ -107,9 +107,8 @@ export type Location =
   /** The Files roots page: All items, then vaults, groups and shares. */
   | { kind: 'files' }
   /**
-   * Activity: the place for requests, unfinished operations and server trust
-   * notices across accounts. Only the route exists so far; the page is a
-   * placeholder.
+   * Activity: membership requests, unfinished operations, and server trust
+   * notices across accounts.
    */
   | { kind: 'activity' }
   /**

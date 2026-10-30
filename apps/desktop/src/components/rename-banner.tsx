@@ -141,7 +141,7 @@ export function RenameBanner({
             title={eligibility.title}
             onClick={() => void run(step)}
           >
-            {copy.step === 'confirm' ? 'Confirm' : 'Check status'}
+            {copy.step === 'confirm' ? 'Confirm' : 'Check Status'}
           </Button>
           {copy.step === 'confirm' ? (
             <Button
@@ -246,8 +246,8 @@ export function RenameUnlockSheet({
             onClick={() => void submit()}
           >
             {action.action === 'attempt' && !status.needsCheck
-              ? 'Confirm rename'
-              : 'Check status'}
+              ? 'Confirm Rename'
+              : 'Check Status'}
           </Button>
         </>
       }

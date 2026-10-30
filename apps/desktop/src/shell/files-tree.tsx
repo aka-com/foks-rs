@@ -15,7 +15,7 @@
 
 import { Fragment, useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import { Icon, StoreMark } from '../components';
+import { Icon, MenuButton, MenuItem, StoreMark } from '../components';
 import {
   catalog,
   displayPathComponent,
@@ -358,16 +358,36 @@ export function FilesTree({
       <div className="nav-group">
         <h6 className="nav-h">
           <span id="side-teams">Teams</span>
-          <button
-            type="button"
-            className="tbtn plus"
-            title="New team"
-            aria-label="New team"
+          <MenuButton
+            label=""
+            className="plus"
+            menuLabel="Create or join a team"
+            aria-label="Create or join a team"
+            title="Create or join a team"
+            variant="quiet"
+            icon="plus"
+            trailingIcon={null}
+            align="start"
             disabled={disabled}
-            onClick={() => onNavigate({ kind: 'teams', open: 'create' })}
           >
-            <Icon name="plus" />
-          </button>
+            {() => (
+              <>
+                <MenuItem
+                  onClick={() => onNavigate({ kind: 'teams', open: 'create' })}
+                >
+                  Create a Team…
+                </MenuItem>
+                <MenuItem
+                  onClick={() => onNavigate({ kind: 'teams', open: 'join' })}
+                >
+                  Join a Team…
+                </MenuItem>
+                <MenuItem onClick={() => onNavigate({ kind: 'teams' })}>
+                  Show All Teams
+                </MenuItem>
+              </>
+            )}
+          </MenuButton>
         </h6>
         {teamTrees.length ? (
           <div role="tree" aria-labelledby="side-teams">

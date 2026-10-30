@@ -460,7 +460,7 @@ export function InvitationPanel({
             disabled={busy}
             onClick={() => void checkStatus(row)}
           >
-            Check status
+            Check Status
           </Button>
         )}
       </div>
@@ -473,7 +473,7 @@ export function InvitationPanel({
         presentation={presentation}
         busy={busy}
         glyph={glyph}
-        title="Pending requests"
+        title="Pending Requests"
         footer={
           <>
             <Button
@@ -530,7 +530,7 @@ export function InvitationPanel({
                 disabled={busy}
                 onClick={() => void cancelRequest(operation)}
               >
-                Cancel request
+                Cancel Request
               </Button>
               <span className="spacer" />
               <Button
@@ -548,12 +548,12 @@ export function InvitationPanel({
                   disabled={busy}
                   onClick={() => void checkStatus(operation)}
                 >
-                  Check status
+                  Check Status
                 </Button>
               )}
               {remote && preview?.team_id && !operation.membership_verified ? (
                 <Button disabled={busy} onClick={() => void verifyRemote()}>
-                  Verify membership and keys
+                  Verify Membership and Keys
                 </Button>
               ) : null}
               <span className="spacer" />
@@ -588,7 +588,7 @@ export function InvitationPanel({
             ? `${preview?.name ?? 'The team'} is now in your Teams list.`
             : prepared
               ? 'The request is saved on this device. Submit sends it to the server.'
-              : `You can close this and come back through Resume a pending request.${
+              : `You can close this and come back through Resume a Pending Request.${
                   remote
                     ? ' Once approved, Verify membership and keys confirms the membership against the team’s server.'
                     : ''
@@ -606,7 +606,7 @@ export function InvitationPanel({
         busy={busy}
         glyph={glyph}
         step="Step 2 of 3"
-        title="Confirm this team"
+        title="Confirm This Team"
         footer={
           <>
             <Button disabled={busy} onClick={() => setPreview(null)}>
@@ -621,7 +621,7 @@ export function InvitationPanel({
               disabled={busy || (joinAs === 'team' && !sourceTeam)}
               onClick={() => void requestMembership()}
             >
-              Request membership
+              Request Membership
             </Button>
           </>
         }
@@ -729,7 +729,7 @@ export function InvitationPanel({
             disabled={busy}
             onClick={() => void loadPending()}
           >
-            Resume a pending request
+            Resume a Pending Request
           </button>
           <span className="spacer" />
           <Button disabled={busy} onClick={presentation.onClose}>

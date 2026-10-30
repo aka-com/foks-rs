@@ -1,8 +1,8 @@
-import { useSidebarResize } from './use-sidebar-resize';
+import { useColumnResize } from './use-column-resize';
 
 /** A device-local display preference, intentionally absent from Settings. */
 export function useChatSidebarResize() {
-  return useSidebarResize({
+  return useColumnResize({
     storageKey: 'chatSidebarWidth',
     cssVariable: '--chat-inbox-w',
     className: 'chat-sidebar-resizer',

@@ -77,6 +77,16 @@ const FIELD_LABELS: Readonly<Record<string, string>> = {
 };
 
 const MASK = '••••••••••••';
+
+/** Concealed value mask that exposes "Hidden" to VoiceOver instead of bullet characters. */
+function Masked(): ReactNode {
+  return (
+    <span className="masked">
+      <span aria-hidden="true">{MASK}</span>
+      <span className="offscreen">Hidden</span>
+    </span>
+  );
+}
 const systemAccessNow = (): number => Date.now() / 1000;
 
 /** Coalesces concurrent in-flight read requests for the same item. */
@@ -900,7 +910,7 @@ export function DetailsPanel({
   );
   const secretValue = (value: string): ReactNode =>
     shownValue === null ? (
-      <span className="masked">{MASK}</span>
+      <Masked />
     ) : (
       <span className="value-text">{value}</span>
     );
@@ -957,7 +967,7 @@ export function DetailsPanel({
           </Button>
         }
       >
-        <span className="masked">{MASK}</span>
+        <Masked />
       </PropertyRow>
     ) : inlineEditing ? (
       <PropertyRow label="Value" className="edit top">

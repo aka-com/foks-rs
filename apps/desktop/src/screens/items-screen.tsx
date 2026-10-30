@@ -38,7 +38,6 @@ import {
 } from '../components';
 import type { ListboxOptionProps } from '../components';
 import type { FoksIconName } from '../icons';
-import { PageHeader } from '../shell/page-header';
 import {
   KINDS,
   catalog,
@@ -131,6 +130,8 @@ function Row({
   option,
 }: RowProps): ReactNode {
   const rowRef = useRef<HTMLDivElement>(null);
+  const pressTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(pressTimer.current), []);
   const [menuPoint, setMenuPoint] = useState<{ x: number; y: number } | null>(
     null,
   );
@@ -193,7 +194,30 @@ function Row({
         data-row-key={`${item.store}|${item.path}`}
         {...option}
         aria-haspopup="menu"
-        onClick={onSelect}
+        // Select on primary mouse down after the browser focuses the row (so a
+        // guarded "Discard changes?" alert retains focus); the subsequent
+        // click is a no-op. Hover action clicks, modified clicks, and
+        // secondary clicks defer to `onClick` or `onContextMenu`.
+        onMouseDown={(event) => {
+          if (
+            event.button !== 0 ||
+            event.ctrlKey ||
+            event.metaKey ||
+            event.shiftKey ||
+            event.altKey ||
+            (event.target instanceof Element &&
+              event.target.closest('.acts button'))
+          )
+            return;
+          window.clearTimeout(pressTimer.current);
+          pressTimer.current = window.setTimeout(() => {
+            pressTimer.current = undefined;
+            onSelect();
+          });
+        }}
+        onClick={() => {
+          if (pressTimer.current === undefined && !selected) onSelect();
+        }}
         onContextMenu={(event) => {
           event.preventDefault();
           rowRef.current?.focus();
@@ -222,11 +246,15 @@ function Row({
           <b className="nm" title={name}>
             {name}
           </b>
+          {/* Offscreen commas separate the name, location, and size when
+              VoiceOver reads the option text. */}
+          <span className="offscreen">, </span>
           <small>{where}</small>
         </span>
+        <span className="offscreen">, </span>
         <span className="r">{fmtSize(item.size)}</span>
-        {/* Pointer shortcuts only: the context menu (Shift+F10) carries the
-            same actions for the keyboard and VoiceOver. */}
+        {/* Pointer-only hover actions; keyboard and screen-reader users access
+            the same commands via the row context menu (Shift+F10). */}
         <span className="acts" aria-hidden="true">
           {item.kind !== 'File' ? (
             <>
@@ -368,8 +396,10 @@ function FolderRow({
         <b className="nm" title={name}>
           {name}
         </b>
+        <span className="offscreen">, </span>
         <small>Folder</small>
       </span>
+      <span className="offscreen">, </span>
       <span className="r">{itemCount(count)}</span>
     </div>
   );
@@ -827,14 +857,13 @@ export function ItemsScreen({
   // a store that is no longer present.
   if (location.kind === 'store' && !store) {
     return (
-      <>
-        <PageHeader title="Vault unavailable" subtitle="" />
-        <div className="body">
-          <Notice severity="crit" title="Vault no longer available">
-            <p>Refresh, or choose another vault from the sidebar.</p>
-          </Notice>
-        </div>
-      </>
+      <div className="body">
+        <EmptyState
+          icon="lock"
+          title="Vault Unavailable"
+          body="This vault is no longer on this device. Refresh, or choose another vault from the sidebar."
+        />
+      </div>
     );
   }
 

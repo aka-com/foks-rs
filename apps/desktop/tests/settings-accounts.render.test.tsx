@@ -194,23 +194,23 @@ test('the account panel keeps every workflow row from the accounts pane', async 
   // six quieter links below the device-wide server inventory.
   for (const name of [
     'Change…',
-    'Server details',
+    'Server Details',
     'Devices',
     'Teams',
     'Passphrase…',
-    'Bot accounts',
-    'Web admin panel',
-    'Sign in via SSO',
+    'Bot Accounts',
+    'Web Admin Panel',
+    'Sign In via SSO',
     'Import from FOKS CLI',
-    'Connect an existing account with a recovery phrase',
-    'Create an account on a hardware key…',
+    'Connect an Existing Account with a Recovery Phrase',
+    'Create an Account on a Hardware Key…',
   ])
     assert.equal(
       rendered.getAllByRole('button', { name }).length,
       1,
       `expected one "${name}" button`,
     );
-  for (const name of ['Server details', 'Devices', 'Teams'])
+  for (const name of ['Server Details', 'Devices', 'Teams'])
     assert.ok(
       rendered
         .getByRole('button', { name })
@@ -240,12 +240,12 @@ test('the account panel keeps every workflow row from the accounts pane', async 
       button.textContent?.trim(),
     ),
     [
-      'Bot accounts',
-      'Web admin panel',
-      'Sign in via SSO',
+      'Bot Accounts',
+      'Web Admin Panel',
+      'Sign In via SSO',
       'Import from FOKS CLI',
-      'Connect an existing account with a recovery phrase',
-      'Create an account on a hardware key…',
+      'Connect an Existing Account with a Recovery Phrase',
+      'Create an Account on a Hardware Key…',
     ],
   );
 });
@@ -256,14 +256,14 @@ test('account recovery and hardware-key creation open after the existing actions
   await ui.act(async () => {
     ui.fireEvent.click(
       rendered.getByRole('button', {
-        name: 'Connect an existing account with a recovery phrase',
+        name: 'Connect an Existing Account with a Recovery Phrase',
       }),
     );
   });
   let dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
   assert.equal(
     ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
-    'Connect account via recovery key',
+    'Connect Account via Recovery Key',
   );
   await ui.act(async () => {
     ui.fireEvent.click(
@@ -274,14 +274,14 @@ test('account recovery and hardware-key creation open after the existing actions
   await ui.act(async () => {
     ui.fireEvent.click(
       rendered.getByRole('button', {
-        name: 'Create an account on a hardware key…',
+        name: 'Create an Account on a Hardware Key…',
       }),
     );
   });
   dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
   assert.equal(
     ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
-    'Create an account on a hardware key',
+    'Create an Account on a Hardware Key',
   );
 });
 
@@ -549,7 +549,7 @@ test('the header names the account and carries no switcher of its own', async ()
   const panel = rendered.getByRole('tabpanel');
   assert.equal(panel.id, 'settings-sections-panel-account');
   assert.ok(ui.within(panel).getByText('Username'));
-  assert.ok(rendered.getByRole('button', { name: 'Server details' }));
+  assert.ok(rendered.getByRole('button', { name: 'Server Details' }));
 });
 
 test('an unpaired server is hidden until its account inventory loads successfully', async () => {
@@ -811,7 +811,7 @@ test('a trust block stops remote workflows while local recovery controls remain 
   );
   assert.equal(
     rendered
-      .getByRole('button', { name: 'Sign in via SSO' })
+      .getByRole('button', { name: 'Sign In via SSO' })
       .hasAttribute('disabled'),
     true,
   );
@@ -821,7 +821,7 @@ test('a trust block stops remote workflows while local recovery controls remain 
       'Remote operations are unavailable until a connection is reestablished.',
     ),
   );
-  assert.ok(rendered.getByRole('button', { name: 'Open server' }));
+  assert.ok(rendered.getByRole('button', { name: 'Open Server' }));
   // Access state is a fact about the hero's subject, so it is the hero's
   // own right-hand mark rather than a chip trailing the server line.
   const state = document.querySelector('.account-hero .hero-acts .chip');
@@ -834,8 +834,8 @@ test('a trust block stops remote workflows while local recovery controls remain 
     'Verification failed',
   );
   for (const name of [
-    'Bot accounts',
-    'Web admin panel',
+    'Bot Accounts',
+    'Web Admin Panel',
     'Import from FOKS CLI',
   ])
     assert.equal(
@@ -871,7 +871,7 @@ test('organization sign-in survives browser focus and can finish the same flow',
   const { rendered, readBacks } = await renderPeople(await fixture());
   await ui.act(async () => {
     ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Sign in via SSO' }),
+      rendered.getByRole('button', { name: 'Sign In via SSO' }),
     );
   });
   await ui.act(async () => {
@@ -879,17 +879,17 @@ test('organization sign-in survives browser focus and can finish the same flow',
   });
   await ui.act(async () => {
     ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Open sign-in browser' }),
+      rendered.getByRole('button', { name: 'Open Sign-In Browser' }),
     );
     window.dispatchEvent(new window.Event('blur'));
   });
   assert.ok(rendered.getByRole('dialog'));
   await ui.act(async () => {
-    ui.fireEvent.click(rendered.getByRole('button', { name: 'Check sign-in' }));
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Check Sign-In' }));
   });
   await ui.act(async () => {
     ui.fireEvent.click(
-      rendered.getByRole('button', { name: 'Finish sign-in' }),
+      rendered.getByRole('button', { name: 'Finish Sign-In' }),
     );
   });
   assert.ok(
@@ -1086,7 +1086,7 @@ test('unknown rename outcomes use the status action', async () => {
   );
   await ui.act(async () => {
     ui.fireEvent.click(
-      ui.within(band).getByRole('button', { name: 'Check status' }),
+      ui.within(band).getByRole('button', { name: 'Check Status' }),
     );
   });
   await ui.waitFor(() => assert.deepEqual(actions, ['list', 'status']));
@@ -1128,7 +1128,7 @@ test('security-key confirmation submits the PIN from a dialog', async () => {
     'Unlock security key',
   );
   const confirm = ui.within(dialog).getByRole('button', {
-    name: 'Confirm rename',
+    name: 'Confirm Rename',
   });
   assert.equal(confirm.hasAttribute('disabled'), true);
   ui.fireEvent.change(ui.within(dialog).getByLabelText('Security key PIN'), {
@@ -1238,7 +1238,7 @@ test('an ambiguous submission offers status reconciliation', async () => {
     ui.fireEvent.click(rendered.getByRole('button', { name: 'Confirm' }));
   });
   assert.ok(
-    rendered.queryByRole('button', { name: 'Check status' }),
+    rendered.queryByRole('button', { name: 'Check Status' }),
     'ambiguous attempt still only offers Confirm/Discard',
   );
   assert.equal(rendered.queryByRole('button', { name: 'Discard' }), null);
@@ -1247,7 +1247,7 @@ test('an ambiguous submission offers status reconciliation', async () => {
     null,
   );
   await ui.act(async () => {
-    ui.fireEvent.click(rendered.getByRole('button', { name: 'Check status' }));
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Check Status' }));
   });
   assert.deepEqual(actions, ['list', 'attempt', 'status']);
   assert.deepEqual(refreshed, ['Username updated']);
@@ -1278,7 +1278,7 @@ test('a completed rename remains complete when the account refresh fails', async
   assert.deepEqual(refreshed, ['Username updated']);
   assert.equal(reported.length, 1);
   assert.equal(rendered.queryByRole('button', { name: 'Confirm' }), null);
-  assert.equal(rendered.queryByRole('button', { name: 'Check status' }), null);
+  assert.equal(rendered.queryByRole('button', { name: 'Check Status' }), null);
 });
 
 test('late rename listings are ignored after switching away and back', async () => {
@@ -1376,14 +1376,14 @@ test('a failed security-key attempt retries with a status request', async () => 
   ui.fireEvent.change(pin, { target: { value: '123456' } });
   await ui.act(async () => {
     ui.fireEvent.click(
-      ui.within(dialog).getByRole('button', { name: 'Confirm rename' }),
+      ui.within(dialog).getByRole('button', { name: 'Confirm Rename' }),
     );
   });
   assert.equal((pin as HTMLInputElement).value, '');
   ui.fireEvent.change(pin, { target: { value: '123456' } });
   await ui.act(async () => {
     ui.fireEvent.click(
-      ui.within(dialog).getByRole('button', { name: 'Check status' }),
+      ui.within(dialog).getByRole('button', { name: 'Check Status' }),
     );
   });
   assert.deepEqual(actions, ['attempt', 'attempt', 'status']);

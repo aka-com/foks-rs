@@ -106,7 +106,7 @@ export function ChannelCreationCompletions({
                 }
               }}
             >
-              Open channel
+              Open Channel
             </Button>
             <Button onClick={() => controller.acknowledge(record.id)}>
               Dismiss

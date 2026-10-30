@@ -686,7 +686,7 @@ function StatusBand({
             disabled={busy}
             onClick={onCheck}
           >
-            Check now
+            Check Now
           </Button>
         }
       >
@@ -707,7 +707,7 @@ function StatusBand({
             disabled={busy}
             onClick={onCheck}
           >
-            Check now
+            Check Now
           </Button>
         }
       >
@@ -1097,7 +1097,7 @@ function AddServerSheet({
     new TextEncoder().encode(cleanProbe).length <= 2048;
   return (
     <SheetFrame
-      title="Add a server"
+      title="Add a Server"
       onClose={onClose}
       footer={
         <>
@@ -1114,7 +1114,7 @@ function AddServerSheet({
                 .finally(() => setBusy(false));
             }}
           >
-            Add server
+            Add Server
           </Button>
         </>
       }
@@ -1164,7 +1164,7 @@ function RenameServerSheet({
     new TextEncoder().encode(trimmed).length <= 64;
   return (
     <SheetFrame
-      title="Rename server"
+      title="Rename Server"
       onClose={onClose}
       footer={
         <>
@@ -1258,7 +1258,7 @@ function RemoveServerSheet({
                 .finally(() => setBusy(false));
             }}
           >
-            Remove server and credentials
+            Remove Server and Credentials
           </Button>
         </>
       }

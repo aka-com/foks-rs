@@ -288,14 +288,14 @@ export function ChatScreen({
                 })
               }
             >
-              Check in
+              Check In
             </Button>
           )}
           {elsewhere && (
             <Button
               onClick={() => onNavigate({ kind: 'chat', ref: elsewhere.id })}
             >
-              Open another team
+              Open Another Team
             </Button>
           )}
         </div>
@@ -424,7 +424,7 @@ export function ChatScreen({
             <p>Create a channel for this team to start chatting.</p>
             {empty && onNewChat && (
               <Button variant="primary" icon="plus" onClick={onNewChat}>
-                New channel
+                New Channel
               </Button>
             )}
           </div>

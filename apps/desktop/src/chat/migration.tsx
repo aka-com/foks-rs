@@ -77,7 +77,7 @@ export function useChatMigration(
                 type="button"
                 onClick={() => setAttempt((value) => value + 1)}
               >
-                Retry recovery
+                Retry Recovery
               </button>
             </>
           ) : (

@@ -595,7 +595,7 @@ test('a Teams row removes a creation that finishing cannot fix', async () => {
   await ui.act(async () => {
     ui.fireEvent.click(menuItem('Homelab', 'Remove Team…'));
   });
-  const confirm = rendered.getByRole('button', { name: 'Remove team' });
+  const confirm = rendered.getByRole('button', { name: 'Remove Team' });
   assert.equal(confirm.hasAttribute('disabled'), true);
   const field = document.querySelector<HTMLInputElement>(
     'input[placeholder="type homelab"]',
@@ -605,7 +605,7 @@ test('a Teams row removes a creation that finishing cannot fix', async () => {
     ui.fireEvent.change(field, { target: { value: 'homelab' } });
   });
   await ui.act(async () => {
-    ui.fireEvent.click(rendered.getByRole('button', { name: 'Remove team' }));
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Remove Team' }));
   });
   assert.deepEqual(abandoned, ['team:homelab']);
 });

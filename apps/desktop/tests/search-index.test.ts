@@ -122,11 +122,11 @@ test('the index holds every kind the palette searches', () => {
 
   // Channels: named by group and channel, and only where the store is held.
   const channels = INDEX.filter((entry) => entry.scope === 'channels');
-  assert.deepEqual(names(channels), [
-    'engineering#deploys',
-    'engineering#general',
-    'household#general',
-  ]);
+  assert.deepEqual(names(channels), ['#deploys', '#general', '#general']);
+  assert.deepEqual(
+    channels.map((entry) => entry.detail),
+    ['Channel · Engineering', 'Channel · Engineering', 'Channel · Household'],
+  );
   assert.deepEqual(channels[0].target, {
     kind: 'channel',
     ref: 'team:eng',
@@ -229,12 +229,12 @@ test('a store matches its alias and a channel its hash', () => {
   );
   assert.deepEqual(
     names(palette.searchResults(INDEX, '#deploys', 'channels')),
-    ['engineering#deploys'],
+    ['#deploys'],
   );
   // The group name reaches every channel in it.
   assert.deepEqual(
     names(palette.searchResults(INDEX, 'household', 'channels')),
-    ['household#general'],
+    ['#general'],
   );
 });
 
@@ -256,4 +256,31 @@ test('a query that matches nothing returns nothing', () => {
     names(palette.searchResults(INDEX, '  netflix  ', 'items')),
     ['netflix'],
   );
+});
+
+test('the general channel, whose protocol name is empty, is #general', () => {
+  const index = palette.searchIndex(FIXTURE, [
+    { store: 'team:household', name: '' },
+  ]);
+  const found = palette.searchResults(index, 'general', 'channels');
+  assert.deepEqual(names(found), ['#general']);
+  assert.equal(found[0].detail, 'Channel · Household');
+});
+
+test('places are matched by the words they show', () => {
+  const placeNames = (query: string): string[] =>
+    palette.matchPlaces(query).map((place) => place.name);
+  assert.equal(placeNames('').length, 6);
+  assert.deepEqual(placeNames('settings'), ['Open Settings']);
+  assert.deepEqual(placeNames('dev'), ['Go to Devices']);
+  assert.deepEqual(placeNames('chat'), ['Go to Chat']);
+  assert.deepEqual(placeNames('go to'), [
+    'Go to All Items',
+    'Go to Chat',
+    'Go to Activity',
+    'Go to Teams',
+    'Go to Devices',
+  ]);
+  assert.deepEqual(placeNames('netflix'), []);
+  assert.deepEqual(palette.matchPlaces('settings', 'items'), []);
 });

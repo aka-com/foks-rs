@@ -126,7 +126,7 @@ export function OutgoingRow({
                   disabled={message.running}
                   onClick={() => void run(false)}
                 >
-                  Retry local cleanup
+                  Retry Local Cleanup
                 </Button>
               </>
             )}

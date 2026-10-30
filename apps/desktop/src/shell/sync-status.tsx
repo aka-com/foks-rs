@@ -48,6 +48,22 @@ export function syncFace(
 }
 
 /**
+ * Visually hidden `role="status"` region that announces settled connection
+ * state transitions (Connected, Refresh failed, Disconnected) to VoiceOver.
+ * In-flight refreshes keep the previous settled label.
+ */
+function ConnectionAnnouncer({ label }: { label: string }): ReactNode {
+  const [settled, setSettled] = useState(label);
+  if (label !== settled && label !== syncFace('syncing').label)
+    setSettled(label);
+  return (
+    <span className="offscreen" role="status">
+      {settled}
+    </span>
+  );
+}
+
+/**
  * Sync status control: a button that triggers a manual refresh on click, shows
  * a spinning icon while any server is refreshing, and displays failure states
  * as text. Hovering or focusing the button opens the per-server status popover.
@@ -204,6 +220,7 @@ export function SyncControls({
           <span className="t">{face.label}</span>
         )}
       </button>
+      <ConnectionAnnouncer label={face.label} />
       {open ? (
         <SyncPopover
           snapshot={snapshot}
@@ -239,31 +256,35 @@ export function PlainSyncStatus({
 }): ReactNode {
   const face = syncFace(blocked ? 'lost' : refreshing ? 'syncing' : 'synced');
   return (
-    <button
-      type="button"
-      className={`global-refresh ${face.className}`}
-      aria-label={`${face.label} — ${
-        refreshing
-          ? 'refreshing vaults, teams and devices'
-          : 'refresh vaults, teams and devices'
-      }`}
-      title={
-        refreshing
-          ? 'Refreshing vaults, teams, and devices'
-          : 'Refresh vaults and teams'
-      }
-      // Busy, not disabled: a disabled button drops the keyboard focus.
-      aria-busy={refreshing || undefined}
-      aria-disabled={refreshing || undefined}
-      disabled={blocked}
-      onClick={refreshing ? undefined : onRefresh}
-    >
-      {face.label === 'Connected' ? (
-        <span className="dot ok" aria-hidden="true" />
-      ) : face.icon === 'refresh' ? null : (
-        <Icon name={face.icon} />
-      )}
-      <span className="t">{face.label}</span>
-    </button>
+    <>
+      <button
+        type="button"
+        className={`global-refresh ${face.className}`}
+        aria-label={`${face.label} — ${
+          refreshing
+            ? 'refreshing vaults, teams and devices'
+            : 'refresh vaults, teams and devices'
+        }`}
+        title={
+          refreshing
+            ? 'Refreshing vaults, teams, and devices'
+            : 'Refresh vaults and teams'
+        }
+        // Use `aria-busy` and `aria-disabled` instead of `disabled` while
+        // refreshing so the button retains keyboard focus.
+        aria-busy={refreshing || undefined}
+        aria-disabled={refreshing || undefined}
+        disabled={blocked}
+        onClick={refreshing ? undefined : onRefresh}
+      >
+        {face.label === 'Connected' ? (
+          <span className="dot ok" aria-hidden="true" />
+        ) : face.icon === 'refresh' ? null : (
+          <Icon name={face.icon} />
+        )}
+        <span className="t">{face.label}</span>
+      </button>
+      <ConnectionAnnouncer label={face.label} />
+    </>
   );
 }

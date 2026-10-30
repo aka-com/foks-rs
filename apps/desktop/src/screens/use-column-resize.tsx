@@ -4,7 +4,7 @@ import type { CSSProperties, ReactNode, RefObject } from 'react';
 const clamp = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(max, value));
 
-interface SidebarResizeOptions {
+interface ColumnResizeOptions {
   storageKey: string;
   cssVariable: `--${string}`;
   className: string;
@@ -17,15 +17,21 @@ interface SidebarResizeOptions {
   reservedWidth?: number;
 }
 
-export interface SidebarResize<T extends HTMLElement> {
+export interface ColumnResize<T extends HTMLElement> {
   ref: RefObject<T | null>;
   id: string;
   style: CSSProperties;
   handle: ReactNode;
 }
 
-/** Shared pointer, keyboard, and persistence behavior for two-column panes. */
-export function useSidebarResize<T extends HTMLElement = HTMLElement>({
+/**
+ * Manages pointer/keyboard resizing and width persistence for an in-panel
+ * column (such as the Chat channel column), measured against its own container
+ * and returned as a style object. The main window sidebar uses
+ * `shell/use-sidebar-resize`, which measures against the window and portals
+ * its divider into `.app`.
+ */
+export function useColumnResize<T extends HTMLElement = HTMLElement>({
   storageKey,
   cssVariable,
   className,
@@ -36,7 +42,7 @@ export function useSidebarResize<T extends HTMLElement = HTMLElement>({
   minWidth = 180,
   maxWidth = 420,
   reservedWidth = 320,
-}: SidebarResizeOptions): SidebarResize<T> {
+}: ColumnResizeOptions): ColumnResize<T> {
   const readWidth = (): number | null => {
     try {
       const value = Number(window.localStorage.getItem(storageKey));
@@ -125,8 +131,8 @@ export function useSidebarResize<T extends HTMLElement = HTMLElement>({
         aria-valuenow={Math.round(width)}
         aria-valuetext={`${Math.round(width)} pixels`}
         title="Drag to resize; double-click to reset"
-        // Out of the Tab loop, like the sidebar's divider: VoiceOver and a
-        // press still focus it, and the arrows then resize.
+        // Exclude from the Tab order (like the sidebar divider); pointer
+        // presses and VoiceOver can still focus it for arrow-key resizing.
         tabIndex={-1}
         onPointerDown={(event) => {
           if (event.button !== 0 || drag.current) return;

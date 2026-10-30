@@ -221,13 +221,13 @@ test('one list groups the devices, security keys and recovery phrases', async ()
   // Account creation and recovery live with the other account workflows.
   assert.equal(
     rendered.queryByRole('button', {
-      name: 'Connect an existing account with a recovery phrase',
+      name: 'Connect an Existing Account with a Recovery Phrase',
     }) === null,
     true,
   );
   assert.equal(
     rendered.queryByRole('button', {
-      name: 'Create an account on a hardware key…',
+      name: 'Create an Account on a Hardware Key…',
     }) === null,
     true,
   );
@@ -296,7 +296,7 @@ test('the chooser offers each way to add, and leads into pairing', async () => {
   const pairing = await ui.waitFor(() => rendered.getByRole('dialog'));
   assert.equal(
     ui.within(pairing).getByRole('heading', { level: 2 }).textContent,
-    'Pair another device',
+    'Pair Another Device',
   );
   assert.ok(ui.within(pairing).getByText('On the other device'));
   // Finish belongs to a started offer, so it waits for one.
@@ -335,7 +335,7 @@ test('starting a pairing reveals the phrase with a way to copy it', async () => 
   ui.fireEvent(window, new Event('blur'));
   assert.ok(rendered.getByRole('dialog'));
   assert.equal(rendered.queryByText('cobalt window'), null);
-  assert.ok(rendered.getByRole('button', { name: 'Resume offer' }));
+  assert.ok(rendered.getByRole('button', { name: 'Resume Offer' }));
 });
 
 test('losing focus leaves the non-sensitive device chooser open', async () => {
@@ -369,15 +369,15 @@ test('the recovery operations moved to a security key’s own page, each saying 
         .map((button) => button.textContent),
       [
         'Provision…',
-        'PIN status',
+        'PIN Status',
         'Sync…',
         'Set…',
         'Change…',
         'Verify…',
-        'Restore management…',
-        'Restore signing key…',
-        'Resume enrollment…',
-        'Resume rotation…',
+        'Restore Management…',
+        'Restore Signing Key…',
+        'Resume Enrollment…',
+        'Resume Rotation…',
         'Rotate…',
         'Settings › Server',
       ],
@@ -385,7 +385,7 @@ test('the recovery operations moved to a security key’s own page, each saying 
   });
   const resume = ui
     .within(cardOps)
-    .getByRole('button', { name: 'Resume enrollment…' });
+    .getByRole('button', { name: 'Resume Enrollment…' });
   // The fixture's "primary key" enrollment is already complete, so there is
   // nothing pending to resume.
   assert.equal(resume.hasAttribute('disabled'), true);
@@ -399,7 +399,7 @@ test('the recovery operations moved to a security key’s own page, each saying 
   // serial), so PIN status is reachable too.
   const pinStatus = ui
     .within(cardOps)
-    .getByRole('button', { name: 'PIN status' });
+    .getByRole('button', { name: 'PIN Status' });
   assert.equal(pinStatus.hasAttribute('disabled'), false);
 });
 
@@ -421,7 +421,7 @@ test('a stopped account lists nothing and says why every action is off', async (
   assert.match(add.getAttribute('title') ?? '', /check-in.*expired/i);
   assert.equal(
     rendered.queryByRole('button', {
-      name: 'Connect an existing account with a recovery phrase',
+      name: 'Connect an Existing Account with a Recovery Phrase',
     }),
     null,
   );
@@ -490,7 +490,7 @@ test('the hardware-key scene still opens its sheet on Devices', async () => {
   const dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
   assert.equal(
     ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
-    'Create an account on a hardware key',
+    'Create an Account on a Hardware Key',
   );
   assert.ok(
     document.activeElement && dialog.contains(document.activeElement),
@@ -522,7 +522,7 @@ test('the recovery-phrase scene opens the one-time reveal', async () => {
   const dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
   assert.equal(
     ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
-    'Save recovery phrase',
+    'Save Recovery Phrase',
   );
   // The `section=` anchor must not pull focus out of the open sheet.
   await ui.waitFor(() => {
@@ -597,7 +597,7 @@ test('the chooser leads into the recovery-phrase and provisioning sheets too', a
   const paper = await choose(rendered, 'Create a new recovery phrase');
   assert.equal(
     ui.within(paper).getByRole('heading', { level: 2 }).textContent,
-    'Create recovery phrase',
+    'Create Recovery Phrase',
   );
   assert.ok(ui.within(paper).getByLabelText('Recovery phrase name'));
   await ui.act(async () => {
@@ -609,7 +609,7 @@ test('the chooser leads into the recovery-phrase and provisioning sheets too', a
   const provision = await choose(rendered, 'Connect a hardware key');
   assert.equal(
     ui.within(provision).getByRole('heading', { level: 2 }).textContent,
-    'Connect a hardware key',
+    'Connect a Hardware Key',
   );
   assert.ok(ui.within(provision).getByText('Hardware key 20993145'));
 });
@@ -625,7 +625,7 @@ test('the chooser offers both pairing directions, so a phrase can be entered', a
   );
   assert.equal(
     ui.within(accepting).getByRole('heading', { level: 2 }).textContent,
-    'Pair another device',
+    'Pair Another Device',
   );
   // The sheet opens on the accepting side: the phrase is typed, not revealed.
   assert.ok(ui.within(accepting).getByLabelText('Pairing phrase'));
@@ -703,7 +703,7 @@ test('a pending enrollment whose card is absent offers only Resume enrollment', 
   const cardOps = rendered.getByRole('region', { name: 'Card operations' });
   const pinStatus = ui
     .within(cardOps)
-    .getByRole('button', { name: 'PIN status' });
+    .getByRole('button', { name: 'PIN Status' });
   await ui.waitFor(() => {
     assert.equal(pinStatus.hasAttribute('disabled'), true);
     assert.equal(
@@ -717,7 +717,7 @@ test('a pending enrollment whose card is absent offers only Resume enrollment', 
   // Resuming is the one operation a pending enrollment can use.
   const resume = ui
     .within(cardOps)
-    .getByRole('button', { name: 'Resume enrollment…' });
+    .getByRole('button', { name: 'Resume Enrollment…' });
   assert.equal(resume.hasAttribute('disabled'), false);
   // Provisioning does not act on this enrollment specifically, so it stays
   // reachable regardless of this key's own state.
@@ -787,12 +787,11 @@ test('a key on a card is revoked under its enrollment, not removed here', async 
   assert.ok(ui.within(facts).getByText(card));
   assert.ok(page.getByText('Revoked under its enrollment'));
   assert.equal(
-    page.queryByRole('button', { name: 'Remove this device…' }),
+    page.queryByRole('button', { name: 'Remove This Device…' }),
     null,
   );
-  // The note is not a dead end, and it does not navigate to the page it is
-  // already on: with no enrollment matching the card, it takes focus to the
-  // Security keys rows of this list, leaving the selection alone.
+  // When no enrollment matches the card, Show Security Keys moves focus to
+  // the Security keys group in this list without navigating or changing selection.
   assert.equal(page.queryByRole('button', { name: 'Go to Devices' }), null);
   assert.ok(page.getByText(/listed under Security keys\./));
   const before = chosen.length;
@@ -937,7 +936,7 @@ test('a key’s row opens its own page, with the full id and a way to copy it', 
 
   await ui.act(async () => {
     ui.fireEvent.click(
-      page.getByRole('button', { name: 'Remove this device…' }),
+      page.getByRole('button', { name: 'Remove This Device…' }),
     );
   });
   const dialog = await ui.waitFor(() => page.getByRole('alertdialog'));
@@ -966,7 +965,7 @@ test('the local device detail page disables device removal', async () => {
   assert.ok(page.getByText('Authenticated on this device now'));
   assert.ok(page.getByText('This device cannot be removed here'));
   assert.equal(
-    page.queryByRole('button', { name: 'Remove this device…' }),
+    page.queryByRole('button', { name: 'Remove This Device…' }),
     null,
   );
   await ui.act(async () => {
@@ -1180,7 +1179,7 @@ test('pairing is two numbered steps, and a resumed offer says the agent holds it
   const resumed = await openPairing();
   await ui.act(async () => {
     ui.fireEvent.click(
-      ui.within(resumed).getByRole('button', { name: 'Resume offer' }),
+      ui.within(resumed).getByRole('button', { name: 'Resume Offer' }),
     );
   });
   assert.ok(
@@ -1232,7 +1231,7 @@ test('a revealed recovery phrase stays open when the app loses focus', async () 
   assert.deepEqual(committed, []);
 });
 
-test('PIN status on a key’s own page acts on that key, not on card or list order', async () => {
+test('PIN Status on a key’s own page acts on that key, not on card or list order', async () => {
   const calls: unknown[] = [];
   const rendered = await renderDevices(await fixture(), {
     store: 'acct:personal',
@@ -1260,7 +1259,7 @@ test('PIN status on a key’s own page acts on that key, not on card or list ord
     await rendered.findByRole('menuitem', { name: 'Refresh Hardware Keys' }),
   );
   const pinStatus = await rendered.findByRole('button', {
-    name: 'PIN status',
+    name: 'PIN Status',
   });
   await ui.waitFor(() =>
     assert.equal(pinStatus.hasAttribute('disabled'), false),
@@ -1349,7 +1348,7 @@ test('Devices reads only the current account and follows sidebar account changes
   assert.equal(rendered.getAllByRole('option').length, 1);
   assert.equal(
     rendered.queryByRole('button', {
-      name: 'Connect an existing account with a recovery phrase',
+      name: 'Connect an Existing Account with a Recovery Phrase',
     }),
     null,
   );
@@ -1380,7 +1379,7 @@ test('device removal refreshes native device records before submitting the write
   });
   await ui.act(async () => {
     ui.fireEvent.click(
-      page.getByRole('button', { name: 'Remove this device…' }),
+      page.getByRole('button', { name: 'Remove This Device…' }),
     );
   });
   const input = document.querySelector<HTMLInputElement>('.sheet input');
@@ -1390,7 +1389,7 @@ test('device removal refreshes native device records before submitting the write
   });
   calls.length = 0;
   await ui.act(async () => {
-    ui.fireEvent.click(page.getByRole('button', { name: 'Remove device' }));
+    ui.fireEvent.click(page.getByRole('button', { name: 'Remove Device' }));
   });
   // The fresh authorization read precedes the write; subscribed display
   // metadata is invalidated and refreshed only after successful completion.
@@ -1422,11 +1421,11 @@ test('an account with no recovery phrase gets its own band without publishing sh
   );
   await ui.act(async () => {
     ui.fireEvent.click(
-      page.getByRole('button', { name: 'Create a recovery phrase…' }),
+      page.getByRole('button', { name: 'Create a Recovery Phrase…' }),
     );
   });
   assert.ok(document.querySelector('.sheet'));
-  assert.ok(page.getByRole('heading', { name: 'Create recovery phrase' }));
+  assert.ok(page.getByRole('heading', { name: 'Create Recovery Phrase' }));
 });
 
 test('an account with a recovery phrase draws no band without publishing shell alerts', async () => {

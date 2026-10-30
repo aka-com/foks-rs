@@ -710,7 +710,7 @@ function ServerBody({
               onClick={() => devices.retry(server.profileName!)}
               aria-label={`Retry devices on ${server.profileName}`}
             >
-              Retry devices
+              Retry Devices
             </Button>
           ) : null}
           {server.canReconnect ? (
@@ -977,12 +977,12 @@ export function SyncPopover({
               size="sm"
               variant="plain"
               icon="refresh"
-              aria-label="Refresh now"
-              title="Refresh now"
+              aria-label="Refresh Now"
+              title="Refresh Now"
               disabled={refreshDisabled}
               onClick={onRefresh}
             >
-              Refresh now
+              Refresh Now
             </Button>
           ) : null}
         </div>

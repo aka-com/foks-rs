@@ -158,10 +158,10 @@ const CARD_OP_LABELS: Readonly<Record<RecoveryAction, string>> = {
   'set-passphrase': 'Set…',
   'change-passphrase': 'Change…',
   'verify-passphrase': 'Verify…',
-  'recover-management': 'Restore management…',
-  'recover-subkey': 'Restore signing key…',
-  'resume-enrollment': 'Resume enrollment…',
-  'resume-rotation': 'Resume rotation…',
+  'recover-management': 'Restore Management…',
+  'recover-subkey': 'Restore Signing Key…',
+  'resume-enrollment': 'Resume Enrollment…',
+  'resume-rotation': 'Resume Rotation…',
   rotate: 'Rotate…',
 };
 
@@ -680,7 +680,7 @@ export function DevicesScreen({
                     })
                   }
                 >
-                  Open server
+                  Open Server
                 </Button>
               }
             >
@@ -698,7 +698,7 @@ export function DevicesScreen({
                     setSheet('pair');
                   }}
                 >
-                  Resume offer…
+                  Resume Offer…
                 </Button>
               }
             >
@@ -719,7 +719,7 @@ export function DevicesScreen({
                   {...access.props('backup-create', target)}
                   onClick={() => setSheet('phrase')}
                 >
-                  Create a recovery phrase…
+                  Create a Recovery Phrase…
                 </Button>
               }
             >
@@ -1262,7 +1262,7 @@ function DeviceDetail({
                       {...access.props('device-remove', target)}
                       onClick={() => onRemove(source.device)}
                     >
-                      Remove this device…
+                      Remove This Device…
                     </Button>
                   }
                 >
@@ -1398,7 +1398,7 @@ function CardOperations({
                 title={pinReason}
                 onClick={() => onYubiAction('pin-status', enrollment)}
               >
-                PIN status
+                PIN Status
               </Button>
             </>
           }

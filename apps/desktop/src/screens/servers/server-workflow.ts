@@ -137,21 +137,21 @@ export class ServerCheckController {
           if (report.profile !== server.profileName)
             throw new Error('check_server returned a different profile.');
           this.observer.checked(binding, report);
-          if (!seeded)
-            this.observer.toast(
-              `Checked ${report.canonicalName}, ${acceptanceText(report.acceptance)}`,
-            );
+          // Emit a single toast per check: pass the message to the subsequent
+          // refresh, or toast it directly if the passive status read does not
+          // complete.
+          const message = `Checked ${report.canonicalName}, ${acceptanceText(report.acceptance)}`;
           const passive = await readCurrentServerStatus(
             this.bridge,
             server,
             isCurrent,
           );
-          if (!passive || !isCurrent()) return;
+          if (!passive || !isCurrent()) {
+            if (!seeded && isCurrent()) this.observer.toast(message);
+            return;
+          }
           this.observer.status(binding, passive);
-          if (!seeded)
-            await this.observer.refresh(
-              `Checked ${report.canonicalName}; refreshed signed server status`,
-            );
+          if (!seeded) await this.observer.refresh(message);
         },
       );
       if (!isCurrent()) return;

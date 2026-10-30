@@ -103,11 +103,18 @@ export function inPopup(target: Element): boolean {
 }
 
 /**
- * The control a menu returns the focus to, while one of its items is being
- * chosen. A dialog the item opens takes it as its own opener, so the focus
- * goes back to the menu's trigger once every overlay has closed.
+ * Focus return target while a menu item is being selected. If the item opens a
+ * dialog, the dialog inherits this target so focus returns to the menu trigger
+ * when all overlays close.
  */
 let menuOpener: HTMLElement | null = null;
+/**
+ * Opener of a dialog that closed in the same commit as another opened (e.g.
+ * when Continue in a chooser sheet replaces it with the chosen sheet). The new
+ * dialog inherits this opener so closing the second sheet returns focus to the
+ * original trigger rather than the window fallback target.
+ */
+let replacedOpener: HTMLElement | null = null;
 
 const OverlayContext = createContext<OverlayEnvironment | null>(null);
 const OverlayBlockingContext = createContext(false);
@@ -232,6 +239,8 @@ export function Dialog({
       openerRef.current = document.activeElement;
     else if (!openerRef.current && menuOpener?.isConnected)
       openerRef.current = menuOpener;
+    else if (!openerRef.current && replacedOpener?.isConnected)
+      openerRef.current = replacedOpener;
     const opener = openerRef.current;
     const releases = [
       ...(environment.backgroundRef.current
@@ -252,6 +261,12 @@ export function Dialog({
       dialogs.delete(dialog);
       mountedDialogs.delete(dialog);
       for (const release of releases.reverse()) release();
+      if (opener) {
+        replacedOpener = opener;
+        queueMicrotask(() => {
+          if (replacedOpener === opener) replacedOpener = null;
+        });
+      }
       queueMicrotask(() => {
         if (dialog.isConnected) return;
         if (opener && canRestoreFocus(opener, dialogs)) opener.focus();

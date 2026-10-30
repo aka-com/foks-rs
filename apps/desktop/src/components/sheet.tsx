@@ -75,11 +75,11 @@ export function Sheet({
 }
 
 /**
- * Return activates the sheet's default button, as on macOS: the last primary
- * button in the footer, when it is enabled. A control that uses Return itself
- * keeps it — a text area, a select, an open combobox, a button or link (Return
- * presses the focused one), a picker's popup — and so does a key already
- * handled below, such as an alert over the sheet.
+ * Activates the sheet's last enabled primary footer button on Enter, matching
+ * macOS dialog behavior. Ignores controls that handle Enter directly
+ * (textareas, selects, expanded comboboxes, buttons, links, and popup options)
+ * and events already handled by nested overlays. Pressing Enter on a focused
+ * radio button still triggers the sheet's default button.
  */
 function pressDefaultButton(event: KeyboardEvent<HTMLDivElement>): void {
   if (
@@ -96,15 +96,16 @@ function pressDefaultButton(event: KeyboardEvent<HTMLDivElement>): void {
   if (
     !target ||
     inPopup(target) ||
-    target.closest(
-      'textarea, select, button, a[href], [contenteditable="true"], ' +
-        '[role="combobox"][aria-expanded="true"], [role="option"], ' +
-        '[role="menuitem"], [role="button"], input[type="checkbox"], ' +
-        'input[type="radio"], input[type="file"]',
-    )
+    (!target.closest('[role="radio"]') &&
+      target.closest(
+        'textarea, select, button, a[href], [contenteditable="true"], ' +
+          '[role="combobox"][aria-expanded="true"], [role="option"], ' +
+          '[role="menuitem"], [role="button"], input[type="checkbox"], ' +
+          'input[type="file"]',
+      ))
   )
     return;
-  // The sheet this key belongs to, not one further out in the React tree.
+  // Ignore Enter events from nested `.sheet` elements in the React tree.
   const sheet = target.closest('.sheet');
   if (sheet !== event.currentTarget) return;
   const primaries = sheet.querySelectorAll<HTMLButtonElement>(

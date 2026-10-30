@@ -286,7 +286,7 @@ export function InviteNewUserSheet({
     return (
       <PanelSheet
         presentation={{ title: 'Invite a new user', onClose }}
-        title="Share the invitation"
+        title="Share the Invitation"
         step="Step 2 of 2"
         busy={busy}
         glyph={glyph}
@@ -350,7 +350,7 @@ export function InviteNewUserSheet({
   return (
     <PanelSheet
       presentation={{ title: 'Invite a new user', onClose }}
-      title={`Invite a new user to ${team.name}`}
+      title={`Invite a New User to ${team.name}`}
       step="Step 1 of 2"
       busy={busy}
       glyph={glyph}
@@ -368,8 +368,8 @@ export function InviteNewUserSheet({
             {busy
               ? 'Creating…'
               : operation?.operation_id
-                ? 'Finish creating'
-                : 'Create invitation'}
+                ? 'Finish Creating'
+                : 'Create Invitation'}
           </Button>
         </>
       }
@@ -391,7 +391,7 @@ export function InviteNewUserSheet({
                     disabled={busy}
                     onClick={() => void run(() => finish(row))}
                   >
-                    Finish creating
+                    Finish Creating
                   </Button>
                   <Button
                     size="sm"
@@ -408,7 +408,7 @@ export function InviteNewUserSheet({
                   disabled={busy}
                   onClick={() => void checkStatus(row)}
                 >
-                  Check status
+                  Check Status
                 </Button>
               )
             }
@@ -428,7 +428,7 @@ export function InviteNewUserSheet({
               disabled={busy}
               onClick={() => void checkStatus(unconfirmed)}
             >
-              Check status
+              Check Status
             </Button>
           }
         >

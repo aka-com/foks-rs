@@ -249,16 +249,19 @@ function channelEntries(
     const store = storeOf(snapshot, channel.store);
     if (!store) continue;
     const alias = storeAlias(store);
+    // The general channel has an empty protocol name; display and index it as
+    // "general" to match Chat.
+    const label = channel.name || 'general';
     entries.push({
-      id: `channel:${channel.store}|${channel.id ?? channel.name}`,
+      id: `channel:${channel.store}|${channel.id ?? label}`,
       scope: 'channels',
       group: GROUP_LABELS.channels,
-      name: `${alias}#${channel.name}`,
+      name: `#${label}`,
       detail: `Channel · ${store.name}`,
       where: serverDisplayLabelForStore(snapshot, store),
-      // `#deploys` first, so typing the hash reaches the channel and typing
-      // the group name reaches every channel in it.
-      terms: [`#${channel.name}`, channel.name, store.name],
+      // Index `#<label>` first so `#` prefixes match channels, followed by
+      // the team name and alias so team queries match all of its channels.
+      terms: [`#${label}`, label, store.name, alias],
       glyph: { kind: 'channel' },
       target: {
         kind: 'channel',
@@ -408,16 +411,17 @@ export interface SearchPaletteProps {
 }
 
 /**
- * The places the empty palette offers before any result, as the sidebar
- * names them. They are moves, not search results: typing or choosing a
- * scope replaces them with results.
+ * Navigation destination rows shown in the palette when `scope === 'all'` and
+ * the query is empty or matches the destination label.
  */
-interface PlaceRow {
+export interface PlaceRow {
   id: string;
   name: string;
+  /** Primary destination label matched before `name`. */
+  place: string;
   icon: FoksIconName;
   location: Location;
-  /** A key equivalent bound elsewhere (the native menu), drawn at the end. */
+  /** Keyboard shortcut bound in the native menu, displayed at the row end. */
   shortcut?: string;
 }
 
@@ -425,41 +429,68 @@ const PLACES: readonly PlaceRow[] = [
   {
     id: 'place:all',
     name: 'Go to All Items',
+    place: 'All Items',
     icon: 'grid',
     location: { kind: 'all' },
   },
   {
     id: 'place:chat',
     name: 'Go to Chat',
+    place: 'Chat',
     icon: 'chat',
     location: { kind: 'chat' },
   },
   {
     id: 'place:activity',
     name: 'Go to Activity',
+    place: 'Activity',
     icon: 'activity',
     location: { kind: 'activity' },
   },
   {
     id: 'place:teams',
     name: 'Go to Teams',
+    place: 'Teams',
     icon: 'users',
     location: { kind: 'teams' },
   },
   {
     id: 'place:devices',
     name: 'Go to Devices',
+    place: 'Devices',
     icon: 'shield',
     location: { kind: 'devices' },
   },
   {
     id: 'place:settings',
     name: 'Open Settings',
+    place: 'Settings',
     icon: 'settings',
     location: { kind: 'settings' },
     shortcut: '⌘,',
   },
 ];
+
+/** Returns `PLACES` matching `query` ordered by best match, or all `PLACES` when `query` is empty. */
+export function matchPlaces(
+  query: string,
+  scope: SearchScope = 'all',
+): readonly PlaceRow[] {
+  if (scope !== 'all') return [];
+  const needle = query.trim().toLowerCase();
+  if (!needle) return PLACES;
+  return PLACES.flatMap((place, order) => {
+    const ranks = [place.place, place.name]
+      .map((term, index) => {
+        const rank = termRank(term, needle);
+        return rank === null ? null : rank * 4 + index;
+      })
+      .filter((rank): rank is number => rank !== null);
+    return ranks.length ? [{ place, rank: Math.min(...ranks), order }] : [];
+  })
+    .sort((left, right) => left.rank - right.rank || left.order - right.order)
+    .map(({ place }) => place);
+}
 
 const FOOT_KEYS: readonly { keys: readonly string[]; label: string }[] = [
   { keys: ['↑', '↓'], label: 'move' },
@@ -574,8 +605,10 @@ function SearchSheet({
     [index, query, scope],
   );
 
-  // The empty palette leads with the places; any query or scope drops them.
-  const places = query.trim() === '' && scope === 'all' ? PLACES : [];
+  // Show matching navigation destinations before search results when `scope`
+  // is `'all'` (all destinations when the query is empty, or those matching
+  // the query). Non-`'all'` scopes omit navigation destinations.
+  const places = useMemo(() => matchPlaces(query, scope), [query, scope]);
   const total = places.length + results.length;
   // A shorter result set can strand the highlight past its end.
   const selected = total ? Math.min(active, total - 1) : -1;
@@ -749,7 +782,9 @@ function SearchSheet({
                     <Icon name={place.icon} />
                   </span>
                   <span className="t">
-                    <b>{place.name}</b>
+                    <b>
+                      <Marked text={place.name} query={query} />
+                    </b>
                   </span>
                   {place.shortcut ? (
                     <kbd className="where">{shortcutLabel(place.shortcut)}</kbd>
@@ -759,7 +794,8 @@ function SearchSheet({
             </div>
           ) : null}
           {groups.length === 0 &&
-          readiness !== 'ready' ? null : groups.length === 0 ? (
+          (readiness !== 'ready' || places.length) ? null : groups.length ===
+            0 ? (
             <p className="pal-none">
               {query.trim() ? `No matches for “${query.trim()}”. ` : ''}
               Search item names, paths, usernames, and channels.
@@ -815,10 +851,14 @@ function SearchSheet({
           ))}
           <span className="grow" />
           <span
-            className={places.length ? 'pal-count offscreen' : 'pal-count'}
+            className={
+              query.trim() === '' && places.length
+                ? 'pal-count offscreen'
+                : 'pal-count'
+            }
             aria-live="polite"
           >
-            {results.length === 1 ? '1 result' : `${results.length} results`}
+            {total === 1 ? '1 result' : `${total} results`}
           </span>
         </div>
       </div>

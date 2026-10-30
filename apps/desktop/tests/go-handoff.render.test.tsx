@@ -532,7 +532,7 @@ test('disables account selection and dialog dismissal while server verification 
   assert.ok(continueButton.classList.contains('primary'));
   ui.fireEvent.click(continueButton);
   ui.fireEvent.click(
-    rendered.getByRole('button', { name: 'Use official FOKS server' }),
+    rendered.getByRole('button', { name: 'Use Official FOKS Server' }),
   );
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Import' }));
   assert.equal(
@@ -1393,7 +1393,7 @@ test('a server added after unmount is listed on Accounts and pairs without anoth
   ui.fireEvent.click(await adding.findByRole('radio', { name: /cli-owner/ }));
   ui.fireEvent.click(adding.getByRole('button', { name: 'Continue' }));
   ui.fireEvent.click(
-    adding.getByRole('button', { name: 'Use official FOKS server' }),
+    adding.getByRole('button', { name: 'Use Official FOKS Server' }),
   );
   ui.fireEvent.click(adding.getByRole('button', { name: 'Import' }));
   adding.unmount();
@@ -1444,8 +1444,8 @@ test('a server added after unmount is listed on Accounts and pairs without anoth
   ui.fireEvent.click(ui.within(row).getByRole('button', { name: 'Pair' }));
   ui.fireEvent.click(await accounts.findByRole('radio', { name: /cli-owner/ }));
   ui.fireEvent.click(accounts.getByRole('button', { name: 'Continue' }));
-  assert.ok(accounts.getByRole('button', { name: 'Pair this device' }));
-  assert.ok(accounts.getByRole('button', { name: 'Resume pairing' }));
+  assert.ok(accounts.getByRole('button', { name: 'Pair This Device' }));
+  assert.ok(accounts.getByRole('button', { name: 'Resume Pairing' }));
   assert.equal(accounts.queryByRole('button', { name: 'Import' }), null);
   assert.equal(adds, 1);
 });
@@ -1494,13 +1494,13 @@ test('CLI pairing resumes without entering a new device name', async () => {
   assert.equal(
     (
       rendered.getByRole('button', {
-        name: 'Pair this device',
+        name: 'Pair This Device',
       }) as HTMLButtonElement
     ).disabled,
     true,
   );
   const resume = rendered.getByRole('button', {
-    name: 'Resume pairing',
+    name: 'Resume Pairing',
   }) as HTMLButtonElement;
   assert.equal(resume.disabled, false);
   ui.fireEvent.click(resume);
