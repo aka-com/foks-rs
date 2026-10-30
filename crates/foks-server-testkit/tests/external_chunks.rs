@@ -2,7 +2,7 @@ use std::io::{Cursor, Write as _};
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::{mpsc, Condvar, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use foks_client::{CreatedSoftwareAccount, KvWriteOptions, PinnedHost};
 use foks_client_db::SoftStateStore;
@@ -205,6 +205,25 @@ fn revocation_during_external_put_prevents_publication_without_blocking_writer()
             "revoked upload must not publish"
         );
     });
+    // The client can see its upload fail before the server's handler, which
+    // was blocked in put_object until the gate opened, has finished: a client
+    // or server timeout under load ends the request first. Wait until the
+    // handler has settled the publication attempt, then stop the server,
+    // which drains or stops the handler before its metadata write, and only
+    // then check that nothing was published.
+    let settled = Instant::now() + Duration::from_secs(30);
+    while environment
+        .read_database()
+        .unwrap()
+        .chunk_physical_usage()
+        .unwrap()
+        .unresolved_attempts
+        != 0
+        && Instant::now() < settled
+    {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    server.shutdown().unwrap();
     let usage = environment
         .read_database()
         .unwrap()
@@ -226,7 +245,6 @@ fn revocation_during_external_put_prevents_publication_without_blocking_writer()
         (1, 1, 0)
     );
     assert!(physical.present_bytes > 0);
-    server.shutdown().unwrap();
 }
 
 #[test]
