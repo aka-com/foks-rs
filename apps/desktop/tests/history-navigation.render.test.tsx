@@ -70,6 +70,19 @@ test('the header omits history controls', async () => {
   ui.act(() => store.navigate({ kind: 'settings', section: 'preferences' }));
   assert.equal(view.queryByRole('button', { name: 'Back' }), null);
   assert.equal(view.queryByRole('button', { name: 'Forward' }), null);
+  // A team page displays a chevron that navigates to the enclosing page
+  // ("All Teams") rather than stepping back in history, so its label names
+  // the destination.
+  ui.act(() => store.navigate({ kind: 'group-settings', ref: 'team:eng' }));
+  assert.equal(view.queryByRole('button', { name: 'Back' }), null);
+  const up = document.querySelector<HTMLButtonElement>('.topbar .tbtn.back');
+  assert.ok(up);
+  assert.equal(up.getAttribute('aria-label'), 'All Teams');
+  assert.equal(up.title, 'All Teams');
+  ui.act(() => {
+    ui.fireEvent.click(up);
+  });
+  assert.equal(store.getSnapshot().location.kind, 'teams');
 });
 
 test('completed swipes use guarded history in both directions', async () => {

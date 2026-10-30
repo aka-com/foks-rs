@@ -49,4 +49,5 @@ export type FoksIconName =
   | 'lock'
   | 'panelLeft'
   | 'userPlus'
-  | 'warning';
+  | 'warning'
+  | 'securityKey';

@@ -46,7 +46,7 @@ export function SigninPrimaryAction({
       }
       onClick={() => void recover()}
     >
-      {recoveryPending ? 'Resume recovery' : 'Recover'}
+      {recoveryPending ? 'Resume Recovery' : 'Recover'}
     </Button>
   ) : signinMethod === 'import' ? (
     <Button
@@ -54,7 +54,7 @@ export function SigninPrimaryAction({
       disabled={busy || !accountAlias}
       onClick={() => void copyGoCandidate()}
     >
-      Import credentials
+      Import Credentials
     </Button>
   ) : signinMethod === 'pair' ? (
     <Button
@@ -67,7 +67,7 @@ export function SigninPrimaryAction({
       }
       onClick={() => void acceptPairing(false)}
     >
-      Accept pairing
+      Accept Pairing
     </Button>
   ) : (
     <Button variant="primary" disabled>

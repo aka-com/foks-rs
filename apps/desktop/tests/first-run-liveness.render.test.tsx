@@ -205,17 +205,17 @@ test('completed local setup explains unavailable inventory and offers a retry th
   assert.equal(rendered.view.queryByText('Your Personal vault is ready'), null);
   ui.fireEvent.click(
     rendered.view.getByRole('button', {
-      name: 'Retry loading Personal vault',
+      name: 'Retry Loading Personal Vault',
     }),
   );
   await rendered.view.findByText('Inventory unavailable');
   assert.equal(h.saved()?.state, 'local-done');
   ui.fireEvent.click(
     rendered.view.getByRole('button', {
-      name: 'Retry loading Personal vault',
+      name: 'Retry Loading Personal Vault',
     }),
   );
-  await rendered.view.findByRole('button', { name: 'Continue to my vault' });
+  await rendered.view.findByRole('button', { name: 'Continue to My Vault' });
   assert.equal(refreshes, 2);
   assert.equal(h.saved()?.account?.alias, 'personal');
 });
@@ -259,15 +259,15 @@ test('uncertain signup requires explicit pending-operation resume even when the 
     target: { value: 'personal' },
   });
   ui.fireEvent.click(
-    rendered.view.getByRole('button', { name: 'Create my account' }),
+    rendered.view.getByRole('button', { name: 'Create My Account' }),
   );
-  await rendered.view.findByRole('button', { name: 'Resume account setup' });
+  await rendered.view.findByRole('button', { name: 'Resume Account Setup' });
   assert.equal(h.saved()?.state, 'operation-pending');
   assert.equal(resumes, 0);
   ui.fireEvent.click(
-    rendered.view.getByRole('button', { name: 'Resume account setup' }),
+    rendered.view.getByRole('button', { name: 'Resume Account Setup' }),
   );
-  await rendered.view.findByRole('button', { name: 'Show recovery phrase' });
+  await rendered.view.findByRole('button', { name: 'Show Recovery Phrase' });
   assert.equal(creates, 1);
   assert.equal(resumes, 1);
 });
@@ -292,7 +292,7 @@ test('slow CLI discovery can be skipped and late results do not reopen the choos
     await ui.act(async () => slow());
     assert.ok(rendered.view.getByText(/taking longer than expected/));
     ui.fireEvent.click(
-      rendered.view.getByRole('button', { name: 'Skip for now' }),
+      rendered.view.getByRole('button', { name: 'Skip for Now' }),
     );
     assert.ok(rendered.view.getByText('How are you joining?'));
     await ui.act(async () =>
@@ -311,10 +311,10 @@ test('phrase preparation has an accessible back action outside the disabled cont
     bridge: { ...h.bridge, prepareOwnerBackup: () => preparation.promise },
   });
   ui.fireEvent.click(
-    rendered.view.getByRole('button', { name: 'Show recovery phrase' }),
+    rendered.view.getByRole('button', { name: 'Show Recovery Phrase' }),
   );
   const back = await rendered.view.findByRole('button', {
-    name: 'Back to recovery options',
+    name: 'Back to Recovery Options',
   });
   assert.equal(back.closest('[inert]'), null);
   ui.fireEvent.click(back);
@@ -323,7 +323,7 @@ test('phrase preparation has an accessible back action outside the disabled cont
   );
   assert.equal(rendered.view.queryByText('late secret'), null);
   assert.ok(
-    rendered.view.getByRole('button', { name: 'Show recovery phrase' }),
+    rendered.view.getByRole('button', { name: 'Show Recovery Phrase' }),
   );
 });
 
@@ -338,12 +338,12 @@ test('recovery phrase commit shows a saving label while waiting for confirmation
   );
   ui.fireEvent.click(
     rendered.view.getByRole('button', {
-      name: 'Generate a recovery phrase',
+      name: 'Generate a Recovery Phrase',
     }),
   );
   ui.fireEvent.click(
-    await rendered.view.findByRole('button', {
-      name: 'I have written this down',
+    await rendered.view.findByRole('checkbox', {
+      name: /^I have written down /,
     }),
   );
   ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Done' }));
@@ -353,7 +353,7 @@ test('recovery phrase commit shows a saving label while waiting for confirmation
   assert.equal((saving as HTMLButtonElement).disabled, true);
   await ui.act(async () => commit.resolve({ applied: true }));
   await rendered.view.findByRole('button', {
-    name: 'Generate a recovery phrase',
+    name: 'Generate a Recovery Phrase',
   });
 });
 
@@ -386,13 +386,13 @@ test('multiple groups refresh the catalog and preserve a selected unavailable va
       return h.complete;
     },
   });
-  ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Check now' }));
+  ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Check Now' }));
   await rendered.view.findByText('Choose an existing team');
   assert.deepEqual(forces, [true]);
   // A check that found teams to choose from does not also say none was found.
   assert.equal(rendered.view.queryByText(/Team not found yet/), null);
   ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Open “two”' }));
-  assert.ok(rendered.view.getByRole('button', { name: 'Retry loading team' }));
+  assert.ok(rendered.view.getByRole('button', { name: 'Retry Loading Team' }));
   const saved = h.saved()!;
   assert.equal(saved.selectedGroup?.teamIdHex, groups[1].teamIdHex);
   assert.equal(saved.added, false);
@@ -402,7 +402,7 @@ test('multiple groups refresh the catalog and preserve a selected unavailable va
     location: { kind: 'first-run', path: 'invited', step: 'waiting' },
   });
   assert.ok(resumed.view.getByText('two'));
-  assert.ok(resumed.view.getByRole('button', { name: 'Retry loading team' }));
+  assert.ok(resumed.view.getByRole('button', { name: 'Retry Loading Team' }));
 });
 
 test('a failed team check does not report the team as absent', async () => {
@@ -426,7 +426,7 @@ test('a failed team check does not report the team as absent', async () => {
       onRefreshSnapshot: async () => h.complete,
     },
   );
-  ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Check now' }));
+  ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Check Now' }));
   await rendered.view.findByText('The server could not be reached.');
   assert.ok(rendered.view.getByText('Check failed'));
   assert.equal(rendered.view.queryByText('Checked: now'), null);
@@ -451,7 +451,7 @@ test('zero groups still force catalog reconciliation', async () => {
       },
     },
   );
-  ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Check now' }));
+  ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Check Now' }));
   await rendered.view.findByText(/No active teams found yet/);
   assert.equal(refreshes, 1);
   assert.ok(rendered.view.getByText('Checked: now'));
@@ -513,7 +513,7 @@ test('local-server retry probes again despite a stale failed connectivity snapsh
   });
   await rendered.view.findByText('Service stopped');
   ui.fireEvent.click(
-    rendered.view.getByRole('button', { name: 'Check again' }),
+    rendered.view.getByRole('button', { name: 'Check Again' }),
   );
   await rendered.view.findByText('Ready');
   assert.equal(probes, 2);
@@ -563,9 +563,9 @@ test('a native operation record confirms a lost reply without replaying account 
     target: { value: 'personal' },
   });
   ui.fireEvent.click(
-    rendered.view.getByRole('button', { name: 'Create my account' }),
+    rendered.view.getByRole('button', { name: 'Create My Account' }),
   );
-  await rendered.view.findByRole('button', { name: 'Show recovery phrase' });
+  await rendered.view.findByRole('button', { name: 'Show Recovery Phrase' });
   assert.equal(mutations, 1);
   assert.equal(h.saved()?.state, 'protect');
 });
@@ -585,7 +585,7 @@ for (const cancellation of ['conceal', 'readiness'] as const) {
       onRetryAgent: async () => {},
     });
     ui.fireEvent.click(
-      rendered.view.getByRole('button', { name: 'Show recovery phrase' }),
+      rendered.view.getByRole('button', { name: 'Show Recovery Phrase' }),
     );
     await ui.waitFor(() =>
       assert.ok(
@@ -605,12 +605,12 @@ for (const cancellation of ['conceal', 'readiness'] as const) {
       ),
     );
     if (cancellation === 'readiness') {
-      assert.ok(rendered.view.getByRole('button', { name: 'Retry setup' }));
+      assert.ok(rendered.view.getByRole('button', { name: 'Retry Setup' }));
       rendered.rerender({ agentReady: true });
     }
     assert.equal(h.saved()?.state, 'protect');
     ui.fireEvent.click(
-      rendered.view.getByRole('button', { name: 'Show recovery phrase' }),
+      rendered.view.getByRole('button', { name: 'Show Recovery Phrase' }),
     );
     await ui.waitFor(() => assert.equal(preparations, 2));
     await ui.act(async () => {
@@ -635,7 +635,7 @@ for (const cancellation of ['conceal', 'readiness'] as const) {
       ),
     );
     assert.ok(
-      rendered.view.getByRole('button', { name: 'Show recovery phrase' }),
+      rendered.view.getByRole('button', { name: 'Show Recovery Phrase' }),
     );
   });
 }
@@ -656,14 +656,14 @@ test('focus loss conceals a prepared recovery phrase without closing its sheet',
   );
   ui.fireEvent.click(
     rendered.view.getByRole('button', {
-      name: 'Generate a recovery phrase',
+      name: 'Generate a Recovery Phrase',
     }),
   );
   await rendered.view.findByText('KEPT_SECRET');
   const dialog = rendered.view.getByRole('dialog');
-  const written = rendered.view.getByRole('button', {
-    name: 'I have written this down',
-  });
+  const written = rendered.view.getByRole('checkbox', {
+    name: /^I have written down /,
+  }) as HTMLInputElement;
   ui.fireEvent.click(written);
 
   ui.fireEvent(window, new Event('blur'));
@@ -671,9 +671,9 @@ test('focus loss conceals a prepared recovery phrase without closing its sheet',
   assert.equal(rendered.view.getByRole('dialog'), dialog);
   assert.equal(rendered.view.queryByText('KEPT_SECRET'), null);
   assert.ok(rendered.view.getByLabelText('Recovery phrase hidden'));
-  assert.ok(written.classList.contains('on'));
+  assert.ok(written.checked);
   ui.fireEvent.click(
-    rendered.view.getByRole('button', { name: 'Show recovery phrase' }),
+    rendered.view.getByRole('button', { name: 'Show Recovery Phrase' }),
   );
   assert.ok(rendered.view.getByText('KEPT_SECRET'));
 });
@@ -692,7 +692,7 @@ test('a recovery phrase prepared while the window is hidden stays concealed', as
     },
   });
   ui.fireEvent.click(
-    rendered.view.getByRole('button', { name: 'Show recovery phrase' }),
+    rendered.view.getByRole('button', { name: 'Show Recovery Phrase' }),
   );
   await ui.waitFor(() => assert.equal(preparations, 1));
   Object.defineProperty(document, 'visibilityState', {
@@ -716,7 +716,7 @@ test('a recovery phrase prepared while the window is hidden stays concealed', as
   assert.equal(rendered.view.queryByText('LATE_SECRET'), null);
   assert.ok(rendered.view.getByLabelText('Recovery phrase hidden'));
   ui.fireEvent.click(
-    rendered.view.getByRole('button', { name: 'Show recovery phrase' }),
+    rendered.view.getByRole('button', { name: 'Show Recovery Phrase' }),
   );
   assert.ok(rendered.view.getByText('LATE_SECRET'));
 });
@@ -750,7 +750,7 @@ test('acknowledged signup is persisted before refresh and resumes read-only afte
     target: { value: 'Mac' },
   });
   ui.fireEvent.click(
-    rendered.view.getByRole('button', { name: 'Create my account' }),
+    rendered.view.getByRole('button', { name: 'Create My Account' }),
   );
   await rendered.view.findByText('Your account is connected');
   assert.equal(h.saved()?.state, 'identity-pending');
@@ -760,7 +760,7 @@ test('acknowledged signup is persisted before refresh and resumes read-only afte
   });
   await rendered.view.findByText('Catalog unavailable');
   assert.equal(
-    rendered.view.queryByRole('button', { name: 'Create my account' }),
+    rendered.view.queryByRole('button', { name: 'Create My Account' }),
     null,
   );
   const pending = h.saved()!;
@@ -774,7 +774,7 @@ test('acknowledged signup is persisted before refresh and resumes read-only afte
     },
   });
   assert.ok(resumed.view.getByText('Your account is connected'));
-  await resumed.view.findByRole('button', { name: 'Show recovery phrase' });
+  await resumed.view.findByRole('button', { name: 'Show Recovery Phrase' });
   assert.equal(mutations, 1);
   assert.equal(refreshes, 2);
   assert.equal(h.saved()?.account?.username, 'satoshi');
@@ -848,7 +848,7 @@ for (const method of ['recovery', 'sso'] as const) {
       false,
     );
     ui.fireEvent.click(
-      rendered.view.getByRole('button', { name: 'Retry loading account' }),
+      rendered.view.getByRole('button', { name: 'Retry Loading Account' }),
     );
     await rendered.view.findByText('Identity unavailable');
     assert.equal(mutations, 1);
@@ -915,7 +915,7 @@ for (const method of ['copy', 'pair', 'resume-pair'] as const) {
     ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Continue' }));
     ui.fireEvent.click(
       rendered.view.getByRole('button', {
-        name: 'Use the official FOKS server',
+        name: 'Use the Official FOKS Server',
       }),
     );
     ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Continue' }));
@@ -933,7 +933,7 @@ for (const method of ['copy', 'pair', 'resume-pair'] as const) {
     );
     if (method === 'copy')
       ui.fireEvent.click(
-        rendered.view.getByRole('button', { name: 'Import credentials' }),
+        rendered.view.getByRole('button', { name: 'Import Credentials' }),
       );
     else {
       ui.fireEvent.change(rendered.view.getByLabelText('This device’s name'), {
@@ -945,11 +945,11 @@ for (const method of ['copy', 'pair', 'resume-pair'] as const) {
         });
       ui.fireEvent.click(
         rendered.view.getByRole('button', {
-          name: method === 'pair' ? 'Accept pairing' : 'Resume pairing',
+          name: method === 'pair' ? 'Accept Pairing' : 'Resume pairing',
         }),
       );
     }
-    await rendered.view.findByRole('button', { name: 'Retry loading account' });
+    await rendered.view.findByRole('button', { name: 'Retry Loading Account' });
     assert.equal(h.saved()?.provisionedAccount?.alias, 'personal');
     assert.equal(
       window.localStorage
@@ -982,15 +982,15 @@ test('late identity refresh cannot complete onboarding after readiness is lost',
     result.resolve(h.complete);
   });
   assert.equal(h.saved()?.state, 'identity-pending');
-  assert.ok(rendered.view.getByRole('button', { name: 'Retry setup' }));
+  assert.ok(rendered.view.getByRole('button', { name: 'Retry Setup' }));
   rendered.rerender({
     agentReady: true,
     onRefreshSnapshot: async () => h.complete,
   });
   ui.fireEvent.click(
-    rendered.view.getByRole('button', { name: 'Retry loading account' }),
+    rendered.view.getByRole('button', { name: 'Retry Loading Account' }),
   );
-  await rendered.view.findByRole('button', { name: 'Show recovery phrase' });
+  await rendered.view.findByRole('button', { name: 'Show Recovery Phrase' });
 });
 
 test('the development bridge supplies matching identity facts after pending setup is restored', async () => {
@@ -1039,9 +1039,9 @@ test('pending identity survives an empty refresh and is adopted from authoritati
     snapshot: h.complete,
     location: { kind: 'first-run', path: 'own', step: 'who' },
   });
-  assert.ok(resumed.view.getByRole('button', { name: 'Show recovery phrase' }));
+  assert.ok(resumed.view.getByRole('button', { name: 'Show Recovery Phrase' }));
   assert.equal(
-    resumed.view.queryByRole('button', { name: 'Create my account' }),
+    resumed.view.queryByRole('button', { name: 'Create My Account' }),
     null,
   );
 });
@@ -1090,9 +1090,9 @@ test('allows going back when unconfirmed setup has no resume path', async () => 
     },
   });
   ui.fireEvent.click(
-    await rendered.view.findByRole('button', { name: 'Go back' }),
+    await rendered.view.findByRole('button', { name: 'Go Back' }),
   );
-  assert.ok(rendered.view.getByRole('button', { name: 'Create my account' }));
+  assert.ok(rendered.view.getByRole('button', { name: 'Create My Account' }));
   assert.equal(h.saved()?.state, 'account');
   assert.equal(h.saved()?.provisioning, undefined);
   assert.equal(mutations, 0);
@@ -1130,10 +1130,10 @@ test('keeps the missing-server warning separate from the go-back action', async 
       ),
   );
   assert.equal(ui.within(warning).queryByRole('button'), null);
-  const goBack = rendered.view.getByRole('button', { name: 'Go back' });
+  const goBack = rendered.view.getByRole('button', { name: 'Go Back' });
   assert.ok(goBack.closest('.operation-actions'));
   assert.equal(
-    rendered.view.getAllByRole('button', { name: 'Go back' }).length,
+    rendered.view.getAllByRole('button', { name: 'Go Back' }).length,
     1,
   );
 });
@@ -1167,16 +1167,16 @@ test('an unreadable operation record still probes pending operations and reports
       },
     },
   );
-  await rendered.view.findByRole('button', { name: 'Resume account setup' });
+  await rendered.view.findByRole('button', { name: 'Resume Account Setup' });
   assert.ok(
     rendered.view.getByText(
       /\(Details: This setup attempt does not match the current account or workspace\.\)/,
     ),
   );
-  assert.ok(rendered.view.getByRole('button', { name: 'Go back' }));
+  assert.ok(rendered.view.getByRole('button', { name: 'Go Back' }));
   assert.equal(
     rendered.view.queryByRole('button', {
-      name: 'Continue with existing account',
+      name: 'Continue with Existing Account',
     }),
     null,
   );
@@ -1218,7 +1218,7 @@ test('allows continuing with an existing account when an operation record cannot
     },
   );
   const adopt = await rendered.view.findByRole('button', {
-    name: 'Continue with existing account',
+    name: 'Continue with Existing Account',
   });
   assert.equal(h.saved()?.state, 'operation-pending');
   assert.equal(h.saved()?.account, undefined);
@@ -1231,10 +1231,10 @@ test('allows continuing with an existing account when an operation record cannot
     [
       ...rendered.view.container.querySelectorAll('.operation-actions button'),
     ].map((button) => button.textContent),
-    ['Continue with existing account', 'Check status', 'Go back'],
+    ['Continue with Existing Account', 'Check Status', 'Go Back'],
   );
   ui.fireEvent.click(adopt);
-  await rendered.view.findByRole('button', { name: 'Show recovery phrase' });
+  await rendered.view.findByRole('button', { name: 'Show Recovery Phrase' });
   assert.equal(h.saved()?.state, 'protect');
   assert.equal(h.saved()?.account?.username, 'satoshi');
   assert.equal(mutations, 0);
@@ -1269,10 +1269,10 @@ test('shows option to set up a different account when identity is missing', asyn
   });
   ui.fireEvent.click(
     await rendered.view.findByRole('button', {
-      name: 'Set up a different account',
+      name: 'Set Up a Different Account',
     }),
   );
-  assert.ok(rendered.view.getByRole('button', { name: 'Create my account' }));
+  assert.ok(rendered.view.getByRole('button', { name: 'Create My Account' }));
   assert.equal(h.saved()?.state, 'account');
   assert.equal(h.saved()?.provisionedAccount, undefined);
   assert.equal(mutations, 0);
@@ -1281,7 +1281,7 @@ test('shows option to set up a different account when identity is missing', asyn
   await unavailable.view.findByText(/Couldn’t load your account details/);
   assert.ok(
     unavailable.view.getByRole('button', {
-      name: 'Set up a different account',
+      name: 'Set Up a Different Account',
     }),
   );
 });
@@ -1317,11 +1317,11 @@ test('shows a missing-server warning with the different-account action for ackno
   assert.ok(
     ui
       .within(warning)
-      .getByRole('button', { name: 'Set up a different account' }),
+      .getByRole('button', { name: 'Set Up a Different Account' }),
   );
   assert.equal(
     rendered.view.getAllByRole('button', {
-      name: 'Set up a different account',
+      name: 'Set Up a Different Account',
     }).length,
     1,
   );
@@ -1340,7 +1340,7 @@ test('a pending operation is confirmed on mount without any click', async () => 
       },
     },
   );
-  await rendered.view.findByRole('button', { name: 'Show recovery phrase' });
+  await rendered.view.findByRole('button', { name: 'Show Recovery Phrase' });
   assert.equal(h.saved()?.state, 'protect');
   assert.equal(h.saved()?.provisioning, undefined);
 });
@@ -1359,7 +1359,7 @@ test('cannot discard account setup while it is still running', async () => {
     },
   );
   await rendered.view.findByText(/Account setup is still running/);
-  assert.equal(rendered.view.queryByRole('button', { name: 'Go back' }), null);
+  assert.equal(rendered.view.queryByRole('button', { name: 'Go Back' }), null);
   assert.equal(
     (
       rendered.view.getByRole('button', {

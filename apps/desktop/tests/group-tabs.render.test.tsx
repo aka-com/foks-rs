@@ -333,7 +333,7 @@ test('Add channel opens the creation form with this group selected', async () =>
   });
   // The sheet opens on the step it was asked for: the create form for this
   // group, not the channel picker and not the cross-team one.
-  assert.ok(rendered.getByRole('heading', { name: 'Create channel' }));
+  assert.ok(rendered.getByRole('heading', { name: 'Create Channel' }));
   assert.ok(rendered.getByLabelText('Channel name'));
   const teamSelect = rendered.getByRole('button', { name: 'Team' });
   assert.ok(teamSelect.classList.contains('card-select-trigger'));
@@ -367,7 +367,7 @@ test('a channel created from the group page opens it in Chat', async () => {
       target: { value: 'garden' },
     });
   });
-  const create = rendered.getByRole('button', { name: 'Create channel' });
+  const create = rendered.getByRole('button', { name: 'Create Channel' });
   assert.equal(create.hasAttribute('disabled'), false);
   await ui.act(async () => {
     ui.fireEvent.click(create);
@@ -417,13 +417,13 @@ test('channel creation survives leaving the group page without a late redirect',
     assert.equal(
       rendered
         .getByRole('button', {
-          name: 'Create channel',
+          name: 'Create Channel',
         })
         .hasAttribute('disabled'),
       false,
     ),
   );
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Create channel' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Create Channel' }));
   await ui.waitFor(() => assert.ok(finish));
   await ui.act(async () => {
     rendered.setPageMounted(false);

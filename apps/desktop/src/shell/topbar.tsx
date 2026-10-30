@@ -366,9 +366,17 @@ export function Topbar({
     tab === 'devices';
   const parent =
     !listBar && tab !== 'settings' ? parentLocation(location) : null;
-  // Settings names only itself: its sub-navigation names the section, and a
-  // server page leads with its own way back to Account.
+  // On Settings, show only "Settings" in the topbar breadcrumb; the
+  // sub-navigation highlights the active section, and server detail pages
+  // render their own back link to Account.
   const shownSegments = tab === 'settings' ? segments.slice(0, 1) : segments;
+  // The chevron navigates to the enclosing page rather than stepping back in
+  // history (⌘[), so label it with the destination ("All Teams" or the
+  // preceding breadcrumb segment).
+  const parentName =
+    parent?.kind === 'teams'
+      ? 'All Teams'
+      : (shownSegments.at(-2)?.label ?? 'Enclosing Page');
   return (
     <div
       className={listBar ? 'topbar bar list-bar' : 'topbar bar'}
@@ -417,8 +425,8 @@ export function Topbar({
         <button
           type="button"
           className="tbtn back"
-          aria-label="Back"
-          title="Back"
+          aria-label={parentName}
+          title={parentName}
           disabled={blocked}
           onClick={() => onNavigate(parent)}
         >

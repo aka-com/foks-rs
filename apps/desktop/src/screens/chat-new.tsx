@@ -23,6 +23,7 @@ import {
   RadioGroup,
   SectionLabel,
   SheetDialog,
+  StoreMark,
 } from '../components';
 import type { Bridge } from '../bridge';
 
@@ -53,7 +54,6 @@ import {
   normalizeChannelName,
 } from '../chat/presentation';
 import { chatTeams, noChatReason, noChatTeams } from './chat-teams';
-import { GroupMark } from './group-mark';
 
 const fieldText = (value: string): string =>
   lowercaseChatText(value.replace(/\r\n?|\n/g, ' '));
@@ -436,7 +436,7 @@ export function NewChatSheet({
           <Icon name="hash" />
         </span>
       }
-      title="Create channel"
+      title="Create Channel"
       onClose={close}
       dismissible
       footer={
@@ -459,7 +459,7 @@ export function NewChatSheet({
                     ? 'Retry creation'
                     : 'Check again'
                   : 'Retry channel creation'
-                : 'Create channel'}
+                : 'Create Channel'}
           </Button>
         </>
       }
@@ -550,13 +550,20 @@ export function NewChatSheet({
                         the access checks that guard channel creation. */}
                 <CardSelect
                   label="Team"
+                  className="compact"
                   placeholder="Choose a team"
                   value={chosen ?? ''}
                   disabled={locked}
                   options={[
                     ...choices.map((choice) => ({
                       id: choice.store.id,
-                      mark: <GroupMark store={choice.store} />,
+                      mark: (
+                        <StoreMark
+                          snapshot={snapshot}
+                          store={choice.store}
+                          size="sm"
+                        />
+                      ),
                       title: choice.store.name,
                       detail: choice.reason || choice.detail,
                       off: Boolean(choice.reason),
@@ -568,7 +575,13 @@ export function NewChatSheet({
                       ? [
                           {
                             id: active.store.id,
-                            mark: <GroupMark store={active.store} />,
+                            mark: (
+                              <StoreMark
+                                snapshot={snapshot}
+                                store={active.store}
+                                size="sm"
+                              />
+                            ),
                             title: active.store.name,
                             detail: 'Unavailable',
                             off: true,

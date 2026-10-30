@@ -33,7 +33,7 @@ import { useTabSheetState } from '../navigation-guard';
  * shared header draws.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AdminPanel } from '../components/admin-panel';
 import { BotPanel } from '../components/bot-panel';
@@ -242,30 +242,35 @@ export function unroutedNotices(snapshot: AgentSnapshot): Notification[] {
   );
 }
 
-interface UnroutedNoticesProps {
+interface NeedsAttentionProps {
   snapshot: AgentSnapshot;
+  /** Connected servers that have no paired account on this device. */
+  unpairedServers: readonly Server[];
+  onPair: (server: Server) => void;
   onRefreshSnapshot: () => Promise<AgentSnapshot>;
   onError: (error: unknown) => void;
 }
 
 /**
- * Notices this page cannot route anywhere else: a catalog read that only a
- * retry can fix, or a note whose place could not be resolved — an alias that
- * matches more than one store, or a federated membership this Mac cannot place. Every
- * other note already has a home: a lapsed or unverified server shows on
- * Settings › Account, a team whose setup is incomplete shows on Teams, and a
- * team's membership in another team shows as Inactive on the host team's own
- * Members page. Drawing those again here would be a second copy of a state
- * the reader can already see where it is acted on.
+ * Renders the "Needs attention" group on Settings › Account: unrouted notices
+ * (retryable catalog read failures, aliases matching multiple stores, or
+ * unplaced federated memberships) and connected servers without a paired
+ * account. Omits notices displayed elsewhere (lapsed or unverified servers in
+ * the Servers list, incomplete team setup on Teams, and inactive federated
+ * memberships on the host team's Members page). Returns `null` when both lists
+ * are empty.
  */
-function UnroutedNotices({
+function NeedsAttention({
   snapshot,
+  unpairedServers,
+  onPair,
   onRefreshSnapshot,
   onError,
-}: UnroutedNoticesProps): ReactNode {
+}: NeedsAttentionProps): ReactNode {
   const [busy, setBusy] = useState<Set<string>>(new Set());
+  const headingId = useId();
   const notes = unroutedNotices(snapshot);
-  if (!notes.length) return null;
+  if (!notes.length && !unpairedServers.length) return null;
 
   const retry = (note: Notification): void => {
     if (!canRetry(note) || busy.has(note.id)) return;
@@ -282,33 +287,52 @@ function UnroutedNotices({
   };
 
   return (
-    <section className="people-attention" aria-label="Needs attention">
-      {notes.map((note) => (
-        <Band
-          key={note.id}
-          severity={note.severity}
-          label={note.title}
-          action={
-            canRetry(note) ? (
-              <Button
-                variant="primary"
-                size="sm"
-                disabled={busy.has(note.id)}
-                title="Retry loading"
-                onClick={() => retry(note)}
-              >
-                {note.action}
-              </Button>
-            ) : note.action ? (
-              <Chip tone="warn" title={ACTION_UNAVAILABLE}>
-                {note.action}
-              </Chip>
-            ) : null
-          }
-        >
-          {note.detail}
-        </Band>
-      ))}
+    <section className="account-attention" aria-labelledby={headingId}>
+      <SectionLabel className="settings-heading" id={headingId}>
+        Needs attention
+      </SectionLabel>
+      <Inset className="settings-inset middle wide">
+        {notes.map((note) => (
+          <InsetRow
+            key={note.id}
+            className={`attention-note ${note.severity}`}
+            action={
+              canRetry(note) ? (
+                <Button
+                  size="sm"
+                  disabled={busy.has(note.id)}
+                  title="Retry loading"
+                  onClick={() => retry(note)}
+                >
+                  {note.action}
+                </Button>
+              ) : note.action ? (
+                <Chip tone="warn" title={ACTION_UNAVAILABLE}>
+                  {note.action}
+                </Chip>
+              ) : null
+            }
+          >
+            <span className="sev" aria-hidden="true" />
+            <span className="t">
+              <b>{note.title}</b>
+              {note.detail ? <small>{note.detail}</small> : null}
+            </span>
+          </InsetRow>
+        ))}
+        {unpairedServers.map((server) => (
+          // Render the server name in the value column because hostnames
+          // overflow the fixed-width label column.
+          <InsetRow
+            key={server.profileName}
+            label="Server"
+            action={<Button onClick={() => onPair(server)}>Pair</Button>}
+          >
+            {serverDisplayLabel(server)}{' '}
+            <span className="dim">Connected, not paired</span>
+          </InsetRow>
+        ))}
+      </Inset>
     </section>
   );
 }
@@ -475,16 +499,6 @@ export function AccountSection({
       }
     : undefined;
 
-  // The fallback band belongs above the facts of the account the page names.
-  // The branches that state no identity draw no facts either, so they keep it
-  // at the top of the page.
-  const notices = (
-    <UnroutedNotices
-      snapshot={snapshot}
-      onRefreshSnapshot={onRefreshSnapshot}
-      onError={onError}
-    />
-  );
   const unpairedServers =
     snapshot.profileInventoryStatus === 'complete'
       ? snapshot.servers.filter(
@@ -495,32 +509,19 @@ export function AccountSection({
             )?.accounts === 'complete',
         )
       : [];
-  const noticesAndUnpairedServers = (
-    <>
-      {notices}
-      {unpairedServers.map((server) => (
-        <Inset key={server.profileName}>
-          {/* The server's name is the value, not the label: the label column
-              is a fixed 88px and a hostname overran it. */}
-          <InsetRow
-            label="Server"
-            action={
-              <Button
-                onClick={() => {
-                  setPairingProfile(server);
-                  setSheet('go-profile');
-                }}
-              >
-                Pair
-              </Button>
-            }
-          >
-            {serverDisplayLabel(server)}{' '}
-            <span className="dim">Connected, not paired</span>
-          </InsetRow>
-        </Inset>
-      ))}
-    </>
+  // Render after account details and before the server list (or at the top
+  // of the page when no account is selected).
+  const attention = (
+    <NeedsAttention
+      snapshot={snapshot}
+      unpairedServers={unpairedServers}
+      onPair={(server) => {
+        setPairingProfile(server);
+        setSheet('go-profile');
+      }}
+      onRefreshSnapshot={onRefreshSnapshot}
+      onError={onError}
+    />
   );
 
   return (
@@ -559,7 +560,7 @@ export function AccountSection({
             </>
           ) : unavailable ? (
             <>
-              {noticesAndUnpairedServers}
+              {attention}
               <UnavailableAccount
                 stores={stores}
                 snapshot={snapshot}
@@ -576,7 +577,6 @@ export function AccountSection({
           ) : selected ? (
             <>
               <AccountPanel
-                notices={noticesAndUnpairedServers}
                 freshness={freshness}
                 onRetry={retryMetadata}
                 snapshot={snapshot}
@@ -599,10 +599,11 @@ export function AccountSection({
                   setSheet(next);
                 }}
               />
+              {attention}
             </>
           ) : (
             <>
-              {noticesAndUnpairedServers}
+              {attention}
               <NoAvailableAccount
                 onConnectGoProfile={() => setSheet('go-profile')}
               />
@@ -788,7 +789,6 @@ function AccountPanel({
   onRenameComplete,
   onNavigate,
   onSheet,
-  notices,
   freshness,
   onRetry,
 }: {
@@ -809,8 +809,6 @@ function AccountPanel({
   stopped: { stopped: boolean; reason: string };
   onNavigate: (location: Location) => void;
   onSheet: (sheet: AccountSheet) => void;
-  /** The notices no tab can resolve, drawn above the facts they qualify. */
-  notices: ReactNode;
 }): ReactNode {
   const username = usernameOf(snapshot, store);
   const access = useWorkflowAccess(snapshot);
@@ -851,7 +849,6 @@ function AccountPanel({
           Remote operations are unavailable until a connection is reestablished.
         </Band>
       ) : null}
-      {notices}
       <RenameBanner
         status={rename}
         profile={store.server}
@@ -1006,7 +1003,10 @@ function AccountPanel({
   );
 }
 
-/** Secondary account workflows, placed after the device-wide server list. */
+/**
+ * Secondary account workflows rendered in a wrapping button row after the
+ * device-wide server list.
+ */
 function AccountActions({
   snapshot,
   store,
@@ -1019,61 +1019,49 @@ function AccountActions({
   const access = useWorkflowAccess(snapshot);
   const target = { profile: store.server, account: store.account };
   return (
-    <div className="fn account-more">
-      <Button
-        variant="plain"
-        size="sm"
-        className="lnk"
-        {...access.props('bot-list', target)}
-        onClick={() => onSheet('bot')}
-      >
-        Bot accounts
-      </Button>
-      <Button
-        variant="plain"
-        size="sm"
-        className="lnk"
-        {...access.props('web-admin-configure', target)}
-        onClick={() => onSheet('admin')}
-      >
-        Web admin panel
-      </Button>
-      <Button
-        variant="plain"
-        size="sm"
-        className="lnk"
-        {...access.props('sso-login', target)}
-        onClick={() => onSheet('sso')}
-      >
-        Sign in via SSO
-      </Button>
-      <Button
-        variant="plain"
-        size="sm"
-        className="lnk"
-        onClick={() => onSheet('go-profile')}
-      >
-        Import from FOKS CLI
-      </Button>
-      <Button
-        variant="plain"
-        size="sm"
-        className="lnk"
-        {...access.props('account-recover', { profile: store.server })}
-        onClick={() => onSheet('recover')}
-      >
-        Connect an existing account with a recovery phrase
-      </Button>
-      <Button
-        variant="plain"
-        size="sm"
-        className="lnk"
-        {...access.props('yubi-create', { profile: store.server })}
-        onClick={() => onSheet('enroll')}
-      >
-        Create an account on a hardware key…
-      </Button>
-    </div>
+    <>
+      <SectionLabel className="settings-heading">Account tools</SectionLabel>
+      <div className="account-more">
+        <Button
+          size="sm"
+          {...access.props('bot-list', target)}
+          onClick={() => onSheet('bot')}
+        >
+          Bot accounts
+        </Button>
+        <Button
+          size="sm"
+          {...access.props('web-admin-configure', target)}
+          onClick={() => onSheet('admin')}
+        >
+          Web admin panel
+        </Button>
+        <Button
+          size="sm"
+          {...access.props('sso-login', target)}
+          onClick={() => onSheet('sso')}
+        >
+          Sign in via SSO
+        </Button>
+        <Button size="sm" onClick={() => onSheet('go-profile')}>
+          Import from FOKS CLI
+        </Button>
+        <Button
+          size="sm"
+          {...access.props('account-recover', { profile: store.server })}
+          onClick={() => onSheet('recover')}
+        >
+          Connect an existing account with a recovery phrase
+        </Button>
+        <Button
+          size="sm"
+          {...access.props('yubi-create', { profile: store.server })}
+          onClick={() => onSheet('enroll')}
+        >
+          Create an account on a hardware key…
+        </Button>
+      </div>
+    </>
   );
 }
 

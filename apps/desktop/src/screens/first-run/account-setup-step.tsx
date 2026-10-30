@@ -129,8 +129,8 @@ export function AccountSetupStep({
               {checkpoint.account
                 ? 'Continue'
                 : signupPending
-                  ? 'Resume account setup'
-                  : 'Create my account'}
+                  ? 'Resume Account Setup'
+                  : 'Create My Account'}
             </Button>
           )}
         </Foot>
@@ -257,7 +257,7 @@ export function AccountSetupStep({
                   variant="primary"
                   onClick={() => void adoptDuplicateAccount()}
                 >
-                  Use existing account
+                  Use Existing Account
                 </Button>
               </span>
             </div>

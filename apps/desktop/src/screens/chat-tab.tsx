@@ -116,12 +116,18 @@ export function ChatTab({
     setNewChat(null);
     setSubmittedSheet(null);
   };
-  // The column's "+" opens the creation form with no team chosen: it belongs
-  // to the column rather than to any one team's row.
+  // Preselect the active team in the creation form when it supports channel
+  // creation; otherwise leave the team unselected.
   const openNewChat = () =>
-    setNewChat({ originRef: ref, originChannel: location.channel });
-  // Chat starts in a team: with none, the bar's add control is the team,
-  // created on the Teams page where that sheet lives.
+    setNewChat({
+      ...(open && chatAvailable(snapshot, open, accessOptions)
+        ? { team: open.id }
+        : {}),
+      originRef: ref,
+      originChannel: location.channel,
+    });
+  // When no chat-capable team exists, the topbar add button navigates to the
+  // Teams page to open the Create Team sheet.
   const add = teams.length ? (
     <Button
       variant="quiet"

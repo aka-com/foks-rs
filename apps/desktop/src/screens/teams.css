@@ -56,10 +56,10 @@
 .team-inner>.tabs .tab:hover{background:transparent;color:var(--ink)}
 .team-inner>.tabs .tab.on{background:var(--seg-on);color:var(--ink);font-weight:var(--weight-label);box-shadow:var(--shadow-seg)}
 .team-inner>.tabs .tab.on::after{content:none}
-.team-inner>.tabs .tab .n,.team-inner>.tabs .tab.on .n{padding:0;background:none;font-size:12px;font-weight:var(--weight-label);line-height:inherit;color:var(--faint)}
+.team-inner>.tabs .tab .n,.team-inner>.tabs .tab.on .n{padding:0;background:none;font-size:12px;font-weight:var(--weight-label);line-height:inherit;color:var(--muted)}
 .team-panel{min-width:0}
 
-/* Members: initials or a glyph tile, and the links under a card. */
+/* Member rows: avatar initials or icon tile, and footer action links inside a member card. */
 .member-row{min-height:52px}
 .member-mark{width:22px;height:22px;flex:none;display:inline-grid;place-items:center;border-radius:50%;color:var(--on-accent);font-size:var(--mark-type);font-weight:var(--weight-title)}
 .member-tile{width:28px;height:28px;flex:none;display:grid;place-items:center;border-radius:var(--radius-md);background:var(--chip-bg);color:var(--muted);font-size:14px}
@@ -100,11 +100,15 @@
 .activity-detail p[role='alert']{margin:0 0 8px;color:var(--danger-ink)}
 .activity-detail .prop-row .dim{color:var(--muted)}
 .activity-detail .prop-row>.v>.store-mark{margin-right:2px}
-.activity-detail .prop-row.admit>.a{flex-wrap:wrap}
+/* Admit as row: place the role selector in the value column and decision
+   buttons at the trailing edge. When the container is too narrow (< 420px,
+   e.g. an 860px window), wrap the decision buttons onto a second line in the
+   value column instead of compressing the role selector. */
+.activity-detail .prop-row.admit .role-select{flex:none}
+@container (max-width:419px){.activity-detail .prop-row.admit{grid-template-columns:var(--key-w,150px) minmax(0,1fr);row-gap:8px;padding-bottom:8px}.activity-detail .prop-row.admit>.a{grid-column:2;justify-content:flex-start}}
 .activity-detail .chip .ic{font-size:12px}
 
-/* Team sheets: the Visibility stepper as one joined control, and the
-   member line in the Remove alert. */
+/* Team sheets: joined Visibility stepper control and member summary line in the Remove alert. */
 .stepper{display:inline-flex;align-items:center;border:1px solid var(--line-mid);border-radius:var(--radius-md);background:var(--btn-bg);box-shadow:var(--shadow-btn);overflow:hidden}
 .stepper>.btn{width:26px;min-width:0;height:24px;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;color:var(--ink-2);font-size:14px}
 .stepper>.btn:hover:not(:disabled){background:var(--btn-hover)}

@@ -84,7 +84,7 @@
   white-space: nowrap;
 }
 
-.subnav-page .account-hero .av {
+.subnav-page .account-hero .kico.round {
   width: 40px;
   height: 40px;
   font-size: 16px;
@@ -140,10 +140,11 @@
   color: var(--muted);
 }
 
-/* Section headings: 15px on the three pages, the quieter 12px label on a
-   server page, whose groups are facts about one subject. */
+/* Section headings: 15px on top-level Settings sections, and 12px on a server
+   detail view where groups display properties of a single server. */
 .subnav-page .settings-main:not(.server-main) > .sec,
-.subnav-page .settings-main > .settings-heading {
+.subnav-page .settings-main > .settings-heading,
+.subnav-page .settings-main > .account-attention > .settings-heading {
   min-height: 26px;
   margin: 26px 0 10px;
   font-size: 15px;
@@ -294,11 +295,48 @@
   color: var(--ink);
 }
 
+/* Account tools: wrapping row of buttons below the section heading. */
 .subnav-page .settings-main .account-more {
-  margin-top: 26px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
-/* Theme and sidebar color: the segmented control and round swatches. */
+/* Needs attention row: severity dot, title and detail text, and action. */
+.subnav-page .settings-inset .fr.attention-note .v {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.subnav-page .attention-note .sev {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warning-dot);
+}
+
+.subnav-page .attention-note.crit .sev {
+  background: var(--danger-solid);
+}
+
+.subnav-page .attention-note .t {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.subnav-page .attention-note .t b {
+  font-weight: var(--weight-label);
+}
+
+.subnav-page .attention-note .t small {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Theme segmented control and round accent color swatches. */
 .subnav-page .swatches {
   gap: 8px;
 }

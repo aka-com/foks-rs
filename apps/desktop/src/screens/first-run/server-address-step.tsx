@@ -92,7 +92,7 @@ export function ServerAddressStep({
           editServerAddress('foks.app:4430');
         }}
       >
-        Use the official FOKS server
+        Use the Official FOKS Server
       </Button>
       {state === 'error' && !addressInvalid ? (
         <div className="crit" role="alert">

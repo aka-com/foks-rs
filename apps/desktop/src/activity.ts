@@ -3,18 +3,24 @@
  * Each notice derives from the same snapshot state read by the screen that
  * resolves it:
  *
- * - a team whose creation never finished (`store.active === false`), resolved
- *   on the team's page by Finish Setup or Remove;
- * - a federated team admission that is inactive (`FederationEntry.active`),
- *   resolved by Restore Access on the host team's Members tab;
- * - a server that was never verified or whose check-in lapsed, resolved on
- *   that server's page in Settings › Account. These are the servers behind
- *   the Settings row's dot.
+ * - a team with incomplete creation (`store.active === false`), resolved on the
+ *   team page via Finish Setup or Remove;
+ * - an inactive federated team admission (`FederationEntry.active`), resolved
+ *   via Restore Access on the host team's Members tab;
+ * - an unverified server or one with an expired check-in, resolved on that
+ *   server's page in Settings › Account (the same servers that trigger the
+ *   Settings row indicator);
+ * - a team with unfinished membership work (pending membership operations and
+ *   invitation recovery), resolved in the team's Unfinished activity sheet.
+ *   These counts come from cached team-page reads (`useCachedUnfinishedCounts`);
+ *   Activity does not issue its own reads, so unread teams are omitted.
  *
- * Synchronization jobs are not listed: the sidebar's sync status owns them.
+ * Background synchronization jobs are omitted here and shown in the sidebar
+ * sync status control.
  */
 
 import {
+  federatedTeamName,
   plural,
   serverAvailability,
   serverDisplayLabel,
@@ -42,14 +48,32 @@ export type ActivityNotice =
       id: string;
       server: Server;
       reason: 'verification-required' | 'check-in-expired';
-    };
+    }
+  | { kind: 'unfinished'; id: string; store: TeamStore; count: number };
 
-/** The notices, in the order the page lists them. */
-export function activityNotices(snapshot: AgentSnapshot): ActivityNotice[] {
+/**
+ * Returns activity notices in display order. `unfinished` maps each team to its
+ * cached unfinished-work count; when omitted, unfinished-work notices are
+ * excluded.
+ */
+export function activityNotices(
+  snapshot: AgentSnapshot,
+  unfinished: ReadonlyMap<StoreRef, number> = new Map(),
+): ActivityNotice[] {
   const notices: ActivityNotice[] = [];
   const teams = snapshot.stores.filter(
     (store): store is TeamStore => store.kind === 'team',
   );
+  for (const store of teams) {
+    const count = unfinished.get(store.id);
+    if (count)
+      notices.push({
+        kind: 'unfinished',
+        id: `unfinished:${store.id}`,
+        store,
+        count,
+      });
+  }
   for (const store of teams) {
     if (store.active === false)
       notices.push({
@@ -97,9 +121,14 @@ export function activityNoticeText(
         title: `${notice.store.name} is inactive`,
         detail: `Team setup incomplete · ${serverDisplayLabelForStore(snapshot, notice.store)}`,
       };
+    case 'unfinished':
+      return {
+        title: `${notice.store.name} has unfinished changes`,
+        detail: `${notice.count} incomplete membership ${notice.count === 1 ? 'change' : 'changes'}`,
+      };
     case 'federation-inactive':
       return {
-        title: `${notice.entry.remote_team_alias} cannot access ${notice.store.name}`,
+        title: `${federatedTeamName(snapshot, notice.entry)} cannot access ${notice.store.name}`,
         detail: `Membership in ${notice.store.name} inactive`,
       };
     case 'server':
@@ -136,9 +165,10 @@ export function requestTotal(counts: ReadonlyMap<StoreRef, TeamRequestCount>): {
 export function activityBadge(
   snapshot: AgentSnapshot,
   counts: ReadonlyMap<StoreRef, TeamRequestCount>,
+  unfinished?: ReadonlyMap<StoreRef, number>,
 ): { label: string; description: string } | null {
   const { total: requests, truncated } = requestTotal(counts);
-  const notices = activityNotices(snapshot).length;
+  const notices = activityNotices(snapshot, unfinished).length;
   const total = requests + notices;
   if (!total) return null;
   const parts = [

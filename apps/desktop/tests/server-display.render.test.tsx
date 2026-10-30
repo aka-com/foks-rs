@@ -57,7 +57,7 @@ async function setup(label: string | null) {
 }
 
 for (const label of ['Local server alias', null]) {
-  test(`server page and breadcrumb use ${label ?? 'Loading...'} while retaining the Internal ID`, async () => {
+  test(`server page and breadcrumb use ${label ?? 'Loading...'} while retaining the Internal ID, and the list row names the server`, async () => {
     const h = await setup(label);
     const { ServersSection } = (await vite.ssrLoadModule(
       '/src/screens/servers-screen.tsx',
@@ -76,9 +76,18 @@ for (const label of ['Local server alias', null]) {
       onMutationError: async () => {},
     };
     const list = ui.render(h.wrap(createElement(ServersSection, props)));
-    const names = list.container.querySelectorAll('.srow .t > b');
+    // The list row names a server with no display label by its address
+    // (it has none before its first check); its page and crumbs keep the
+    // pending label.
+    const names = [...list.container.querySelectorAll('.srow .t > b')];
     assert.ok(names.length > 0);
-    for (const name of names) assert.equal(name.textContent, h.name);
+    // The list puts servers needing attention first, so compare as sets.
+    assert.deepEqual(
+      names.map((name) => name.textContent).sort(),
+      h.snapshot.servers
+        .map((server) => label ?? server.configuredEndpoint)
+        .sort(),
+    );
     list.unmount();
     const detail = ui.render(
       h.wrap(createElement(ServersSection, { ...props, profile })),

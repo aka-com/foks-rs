@@ -672,9 +672,8 @@ export function TeamsScreen({
       Create a Team…
     </Button>
   );
-  // Teams whose setup never finished: each is one band, with the action that
-  // finishes it, ahead of the list.
-  const unfinished = teams.filter((store) => store.active === false);
+  // Count of distinct server profiles across all listed teams.
+  const teamServers = new Set(teams.map((store) => store.server)).size;
 
   return (
     <>
@@ -703,7 +702,9 @@ export function TeamsScreen({
       </BarActions>
       <div className="body team-page">
         <div className="team-inner">
-          {flaggedTeams.length || unfinished.length ? (
+          {/* Teams with incomplete setup already display "Setup incomplete" and
+              Finish Setup on their list row, so do not repeat them in a top band. */}
+          {flaggedTeams.length ? (
             <div className="bandstrip">
               {flaggedTeams.map((store) => {
                 const count = requestCounts.get(store.id) ?? 0;
@@ -732,20 +733,6 @@ export function TeamsScreen({
                   </Band>
                 );
               })}
-              {unfinished.map((store) => (
-                <Band
-                  key={store.id}
-                  icon="warning"
-                  action={
-                    <Button size="sm" onClick={() => finishSetup(store)}>
-                      Finish Setup
-                    </Button>
-                  }
-                >
-                  <b>{store.name}</b> is inactive: its setup on{' '}
-                  {displayServerName(snapshot, store)} did not finish.
-                </Band>
-              ))}
             </div>
           ) : null}
           {catalogLoading &&
@@ -764,8 +751,10 @@ export function TeamsScreen({
             <>
               <div className="group-card team-list">{teamRows(teams)}</div>
               <p className="fn">
-                Find Teams checks each account’s server for teams it can see. A
-                team’s page opens from its row.
+                {plural(teams.length, 'team')} on{' '}
+                {plural(teamServers, 'server')}. Find Teams checks each
+                account’s server for teams it can see. A team’s page opens from
+                its row.
               </p>
             </>
           ) : (

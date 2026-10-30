@@ -678,7 +678,7 @@ test('channel creation completes after navigation without redirecting back', asy
   });
   const name = await openChannelSheet();
   ui.fireEvent.change(name, { target: { value: 'drawings' } });
-  await click(ui.screen.getByRole('button', { name: 'Create channel' }));
+  await click(ui.screen.getByRole('button', { name: 'Create Channel' }));
   await ui.screen.findByRole('button', { name: 'Creating…' });
   await ui.waitFor(() => assert.ok(finish));
   await leave(store);

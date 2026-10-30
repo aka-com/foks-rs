@@ -51,6 +51,7 @@ export function RecoveryStep({
   mutationBusy,
   commitBackup,
 }: Props): ReactNode {
+  const phraseWords = recoveryPhrase?.trim().split(/\s+/).length ?? 0;
   let content: ReactNode;
   if ((state === 'protect' || state === 'phrase') && checkpoint.managedLocal)
     content = (
@@ -77,7 +78,7 @@ export function RecoveryStep({
               }
               onClick={() => void finishLocalProtection()}
             >
-              Start using FOKS
+              Start Using FOKS
             </Button>
           </Foot>
         }
@@ -128,7 +129,7 @@ export function RecoveryStep({
             >
               {checkpoint.backupCommitted
                 ? 'Recovery phrase saved'
-                : 'Show recovery phrase'}
+                : 'Show Recovery Phrase'}
             </Button>
           )}
         </div>
@@ -178,7 +179,7 @@ export function RecoveryStep({
               disabled={busy || (checkpoint.backupCommitted && !recoveryPhrase)}
               onClick={() => go('phrase')}
             >
-              Generate a recovery phrase
+              Generate a Recovery Phrase
             </Button>
           </div>
           <div className="pcard">
@@ -214,12 +215,21 @@ export function RecoveryStep({
             width="wide"
             dismissible={!mutationBusy}
             onClose={() => go('protect')}
-            glyph={<Icon name="key" />}
+            glyph={
+              <span className="kic Store" aria-hidden="true">
+                <Icon name="fileText" />
+              </span>
+            }
             title="Save your recovery phrase"
+            subtitle={
+              checkpoint.account?.username
+                ? `For ${checkpoint.account.username} on ${checkpoint.profile?.canonicalName ?? 'this server'}`
+                : undefined
+            }
             footer={
               <>
                 <Button disabled={mutationBusy} onClick={() => go('protect')}>
-                  Not now
+                  Not Now
                 </Button>
                 <Button
                   variant="primary"
@@ -242,15 +252,18 @@ export function RecoveryStep({
                 concealed={phraseConcealed}
                 onReveal={revealPhrase}
               />
-              <button
-                type="button"
-                aria-label="I have written this down"
-                className={`check${phraseWritten ? ' on' : ''}`}
-                onClick={() => setPhraseWritten((value) => !value)}
-              >
-                <span className="bx">{phraseWritten ? '✓' : ''}</span>I have
-                written this down
-              </button>
+              <label className="local-confirm">
+                <input
+                  type="checkbox"
+                  checked={phraseWritten}
+                  onChange={(event) => setPhraseWritten(event.target.checked)}
+                />
+                <span>
+                  {phraseWords > 1
+                    ? `I have written down all ${phraseWords} words.`
+                    : 'I have written down the phrase.'}
+                </span>
+              </label>
             </>
           </SheetDialog>
         ) : null}
@@ -289,7 +302,7 @@ function RecoveryPhrase({
         ))}
       </div>
       {concealed ? (
-        <Button onClick={onReveal}>Show recovery phrase</Button>
+        <Button onClick={onReveal}>Show Recovery Phrase</Button>
       ) : null}
     </>
   );

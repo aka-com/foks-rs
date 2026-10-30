@@ -7,7 +7,14 @@
 
 import { plural } from './format';
 import { admits, parseRole, roleRank, visibilityOf } from './roles';
-import type { Item, Party, Store, StoreRef, AgentSnapshot } from './types';
+import type {
+  AgentSnapshot,
+  FederationEntry,
+  Item,
+  Party,
+  Store,
+  StoreRef,
+} from './types';
 
 /** The store with this id, or `undefined`. */
 export function storeOf(
@@ -20,6 +27,24 @@ export function storeOf(
 /** Returns all member parties belonging to the specified store. */
 export function partiesOf(snapshot: AgentSnapshot, ref: StoreRef): Party[] {
   return snapshot.parties.filter((party) => party.store === ref);
+}
+
+/**
+ * Returns the display name for a federated team. Prefers the local store's
+ * display name when this device holds a team with the same ID on the same
+ * server profile, falling back to `remote_team_alias`.
+ */
+export function federatedTeamName(
+  snapshot: AgentSnapshot,
+  entry: FederationEntry,
+): string {
+  const held = snapshot.stores.find(
+    (store) =>
+      store.kind === 'team' &&
+      store.server === entry.remote_profile &&
+      store.team_id_hex === entry.remote_team_id_hex,
+  );
+  return held?.name ?? entry.remote_team_alias;
 }
 
 /** Returns whether a member party can be modified or removed by the current user. */

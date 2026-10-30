@@ -511,9 +511,10 @@
 
 /* Onboarding flow layout overrides */
 
-/* First run traffic strip offset */
+/* Post-setup screens render a 44px top bar that clears the window traffic
+   lights; setup cards render their own title bar. */
 .first-run-main {
-  padding-top: 32px;
+  padding-top: 0;
 }
 
 .first-run-main .body.pb {

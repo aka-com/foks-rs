@@ -201,6 +201,18 @@ test('a Teams row in an abnormal state carries the same chip, and opens team set
   const homelab = row('Homelab');
   assert.ok(homelab.className.split(' ').includes('off'));
   assert.equal(stateChip(homelab), 'Setup incomplete');
+  // The row displays the incomplete state once; no top band repeats it.
+  assert.equal(
+    [...document.querySelectorAll('.band')].some((band) =>
+      /Homelab is inactive/.test(band.textContent ?? ''),
+    ),
+    false,
+  );
+  // The footer displays the total team and server counts.
+  assert.match(
+    document.querySelector('.team-inner p.fn')?.textContent ?? '',
+    /^\d+ teams on \d+ servers?\. /,
+  );
   // Named teams and ad-hoc shares are one list, so a row's own Chat/Share
   // pill says what it is; the caption says only the catalog facts it has.
   assert.equal(kindChip(homelab), 'Share');

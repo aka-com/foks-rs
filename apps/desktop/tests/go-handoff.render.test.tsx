@@ -175,7 +175,7 @@ for (const notifyGlobally of [false, true]) {
         rendered.queryByText(/Could not check existing CLI profiles/),
         null,
       );
-      ui.fireEvent.click(rendered.getByRole('button', { name: 'Retry setup' }));
+      ui.fireEvent.click(rendered.getByRole('button', { name: 'Retry Setup' }));
       await ui.waitFor(() => assert.equal(initializations, 1));
       assert.equal(
         discoveries,
@@ -248,7 +248,7 @@ test('first-run keeps a newly verified server across shell navigation', async ()
   );
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Continue' }));
   ui.fireEvent.click(
-    rendered.getByRole('button', { name: 'Use the official FOKS server' }),
+    rendered.getByRole('button', { name: 'Use the Official FOKS Server' }),
   );
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Continue' }));
 
@@ -275,7 +275,7 @@ for (const failure of [
     await ui.waitFor(() =>
       assert.ok(rendered.getByText(/Could not check existing CLI profiles/)),
     );
-    assert.equal(rendered.queryByRole('button', { name: 'Retry setup' }), null);
+    assert.equal(rendered.queryByRole('button', { name: 'Retry Setup' }), null);
     assert.equal(initializations, 0);
   });
 }
@@ -357,7 +357,7 @@ test('discovers Go CLI profile in StrictMode and passes profile credentials to s
   });
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Continue' }));
   ui.fireEvent.click(
-    rendered.getByRole('button', { name: 'Use the official FOKS server' }),
+    rendered.getByRole('button', { name: 'Use the Official FOKS Server' }),
   );
   assert.equal(
     (rendered.getByLabelText('Server address') as HTMLInputElement).value,
@@ -446,7 +446,7 @@ test('the start fork selects nested CLI accounts with row actions', async () => 
   );
   assert.equal(primary().disabled, true);
   assert.equal(
-    view.queryByRole('button', { name: 'Create a new account' }),
+    view.queryByRole('button', { name: 'Create a New Account' }),
     null,
   );
   // The new-account radio hides the list and is enough on its own.
@@ -468,7 +468,7 @@ test('the start fork selects nested CLI accounts with row actions', async () => 
   assert.equal(selected.textContent, 'Selected');
   ui.fireEvent.click(primary());
   // Continue with the chosen account leaves for the server step.
-  assert.ok(view.getByRole('button', { name: 'Use the official FOKS server' }));
+  assert.ok(view.getByRole('button', { name: 'Use the Official FOKS Server' }));
   assert.equal(view.queryByRole('heading', { name: 'Set up FOKS' }), null);
 });
 
@@ -612,7 +612,7 @@ test('first-run waits for shared readiness and never initializes itself', async 
       }),
     }),
   );
-  assert.ok(rendered.getByRole('button', { name: 'Preparing service…' }));
+  assert.ok(rendered.getByRole('button', { name: 'Preparing Service…' }));
   await settle();
   assert.equal(initializations, 0);
   assert.equal(discoveries, 0);
@@ -651,7 +651,7 @@ test('first-run exposes shared agent recovery without discarding its current ste
   );
   assert.ok(rendered.getByText('Finish preparing this device'));
   assert.equal(rendered.queryByLabelText('Server address'), null);
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Retry setup' }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Retry Setup' }));
   await ui.waitFor(() => assert.equal(retries, 1));
   const saved = JSON.parse(
     window.localStorage.getItem('foks.first-run.v2') ?? '{}',
@@ -758,7 +758,7 @@ test('native-shaped account creation is not rewound by the pre-mutation inventor
   );
   ui.fireEvent.click(view.getByRole('button', { name: 'Continue' }));
   ui.fireEvent.click(
-    view.getByRole('button', { name: 'Use the official FOKS server' }),
+    view.getByRole('button', { name: 'Use the Official FOKS Server' }),
   );
   ui.fireEvent.click(view.getByRole('button', { name: 'Continue' }));
   await view.findByRole('button', { name: 'Details' });
@@ -770,7 +770,7 @@ test('native-shaped account creation is not rewound by the pre-mutation inventor
   ui.fireEvent.change(view.getByPlaceholderText('Your device'), {
     target: { value: 'Native Mac' },
   });
-  ui.fireEvent.click(view.getByRole('button', { name: 'Create my account' }));
+  ui.fireEvent.click(view.getByRole('button', { name: 'Create My Account' }));
   await ui.waitFor(() => assert.equal(signupRequests.length, 1));
   assert.equal(signupRequests[0].profile, profile);
   // Preserve the entered username while suggesting its normalized local alias.
@@ -860,7 +860,7 @@ test('first-run account navigation, server edits, and connection errors stay sco
   assert.ok(view.getByRole('button', { name: /Selected account cli-owner/ }));
   ui.fireEvent.click(view.getByRole('button', { name: 'Continue' }));
   ui.fireEvent.click(
-    view.getByRole('button', { name: 'Use the official FOKS server' }),
+    view.getByRole('button', { name: 'Use the Official FOKS Server' }),
   );
   ui.fireEvent.click(view.getByRole('button', { name: 'Continue' }));
   await view.findByRole('button', { name: 'Details' });
@@ -921,14 +921,14 @@ test('first-run account navigation, server edits, and connection errors stay sco
       'Both apps will share the same device credentials. Revoking the device in either client will disable both.',
     ),
   );
-  ui.fireEvent.click(view.getByRole('button', { name: 'Import credentials' }));
+  ui.fireEvent.click(view.getByRole('button', { name: 'Import Credentials' }));
   await view.findByText('Copy failed');
   ui.fireEvent.click(
     view.getByRole('radio', { name: /Recover with recovery phrase/ }),
   );
   assert.equal(view.queryByText('Copy failed'), null);
   assert.equal(
-    view.queryByRole('button', { name: 'Import credentials' }),
+    view.queryByRole('button', { name: 'Import Credentials' }),
     null,
   );
   ui.fireEvent.change(view.getByLabelText('Recovery phrase'), {
@@ -955,14 +955,14 @@ test('first-run account navigation, server edits, and connection errors stay sco
   );
   assert.ok(view.getByLabelText('Pairing phrase'));
   assert.ok(
-    (view.getByRole('button', { name: 'Accept pairing' }) as HTMLButtonElement)
+    (view.getByRole('button', { name: 'Accept Pairing' }) as HTMLButtonElement)
       .disabled,
   );
   ui.fireEvent.click(view.getByRole('button', { name: 'Resume pairing' }));
   await view.findByRole('heading', { name: 'Check account setup' });
   assert.equal(view.queryByRole('button', { name: 'Recover' }), null);
   assert.equal(
-    view.queryByRole('button', { name: 'Import credentials' }),
+    view.queryByRole('button', { name: 'Import Credentials' }),
     null,
   );
   ui.fireEvent.click(view.getByRole('button', { name: 'Finish later' }));
@@ -1014,7 +1014,7 @@ test('personal recovery puts backup first and completes without creating a group
   assert.ok(view.queryByText(/hardware key/i) === null);
   assert.ok(view.queryByText('Create a group') === null);
   ui.fireEvent.click(view.getByRole('button', { name: 'Continue' }));
-  await view.findByRole('button', { name: 'Continue to my vault' });
+  await view.findByRole('button', { name: 'Continue to My Vault' });
   assert.ok(view.queryByText('Create a group') === null);
   assert.equal(creations, 0);
   const checkpoint = JSON.parse(
@@ -1264,7 +1264,7 @@ test('identity loading waits out a native mutation instead of failing setup', as
   assert.equal(
     (
       rendered.getByRole('button', {
-        name: /Loading account details/,
+        name: /Loading Account Details/,
       }) as HTMLButtonElement
     ).disabled,
     true,

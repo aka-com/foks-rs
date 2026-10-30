@@ -1,4 +1,8 @@
-import { groupDetailReadiness, combineReadiness } from '../model';
+import {
+  groupDetailReadiness,
+  combineReadiness,
+  federatedTeamName,
+} from '../model';
 import { CollectionStatus } from '../components/collection-status';
 import { federatedTeamMembers, memberCountOf } from './team-members';
 import { useGroupOperationController } from './groups/operation-controller';
@@ -641,8 +645,10 @@ function MembersTab({
         <button type="button" className="lnk" onClick={() => onSheet('add')}>
           Add someone on {serverName}…
         </button>
+        {/* Opens the same team-invitation workflow and label as
+            Add People › Invite New User…. */}
         <button type="button" className="lnk" onClick={onInvite}>
-          Send setup instructions…
+          Invite New User…
         </button>
       </>
     ) : undefined;
@@ -1727,9 +1733,9 @@ export function GroupSettingsScreen({
                         ) : undefined
                       }
                     >
-                      {entry.remote_team_alias}’s membership is inactive.{' '}
-                      {entry.remote_team_alias} members cannot access{' '}
-                      {store.name} until it is restored.
+                      {federatedTeamName(snapshot, entry)}’s membership is
+                      inactive. {federatedTeamName(snapshot, entry)} members
+                      cannot access {store.name} until it is restored.
                     </Band>
                   ))}
               {/* Combine blocking membership operations and invitation activity

@@ -192,7 +192,7 @@ export function AddDeviceSheet({
         />
         <RadioCard
           icon="file"
-          title="Create a new recovery recovery phrase"
+          title="Create a new recovery phrase"
           detail="Add a phrase you can recover this account with."
           selected={choice === 'phrase'}
           onSelect={() => setChoice('phrase')}

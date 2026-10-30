@@ -71,6 +71,8 @@ export class MetadataQuery<T> {
     invalidation: 0,
   });
   private listeners = new Set<() => void>();
+  /** Observers that read cached snapshots without triggering a refresh. */
+  private watchers = new Set<() => void>();
   private generation = 0;
   private updated: number | undefined;
   private pending?: Promise<T>;
@@ -92,6 +94,15 @@ export class MetadataQuery<T> {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   };
+  /**
+   * Observes published snapshots without subscribing. Notifies `listener`
+   * when data or invalidation state changes, without marking the query due
+   * for `reconcileSubscribed` or triggering a read.
+   */
+  readonly watch = (listener: () => void): (() => void) => {
+    this.watchers.add(listener);
+    return () => this.watchers.delete(listener);
+  };
 
   /** Report a shared failed request once, even when several views observe it. */
   claimError(error: unknown): boolean {
@@ -104,6 +115,7 @@ export class MetadataQuery<T> {
   private publish(state: QuerySnapshot<T>): void {
     this.state = Object.freeze(state);
     for (const listener of this.listeners) listener();
+    for (const watcher of this.watchers) watcher();
   }
 
   invalidate(drop = false): void {
@@ -263,6 +275,7 @@ export class MetadataQuery<T> {
 
 export class MetadataRepository {
   private entries = new Map<string, MetadataQuery<unknown>>();
+  private entryWatchers = new Set<() => void>();
   private observers = new Set<QueryObserver>();
   private accessEpoch = 0;
   private closed = false;
@@ -326,8 +339,31 @@ export class MetadataRepository {
         freshFor,
       );
       this.entries.set(id, entry);
+      // Defer watcher notifications to a microtask so queries registered
+      // during render do not trigger state updates in other components.
+      if (this.entryWatchers.size)
+        queueMicrotask(() => {
+          for (const watcher of this.entryWatchers) watcher();
+        });
     }
     return entry as MetadataQuery<T>;
+  }
+
+  /**
+   * Returns the query registered under `key`, or `undefined`. Does not
+   * create an entry or trigger a read.
+   */
+  peek<T>(key: QueryKey): MetadataQuery<T> | undefined {
+    return this.entries.get(JSON.stringify(key)) as
+      MetadataQuery<T> | undefined;
+  }
+
+  /** Registers `listener` to run when a new query entry is created. */
+  watchEntries(listener: () => void): () => void {
+    this.entryWatchers.add(listener);
+    return () => {
+      this.entryWatchers.delete(listener);
+    };
   }
 
   reconcileSubscribed(

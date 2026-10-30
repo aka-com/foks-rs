@@ -315,8 +315,8 @@ function RailColorPicker(): ReactNode {
           ))}
         </div>
       </InsetRow>
-      <InsetRow label="Sidebar color">
-        <div className="swatches" role="radiogroup" aria-label="Sidebar color">
+      <InsetRow label="Accent color">
+        <div className="swatches" role="radiogroup" aria-label="Accent color">
           {RAIL_COLORS.map((entry) => (
             <button
               key={entry.id}
@@ -325,13 +325,11 @@ function RailColorPicker(): ReactNode {
               className={entry.id === color ? 'swatch on' : 'swatch'}
               aria-checked={entry.id === color}
               aria-label={entry.label}
-              title={`${entry.label} — light / dark`}
+              title={entry.label}
               onClick={() => choose(entry.id)}
             >
               <i
-                style={{
-                  background: `linear-gradient(135deg, ${entry.hex} 50%, ${entry.darkHex} 50%)`,
-                }}
+                style={{ background: entry.fill }}
                 aria-hidden="true"
               />
               <span>{entry.label}</span>

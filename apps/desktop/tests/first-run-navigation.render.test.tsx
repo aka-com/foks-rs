@@ -275,7 +275,7 @@ test('the account pages are numbered sections and a lone sign-in method is prese
     null,
   );
   assert.equal(r.view.queryByLabelText('Recovery phrase'), null);
-  assert.ok(r.view.getByRole('button', { name: 'Create my account' }));
+  assert.ok(r.view.getByRole('button', { name: 'Create My Account' }));
   ui.cleanup();
   // The managed-local page has no setup-method group, so the sign-in method
   // is its first section.
@@ -303,7 +303,7 @@ test('local recover/create choices cannot create a Back cycle', async () => {
     r.view.getByRole('button', { name: /Recover an existing account/ }),
   );
   ui.fireEvent.click(
-    r.view.getByRole('button', { name: 'Create a new account' }),
+    r.view.getByRole('button', { name: 'Create a New Account' }),
   );
   ui.fireEvent.click(r.view.getByRole('button', { name: 'Back' }));
   assert.equal(h.saved()?.state, 'local');
@@ -388,14 +388,14 @@ test('resumable recovery without its phrase can start a different setup', async 
     },
   );
   const resume = await r.view.findByRole('button', {
-    name: 'Resume account setup',
+    name: 'Resume Account Setup',
   });
   assert.equal((resume as HTMLButtonElement).disabled, true);
   restartSetup(r.view);
   assert.equal(h.saved()?.state, 'who');
   assert.equal(h.saved()?.provisioning, undefined);
   assert.equal(
-    r.view.queryByRole('button', { name: 'Resume account setup' }),
+    r.view.queryByRole('button', { name: 'Resume Account Setup' }),
     null,
   );
 });
@@ -510,7 +510,7 @@ test('restart during identity loading ignores the old read when it completes', a
     bridge: { ...h.bridge, native: false },
     onRefreshSnapshot: () => read.promise,
   });
-  await r.view.findByRole('button', { name: 'Loading account details…' });
+  await r.view.findByRole('button', { name: 'Loading Account Details…' });
   restartSetup(r.view);
   await ui.act(async () => {
     read.resolve(h.complete);
@@ -562,7 +562,7 @@ test('a retained attempt on the same target is reconciled instead of creating ag
   ui.fireEvent.change(r.view.getByPlaceholderText('yourname'), {
     target: { value: 'personal' },
   });
-  ui.fireEvent.click(r.view.getByRole('button', { name: 'Create my account' }));
+  ui.fireEvent.click(r.view.getByRole('button', { name: 'Create My Account' }));
   await ui.waitFor(() =>
     assert.equal(h.saved()?.provisioning?.id, 'earlier-attempt'),
   );
