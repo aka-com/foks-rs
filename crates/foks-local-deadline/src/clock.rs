@@ -193,6 +193,13 @@ impl Deadline {
         })
     }
     fn shorten_with(&self, earlier: Instant, clock: &impl Clock) -> Result<Self> {
+        // A bound at or after this deadline changes nothing. Recapturing would
+        // move the propagated expiry earlier by the sampling delay, so a caller
+        // that only caps by a class budget keeps the exact supplied envelope.
+        if earlier >= self.instant {
+            self.check_with(clock)?;
+            return Ok(self.clone());
+        }
         let mut next = Self::capture_with(earlier.min(self.instant), clock)?;
         if next.envelope.domain != self.envelope.domain {
             return Err(Error::DomainMismatch);
@@ -319,6 +326,16 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn a_later_bound_keeps_the_exact_envelope() {
+        let clock = Fake::new(3);
+        let d = Deadline::capture_with(clock.base + Duration::from_nanos(100), &clock).unwrap();
+        let next = d
+            .shorten_with(clock.base + Duration::from_nanos(1000), &clock)
+            .unwrap();
+        assert_eq!(next.instant, d.instant);
+        assert_eq!(next.envelope, d.envelope);
+    }
     #[test]
     fn earlier_shortening_and_checks_spend_sampling_delay() {
         let clock = Fake::new(0);
