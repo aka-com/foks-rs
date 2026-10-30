@@ -3,6 +3,7 @@ use crate::Error;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Phase {
+    BackupLease,
     BackupRead,
     BackupCreate,
     BackupPublish,
@@ -16,6 +17,7 @@ pub(crate) enum Phase {
 impl Phase {
     pub(crate) fn code(self) -> &'static str {
         match self {
+            Self::BackupLease => "backup_lease",
             Self::BackupRead => "backup_read",
             Self::BackupCreate => "backup_create",
             Self::BackupPublish => "backup_publish",
@@ -94,11 +96,46 @@ fn reason(error: &Error) -> Reason {
         | Error::Config(_)
         | Error::Database(Db::Invalid(_) | Db::UnsafeDatabasePath(_)) => Reason::InvalidState,
         Error::Database(_) => Reason::Storage,
+        Error::Chunk(message) => chunk_reason(message),
         _ => Reason::Internal,
     }
 }
 
+/// The storage lease and the object namespace lease refuse with these
+/// messages only when the lock is held (WouldBlock); an I/O failure while
+/// locking is reported as `Error::Io`.
+const CHUNK_BUSY: [&str; 2] = [
+    crate::storage_lease::STORAGE_IN_USE,
+    crate::chunks::NAMESPACE_IN_USE,
+];
+
+fn chunk_reason(message: &str) -> Reason {
+    if CHUNK_BUSY.contains(&message) {
+        Reason::Busy
+    } else {
+        Reason::Storage
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static REPORTED: std::cell::RefCell<Vec<(&'static str, &'static str)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The (phase, reason) records this thread has reported since the last call.
+#[cfg(test)]
+pub(crate) fn take_reported() -> Vec<(&'static str, &'static str)> {
+    REPORTED.with(|reported| std::mem::take(&mut *reported.borrow_mut()))
+}
+
 pub(crate) fn report(phase: Phase, error: &Error) {
+    #[cfg(test)]
+    REPORTED.with(|reported| {
+        reported
+            .borrow_mut()
+            .push((phase.code(), reason(error).code()))
+    });
     eprintln!(
         "FOKS operation failed: phase={}, reason={}",
         phase.code(),
@@ -131,6 +168,10 @@ mod tests {
             (Error::Key("secret manifest"), "invalid_state"),
             (Error::WriterQueue, "busy"),
             (Error::Database(Db::QuotaExceeded), "capacity"),
+            (
+                Error::Chunk("storage lock is not a regular file"),
+                "storage",
+            ),
         ];
         for (error, expected) in cases {
             assert_eq!(reason(&error).code(), expected);
@@ -146,6 +187,33 @@ mod tests {
             )));
             assert_eq!(reason(&error).code(), expected);
         }
+    }
+
+    #[test]
+    fn held_storage_and_namespace_leases_are_busy() {
+        let root = tempfile::tempdir().unwrap();
+        let database = root.path().join("foks-server.sqlite");
+        std::fs::write(&database, b"").unwrap();
+        let held = crate::storage_lease::StorageLease::exclusive(&database).unwrap();
+        let Err(error) = crate::storage_lease::StorageLease::shared(&database) else {
+            panic!("a held storage lease must refuse");
+        };
+        assert_eq!(reason(&error).code(), "busy");
+        drop(held);
+        let store = crate::chunks::ChunkStoreConfig::Filesystem {
+            directory: root.path().join("objects"),
+        }
+        .build()
+        .unwrap();
+        let held = store.namespace_lease(true).unwrap();
+        let Err(error) = store.namespace_lease(false) else {
+            panic!("a held namespace lease must refuse");
+        };
+        assert_eq!(reason(&error).code(), "busy");
+        drop(held);
+        // A lock attempt that fails with I/O is not reported as contention.
+        let error = Error::Io(std::io::Error::from_raw_os_error(libc::ENOLCK));
+        assert_eq!(reason(&error).code(), "io");
     }
 
     use foks_server_db::Error as Db;

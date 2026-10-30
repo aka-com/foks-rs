@@ -288,6 +288,9 @@ fn create_directory_durable(directory: &Path) -> Result<()> {
 
 const NAMESPACE_MARKER: &str = "_foks_namespace_v1";
 const NAMESPACE_LOCK: &str = "_foks_namespace_lock_v2";
+/// Another lease holder holds the namespace lock in a conflicting mode.
+/// Operational diagnostics report it as `busy`.
+pub(crate) const NAMESPACE_IN_USE: &str = "object namespace is in use";
 /// Prefix of the filesystem backend's temporaries before they are persisted
 /// under their final name. A process killed between create and persist leaves
 /// one behind; such a file is never an object.
@@ -339,7 +342,10 @@ impl ChunkStore for FilesystemChunks {
         } else {
             file.try_lock_shared()
         }
-        .map_err(|_| Error::Chunk("object namespace is in use"))?;
+        .map_err(|error| match error {
+            std::fs::TryLockError::WouldBlock => Error::Chunk(NAMESPACE_IN_USE),
+            std::fs::TryLockError::Error(error) => Error::Io(error),
+        })?;
         self.recheck()?;
         Ok(Some(ChunkNamespaceLease { _file: file }))
     }
