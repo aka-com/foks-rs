@@ -4,6 +4,7 @@ use crate::{
     array, encode, entity, fixed_blob, role, unsigned, DhPublicKey, EntityId, Error, Hepk,
     HybridBox, Result, Role, SecretBox, Value, ENTITY_HOST, ENTITY_PASSPHRASE_KEY, ENTITY_USER,
 };
+use foks_snowpack::{decode_sensitive, encode_ref, ValueRef};
 use zeroize::Zeroize;
 
 pub const FIRST_PASSPHRASE_GENERATION: u64 = 1;
@@ -441,7 +442,7 @@ impl Drop for SkmwkList {
 
 impl SkmwkList {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        let value = crate::decode(bytes)?;
+        let value = decode_sensitive(bytes)?;
         let fields = array(&value, 2)?;
         let fqu = array(&fields[0], 2)?;
         let key_values = match &fields[1] {
@@ -471,17 +472,12 @@ impl SkmwkList {
                 found: 0,
             });
         }
-        Ok(encode(&Value::Array(vec![
-            Value::Array(vec![
-                Value::Binary(self.uid.as_bytes().to_vec()),
-                Value::Binary(self.host.as_bytes().to_vec()),
+        Ok(encode_ref(&ValueRef::Array(vec![
+            ValueRef::Array(vec![
+                ValueRef::Binary(self.uid.as_bytes()),
+                ValueRef::Binary(self.host.as_bytes()),
             ]),
-            Value::Array(
-                self.keys
-                    .iter()
-                    .map(|key| Value::Binary(key.to_vec()))
-                    .collect(),
-            ),
+            ValueRef::Array(self.keys.iter().map(|key| ValueRef::Binary(key)).collect()),
         ]))?)
     }
 }
@@ -510,7 +506,7 @@ impl Drop for PpePassphraseBoxPayload {
 
 impl PpePassphraseBoxPayload {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        let value = crate::decode(bytes)?;
+        let value = decode_sensitive(bytes)?;
         let fields = array(&value, 2)?;
         let generation = unsigned(&fields[0])?;
         if generation < FIRST_PASSPHRASE_GENERATION {
@@ -526,9 +522,9 @@ impl PpePassphraseBoxPayload {
         if self.generation < FIRST_PASSPHRASE_GENERATION {
             return Err(Error::IntegerRange("passphrase generation"));
         }
-        Ok(encode(&Value::Array(vec![
-            Value::Unsigned(self.generation),
-            Value::Binary(self.session_key.to_vec()),
+        Ok(encode_ref(&ValueRef::Array(vec![
+            ValueRef::Unsigned(self.generation),
+            ValueRef::Binary(&self.session_key),
         ]))?)
     }
 }
@@ -559,7 +555,7 @@ impl Drop for PpePukBoxPayload {
 
 impl PpePukBoxPayload {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        let value = crate::decode(bytes)?;
+        let value = decode_sensitive(bytes)?;
         let fields = array(&value, 3)?;
         let generation = unsigned(&fields[0])?;
         if generation < FIRST_PASSPHRASE_GENERATION {
@@ -576,10 +572,10 @@ impl PpePukBoxPayload {
         if self.generation < FIRST_PASSPHRASE_GENERATION {
             return Err(Error::IntegerRange("passphrase generation"));
         }
-        Ok(encode(&Value::Array(vec![
-            Value::Unsigned(self.generation),
-            Value::Binary(self.session_key.to_vec()),
-            crate::decode(&self.passphrase_public_key.encoded()?)?,
+        Ok(encode_ref(&ValueRef::Array(vec![
+            ValueRef::Unsigned(self.generation),
+            ValueRef::Binary(&self.session_key),
+            ValueRef::Owned(crate::decode(&self.passphrase_public_key.encoded()?)?),
         ]))?)
     }
 }
@@ -651,5 +647,58 @@ mod tests {
         assert!(debug.starts_with("SkmwkList"));
         assert!(debug.contains("[REDACTED]"));
         assert!(!debug.contains("7, 7"));
+    }
+
+    /// The borrowed encoders must produce the bytes of the owned `Value`
+    /// trees they replaced, and the sensitive decoder must accept them.
+    #[test]
+    fn secret_payload_encodings_match_the_owned_tree_and_round_trip() {
+        let uid = EntityId::from_bytes([ENTITY_USER; 33].to_vec()).unwrap();
+        let host = EntityId::from_bytes([ENTITY_HOST; 33].to_vec()).unwrap();
+        let list = SkmwkList {
+            uid: uid.clone(),
+            host: host.clone(),
+            keys: vec![[7; 32], [8; 32]],
+        };
+        let owned = encode(&Value::Array(vec![
+            Value::Array(vec![
+                Value::Binary(uid.as_bytes().to_vec()),
+                Value::Binary(host.as_bytes().to_vec()),
+            ]),
+            Value::Array(vec![Value::Binary(vec![7; 32]), Value::Binary(vec![8; 32])]),
+        ]))
+        .unwrap();
+        assert_eq!(list.encoded().unwrap(), owned);
+        assert_eq!(SkmwkList::decode(&owned).unwrap(), list);
+
+        let passphrase = PpePassphraseBoxPayload {
+            generation: 3,
+            session_key: [9; 32],
+        };
+        let owned = encode(&Value::Array(vec![
+            Value::Unsigned(3),
+            Value::Binary(vec![9; 32]),
+        ]))
+        .unwrap();
+        assert_eq!(passphrase.encoded().unwrap(), owned);
+        assert_eq!(PpePassphraseBoxPayload::decode(&owned).unwrap(), passphrase);
+
+        let hepk = Hepk::yubi([2; 33], vec![5; 1184]).unwrap();
+        let puk = PpePukBoxPayload {
+            generation: 4,
+            session_key: [10; 32],
+            passphrase_public_key: hepk.clone(),
+        };
+        let owned = encode(&Value::Array(vec![
+            Value::Unsigned(4),
+            Value::Binary(vec![10; 32]),
+            crate::decode(&hepk.encoded().unwrap()).unwrap(),
+        ]))
+        .unwrap();
+        assert_eq!(puk.encoded().unwrap(), owned);
+        assert_eq!(PpePukBoxPayload::decode(&owned).unwrap(), puk);
+        let mut trailing = owned;
+        trailing.push(0);
+        assert!(PpePukBoxPayload::decode(&trailing).is_err());
     }
 }

@@ -6,6 +6,7 @@ use crate::{
     array, binary, decode, encode, fixed_blob, text, unsigned, EntityId, Error, Result, Role,
     SecretBox, Value, ENTITY_YUBI,
 };
+use foks_snowpack::{decode_sensitive, encode_ref, ValueRef};
 use zeroize::Zeroize as _;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -98,7 +99,7 @@ impl fmt::Debug for YubiManagementKeyBoxPayload {
 
 impl YubiManagementKeyBoxPayload {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        let value = decode(bytes)?;
+        let value = decode_sensitive(bytes)?;
         let fields = array(&value, 4)?;
         let result = Self {
             management_key: fixed_blob(&fields[0], "Yubi management key")?,
@@ -112,11 +113,11 @@ impl YubiManagementKeyBoxPayload {
 
     pub fn encoded(&self) -> Result<Vec<u8>> {
         self.validate()?;
-        Ok(encode(&Value::Array(vec![
-            Value::Binary(self.management_key.to_vec()),
-            self.card.to_value(),
-            Value::Unsigned(self.slot),
-            Value::Binary(self.yubi_id.as_bytes().to_vec()),
+        Ok(encode_ref(&ValueRef::Array(vec![
+            ValueRef::Binary(&self.management_key),
+            ValueRef::Owned(self.card.to_value()),
+            ValueRef::Unsigned(self.slot),
+            ValueRef::Binary(self.yubi_id.as_bytes()),
         ]))?)
     }
 
@@ -185,6 +186,28 @@ impl YubiEncryptedManagementKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn management_key_payload_encoding_matches_the_owned_tree_and_round_trips() {
+        let payload = YubiManagementKeyBoxPayload {
+            management_key: [3; 24],
+            card: YubiCardId {
+                name: b"YubiKey 5".to_vec(),
+                serial: 1234,
+            },
+            slot: 0x83,
+            yubi_id: EntityId::from_bytes([ENTITY_YUBI; 34].to_vec()).unwrap(),
+        };
+        let owned = encode(&Value::Array(vec![
+            Value::Binary(vec![3; 24]),
+            payload.card.to_value(),
+            Value::Unsigned(0x83),
+            Value::Binary(payload.yubi_id.as_bytes().to_vec()),
+        ]))
+        .unwrap();
+        assert_eq!(payload.encoded().unwrap(), owned);
+        assert!(YubiManagementKeyBoxPayload::decode(&owned).unwrap() == payload);
+    }
 
     #[test]
     fn pq_hint_round_trips_and_rejects_non_retired_slots() {

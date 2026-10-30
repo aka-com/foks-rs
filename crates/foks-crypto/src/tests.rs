@@ -2,12 +2,13 @@
 
 use crate::backup::{BackupKey, BACKUP_SEED_BYTES};
 use crate::hybrid::{
-    derive_device_public, derive_hybrid_key, derive_shared_public, derive_yubi_public_material,
-    open_hybrid_box, open_puk_parcel, open_puk_parcel_for_role, open_puk_parcel_with,
-    open_puk_parcel_with_for_role, open_puk_seed_chain, open_shared_key_parcel_with,
-    open_shared_key_seed_chain, seal_initial_puk_box, seal_puk_seed_chain_box,
-    seal_shared_key_boxes, seal_software_puk_boxes, seal_software_puk_boxes_mixed,
-    seal_yubi_puk_boxes, yubi_mlkem_decapsulate, DevicePublicMaterial, HybridSecretDecapsulator,
+    derive_device_public, derive_hybrid_key, derive_key, derive_shared_public,
+    derive_yubi_public_material, open_hybrid_box, open_puk_parcel, open_puk_parcel_for_role,
+    open_puk_parcel_with, open_puk_parcel_with_for_role, open_puk_seed_chain,
+    open_shared_key_parcel_with, open_shared_key_seed_chain, open_team_shared_key_seed_chain,
+    seal_initial_puk_box, seal_puk_seed_chain_box, seal_shared_key_boxes, seal_software_puk_boxes,
+    seal_software_puk_boxes_mixed, seal_yubi_puk_boxes, shared_key_seed_plaintext,
+    yubi_mlkem_decapsulate, DevicePublicMaterial, HybridSecretDecapsulator,
     InitialPukBoxRandomness, PukBoxRandomness, SharedKeyBoxInput, SharedKeyDecapsulator,
     SoftwarePukBoxInput, SoftwarePukBoxSetRandomness, YubiDevice, YubiPublicMaterial,
     YubiPukBoxInput, YubiPukBoxRandomness, YubiPukBoxSetRandomness, YubiSubkeyBoxRandomness,
@@ -1839,6 +1840,197 @@ fn software_mutation_boxes_round_trip_and_preserve_history() {
     assert_eq!(history.len(), 2);
     assert_eq!(history[0].seed, previous_seed);
     assert_eq!(history[1].seed, current_seed);
+}
+
+#[test]
+fn seed_chain_boxes_accept_zero_padding_and_bind_the_receiver() {
+    let expected = UserLink::decode(&signup_fixture("eldest-link.snowp")).unwrap();
+    let opened = expected.decode_eldest().unwrap();
+    let boxed = SharedKeyBoxSet::decode(&signup_fixture("puk-box-set.snowp")).unwrap();
+    let shared = boxed.boxes.into_iter().next().unwrap();
+    let current_seed = SecretSeed::new([31; 32]);
+    let previous_seed = SecretSeed::new([32; 32]);
+    let editor = opened.uid.clone();
+    let mut other = opened.uid.as_bytes().to_vec();
+    *other.last_mut().unwrap() ^= 1;
+    let other = EntityId::from_bytes(other).unwrap();
+    let chain_box = |receiver: &EntityId, padding: &[u8]| {
+        let plaintext =
+            shared_key_seed_plaintext(receiver, &opened.host, 1, Role::OWNER, &previous_seed)
+                .unwrap();
+        let padded = Zeroizing::new([plaintext.as_slice(), padding].concat());
+        let key = derive_key(&current_seed, 2, None).unwrap();
+        let nonce = [33; 16];
+        foks_proto::SeedChainBox {
+            generation: 1,
+            role: Role::OWNER,
+            secret_box: SecretBox {
+                nonce,
+                ciphertext: seal_typed_secretbox(
+                    key.as_bytes(),
+                    SHARED_KEY_SEED_TYPE_ID,
+                    &nonce,
+                    &padded,
+                    false,
+                )
+                .unwrap(),
+            },
+        }
+    };
+    let parcel = |receiver: &EntityId, padding: &[u8]| PukParcel {
+        generation: 2,
+        role: Role::OWNER,
+        hybrid: shared.hybrid.clone(),
+        target: shared.target.entity.clone(),
+        target_host: shared.target.host.clone(),
+        target_role: shared.target.role,
+        target_generation: shared.target.generation,
+        sender: opened.uid.clone(),
+        box_id: boxed.box_id,
+        temp_dh_key: boxed.temp_dh_key.clone(),
+        seed_chain: vec![chain_box(receiver, padding)],
+    };
+    let current = || SharedKeySeed {
+        receiver: opened.uid.clone(),
+        host: opened.host.clone(),
+        generation: 2,
+        role: Role::OWNER,
+        seed: SecretSeed::new(*current_seed.as_bytes()),
+    };
+
+    let padded = parcel(&editor, &[0; 7]);
+    let history = open_shared_key_seed_chain(current(), &padded, &editor, &opened.host).unwrap();
+    assert_eq!(history[0].seed, previous_seed);
+    assert_eq!(history[1].seed, current_seed);
+    assert!(matches!(
+        open_shared_key_seed_chain(current(), &padded, &other, &opened.host),
+        Err(Error::PukBinding)
+    ));
+    // A team chain names the rotating editor, not the parcel recipient, so
+    // the team opener skips the receiver check that the PUK opener applies.
+    let team = parcel(&other, &[0; 7]);
+    let history = open_team_shared_key_seed_chain(current(), &team, &opened.host).unwrap();
+    assert_eq!(history[0].seed, previous_seed);
+    assert_eq!(history[0].receiver, other);
+    assert!(matches!(
+        open_shared_key_seed_chain(current(), &team, &editor, &opened.host),
+        Err(Error::PukBinding)
+    ));
+    assert!(matches!(
+        open_team_shared_key_seed_chain(current(), &team, &other),
+        Err(Error::PukBinding)
+    ));
+
+    let nonzero = parcel(&editor, &[0, 0, 1]);
+    for result in [
+        open_shared_key_seed_chain(current(), &nonzero, &editor, &opened.host),
+        open_team_shared_key_seed_chain(current(), &nonzero, &opened.host),
+    ] {
+        assert!(matches!(result, Err(Error::KvPadding)));
+    }
+}
+
+#[test]
+fn seed_chain_plaintexts_bypass_the_non_zeroizing_prefix_decoder() {
+    // The general prefix decoder copies the older seed into an ordinary
+    // `Value::Binary` that is dropped without erasure. The check covers
+    // hybrid.rs only, so it also requires the seed-chain decoder to stay there.
+    let hybrid = include_str!("hybrid.rs");
+    let general_prefix_decoder = ["decode_prefix", "("].concat();
+    assert!(!hybrid.contains(&general_prefix_decoder));
+    assert!(hybrid.contains("fn decode_padded_shared_key_seed("));
+    assert!(hybrid.contains("decode_prefix_sensitive(plaintext)"));
+}
+
+/// The ways `source` can reach foks_snowpack's general decoders under a name
+/// the plain-text guard does not see: a `use` of `decode` or
+/// `decode_prefix` (in nested groups, through a module path, renamed, or
+/// from `::foks_snowpack`), a glob import, an alias of the crate itself, and
+/// a call through a longer path such as `foks_snowpack::x::decode(`.
+fn snowpack_decoder_reaches(source: &str) -> Vec<String> {
+    const GENERAL: [&str; 2] = ["decode", "decode_prefix"];
+    let mut found = Vec::new();
+    for statement in source.split(';') {
+        let Some(start) = statement.lines().position(|line| {
+            let line = line.trim_start();
+            let line = line
+                .strip_prefix("pub(crate) ")
+                .or_else(|| line.strip_prefix("pub(super) "))
+                .or_else(|| line.strip_prefix("pub "))
+                .unwrap_or(line);
+            line.starts_with("use ")
+        }) else {
+            continue;
+        };
+        let item = statement.lines().skip(start).collect::<Vec<_>>().join(" ");
+        let item = item.replace("::foks_snowpack", "foks_snowpack");
+        if !item.contains("foks_snowpack") {
+            continue;
+        }
+        if item.contains("foks_snowpack as") {
+            found.push("an alias of foks_snowpack".to_owned());
+        }
+        if item.contains('*') {
+            found.push("a glob import from foks_snowpack".to_owned());
+        }
+        for piece in item.split(['{', '}', ',']) {
+            let path = piece.split(" as ").next().unwrap_or("").trim();
+            let name = path.rsplit("::").next().unwrap_or("").trim();
+            if GENERAL.contains(&name) {
+                found.push(format!("an import of {name}"));
+            }
+        }
+    }
+    let mut rest = source;
+    while let Some(start) = rest.find("foks_snowpack::") {
+        let path: String = rest[start..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == ':')
+            .collect();
+        let after = &rest[start + path.len()..];
+        let name = path.rsplit("::").next().unwrap_or("");
+        if GENERAL.contains(&name) && after.trim_start().starts_with('(') {
+            found.push(format!("a call of {path}"));
+        }
+        rest = &rest[start + "foks_snowpack::".len()..];
+    }
+    found
+}
+
+#[test]
+fn snowpack_decoder_scan_finds_every_import_form() {
+    assert!(snowpack_decoder_reaches("use foks_snowpack::{encode, Value};").is_empty());
+    for source in [
+        "use foks_snowpack::decode;",
+        "use foks_snowpack::{encode, decode as d};",
+        "use foks_snowpack::{codec::{decode_prefix}, Value};",
+        "use foks_snowpack::x::decode;",
+        "pub(crate) use ::foks_snowpack::decode;",
+        "use foks_snowpack::*;",
+        "use foks_snowpack as s;",
+        "fn f() { foks_snowpack::x::decode(b); }",
+    ] {
+        assert!(!snowpack_decoder_reaches(source).is_empty(), "{source}");
+    }
+}
+
+#[test]
+fn secret_plaintext_sites_avoid_the_general_decoder_and_unerased_encodings() {
+    // Opened PPE, SKMWK and KEX plaintexts are decoded by the foks-proto
+    // payload types, which use the sensitive decoder; these modules must not
+    // decode them with the general decoder themselves. The KEX cleartext
+    // encoding holds the SKMWK and the self token and is erased after sealing.
+    let general_decoder = ["foks_snowpack::", "decode("].concat();
+    let general_prefix_decoder = ["decode_prefix", "("].concat();
+    for source in [include_str!("passphrase.rs"), include_str!("kex.rs")] {
+        assert!(!source.contains(&general_decoder));
+        assert!(!source.contains(&general_prefix_decoder));
+        // Nor may they reach the general decoders under another name.
+        assert_eq!(snowpack_decoder_reaches(source), Vec::<String>::new());
+    }
+    let kex = include_str!("kex.rs");
+    assert!(kex.contains("let plaintext = Zeroizing::new(cleartext.encoded()?);"));
+    assert!(!kex.contains(&["cleartext.encoded()?", ".as_slice()"].concat()));
 }
 
 #[test]
