@@ -430,9 +430,10 @@ tile and a subtitle saying where they save.
 A failed `import_dropped_file` or `replace_dropped_file` names the upload
 handle the host issued and points to Uploads only after failures that can
 follow the agent's registration of the handle: an ambiguous outcome,
-`deadline-exceeded`, `cancelled`, `conflict`, `upload-spool-full`,
-`upload-identity-conflict`, `reauthentication-required` and the server
-failures of the upload itself. Refusals before registration (capability,
+`deadline-exceeded`, `cancelled`, `conflict`, `already-exists`,
+`upload-spool-full`, `upload-identity-conflict`, `reauthentication-required`
+and the server failures of the upload itself (`server-unavailable`,
+`rate-limited`, `quota-exceeded`, `operation-failed`). Refusals before registration (capability,
 credential, clock and capacity checks) name no handle; after a lost agent
 connection, `profile-busy`, `busy`, `invalid-request` or `rollback-detected`,
 which can come before or after registration, the message says that the
