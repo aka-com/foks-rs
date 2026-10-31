@@ -99,10 +99,13 @@ files that may use the dependency; a use in any other file fails the check.
   `device`, `recovery`, `passphrase`, `team` and `yubi` open
   `ClientCredentials` and `ProfileSession` in-process, and `state` calls the
   `foks-client-app` portability functions directly, including
-  `verify_imported_profile` for `state verify-online`. The account admin,
-  bot, rename and sync commands, team invitations, `mcp`, `sso` and
-  `retention` use the agent. The integration tests seed state through
-  `foks-client-app` before starting an agent.
+  `verify_imported_profile` for `state verify-online`. `retention maintain`
+  and the upload preflight drain local upload cleanup in-process under the
+  profile lock, and every command enters a `foks-client-app` operation scope
+  for its deadline. The account admin, bot, rename and sync commands, team
+  invitations, `mcp`, `sso` and the other `retention` commands use the
+  agent. The integration tests seed state through `foks-client-app` before
+  starting an agent.
 - `foks-desktop-app` → `foks-client-app`, `foks-keystore`, `foks-yubi`.
   Offline maintenance with the agent stopped (state export, import,
   relocation, import verification, reset of unreadable state, the state
