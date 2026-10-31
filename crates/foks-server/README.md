@@ -355,8 +355,9 @@ gauges are absent and `/metrics` does not read the database for them.
 the SQLite writer, the maintenance loop, the automatic backup scheduler, the
 management listener, and the administration and OIDC listeners when they are
 configured. None of them restarts in place. When one exits without a requested
-shutdown, for example because a writer operation panicked or an accept loop
-lost its listening socket, `/healthz` and `/readyz` return 503 and
+shutdown, for example because a writer operation panicked, an accept loop
+lost its listening socket, or a panic in one connection's session task ended
+its RPC listener, `/healthz` and `/readyz` return 503 and
 `foks-server` shuts down the remaining threads and exits with status 1, so a
 service manager that restarts on failure starts a new process. The writer runs
 no further operations after a panic; queued and later writes fail, and most
@@ -370,7 +371,10 @@ connection, and other errors that leave the listening socket usable). It
 retries at once for ECONNABORTED and the pending network errors, which concern
 only the connection that `accept()` dequeued, and after 50 ms otherwise. Only
 errors that invalidate the listening socket end the accept loop. Retries are
-counted in `foks_accept_errors_total{kind}`. With every connection limit
+counted in `foks_accept_errors_total{kind}`, and each kind also writes at most
+one stderr line per minute, `FOKS server warning: accept() failed: kind=...,
+errno=..., count_since_last_line=...`, so that a sustained EMFILE or an
+unclassified error is visible in the service log. With every connection limit
 reached, the `serve-config` defaults can use up to an estimated 1,202 file
 descriptors, more than systemd's default soft `RLIMIT_NOFILE` of 1,024.
 `serve` and `serve-config` therefore raise the soft limit to the hard limit at
