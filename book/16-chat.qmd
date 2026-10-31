@@ -125,7 +125,10 @@ Verifying a page proceeds as follows:
 3. For each text message whose predecessor is neither in the page nor in
    the anchor table, fetch the predecessor by sequence and check that its
    ID is the one the message claims, whatever the predecessor's own
-   verdict. A mismatch is a "predecessor contradiction".
+   verdict. A mismatch is a "predecessor contradiction". When the
+   predecessor's mapping is anchored, because it is authenticated text
+   already in the anchor table or authenticated in the same page, the
+   contradicting message becomes unverifiable; otherwise the page fails.
 4. In one transaction, compare every observed `(sequence, ID, digest)` with
    what is already stored under both keys. If the server has changed the
    mapping for any sequence or any ID, the page is rejected as a conflict.
@@ -143,30 +146,37 @@ does so without storing any plaintext.
 
 The verdicts exist because the server cannot inspect ciphertext: any member
 with write access can submit a Basic message that does not decrypt, and a Go
-v0.1.9 host also stores the author's ID and predecessor pointer without
-checking them. Such a row is shown as a placeholder while the rest of its
+v0.1.9 host checks an author's message ID only for uniqueness across the host
+(`UNIQUE(msg_id)` in its `messages_enc` table) and stores the predecessor
+pointer without checking it against its mapping. Such a row is shown as a placeholder while the rest of its
 page stays readable, and a new message chains to the latest row whatever
 its verdict, because the server checks only the `(sequence, ID)` mapping.
 Only contradictions in the server's mapping fail a page: the checks in
 steps 1 and 4, a missing sender or out-of-range sequence, and a
-predecessor contradiction. An inbox preview that fails this way stops that
+predecessor contradiction whose predecessor is not anchored. An inbox preview that fails this way stops that
 one channel and leaves the team's other channels synchronising. A Rust host
 refuses a send whose ID is zero or already used, or whose pointer does not
 match its mapping, so there only a server can cause these failures. The Go
-v0.1.9 send path checks neither, so a member there can still stop a channel
-by reusing another message's ID or by authoring a text message whose
-pointer contradicts the mapping; the client cannot tell either from a
-substituted row. An all-zero ID cannot be named by a pointer, so a send
-chains to the row before such a row instead.
+v0.1.9 send path refuses a reused ID but not a pointer that contradicts the
+mapping. A member there who seals text with such a pointer gets an
+unverifiable verdict when the predecessor is anchored, and later sends chain
+past it. When the predecessor does not authenticate (it does not decrypt or
+is of a kind the client does not open), the client cannot tell the author's
+pointer from a substituted predecessor, which is how a server rewriting
+history shows, so the page still fails; a member can therefore still stop a
+channel by pointing past such a row. An all-zero ID cannot be named by a
+pointer, so a send chains to the row before such a row instead; since the
+host checks IDs for uniqueness, it holds at most one such row.
 
 A verdict for an unavailable key generation depends on the reader's team
 view at read time, so a later read that holds the generation can return the
 same row as text. The desktop accepts that change for a row whose ID,
 sequence, sender and times are unchanged, and treats any other change to a
 row it holds as a contradiction. The agent reports a non-user sender as no
-sender. The desktop keys a row with an all-zero ID by its sequence: such a
-row never becomes an anchor, so its ID is checked only against its own page
-and can recur on another page.
+sender. The desktop keys a row with an all-zero ID by its sequence. This is
+defensive: such a row never becomes an anchor, so its ID is checked only
+against its own page, and while a Go host holds at most one such row and a
+Rust host none, a server could present the same zero ID on two pages.
 
 ## Inbox versions
 

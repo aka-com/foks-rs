@@ -32,8 +32,9 @@ fn valid_content(content: &ChatContent, maximum: usize) -> bool {
         ChatContent::Unsupported | ChatContent::Oversized | ChatContent::Unverifiable => true,
     }
 }
-/// A Go v0.1.9 host stores an author's all-zero message ID unchecked, and
-/// foks-client gives that row an unverifiable verdict; no other row has one.
+/// A Go v0.1.9 host checks message IDs only for uniqueness, so it can store one
+/// author's all-zero message ID, and foks-client gives that row an unverifiable
+/// verdict; no other row has one.
 fn valid_message_id(message: &ChatMessage) -> bool {
     valid_chat_id(&message.id)
         || (message.content == ChatContent::Unverifiable

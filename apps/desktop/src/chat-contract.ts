@@ -460,8 +460,9 @@ export function decodeChatReply(
         return fail();
       const body = content(m.content, CHAT_TEXT_BYTES);
       return {
-        // A Go v0.1.9 host stores an author's all-zero ID unchecked, and the
-        // agent reports that row as unverifiable; no other row has one.
+        // A Go v0.1.9 host checks an author's ID only for uniqueness across
+        // the host, so it can hold one all-zero ID, which the agent reports as
+        // unverifiable; no other row has one.
         id:
           body.kind === 'unverifiable' && m.id === ZERO_MESSAGE_ID
             ? ZERO_MESSAGE_ID
@@ -498,8 +499,10 @@ export function decodeChatReply(
       kind: 'history',
       ...(after === undefined ? {} : { gap: r.gap as boolean }),
       channel,
-      // The desktop keys rows by ID, and zero-ID rows on different pages
-      // would share one key, so each is keyed by its sequence instead.
+      // The desktop keys rows by ID. The rekey is defensive: a Go v0.1.9 host
+      // holds at most one zero-ID row (IDs are unique across the host) and
+      // the Rust server refuses zero IDs, but a server that returned the
+      // same zero ID at two sequences would otherwise give two rows one key.
       messages: messages.map((m) =>
         m.id === ZERO_MESSAGE_ID ? { ...m, id: `zero:${m.sequence}` } : m,
       ),
