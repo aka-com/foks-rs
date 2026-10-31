@@ -7,6 +7,7 @@ mod groups;
 mod preparation;
 mod servers;
 mod support;
+mod trash;
 mod uploads;
 mod validation;
 mod vault;

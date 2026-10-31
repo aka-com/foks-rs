@@ -40,12 +40,17 @@ import {
   canChangeItem,
   displayPath,
   displayPathComponent,
+  fieldLineText,
   fmtSize,
   roleChipLabel,
   hue as nameHue,
-  isLogin,
+  isBlankLine,
   kindLabel,
   kindOf,
+  LOGIN_FIELDS,
+  loginField,
+  loginFieldOf,
+  loginLines,
   nameOf,
   parseRole,
   partiesOf,
@@ -56,26 +61,46 @@ import {
   storeAvailability,
   storeOf,
 } from '../model';
-import type { Item, Party, RoleWire, AgentSnapshot } from '../model';
+import type {
+  Item,
+  LoginFieldName,
+  Party,
+  RoleWire,
+  AgentSnapshot,
+} from '../model';
 import { AccountMark } from './account-switcher';
 import type { NavigationGuard, Selection } from '../location';
 import { useNavigationGuard } from '../navigation-guard';
 import { normalizeCommandError } from '../bridge';
-import type { Bridge, ItemRequest, ReadItemResponse } from '../bridge';
+import type {
+  Bridge,
+  ItemField,
+  ItemRequest,
+  ReadItemResponse,
+} from '../bridge';
 import { useFileDrop } from '../file-drop';
 import type { MutationFailureHandler } from '../mutation-recovery';
-import { editableValue } from './edit-value';
+import { copyActions, copyAndAnnounce } from './item-copy';
 import { BigTile, itemTile } from './item-tile';
 import { accessCopy, itemActionProblem } from './store-access';
 import { useConcealOnInactive } from '../use-conceal-on-inactive';
 
-const FIELD_LABELS: Readonly<Record<string, string>> = {
-  user: 'User name',
-  username: 'User name',
-  password: 'Password',
-  url: 'Website',
-  ssid: 'Network',
-};
+const FIELD_LABELS: ReadonlyMap<string, string> = new Map([
+  ['user', 'User name'],
+  ['username', 'User name'],
+  ['password', 'Password'],
+  ['url', 'Website'],
+  ['website', 'Website'],
+  ['ssid', 'Network'],
+]);
+
+/**
+ * The label of a login line's key: a known field's name, or the key itself.
+ * A map lookup, so a key such as `constructor` is not read from a prototype.
+ */
+function fieldLabel(key: string): string {
+  return FIELD_LABELS.get(key) ?? key;
+}
 
 const MASK = '••••••••••••';
 
@@ -147,70 +172,56 @@ function roleText(wire: RoleWire): string {
   return typeof wire === 'string' ? wire : wire.role;
 }
 
-/** Parses lines formatted as "key: value". Lines without a colon delimiter are treated as raw values. */
-function parseFields(value: string): [string | null, string][] {
-  return value.split('\n').map((line) => {
-    const cut = line.indexOf(': ');
-    return cut > 0
-      ? ([line.slice(0, cut), line.slice(cut + 2)] as [string, string])
-      : ([null, line] as [null, string]);
-  });
+/**
+ * The lines the structured login editor lists, by index, or null when the
+ * text opens in the textarea. The editor opens for text with a line the host
+ * would copy as the password, which the editor masks, and lists every line
+ * but blank ones: typing into a blank line would add a line that is not a
+ * field line, and the agent would then list the item as a Document. Blank
+ * lines are still saved as they were read. Both choices are made once, when
+ * the edit opens, so typing never swaps editors or removes a row.
+ */
+function loginEditLines(text: string): readonly number[] | null {
+  const lines = loginLines(text);
+  if (!lines.some(({ key }) => loginFieldOf(key) === 'password')) return null;
+  return lines.flatMap((line, index) => (isBlankLine(line) ? [] : [index]));
 }
 
-interface PasswordField {
-  field: string | null;
-  value: string;
-  secret: boolean;
+/** One row of a login's fields. */
+interface LoginRow {
+  /** Identifies the row's Show state: a login field, or `line:<index>`. */
+  id: string;
+  label: string;
+  /** The field the host copies for this row; null for other lines. */
+  field: LoginFieldName | null;
+  /** Null before a read, and for a login field the text lacks. */
+  value: string | null;
 }
 
 /**
- * Maps raw or masked password values to displayable field rows.
+ * The rows a login lists: user name, password and website always, each
+ * masked until shown, then after a read any other line, such as a Wi-Fi
+ * network name, in stored order. Values come from `loginField`, the parser
+ * the host's field copy follows, so a row and its Copy agree.
  */
-function passwordFields(
-  masked: string | undefined,
-  shown: string | null,
-): PasswordField[] {
-  if (shown !== null) {
-    const learned = parseFields(shown);
-    if (learned.some(([field]) => field === 'password')) {
-      return learned.map(([field, value]) => ({
-        field,
-        value,
-        secret: field === 'password',
-      }));
-    }
-    if (!masked) return [{ field: null, value: shown, secret: true }];
-    return parseFields(masked).map(([field, value]) => ({
-      field,
-      value: field === 'password' ? shown : value,
-      secret: field === 'password',
-    }));
-  }
-  if (!masked)
-    return [{ field: 'password', value: '••••••••••', secret: true }];
-  return parseFields(masked).map(([field, value]) => ({
+function loginRows(shown: string | null): LoginRow[] {
+  const rows: LoginRow[] = LOGIN_FIELDS.map((field) => ({
+    id: field,
+    label: fieldLabel(field),
     field,
-    value: field === 'password' ? '••••••••••' : value,
-    secret: field === 'password',
+    value: shown === null ? null : loginField(shown, field),
   }));
-}
-
-/**
- * Formats a newly saved login value for the unrevealed view by masking the
- * `password` field with bullets. Returns `null` if the value has no
- * `password` field.
- */
-function maskedSaved(value: string): string | null {
-  const fields = parseFields(value);
-  if (!fields.some(([field]) => field?.toLowerCase() === 'password'))
-    return null;
-  return fields
-    .map(([field, current]) =>
-      field === null
-        ? current
-        : `${field}: ${field.toLowerCase() === 'password' ? '••••••••••' : current}`,
-    )
-    .join('\n');
+  if (shown === null) return rows;
+  loginLines(shown).forEach(({ key, value }, index) => {
+    if (loginFieldOf(key) !== null || !value) return;
+    rows.push({
+      id: `line:${index}`,
+      label: key === null ? 'Text' : fieldLabel(key),
+      field: null,
+      value,
+    });
+  });
+  return rows;
 }
 
 /** Message displayed when a server's check-in has expired. */
@@ -247,7 +258,8 @@ export interface DetailsPanelProps {
   revealRequest?: string | null;
   onRevealHandled?: () => void;
   onClose: () => void;
-  onDelete: (item: Item) => void;
+  /** Moves the item to Trash, from where it can be restored. */
+  onTrash: (item: Item) => void;
   onMove?: (item: Item) => void;
   /** Opens a folder in the item's store from the location bar (`path` "/" is the root). */
   onOpenFolder?: (storeId: string, path: string) => void;
@@ -286,7 +298,7 @@ export function DetailsPanel({
   revealRequest = null,
   onRevealHandled,
   onClose,
-  onDelete,
+  onTrash,
   onMove,
   onOpenFolder,
   onOpenServer,
@@ -320,10 +332,18 @@ export function DetailsPanel({
     | { key: string; state: 'error'; message: string }
     | null
   >(null);
+  // The login rows shown while `read` holds the text; any other row stays
+  // masked. Meaningless while nothing is shown.
+  const [revealed, setRevealed] = useState<readonly string[]>([]);
   const toasts = useToast();
   const accessDescriptionId = useId();
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
+  // The lines the open edit's structured login editor lists, or null for the
+  // textarea; see loginEditLines.
+  const [editLoginLines, setEditLoginLines] = useState<
+    readonly number[] | null
+  >(null);
   const [editPasswordShown, setEditPasswordShown] = useState(false);
   const [editContentConcealed, setEditContentConcealed] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -331,12 +351,6 @@ export function DetailsPanel({
   const [dropHover, setDropHover] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [binaryFile, setBinaryFile] = useState(false);
-  // Masked non-secret fields from the most recent inline save for `key`.
-  // Because catalog snapshots omit item values, this preserves updated
-  // non-secret fields until the user reveals or conceals the item.
-  const [saved, setSaved] = useState<{ key: string; value: string } | null>(
-    null,
-  );
   const focusEditorOnOpen = useRef(false);
   const focusActionsOnClose = useRef(false);
   const editorRef = useRef<HTMLDivElement>(null);
@@ -400,7 +414,6 @@ export function DetailsPanel({
   useEffect(() => {
     if (!readProblem) return;
     setRead(null);
-    setSaved(null);
     setEditPasswordShown(false);
   }, [readProblem]);
 
@@ -477,7 +490,6 @@ export function DetailsPanel({
   useEffect(() => {
     concealEpoch.current += 1;
     setRead(null);
-    setSaved((current) => (current?.key === key ? current : null));
     setEditPasswordShown(false);
     if (
       editTarget.current &&
@@ -490,6 +502,7 @@ export function DetailsPanel({
     } else {
       setEditing(false);
       setEditValue('');
+      setEditLoginLines(null);
       setEditContentConcealed(false);
       editBaseline.current = null;
       editTarget.current = null;
@@ -508,7 +521,12 @@ export function DetailsPanel({
     const requested = revealRequest === `${item.store}|${item.path}`;
     if (!requested) return;
     onRevealHandled?.();
-    if (read?.key !== key) void show();
+    // Reveal on a login shows its password, the field the list offers.
+    const current = read?.key === key;
+    setRevealed((fields) =>
+      current ? [...new Set([...fields, 'password'])] : ['password'],
+    );
+    if (!current) void show();
   }, [item, key, onRevealHandled, read?.key, revealRequest, show]);
 
   // Revealed values and plaintext edit drafts are covered without abandoning
@@ -517,18 +535,11 @@ export function DetailsPanel({
     () => {
       concealEpoch.current += 1;
       setRead(null);
-      setSaved(null);
       setEditPasswordShown(false);
-      if (
-        editing &&
-        item &&
-        !isLogin(item) &&
-        item.kind !== 'File' &&
-        !binaryFile
-      )
+      if (editing && item && item.kind !== 'File' && !binaryFile)
         setEditContentConcealed(true);
     },
-    Boolean(read) || Boolean(saved) || editing || saving,
+    Boolean(read) || editing || saving,
   );
 
   // A read in flight when access changes generation is dropped when it lands,
@@ -541,8 +552,8 @@ export function DetailsPanel({
     if (!concealSignal) return;
     concealEpoch.current += 1;
     setRead(null);
-    setSaved(null);
     setEditValue('');
+    setEditLoginLines(null);
     editBaseline.current = null;
     editTarget.current = null;
     setEditing(false);
@@ -559,6 +570,9 @@ export function DetailsPanel({
     if (appliedDraft.current === resumeDraft.epoch) return;
     appliedDraft.current = resumeDraft.epoch;
     setEditValue(resumeDraft.value);
+    setEditLoginLines(
+      kindOf(item) === 'Password' ? loginEditLines(resumeDraft.value) : null,
+    );
     setEditContentConcealed(false);
     editBaseline.current = null;
     editTarget.current = item;
@@ -608,6 +622,7 @@ export function DetailsPanel({
   const clearEdit = useCallback(() => {
     setEditing(false);
     setEditValue('');
+    setEditLoginLines(null);
     setEditContentConcealed(false);
     editBaseline.current = null;
     editTarget.current = null;
@@ -699,9 +714,6 @@ export function DetailsPanel({
   const shownValue =
     !readProblem && activeRead?.state === 'shown' ? activeRead.value : null;
   const readError = activeRead?.state === 'error' ? activeRead.message : null;
-  // Prefer the masked fields from a recent inline save for this version over
-  // the catalog's cached metadata.
-  const maskedValue = saved?.key === key ? saved.value : item.value;
   const reading = activeRead?.state === 'loading';
   const serverLabel = store ? serverDisplayLabelForStore(snapshot, store) : '';
   const now = accessNow();
@@ -729,25 +741,29 @@ export function DetailsPanel({
   const describedBy = (problem: string | undefined): string | undefined =>
     problem ? accessDescriptionId : undefined;
 
-  const copyValue = async (): Promise<void> => {
-    if (!request || !requireAccess()) return;
-    try {
-      await bridge.copyItemValue(request);
-      toasts.show(`${kind === 'Password' ? 'Password' : 'Value'} copied`);
-    } catch (error) {
-      onCommandError(error, item);
-    }
-  };
-  // Copy non-secret login fields (such as username or URL) directly from the
-  // displayed row text.
-  const copyField = async (label: string, text: string): Promise<void> => {
+  const copyField = async (field: ItemField): Promise<void> => {
     if (!requireAccess()) return;
-    try {
-      await bridge.copyText(text);
-      toasts.show(`${label} copied`);
-    } catch (error) {
-      onCommandError(error, item);
-    }
+    await copyAndAnnounce({
+      bridge,
+      item,
+      field,
+      toasts,
+      onError: onCommandError,
+    });
+  };
+  // Showing one login row reads the item once; the text then stays in
+  // `read` while any row is shown, and later rows reveal without a read.
+  const showRow = (id: string): void => {
+    const held = shownValue !== null || reading;
+    setRevealed((fields) => (held ? [...new Set([...fields, id])] : [id]));
+    if (!held) void show();
+  };
+  const hideRow = (id: string): void => {
+    const remaining = revealed.filter((field) => field !== id);
+    setRevealed(remaining);
+    if (remaining.length) return;
+    concealEpoch.current += 1;
+    setRead(null);
   };
   const copyPath = async (): Promise<void> => {
     if (!request || !requireAccess()) return;
@@ -758,17 +774,17 @@ export function DetailsPanel({
       onCommandError(error, item);
     }
   };
-  // Clear both the revealed read value and any post-save field preview.
+  // Clear the revealed read value.
   const hide = (): void => {
     concealEpoch.current += 1;
     setRead(null);
-    setSaved(null);
   };
 
   const beginEdit = async (): Promise<void> => {
     if (!request || !requireAccess(true)) return;
     setEditError(null);
     if (fileMode) {
+      setEditLoginLines(null);
       setEditContentConcealed(false);
       editBaseline.current = '';
       editTarget.current = item;
@@ -796,11 +812,9 @@ export function DetailsPanel({
       );
       assertExactRead(request, response);
       if (!current()) return;
-      const opened = editableValue(
-        { ...item, value: maskedValue },
-        response.value,
-      );
+      const opened = response.value;
       setEditValue(opened);
+      setEditLoginLines(kind === 'Password' ? loginEditLines(opened) : null);
       setEditContentConcealed(false);
       editBaseline.current = opened;
       editTarget.current = item;
@@ -815,6 +829,7 @@ export function DetailsPanel({
       if (typed.code === 'not-text' && item.kind === 'Secret') {
         setBinaryFile(true);
         setRead(null);
+        setEditLoginLines(null);
         setEditContentConcealed(false);
         editBaseline.current = '';
         editTarget.current = item;
@@ -852,10 +867,6 @@ export function DetailsPanel({
       version: target.version,
       direntId: target.direntId,
     };
-    // Record the conceal epoch and item key so a save completing after window
-    // conceal or selection change does not display stale fields.
-    const epoch = concealEpoch.current;
-    const savedFrom = `${target.store}|${target.path}|${target.version}`;
     setSaving(true);
     try {
       if (fileMode) {
@@ -868,19 +879,9 @@ export function DetailsPanel({
         if (!response.applied) return;
       } else {
         await bridge.editTextItem({ ...editRequest, value: editValue });
-        const masked = maskedSaved(editValue);
-        setSaved(
-          masked === null ||
-            epoch !== concealEpoch.current ||
-            keyRef.current !== savedFrom
-            ? null
-            : {
-                key: `${target.store}|${target.path}|${target.version + 1}`,
-                value: masked,
-              },
-        );
         // Clear the editor plaintext buffer after a successful write.
         setEditValue('');
+        setEditLoginLines(null);
       }
       editBaseline.current = null;
       editTarget.current = null;
@@ -915,13 +916,26 @@ export function DetailsPanel({
     );
   };
 
-  const editFields = editing && isLogin(item) ? parseFields(editValue) : [];
+  // One row per listed line, split by the rules Copy follows. Changing a row
+  // rewrites only its line, keeping its separator; every other line is saved
+  // as it was read.
+  const editLines = editing && editLoginLines ? loginLines(editValue) : null;
+  const editRows =
+    editLines && editLoginLines
+      ? editLoginLines.flatMap((index) => {
+          const line = editLines[index];
+          return line ? [{ ...line, index }] : [];
+        })
+      : null;
   const updateEditField = (index: number, value: string): void => {
+    if (!editLines) return;
     setEditValue(
-      editFields
-        .map(([field, current], candidate) => {
-          const next = candidate === index ? value : current;
-          return field ? `${field}: ${next}` : next;
+      editLines
+        .map(({ key, separator, raw }, candidate) => {
+          if (candidate !== index) return raw;
+          const line =
+            key === null ? value : fieldLineText(key, separator, value);
+          return raw.endsWith('\r') ? `${line}\r` : line;
         })
         .join('\n'),
     );
@@ -969,14 +983,34 @@ export function DetailsPanel({
       <span className="value-text">{value}</span>
     );
 
+  // A concealed draft shows one masked Value row in either editor.
   const content: ReactNode =
-    inlineEditing && isLogin(item) ? (
-      editFields.map(([field, value], index) => {
-        const label = FIELD_LABELS[field ?? ''] ?? field ?? 'Value';
-        const secret = field?.toLowerCase() === 'password';
+    inlineEditing && editContentConcealed ? (
+      <PropertyRow
+        label="Value"
+        actions={
+          <Button title="Show" onClick={() => setEditContentConcealed(false)}>
+            Show
+          </Button>
+        }
+      >
+        <Masked />
+      </PropertyRow>
+    ) : inlineEditing && editRows ? (
+      editRows.map(({ key: field, value, index }) => {
+        const loginKey = loginFieldOf(field);
+        const label =
+          loginKey !== null
+            ? fieldLabel(loginKey)
+            : field !== null
+              ? fieldLabel(field)
+              : 'Value';
+        const secret = loginKey === 'password';
+        // A row is a line, and editing a row never adds or removes one, so a
+        // line keeps its input when its parse changes.
         return (
           <PropertyRow
-            key={`${field ?? 'value'}-${index}`}
+            key={index}
             label={label}
             className="edit"
             actions={
@@ -1013,17 +1047,6 @@ export function DetailsPanel({
           </PropertyRow>
         );
       })
-    ) : inlineEditing && editContentConcealed ? (
-      <PropertyRow
-        label="Value"
-        actions={
-          <Button title="Show" onClick={() => setEditContentConcealed(false)}>
-            Show
-          </Button>
-        }
-      >
-        <Masked />
-      </PropertyRow>
     ) : inlineEditing ? (
       <PropertyRow label="Value" className="edit top">
         <textarea
@@ -1036,46 +1059,74 @@ export function DetailsPanel({
         />
       </PropertyRow>
     ) : kind === 'Password' && !fileMode ? (
-      passwordFields(maskedValue, shownValue).map(
-        ({ field, value, secret }, index) => {
-          const label = FIELD_LABELS[field ?? ''] ?? field ?? 'Value';
-          return secret ? (
-            <PropertyRow
-              key={index}
-              label={label}
-              actions={
-                <>
-                  {shownValue === null ? showButton : hideButton}
-                  {copyButton(label, copyValue)}
-                </>
-              }
-            >
-              {secretValue(value)}
-            </PropertyRow>
-          ) : (
-            <PropertyRow
-              key={index}
-              label={label}
-              actions={
-                value
-                  ? copyButton(label, () => copyField(label, value))
-                  : undefined
-              }
-            >
-              <span className="clip" title={value}>
-                {value}
-              </span>
-            </PropertyRow>
-          );
-        },
-      )
+      loginRows(shownValue).map(({ id, label, field, value }) => {
+        const visible = shownValue !== null && revealed.includes(id);
+        // A field the read text lacks has nothing for the host to copy.
+        const absent = shownValue !== null && field !== null && !value;
+        return (
+          <PropertyRow
+            key={id}
+            label={label}
+            actions={
+              <>
+                {visible ? (
+                  <Button
+                    data-focus-key={`reveal-${id}`}
+                    aria-label={`Hide ${label}`}
+                    title="Hide"
+                    onClick={() => hideRow(id)}
+                  >
+                    Hide
+                  </Button>
+                ) : (
+                  <Button
+                    data-focus-key={`reveal-${id}`}
+                    aria-label={`Show ${label}`}
+                    aria-busy={(reading && revealed.includes(id)) || undefined}
+                    disabled={Boolean(readProblem)}
+                    title={readProblem ?? (reading ? 'Reading…' : 'Show')}
+                    aria-describedby={describedBy(readProblem)}
+                    onClick={() => showRow(id)}
+                  >
+                    Show
+                  </Button>
+                )}
+                {field ? (
+                  <Button
+                    aria-label={`Copy ${label}`}
+                    disabled={Boolean(readProblem) || absent}
+                    title={
+                      readProblem ??
+                      (absent
+                        ? `No ${label.toLowerCase()} saved`
+                        : `Copy ${label}`)
+                    }
+                    aria-describedby={describedBy(readProblem)}
+                    onClick={() => void copyField(field)}
+                  >
+                    Copy
+                  </Button>
+                ) : null}
+              </>
+            }
+          >
+            {!visible ? (
+              <Masked />
+            ) : value ? (
+              <span className="value-text">{value}</span>
+            ) : (
+              <span className="muted">Not set</span>
+            )}
+          </PropertyRow>
+        );
+      })
     ) : kind === 'Document' && !fileMode ? (
       <PropertyRow
         label="Value"
         actions={
           <>
             {shownValue === null ? showButton : hideButton}
-            {copyButton('Value', copyValue)}
+            {copyButton('Value', () => copyField('value'))}
           </>
         }
       >
@@ -1179,19 +1230,30 @@ export function DetailsPanel({
                     icon={shownValue === null ? 'eye' : 'eyeOff'}
                     reason={shownValue === null ? readProblem : undefined}
                     onClick={() => {
-                      if (shownValue === null) void show();
-                      else hide();
+                      if (shownValue !== null) hide();
+                      else if (kind === 'Password') showRow('password');
+                      else void show();
                     }}
                   >
-                    {shownValue === null ? 'Show Value' : 'Hide Value'}
+                    {kind === 'Password'
+                      ? shownValue === null
+                        ? 'Show Password'
+                        : // Any of a login's rows may be shown by now.
+                          'Hide Values'
+                      : shownValue === null
+                        ? 'Show Value'
+                        : 'Hide Value'}
                   </MenuItem>
-                  <MenuItem
-                    icon="copy"
-                    reason={readProblem}
-                    onClick={() => void copyValue()}
-                  >
-                    {kind === 'Password' ? 'Copy Password' : 'Copy Value'}
-                  </MenuItem>
+                  {copyActions(item).map(({ field, label }) => (
+                    <MenuItem
+                      key={field}
+                      icon="copy"
+                      reason={readProblem}
+                      onClick={() => void copyField(field)}
+                    >
+                      {label}
+                    </MenuItem>
+                  ))}
                 </>
               )}
               <MenuItem
@@ -1219,10 +1281,10 @@ export function DetailsPanel({
                 shortcut="⌘⌫"
                 reason={writeProblem}
                 onClick={() => {
-                  if (requireAccess(true)) onDelete(item);
+                  if (requireAccess(true)) onTrash(item);
                 }}
               >
-                Delete…
+                Move to Trash
               </MenuItem>
             </>
           )}

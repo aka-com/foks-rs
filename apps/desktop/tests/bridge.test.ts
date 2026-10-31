@@ -5,9 +5,11 @@ import { readFile } from 'node:fs/promises';
 import {
   decodeAccounts,
   decodeCatalog,
+  decodeClipboardCopy,
   decodeCopy,
   decodeDownload,
   decodeMutation,
+  decodeTrashMutation,
   decodeCheckedProfile,
   decodePendingOperations,
   decodeRecoveryPhrase,
@@ -79,7 +81,7 @@ test('mock mutations reject a recreated source with the same path and version', 
     version: original.version,
     direntId: original.direntId,
   };
-  await bridge.removeItem(request);
+  await bridge.trashItem(request);
   await bridge.createTextItem({
     value: 'test',
     storeId: original.store,
@@ -93,6 +95,7 @@ test('mock mutations reject a recreated source with the same path and version', 
   await assert.rejects(
     bridge.moveItem({ ...request, destination: '/aba-moved' }),
   );
+  await assert.rejects(bridge.trashItem(request));
   await assert.rejects(bridge.removeItem(request));
   assert.ok(
     (await bridge.listCatalog()).items.some(
@@ -275,6 +278,158 @@ test('decodeCatalog enforces schema validation and rejects malformed fields', ()
   );
 });
 
+test('decodeCatalog reads a small file shape as login or other', () => {
+  const withShape = (shape: unknown) =>
+    decodeCatalog({ ...catalog, items: [{ ...catalog.items[0], shape }] });
+  assert.equal(withShape('login').items[0]?.shape, 'login');
+  assert.equal(withShape('other').items[0]?.shape, 'other');
+  // An agent that predates the field omits it; the key stays absent.
+  assert.equal('shape' in withShape(undefined).items[0], false);
+  // A shape a later agent adds is an ordinary small file here.
+  for (const shape of ['text', 'Login', 'passkey'])
+    assert.equal(withShape(shape).items[0]?.shape, 'other');
+  for (const shape of [null, 1]) assert.throws(() => withShape(shape), /shape/);
+  const folder = decodeCatalog({
+    ...catalog,
+    items: [{ ...catalog.items[0], kind: 'Folder', unreadableEntries: 2 }],
+  }).items[0];
+  assert.equal(folder?.unreadableEntries, 2);
+  assert.throws(
+    () =>
+      decodeCatalog({
+        ...catalog,
+        items: [{ ...catalog.items[0], unreadableEntries: -1 }],
+      }),
+    /unreadableEntries/,
+  );
+});
+
+test('copyItemField sends the exact version and the field to the host', async () => {
+  const previousWindow = globalThis.window;
+  const calls: [string, unknown][] = [];
+  Object.defineProperty(globalThis, 'window', {
+    value: {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: unknown) => {
+          calls.push([command, args]);
+          return { ok: true, clearAfterSeconds: 15 };
+        },
+      },
+    },
+    configurable: true,
+  });
+  try {
+    assert.deepEqual(
+      await tauriBridge.copyItemField({
+        storeId: 'opaque-store-ref',
+        path: '/work/github.com',
+        version: 4,
+        field: 'password',
+      }),
+      { ok: true, clearAfterSeconds: 15 },
+    );
+    assert.deepEqual(calls, [
+      [
+        'copy_item_field',
+        {
+          storeId: 'opaque-store-ref',
+          path: '/work/github.com',
+          version: 4,
+          field: 'password',
+        },
+      ],
+    ]);
+  } finally {
+    if (previousWindow === undefined)
+      delete (globalThis as { window?: Window }).window;
+    else
+      Object.defineProperty(globalThis, 'window', {
+        value: previousWindow,
+        configurable: true,
+      });
+  }
+});
+
+test('Trash commands send the bound selection and decode the new path', async () => {
+  const previousWindow = globalThis.window;
+  const calls: [string, unknown][] = [];
+  Object.defineProperty(globalThis, 'window', {
+    value: {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: unknown) => {
+          calls.push([command, args]);
+          return command === 'remove_item' || command === 'empty_trash'
+            ? { applied: true }
+            : { applied: true, path: `/moved/${command}` };
+        },
+      },
+    },
+    configurable: true,
+  });
+  const selection = {
+    storeId: 'opaque-store-ref',
+    path: '/logins/github.com',
+    version: 4,
+    direntId: '07'.repeat(16),
+  };
+  try {
+    assert.deepEqual(await tauriBridge.trashItem(selection), {
+      applied: true,
+      path: '/moved/trash_item',
+    });
+    assert.deepEqual(
+      await tauriBridge.restoreTrashItem({
+        ...selection,
+        destination: '/logins/github.com (restored)',
+      }),
+      { applied: true, path: '/moved/restore_trash_item' },
+    );
+    assert.deepEqual(await tauriBridge.removeItem(selection), {
+      applied: true,
+    });
+    assert.deepEqual(
+      await tauriBridge.removeItem({ ...selection, outsideTrash: true }),
+      { applied: true },
+    );
+    const { storeId, ...entry } = selection;
+    assert.deepEqual(
+      await tauriBridge.emptyTrash({
+        storeId,
+        entries: [entry, { ...entry, path: '/.trash/owner/b', version: 2 }],
+      }),
+      { applied: true },
+    );
+    assert.deepEqual(calls, [
+      ['trash_item', selection],
+      [
+        'restore_trash_item',
+        { ...selection, destination: '/logins/github.com (restored)' },
+      ],
+      ['remove_item', { ...selection, outsideTrash: false }],
+      ['remove_item', { ...selection, outsideTrash: true }],
+      [
+        'empty_trash',
+        {
+          storeId,
+          entries: [entry, { ...entry, path: '/.trash/owner/b', version: 2 }],
+        },
+      ],
+    ]);
+    assert.throws(
+      () => decodeTrashMutation({ applied: true }),
+      /trash mutation response\.path/,
+    );
+  } finally {
+    if (previousWindow === undefined)
+      delete (globalThis as { window?: Window }).window;
+    else
+      Object.defineProperty(globalThis, 'window', {
+        value: previousWindow,
+        configurable: true,
+      });
+  }
+});
+
 test('action decoders reject partial or malformed responses', () => {
   assert.deepEqual(
     decodeReadItem({
@@ -296,6 +451,14 @@ test('action decoders reject partial or malformed responses', () => {
   );
   assert.deepEqual(decodeCopy({ ok: true }), { ok: true });
   assert.throws(() => decodeCopy({ ok: false }), /must be true/);
+  assert.deepEqual(decodeClipboardCopy({ ok: true, clearAfterSeconds: 15 }), {
+    ok: true,
+    clearAfterSeconds: 15,
+  });
+  assert.throws(
+    () => decodeClipboardCopy({ ok: true }),
+    /clearAfterSeconds must be a non-negative safe integer/,
+  );
   assert.deepEqual(decodeDownload({ saved: false }), { saved: false });
   assert.deepEqual(decodeMutation({ applied: true }), { applied: true });
   assert.deepEqual(decodeMutation({ applied: false }), { applied: false });
@@ -465,6 +628,10 @@ test('decoders successfully parse the full wire contract golden fixture', async 
   ]);
   assert.equal(decodeReadItem(fixture.readItem).version, 7);
   assert.deepEqual(decodeCopy(fixture.commandAck), { ok: true });
+  assert.deepEqual(decodeClipboardCopy(fixture.clipboardCopy), {
+    ok: true,
+    clearAfterSeconds: 30,
+  });
   assert.deepEqual(decodeDownload(fixture.cancelledDownload), { saved: false });
   assert.deepEqual(decodeMutation(fixture.appliedMutation), { applied: true });
   assert.deepEqual(decodeMutation(fixture.cancelledMutation), {
@@ -1496,7 +1663,7 @@ test('loadSnapshot makes a single catalog call and does not leak fixture data in
     readItem: async () => {
       throw new Error('not used');
     },
-    copyItemValue: async () => ({ ok: true }),
+    copyItemValue: async () => ({ ok: true, clearAfterSeconds: 30 }),
     copyItemPath: async () => ({ ok: true }),
     downloadFile: async () => ({ saved: false }),
   };
@@ -1672,7 +1839,7 @@ test('creates a notification when a server cannot be described instead of omitti
     readItem: async () => {
       throw new Error('not used');
     },
-    copyItemValue: async () => ({ ok: true }),
+    copyItemValue: async () => ({ ok: true, clearAfterSeconds: 30 }),
     copyItemPath: async () => ({ ok: true }),
     downloadFile: async () => ({ saved: false }),
   };
@@ -1737,7 +1904,7 @@ test('loadSnapshot does not fetch team rosters for blocked profiles', async () =
     readItem: async () => {
       throw new Error('not used');
     },
-    copyItemValue: async () => ({ ok: true }),
+    copyItemValue: async () => ({ ok: true, clearAfterSeconds: 30 }),
     copyItemPath: async () => ({ ok: true }),
     downloadFile: async () => ({ saved: false }),
   };
@@ -1830,7 +1997,7 @@ test('loadSnapshot does not fetch members for an inactive team', async () => {
     readItem: async () => {
       throw new Error('not used');
     },
-    copyItemValue: async () => ({ ok: true }),
+    copyItemValue: async () => ({ ok: true, clearAfterSeconds: 30 }),
     copyItemPath: async () => ({ ok: true }),
     downloadFile: async () => ({ saved: false }),
   };
@@ -3332,5 +3499,47 @@ test('mock catalogs retain empty folder identities through a rename', async () =
       direntId: renamed.direntId,
     }),
     (error: unknown) => normalizeCommandError(error).code === 'invalid-request',
+  );
+});
+
+test('the mock refuses a second selection in a store it wrote to until the catalog is read again', async () => {
+  const bridge = mockBridge(FIXTURE);
+  const listed = (await bridge.listCatalog()).items.filter(
+    (item) =>
+      item.store === 'acct:personal' &&
+      ['/logins/github.com', '/documents/passport-scan.pdf'].includes(
+        item.path,
+      ),
+  );
+  assert.equal(listed.length, 2);
+  const [first, second] = listed.map((item) => ({
+    storeId: item.store,
+    path: item.path,
+    version: item.version,
+    direntId: item.direntId,
+  }));
+  const { path } = await bridge.trashItem(first);
+  // The host discards the store's catalog items after a write, as here.
+  await assert.rejects(
+    bridge.trashItem(second),
+    (error: unknown) => normalizeCommandError(error).code === 'conflict',
+  );
+  await bridge.listCatalog();
+  const { path: other } = await bridge.trashItem(second);
+  const entries = (await bridge.listCatalog()).items.filter((item) =>
+    [path, other].includes(item.path),
+  );
+  await bridge.emptyTrash({
+    storeId: 'acct:personal',
+    entries: entries.map(({ path, version, direntId }) => ({
+      path,
+      version,
+      direntId,
+    })),
+  });
+  assert.ok(
+    !(await bridge.listCatalog()).items.some((item) =>
+      [path, other].includes(item.path),
+    ),
   );
 });

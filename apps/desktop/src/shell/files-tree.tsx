@@ -11,6 +11,9 @@
  * Rows set `data-folder-store` and `data-folder-path` for the shared folder
  * context menu (`screens/folder-menu.tsx`), triggered via right-click,
  * ContextMenu, or Shift-F10.
+ *
+ * A store with entries in Trash, or whose Trash is open, lists a Trash row
+ * after its folders; it opens the store's Trash view and has no folder menu.
  */
 
 import { Fragment, useEffect, useState } from 'react';
@@ -24,6 +27,9 @@ import {
   storeDescription,
   storeDescriptionState,
   storeDisplayOrder,
+  storeReadable,
+  TRASH_ROOT,
+  trashEntries,
 } from '../model';
 import type { AgentSnapshot, Store } from '../model';
 import type { Location } from '../location';
@@ -247,6 +253,10 @@ export function FilesTree({
       folderEntries.filter((item) => item.store === store.id),
     ),
   }));
+  const trashCount = (store: Store): number =>
+    storeReadable(snapshot, store.id)
+      ? trashEntries(snapshot, store.id).length
+      : 0;
   const vaultTrees = trees.filter((tree) => tree.store.kind === 'account');
   const teamTrees = trees.filter((tree) => tree.store.kind === 'team');
 
@@ -254,6 +264,8 @@ export function FilesTree({
     folders: readonly FolderNode[],
     store: Store,
     depth: number,
+    /** Rows drawn after these folders at the same level, such as Trash. */
+    trailing = 0,
   ): ReactNode =>
     folders.map((node, index) => {
       const key = `${store.id}|${node.path}`;
@@ -270,7 +282,7 @@ export function FilesTree({
             open={open}
             expandable={node.folders.length > 0}
             disabled={disabled}
-            position={{ index: index + 1, of: folders.length }}
+            position={{ index: index + 1, of: folders.length + trailing }}
             onSelect={() => onOpen(`${store.id}|${node.path}`)}
             onToggle={() => toggle(key)}
           />
@@ -287,6 +299,10 @@ export function FilesTree({
     const { store, root } = tree;
     const key = `${store.id}|/`;
     const open = expanded.has(key);
+    const trashOpen =
+      selected.store === store.id && selected.path === TRASH_ROOT;
+    const inTrash = trashCount(store);
+    const trashRow = inTrash > 0 || trashOpen;
     const access = storeAvailability(snapshot, store, {
       nowSeconds: accessNow(),
     });
@@ -324,14 +340,34 @@ export function FilesTree({
           name={store.name}
           tail={tail}
           open={open}
-          expandable={root.folders.length > 0}
+          expandable={root.folders.length > 0 || trashRow}
           disabled={disabled}
           position={{ index: index + 1, of: group.length }}
           inactive={store.kind === 'team' && store.active === false}
           onSelect={() => onOpen(`${store.id}|/`)}
           onToggle={() => toggle(key)}
         />
-        {open ? drawFolders(root.folders, store, 1) : null}
+        {open ? drawFolders(root.folders, store, 1, trashRow ? 1 : 0) : null}
+        {open && trashRow ? (
+          <TreeRow
+            storeId={store.id}
+            path={TRASH_ROOT}
+            depth={1}
+            active={trashOpen}
+            mark={<Icon name="trash" />}
+            name="Trash"
+            tail={inTrash ? <span className="n c">{inTrash}</span> : undefined}
+            open={false}
+            expandable={false}
+            disabled={disabled}
+            position={{
+              index: root.folders.length + 1,
+              of: root.folders.length + 1,
+            }}
+            onSelect={() => onOpen(`${store.id}|${TRASH_ROOT}`)}
+            onToggle={() => {}}
+          />
+        ) : null}
       </Fragment>
     );
   };

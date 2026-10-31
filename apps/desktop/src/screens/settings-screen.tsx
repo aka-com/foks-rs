@@ -3,6 +3,11 @@ import type { CollectionReadiness } from '../model';
 import { localAliasOf } from '../model';
 import { useDismissedOnboardingTip } from '../onboarding-tips';
 import { setAppearance, useAppearance, type Appearance } from '../appearance';
+import {
+  rememberTrashAutoEmpty,
+  storedTrashAutoEmpty,
+  TRASH_AUTO_EMPTY_CHOICES,
+} from '../trash-auto-empty';
 /**
  * The Settings tab: a sub-navigation of three pages, held on screen beside
  * whichever one is open.
@@ -10,7 +15,8 @@ import { setAppearance, useAppearance, type Appearance } from '../appearance';
  * Account, the first page and the one the tab opens on, is one account's
  * profile: the account the address's `store` names. At its bottom are the
  * servers this Mac talks to. Each server opens its own page, where its security
- * keys are managed. Preferences contains local desktop alert and appearance settings.
+ * keys are managed. Preferences contains local desktop alert, appearance and
+ * automatic Trash emptying settings.
  * Device contains the application version and lock, the agent and its socket,
  * local FOKS data operations, and the device-wide reset. A `section=` address
  * opens its page; `profile=` opens a server page under Account.
@@ -267,6 +273,8 @@ function PreferencesSection(): ReactNode {
       <RailColorPicker />
       <SectionLabel>Desktop alerts</SectionLabel>
       <NotificationSettings />
+      <SectionLabel>Trash</SectionLabel>
+      <TrashAutoEmptyPicker />
       <SectionLabel>Onboarding tips</SectionLabel>
       <Inset className="settings-checkboxes">
         <label>
@@ -279,6 +287,48 @@ function PreferencesSection(): ReactNode {
           <span>Add a password</span>
         </label>
       </Inset>
+    </>
+  );
+}
+
+/**
+ * Automatic emptying of vault Trash on this device. While this app runs,
+ * entries deleted longer ago than the chosen age are deleted permanently,
+ * for everyone, from each vault's Trash where this account can change them.
+ */
+function TrashAutoEmptyPicker(): ReactNode {
+  const [days, setDays] = useState(storedTrashAutoEmpty);
+  return (
+    <>
+      <Inset className="settings-inset middle wide">
+        <InsetRow label="Empty automatically">
+          <div
+            className="seg txt"
+            role="group"
+            aria-label="Empty Trash automatically"
+          >
+            {TRASH_AUTO_EMPTY_CHOICES.map((choice) => (
+              <button
+                type="button"
+                key={choice ?? 'off'}
+                className={days === choice ? 'on' : undefined}
+                aria-pressed={days === choice}
+                onClick={() => {
+                  setDays(choice);
+                  rememberTrashAutoEmpty(choice);
+                }}
+              >
+                {choice === null ? 'Never' : `After ${choice} Days`}
+              </button>
+            ))}
+          </div>
+        </InsetRow>
+      </Inset>
+      <p className="hint">
+        Entries that have been in Trash this long are deleted permanently, for
+        everyone, while this app runs. Other devices and clients are not told of
+        this choice.
+      </p>
     </>
   );
 }

@@ -76,10 +76,12 @@ function toasts(): string {
 
 test('an edit conflict with a deleted item preserves a new-item draft', async () => {
   const { rendered } = await mount((base) => ({
-    // The save meets an item another session has already deleted.
+    // The save meets an item another session has already moved to Trash.
     editTextItem: async (request) => {
-      await base.removeItem({
-        ...request,
+      await base.trashItem({
+        storeId: request.storeId,
+        path: request.path,
+        version: request.version,
         direntId: (await base.listCatalog()).items.find(
           (item) =>
             item.store === request.storeId && item.path === request.path,
@@ -138,7 +140,6 @@ test('an edit conflict with an existing item resumes against the refreshed versi
   assert.ok(document.querySelector('.details'));
 });
 
-/** The confirmation's own Delete, not the details panel's. */
 /** Runs an action from the details panel's More menu. */
 async function itemMenuAction(label: string): Promise<void> {
   ui.fireEvent.click(
@@ -147,57 +148,33 @@ async function itemMenuAction(label: string): Promise<void> {
   ui.fireEvent.click(await ui.screen.findByRole('menuitem', { name: label }));
 }
 
-function confirmDelete(): HTMLButtonElement {
-  const dialog = document.querySelector('[role="alertdialog"]');
-  assert.ok(dialog, 'the delete confirmation is up');
-  const button = [...dialog.querySelectorAll<HTMLButtonElement>('button')].find(
-    (candidate) => candidate.textContent?.trim().startsWith('Delete'),
-  );
-  assert.ok(button);
-  return button;
-}
-
-test('delete conflicts distinguish modified and deleted items', async () => {
+test('Move to Trash conflicts distinguish modified and deleted items', async () => {
   let gone = false;
   const { rendered } = await mount((base) => ({
-    removeItem: async (request) => {
+    trashItem: async (request) => {
       if (gone) {
-        // Another session deleted it first.
-        await base.removeItem({
-          ...request,
-          direntId: (await base.listCatalog()).items.find(
-            (item) =>
-              item.store === request.storeId && item.path === request.path,
-          )!.direntId,
-        });
-      } else {
-        // Another session changed it first.
-        await base.editTextItem({ ...request, value: 'theirs' });
+        // Another session moved it to Trash first.
+        await base.trashItem(request);
+        return base.trashItem(request);
       }
-      return base.removeItem(request);
+      // Another session changed it first.
+      await base.editTextItem({ ...request, value: 'theirs' });
+      return base.trashItem(request);
     },
   }));
-  await itemMenuAction('Delete…');
-  await ui.waitFor(() => confirmDelete());
-  await ui.act(async () => {
-    ui.fireEvent.click(confirmDelete());
-  });
+  await itemMenuAction('Move to Trash');
   await ui.waitFor(() =>
-    assert.match(toasts(), /modified by another user or session/),
+    assert.match(toasts(), /changed by another user or session/),
   );
+  // No confirmation: moving to Trash can be undone.
+  assert.equal(document.querySelector('[role="alertdialog"]'), null);
 
   gone = true;
   await ui.waitFor(() =>
     rendered.getByRole('button', { name: 'More actions' }),
   );
-  await itemMenuAction('Delete…');
-  await ui.waitFor(() => confirmDelete());
-  await ui.act(async () => {
-    ui.fireEvent.click(confirmDelete());
-  });
-  await ui.waitFor(() => assert.match(toasts(), /already deleted elsewhere/));
-  assert.doesNotMatch(
-    toasts().slice(toasts().indexOf('already deleted')),
-    /Review the updated item/,
+  await itemMenuAction('Move to Trash');
+  await ui.waitFor(() =>
+    assert.match(toasts(), /already moved or deleted elsewhere/),
   );
 });

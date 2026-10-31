@@ -248,7 +248,7 @@ test('unsaved edits ask before a click on another row discards them', async () =
   );
 });
 
-test('⌘⌫ acts only while the focus is in the list or the details', async () => {
+test('⌘⌫ moves to Trash only while the focus is in the list or the details', async () => {
   await mount(
     { kind: 'all' },
     {
@@ -259,20 +259,19 @@ test('⌘⌫ acts only while the focus is in the list or the details', async () 
   const chat = document.querySelector<HTMLElement>(
     '.side .nav[data-place="chat"]',
   )!;
+  const toasts = () => document.querySelector('.toasts')?.textContent ?? '';
   chat.focus();
   ui.fireEvent.keyDown(chat, { key: 'Backspace', metaKey: true });
-  assert.equal(ui.screen.queryByRole('alertdialog'), null);
+  assert.doesNotMatch(toasts(), /to Trash/);
   const row = option('github.com');
   row.focus();
   ui.fireEvent.keyDown(row, { key: 'Backspace', metaKey: true });
-  const alert = await ui.screen.findByRole('alertdialog');
-  ui.fireEvent.click(ui.within(alert).getByRole('button', { name: 'Cancel' }));
-  await ui.waitFor(() =>
-    assert.equal(ui.screen.queryByRole('alertdialog'), null),
-  );
+  // The move can be undone, so no alert asks first.
+  assert.equal(ui.screen.queryByRole('alertdialog'), null);
+  await ui.waitFor(() => assert.match(toasts(), /Moved github\.com to Trash/));
 });
 
-test('⌘⌫ on an item the account may not delete shows the reason instead of the alert', async () => {
+test('⌘⌫ on an item the account may not delete shows the reason instead of moving it', async () => {
   await mount(
     { kind: 'all' },
     {

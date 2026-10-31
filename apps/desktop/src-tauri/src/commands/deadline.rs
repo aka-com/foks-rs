@@ -58,9 +58,18 @@ fn command_class(name: &str) -> Result<Option<DeadlineClass>, AgentError> {
         | "retry_agent_connection"
         | "sso_request"
         | "take_agent_connection_loss" => None,
-        "import_dropped_file" | "replace_dropped_file" | "resume_file_upload" => {
-            Some(DeadlineClass::Bulk)
-        }
+        // Empty Trash removes every named entry, and a folder's whole
+        // subtree, under one mutation. Moving an entry into Trash or back
+        // can take four writes in sequence (`/.trash`, its role folder, the
+        // `.origin` file and the move, or a parent folder, the move and the
+        // `.origin` removal), each awaiting the server's sync, which an
+        // Ordinary 15 s budget does not hold on a slow server.
+        "empty_trash"
+        | "import_dropped_file"
+        | "replace_dropped_file"
+        | "restore_trash_item"
+        | "resume_file_upload"
+        | "trash_item" => Some(DeadlineClass::Bulk),
         // A catalog read walks every store of every profile it covers, one
         // ListKv page after another, under this one budget. The agent caps
         // each of those requests by its own class (Ordinary, 15 s), so the
@@ -94,6 +103,7 @@ fn command_class(name: &str) -> Result<Option<DeadlineClass>, AgentError> {
         | "check_server"
         | "commit_owner_backup"
         | "configure_web_admin"
+        | "copy_item_field"
         | "copy_item_value"
         | "create_first_run_account"
         | "create_folder"
@@ -256,5 +266,30 @@ mod tests {
                 .code,
             "missing-deadline-policy"
         );
+    }
+
+    #[test]
+    fn vault_item_and_trash_commands_have_deadline_classes() {
+        let remaining = |name: &str| {
+            CommandState::admitted(&state(), name)
+                .unwrap()
+                .deadline()
+                .unwrap()
+                .instant()
+                .saturating_duration_since(std::time::Instant::now())
+        };
+        for name in ["copy_item_field", "copy_item_value", "remove_item"] {
+            assert!(
+                remaining(name) <= std::time::Duration::from_secs(15),
+                "{name}"
+            );
+        }
+        // A move into or out of Trash can take four synced writes in turn.
+        for name in ["trash_item", "restore_trash_item", "empty_trash"] {
+            assert!(
+                remaining(name) > std::time::Duration::from_secs(290),
+                "{name}"
+            );
+        }
     }
 }

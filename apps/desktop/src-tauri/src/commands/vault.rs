@@ -11,13 +11,13 @@ use crate::commands::validation::{
     MAXIMUM_CLIPBOARD_TEXT_BYTES, MAXIMUM_DOWNLOAD_BYTES, MAXIMUM_TEXT_ITEM_BYTES,
 };
 use foks_agent_proto::{
-    KvChunkResult, KvReadResult, KvRole, KvStoreRef, KvUploadHeader, Operation,
+    KvChunkResult, KvEntryShape, KvReadResult, KvRole, KvStoreRef, KvUploadHeader, Operation,
 };
 use foks_desktop::{
     CatalogFailureScope, CatalogInventoryState, CatalogItem, CatalogSnapshot, CatalogStoreRef,
     CatalogStoreSummary, KvAccountMutation, KvItemRead, KvItemValue,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -61,6 +61,14 @@ pub struct ItemDto {
     pub version: u64,
     pub read: RoleDto,
     pub write: RoleDto,
+    /// `login` or `other` for a small file the agent's listing classified;
+    /// absent for other node types. It carries no field value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shape: Option<&'static str>,
+    /// For a folder, how many entries directly in it this account cannot
+    /// read, as the agent's listing reported it; absent for other node types.
+    #[serde(rename = "unreadableEntries", skip_serializing_if = "Option::is_none")]
+    pub unreadable_entries: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -303,6 +311,11 @@ fn item_dto(item: &CatalogItem) -> Result<ItemDto, AgentError> {
         version: item.metadata.version,
         read: item.metadata.read_role.into(),
         write: item.metadata.write_role.into(),
+        shape: item.metadata.shape.map(|shape| match shape {
+            KvEntryShape::Login => "login",
+            KvEntryShape::Other => "other",
+        }),
+        unreadable_entries: item.metadata.unreadable_entries,
     })
 }
 
@@ -318,6 +331,25 @@ pub struct ReadItemDto {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct DownloadResult {
     pub saved: bool,
+}
+
+/// The acknowledgement of an item copy. The host clears the clipboard
+/// `clear_after_seconds` after the write unless it no longer holds the copied
+/// value, so the renderer can state when that happens.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardAck {
+    pub ok: bool,
+    pub clear_after_seconds: u64,
+}
+
+impl ClipboardAck {
+    fn written() -> Self {
+        Self {
+            ok: true,
+            clear_after_seconds: crate::clipboard::AUTO_CLEAR_SECONDS,
+        }
+    }
 }
 
 /// Checks every agent call, including the chunk calls inside the shared read
@@ -416,7 +448,7 @@ pub(super) fn read_text(
     })
 }
 
-fn protocol_store(store: &CatalogStoreRef) -> KvStoreRef {
+pub(super) fn protocol_store(store: &CatalogStoreRef) -> KvStoreRef {
     match store {
         CatalogStoreRef::Account(store) => KvStoreRef::Account(store.clone()),
         CatalogStoreRef::Team(store) => KvStoreRef::Team(store.clone()),
@@ -803,16 +835,6 @@ pub(super) fn require_text_item(item: &CatalogItem) -> Result<(), AgentError> {
     } else {
         Err(invalid_request("Only secrets can be edited as text."))
     }
-}
-
-pub(super) fn remove_item_operation(item: &CatalogItem) -> Result<Operation, AgentError> {
-    // Folder deletion is not supported.
-    if item.metadata.node_type == "directory" {
-        return Err(invalid_request(
-            "Folder removal is not currently supported.",
-        ));
-    }
-    foks_desktop::remove_kv_operation(item, false).map_err(invalid_request)
 }
 
 pub(super) fn file_create_header(
@@ -1377,6 +1399,8 @@ pub async fn read_item(
     })
 }
 
+/// Copies an item's whole stored text; the same command as
+/// [`copy_item_field`] with [`ItemField::Value`].
 #[tauri::command]
 pub async fn copy_item_value(
     app: tauri::AppHandle,
@@ -1385,7 +1409,65 @@ pub async fn copy_item_value(
     store_id: String,
     path: String,
     version: u64,
-) -> Result<CommandAck, AgentError> {
+) -> Result<ClipboardAck, AgentError> {
+    copy_item_field(
+        app,
+        webview,
+        state,
+        store_id,
+        path,
+        version,
+        ItemField::Value,
+    )
+    .await
+}
+
+/// The part of a stored item [`copy_item_field`] puts on the clipboard.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum ItemField {
+    Password,
+    Username,
+    Url,
+    /// The whole stored text, which [`copy_item_value`] copies.
+    Value,
+}
+
+/// Selects one field of a read item's text. Login fields are found by the
+/// same parser the agent's listing uses to classify a login, so an item
+/// listed as one has a password line this finds; that line may be empty, and
+/// an empty or absent field is reported as `field-missing`. The returned
+/// value is a fresh zeroizing copy; the full text is dropped, and zeroized,
+/// with `value`.
+pub(super) fn item_field(
+    value: Zeroizing<String>,
+    field: ItemField,
+) -> Result<Zeroizing<String>, AgentError> {
+    let (login_field, name) = match field {
+        ItemField::Value => return Ok(value),
+        ItemField::Password => (foks_client_app::LoginField::Password, "password"),
+        ItemField::Username => (foks_client_app::LoginField::Username, "user name"),
+        ItemField::Url => (foks_client_app::LoginField::Url, "website"),
+    };
+    foks_client_app::login_field(&value, login_field)
+        .map(|found| Zeroizing::new(found.to_owned()))
+        .ok_or_else(|| AgentError::new("field-missing", format!("This item has no {name}."), false))
+}
+
+/// Copies one field of an item, for example only the password of a login
+/// rather than its whole stored text, after an exact-version read and with
+/// clipboard hygiene. No content crosses IPC; the response says when the
+/// clipboard is cleared.
+#[tauri::command]
+pub async fn copy_item_field(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    state: super::deadline::CommandState,
+    store_id: String,
+    path: String,
+    version: u64,
+    field: ItemField,
+) -> Result<ClipboardAck, AgentError> {
     let interval = crate::applock::unlocked_interval(&app)?;
     require_main_window(&webview)?;
     let item = state.selected_item(&store_id, &path, version)?;
@@ -1394,7 +1476,10 @@ pub async fn copy_item_value(
     let value = super::deadline::run(
         state.deadline()?,
         false,
-        move || read_text(transport, &item, &worker_interval).map(|read| read.value),
+        move || {
+            read_text(transport, &item, &worker_interval)
+                .and_then(|read| item_field(read.value, field))
+        },
         |value| zeroize::Zeroize::zeroize(&mut **value),
     )
     .await?;
@@ -1406,7 +1491,7 @@ pub async fn copy_item_value(
         crate::clipboard::copy_with_hygiene(&app, value)
             .map_err(|error| AgentError::new("clipboard", error, true))
     })?;
-    Ok(CommandAck { ok: true })
+    Ok(ClipboardAck::written())
 }
 
 #[tauri::command]
@@ -1635,31 +1720,6 @@ pub async fn move_item(
     let item = state.selected_bound_mutation_item(&store_id, &path, version, &dirent_id)?;
     let operation =
         foks_desktop::move_kv_operation(&item, &destination).map_err(invalid_request)?;
-    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
-    apply_kv_mutation(
-        &state,
-        KvAccountMutation::Inline(operation),
-        MutationKind::Guarded,
-    )
-    .await
-}
-
-#[tauri::command]
-pub async fn remove_item(
-    app: tauri::AppHandle,
-    webview: tauri::Webview,
-    state: super::deadline::CommandState,
-    store_id: String,
-    path: String,
-    version: u64,
-    dirent_id: String,
-) -> Result<MutationDto, AgentError> {
-    let unlocked = crate::applock::unlocked_generation(&app)?;
-    require_main_window(&webview)?;
-    let state = state.for_store(&store_id)?;
-    let _permit = prepare_catalog_mutation(&state).await?;
-    let item = state.selected_bound_mutation_item(&store_id, &path, version, &dirent_id)?;
-    let operation = remove_item_operation(&item)?;
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_kv_mutation(
         &state,

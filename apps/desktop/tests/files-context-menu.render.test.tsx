@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createElement, useSyncExternalStore } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 import type { AgentSnapshot, Item } from '../src/model';
-import type { ItemRequest } from '../src/bridge';
+import type { CopyFieldRequest, ItemField, ItemRequest } from '../src/bridge';
 import { installDom } from './lib/dom-harness';
 
 installDom({
@@ -55,7 +55,7 @@ async function mount(accessNow?: () => number) {
     ...INITIAL_STATE,
     location: { kind: 'all' },
   });
-  const copies: ItemRequest[] = [];
+  const copies: (ItemRequest & { field: ItemField })[] = [];
   const downloads: ItemRequest[] = [];
   const reveals: Item[] = [];
   const deletions: Item[] = [];
@@ -65,8 +65,12 @@ async function mount(accessNow?: () => number) {
   const bridge = {
     ...mockBridge(FIXTURE),
     copyItemValue: async (request: ItemRequest) => {
+      copies.push({ ...request, field: 'value' });
+      return { ok: true as const, clearAfterSeconds: 30 };
+    },
+    copyItemField: async (request: CopyFieldRequest) => {
       copies.push(request);
-      return { ok: true as const };
+      return { ok: true as const, clearAfterSeconds: 30 };
     },
     downloadFile: async (request: ItemRequest) => {
       downloads.push(request);
@@ -92,7 +96,11 @@ async function mount(accessNow?: () => number) {
         folder: state.folder,
         onOpen: (folder: string) => locations.openFiles(folder, 'All'),
         onNavigate: (location) => locations.navigate(location),
-        folderActions: { onNewFolder, onTeamInfo },
+        folderActions: {
+          onNewFolder,
+          onTeamInfo,
+          onTrash: (item: Item) => deletions.push(item),
+        },
         accessNow,
       }),
       createElement(ItemsScreen, {
@@ -102,7 +110,7 @@ async function mount(accessNow?: () => number) {
         locations,
         accessNow,
         onReveal: (item: Item) => reveals.push(item),
-        onDelete: (item: Item) => deletions.push(item),
+        onTrash: (item: Item) => deletions.push(item),
         onNew: () => {},
         onResume: async () => {},
         onSettings: () => {},
@@ -167,10 +175,25 @@ test('item menus use the existing read actions and restore keyboard focus', asyn
   ui.fireEvent.click(
     ui.screen.getByRole('menuitem', { name: 'Copy Password' }),
   );
+  // A Password's Copy Password puts only the password on the clipboard.
   assert.deepEqual(mounted.copies, [
-    { storeId: 'acct:personal', path: '/logins/github.com', version: 9 },
+    {
+      storeId: 'acct:personal',
+      path: '/logins/github.com',
+      version: 9,
+      field: 'password',
+    },
   ]);
   assert.equal(ui.screen.queryByRole('menu'), null);
+  await ui.waitFor(() => assert.ok(document.activeElement === password));
+
+  // The user name is its own copy, and a login offers no whole-value copy.
+  ui.fireEvent.keyDown(password, { key: 'F10', shiftKey: true });
+  assert.equal(ui.screen.queryByRole('menuitem', { name: 'Copy Value' }), null);
+  ui.fireEvent.click(
+    ui.screen.getByRole('menuitem', { name: 'Copy User Name' }),
+  );
+  assert.equal(mounted.copies[1]?.field, 'username');
   await ui.waitFor(() => assert.ok(document.activeElement === password));
 
   ui.fireEvent.keyDown(password, { key: 'F10', shiftKey: true });
@@ -195,7 +218,9 @@ test('details and deletion target the context item, not the current selection', 
   const mounted = await mount();
   ui.fireEvent.click(row('github.com'));
   ui.fireEvent.contextMenu(row('passport-scan.pdf'));
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Delete…' }));
+  ui.fireEvent.click(
+    ui.screen.getByRole('menuitem', { name: 'Move to Trash' }),
+  );
   assert.equal(mounted.deletions[0]?.path, '/documents/passport-scan.pdf');
   assert.equal(
     mounted.locations.getSnapshot().selection?.path,
@@ -223,7 +248,7 @@ test('an open menu rechecks changed write permission and modal blocking dismisse
     ),
   };
   mounted.update(snapshot);
-  const deletion = ui.screen.getByRole('menuitem', { name: 'Delete…' });
+  const deletion = ui.screen.getByRole('menuitem', { name: 'Move to Trash' });
   assert.equal(deletion.getAttribute('aria-disabled'), 'true');
   assert.ok(deletion.getAttribute('aria-describedby'));
   ui.fireEvent.click(deletion);
@@ -312,7 +337,7 @@ test('vault and team roots expose scoped folder creation and team info without s
   }
 });
 
-test('tree and content folders target their own path and explain unsupported deletion', async () => {
+test('tree and content folders target their own path and offer Move Folder to Trash', async () => {
   const mounted = await mount();
   // Folders show once their store is open in the tree.
   ui.fireEvent.click(
@@ -324,12 +349,16 @@ test('tree and content folders target their own path and explain unsupported del
     '.side-tree [data-folder-store="acct:personal"][data-folder-path="/logins"] .fselect',
   )!;
   ui.fireEvent.contextMenu(folder);
-  const deletion = ui.screen.getByRole('menuitem', { name: 'Delete Folder' });
+  // The fixture lists no entry for /logins itself, only items under it, so
+  // the folder cannot be selected for a move until the catalog lists it.
+  const deletion = ui.screen.getByRole('menuitem', {
+    name: 'Move Folder to Trash',
+  });
   assert.equal(deletion.getAttribute('aria-disabled'), 'true');
   assert.match(
     document.getElementById(deletion.getAttribute('aria-describedby')!)!
       .textContent,
-    /not supported by the desktop agent/,
+    /Refresh this vault to load the folder before moving it to Trash/,
   );
   ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'New Folder…' }));
   assert.deepEqual(mounted.folders, [
@@ -397,7 +426,7 @@ test('grid folder menus preserve their scope for right click and Shift+F10', asy
     open();
     assert.equal(
       ui.screen
-        .getByRole('menuitem', { name: 'Delete Folder' })
+        .getByRole('menuitem', { name: 'Move Folder to Trash' })
         .getAttribute('aria-disabled'),
       'true',
     );

@@ -1,4 +1,11 @@
-import type { Account, NodeKind, StoreRef, TeamCreationPhase } from '../model';
+import type {
+  Account,
+  ItemShape,
+  LoginFieldName,
+  NodeKind,
+  StoreRef,
+  TeamCreationPhase,
+} from '../model';
 import { decodeAccounts, decodeRole, type RoleDto } from './accounts-groups';
 import { decodeCommandError, type CommandError } from './errors';
 import { decodeServerStatus, type ServerStatusSnapshot } from './servers';
@@ -38,6 +45,13 @@ export interface ItemDto {
   version: number;
   read: RoleDto;
   write: RoleDto;
+  /** Whether a small file holds a login; absent for other node types. */
+  shape?: ItemShape;
+  /**
+   * For a folder, how many entries directly in it this account cannot read;
+   * the listing omits them. Absent for other kinds and from an older agent.
+   */
+  unreadableEntries?: number;
 }
 
 export interface CatalogInventoryDto {
@@ -85,6 +99,13 @@ export interface ItemRequest {
   version: number;
 }
 
+/** One field of an item for `copy_item_field`; `value` is the whole text. */
+export type ItemField = LoginFieldName | 'value';
+
+export interface CopyFieldRequest extends ItemRequest {
+  field: ItemField;
+}
+
 export interface ReadItemResponse {
   store: StoreRef;
   path: string;
@@ -94,6 +115,16 @@ export interface ReadItemResponse {
 
 export interface CopyResponse {
   ok: true;
+}
+
+/**
+ * The response to an item copy. The host clears the clipboard
+ * `clearAfterSeconds` after the write unless it no longer holds the copied
+ * value.
+ */
+export interface ClipboardCopyResponse {
+  ok: true;
+  clearAfterSeconds: number;
 }
 
 export interface DownloadResponse {
@@ -147,6 +178,33 @@ export type MoveItemRequest = ItemRequest & {
   direntId: string;
 };
 export type RemoveItemRequest = ItemRequest & { direntId: string };
+export type RestoreTrashRequest = RemoveItemRequest & { destination: string };
+export type PermanentRemoveRequest = RemoveItemRequest & {
+  /**
+   * Removes an item outside Trash. The host allows it only for a file in a
+   * team that has no `/.trash`, which members other than owners cannot
+   * create.
+   */
+  outsideTrash?: boolean;
+};
+
+/** One Trash entry, bound to the dirent and version the catalog listed. */
+export interface TrashEntrySelection {
+  path: string;
+  version: number;
+  direntId: string;
+}
+
+export interface EmptyTrashRequest {
+  storeId: StoreRef;
+  entries: TrashEntrySelection[];
+}
+
+export interface TrashMutationResponse {
+  applied: boolean;
+  /** Where the entry is now: its Trash path, or the restored path. */
+  path: string;
+}
 
 export interface ImportDroppedFileRequest extends CreateRoleRequest {
   storeId: StoreRef;
@@ -231,7 +289,26 @@ function decodeItem(value: unknown, at: string): ItemDto {
     version: integer(item.version, `${at}.version`),
     read: decodeRole(item.read, `${at}.read`),
     write: decodeRole(item.write, `${at}.write`),
+    ...decodeShape(item.shape, `${at}.shape`),
+    ...(item.unreadableEntries === undefined
+      ? {}
+      : {
+          unreadableEntries: integer(
+            item.unreadableEntries,
+            `${at}.unreadableEntries`,
+          ),
+        }),
   };
+}
+
+/**
+ * A listed shape: `login`, or `other` for every other name, so a class a
+ * later agent adds reads as an ordinary small file rather than failing the
+ * whole catalog.
+ */
+function decodeShape(value: unknown, at: string): { shape?: ItemShape } {
+  if (value === undefined) return {};
+  return { shape: string(value, at) === 'login' ? 'login' : 'other' };
 }
 
 function decodeFailure(value: unknown, at: string): CatalogFailureDto {
@@ -355,9 +432,30 @@ export function decodeCopy(value: unknown): CopyResponse {
   return { ok: true };
 }
 
+export function decodeClipboardCopy(value: unknown): ClipboardCopyResponse {
+  const item = record(value, 'clipboard copy response');
+  if (item.ok !== true)
+    throw new Error('clipboard copy response.ok must be true');
+  return {
+    ok: true,
+    clearAfterSeconds: integer(
+      item.clearAfterSeconds,
+      'clipboard copy response.clearAfterSeconds',
+    ),
+  };
+}
+
 export function decodeDownload(value: unknown): DownloadResponse {
   const item = record(value, 'download_file response');
   return { saved: bool(item.saved, 'download_file.saved') };
+}
+
+export function decodeTrashMutation(value: unknown): TrashMutationResponse {
+  const item = record(value, 'trash mutation response');
+  return {
+    applied: bool(item.applied, 'trash mutation response.applied'),
+    path: string(item.path, 'trash mutation response.path'),
+  };
 }
 
 export function decodeMutation(value: unknown): MutationResponse {

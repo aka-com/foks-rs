@@ -283,7 +283,7 @@ test('filesListShows follows the list rules for each place', async () => {
   );
 });
 
-test('the move sheet says when the destination changes how the item is listed', async () => {
+test('the move sheet keeps a listed shape: a move into /logins does not make a Password', async () => {
   const { store } = await mount();
   await ui.act(async () => {
     store.select({ store: 'acct:personal', path: '/env/prod/DATABASE_URL' });
@@ -294,10 +294,12 @@ test('the move sheet says when the destination changes how the item is listed', 
     assert.ok(found);
     return found;
   });
+  // The agent lists DATABASE_URL with `shape: other`, so it stays a Document
+  // wherever it is filed; the /logins rule applies only to an entry no
+  // listing classified (model.test.ts covers kindOf for both).
   const hint = 'Under /logins, this item is listed with Passwords.';
-  assert.equal(dialog.textContent?.includes(hint), false);
   ui.fireEvent.change(ui.within(dialog).getByLabelText('Path'), {
     target: { value: '/logins/DATABASE_URL' },
   });
-  assert.equal(dialog.textContent?.includes(hint), true);
+  assert.equal(dialog.textContent?.includes(hint), false);
 });

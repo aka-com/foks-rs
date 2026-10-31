@@ -1,7 +1,7 @@
 import { refreshActivitiesFor } from '../refresh-activity';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
-import type { ToastController } from '/kit/toasts';
+import type { ToastController, ToastOptions } from '/kit/toasts';
 import {
   isAgentReadinessError,
   loadSnapshot,
@@ -200,7 +200,11 @@ export function useCatalogRuntime({
   );
 
   const refresh = useCallback(
-    async (message: string, profile?: string): Promise<void> => {
+    async (
+      message: string,
+      profile?: string,
+      options?: ToastOptions,
+    ): Promise<void> => {
       const result = await synchronizeApplied(() => reloadApplied(profile));
       if (result.synchronization === 'pending') {
         if (result.error.code === 'catalog-read-retired') return;
@@ -213,7 +217,8 @@ export function useCatalogRuntime({
           );
         return;
       }
-      toasts.show(message);
+      // A caller that already said what changed passes no message.
+      if (message) toasts.show(message, options);
     },
     [reloadApplied, toasts],
   );

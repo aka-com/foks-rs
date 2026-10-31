@@ -1,0 +1,138 @@
+/**
+ * Copy actions for vault items: which copies an item offers, the command
+ * each one calls, and the toast that names what reached the clipboard.
+ */
+
+import type { ToastController } from '/kit/toasts';
+import { kindOf } from '../model';
+import type { Item } from '../model';
+import { normalizeCommandError } from '../bridge';
+import type { Bridge, ClipboardCopyResponse, ItemField } from '../bridge';
+
+/** A copy an item offers, labelled for its button and menu item. */
+export interface CopyAction {
+  field: ItemField;
+  label: string;
+}
+
+/** The label of each field's Copy menu item. */
+export const COPY_LABELS: Readonly<Record<ItemField, string>> = {
+  password: 'Copy Password',
+  username: 'Copy User Name',
+  url: 'Copy Website',
+  value: 'Copy Value',
+};
+
+const copyOf = (field: ItemField): CopyAction => ({
+  field,
+  label: COPY_LABELS[field],
+});
+
+const PASSWORD_COPIES: readonly CopyAction[] = [
+  copyOf('password'),
+  copyOf('username'),
+];
+const VALUE_COPIES: readonly CopyAction[] = [copyOf('value')];
+// A Password known only by its `/logins/` path, from an agent that lists no
+// shape, may not hold `password:` lines, so it also offers its whole text,
+// labelled so that it does not read as a password copy.
+const UNSHAPED_PASSWORD_COPIES: readonly CopyAction[] = [
+  ...PASSWORD_COPIES,
+  { field: 'value', label: 'Copy All Fields' },
+];
+
+/**
+ * The copies an item offers: a Password's password and user name, a text
+ * Document's whole value, and none for a file, which is downloaded instead.
+ * A Password whose listing has no shape also offers its whole value.
+ */
+export function copyActions(item: Item): readonly CopyAction[] {
+  if (item.kind === 'File') return [];
+  if (kindOf(item) !== 'Password') return VALUE_COPIES;
+  return item.shape === undefined ? UNSHAPED_PASSWORD_COPIES : PASSWORD_COPIES;
+}
+
+/** The toast after a copy, naming only what was copied. */
+export const COPIED: Readonly<Record<ItemField, string>> = {
+  password: 'Password copied',
+  username: 'User name copied',
+  url: 'Website copied',
+  value: 'Value copied',
+};
+
+/**
+ * The toast after a copy: what was copied and when the host clears the
+ * clipboard, for example "Password copied · clears in 30 s".
+ */
+export function copiedMessage(
+  field: ItemField,
+  response: ClipboardCopyResponse,
+): string {
+  return `${COPIED[field]} · clears in ${response.clearAfterSeconds} s`;
+}
+
+/**
+ * Copies one field of the item's current version. A login field is parsed
+ * out by the host, so only that field reaches the clipboard; `value` copies
+ * the whole stored text.
+ */
+export function copyItem(
+  bridge: Bridge,
+  item: Item,
+  field: ItemField,
+): Promise<ClipboardCopyResponse> {
+  const request = {
+    storeId: item.store,
+    path: item.path,
+    version: item.version,
+  };
+  return field === 'value'
+    ? bridge.copyItemValue(request)
+    : bridge.copyItemField({ ...request, field });
+}
+
+/** The message for a copy refused because the item lacks the field. */
+export function missingFieldMessage(error: unknown): string | null {
+  const typed = normalizeCommandError(error);
+  return typed.code === 'field-missing' ? typed.message : null;
+}
+
+/** One copy action and where its outcome is reported. */
+export interface AnnouncedCopy {
+  bridge: Bridge;
+  item: Item;
+  field: ItemField;
+  toasts: Pick<ToastController, 'show'>;
+  /** Why the caller refuses the copy, shown instead of copying. */
+  problem?: string;
+  /** Any failure other than a missing field. */
+  onError: (error: unknown, item?: Item) => void;
+}
+
+/**
+ * A row's or the details panel's Copy: refuses with the access `problem` as
+ * a warning when there is one, copies the field, and names in a toast what
+ * was copied and when the clipboard is cleared, or which field the item
+ * lacks.
+ */
+export async function copyAndAnnounce({
+  bridge,
+  item,
+  field,
+  toasts,
+  problem,
+  onError,
+}: AnnouncedCopy): Promise<void> {
+  if (problem) {
+    toasts.show(problem, { tone: 'warning' });
+    return;
+  }
+  try {
+    const response = await copyItem(bridge, item, field);
+    toasts.show(copiedMessage(field, response));
+  } catch (error) {
+    const missing = missingFieldMessage(error);
+    if (missing) toasts.show(missing, { tone: 'warning' });
+    else onError(error, item);
+  }
+}
