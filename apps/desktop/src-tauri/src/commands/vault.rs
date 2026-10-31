@@ -892,11 +892,13 @@ pub(super) fn upload_file(
     source: &Path,
     kind: MutationKind,
 ) -> Result<(), AgentError> {
+    // The length decides whether the file needs an upload handle; opening the
+    // file reads no content.
+    let (file, total_length) = open_regular_file(source)?;
+    header.total_length = total_length;
     foks_desktop::ensure_upload_identity(transport, &mut header)
         .map_err(AgentError::from_desktop)?;
     let upload_id = header.upload_id.map(|id| id.to_string());
-    let (file, total_length) = open_regular_file(source)?;
-    header.total_length = total_length;
     let mut reader = SourceReader {
         file,
         read_error: None,

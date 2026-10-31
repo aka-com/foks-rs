@@ -915,3 +915,36 @@ fn rejected_publication_is_reported_and_resume_publishes_again() {
         original
     );
 }
+
+/// Front ends send a file of at most `KV_INLINE_FILE_BYTES` without an
+/// upload handle; the client must write exactly those files inline, without
+/// a receipt row, and give one byte more a resumable identity.
+#[test]
+fn the_inline_limit_front_ends_use_matches_the_client() {
+    let f = AccountFixture::start();
+    f.run(|s, v, k| s.create_account("me", "uploadlimit", "laptop", "", "", None, v, k));
+    let limit = usize::try_from(foks_agent_proto::KV_INLINE_FILE_BYTES).unwrap();
+    for (length, receipts) in [(limit, 0), (limit + 1, 1)] {
+        let path = format!("/file-{length}");
+        f.run(|s, v, k| {
+            s.put_kv_file(
+                "me",
+                &path,
+                &mut Cursor::new(vec![3; length]),
+                false,
+                false,
+                v,
+                k,
+            )
+        });
+        assert_eq!(
+            f.run(|s, v, _| s.list_kv_uploads("me", v)).len(),
+            receipts,
+            "{length}"
+        );
+        assert_eq!(
+            f.run(|s, v, _| s.read_kv_file("me", &path, v)).len(),
+            length
+        );
+    }
+}

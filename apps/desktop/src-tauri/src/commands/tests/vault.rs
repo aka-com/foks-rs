@@ -1021,6 +1021,46 @@ fn eighty_four_megabyte_drop_uses_only_the_bounded_stream_boundary() {
     assert!(transport.largest_read.load(Ordering::Acquire) <= 128 * 1024);
 }
 
+/// A dropped file small enough to be written inline is sent without an
+/// upload handle, so it takes no receipt row; one byte more and it gets one.
+#[test]
+fn only_a_file_above_the_inline_limit_takes_an_upload_handle() {
+    let store = CatalogStoreRef::Account(foks_agent_proto::AccountStoreRef {
+        profile: "foks.example".to_owned(),
+        account_alias: "personal".to_owned(),
+    });
+    for (length, handle) in [
+        (0, false),
+        (foks_agent_proto::KV_INLINE_FILE_BYTES, false),
+        (foks_agent_proto::KV_INLINE_FILE_BYTES + 1, true),
+    ] {
+        let source = tempfile::NamedTempFile::new().unwrap();
+        source.as_file().set_len(length).unwrap();
+        let transport = UploadTransport {
+            calls: Mutex::new(Vec::new()),
+            header: Mutex::new(None),
+            total_read: AtomicU64::new(0),
+            largest_read: AtomicU64::new(0),
+        };
+        let header = file_create_header(&store, "/note.txt", 0, None, None).unwrap();
+        upload_file(&transport, header, source.path(), MutationKind::Create).unwrap();
+        let sent = transport.header.lock().unwrap().clone().unwrap();
+        assert_eq!(sent.total_length, length);
+        assert_eq!(sent.upload_id.is_some(), handle, "{length}");
+        assert_eq!(
+            transport
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|operation| matches!(operation, Operation::KvUploadIssuance { .. })),
+            handle,
+            "{length}"
+        );
+        assert_eq!(transport.total_read.load(Ordering::Acquire), length);
+    }
+}
+
 pub(super) struct EarlyUploadLoss;
 
 impl foks_desktop::AgentTransport for EarlyUploadLoss {
@@ -1144,7 +1184,8 @@ fn protocol_error(code: foks_agent_proto::ErrorCode) -> foks_desktop::AgentError
 fn only_failures_after_upload_admission_point_to_the_uploads_list() {
     use foks_agent_proto::ErrorCode;
     let source = tempfile::NamedTempFile::new().unwrap();
-    source.as_file().set_len(1024).unwrap();
+    // Larger than the inline limit, so the upload carries a handle.
+    source.as_file().set_len(4096).unwrap();
     let store = CatalogStoreRef::Account(foks_agent_proto::AccountStoreRef {
         profile: "foks.example".to_owned(),
         account_alias: "personal".to_owned(),
