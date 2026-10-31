@@ -19,7 +19,10 @@ mod scheduling;
 pub use account::TestAccountSpec;
 pub use binary::{BinaryExit, BinaryServer};
 pub use client::TestClient;
-pub use environment::{TestEnvironment, TestFault, TestProfile, SHORT_REQUEST_TIMEOUT};
+pub use environment::{
+    TestEnvironment, TestFault, TestProfile, FEW_REQUESTS_PER_CONNECTION, SHORT_IDLE_TIMEOUT,
+    SHORT_REQUEST_TIMEOUT, TIGHT_IO_IDLE_TIMEOUT,
+};
 pub use foks_server::web_admin::WebAdminConfig;
 pub use process::{InProcessServer, IsolatedTestServer, ProbeOverrideServer};
 pub use recovery::RecoveryLedger;
