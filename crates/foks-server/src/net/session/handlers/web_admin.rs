@@ -67,9 +67,24 @@ fn status(error: crate::Error) -> RpcStatus {
         crate::Error::Config(_) | crate::Error::Protocol(_) => {
             RpcStatus::BadArguments("invalid administration request".into())
         }
-        crate::Error::Database(foks_server_db::Error::Capacity(_))
-        | crate::Error::WriterQueue
-        | crate::Error::ReaderPool => RpcStatus::RateLimited,
-        _ => RpcStatus::TransactionRetry,
+        crate::Error::Database(foks_server_db::Error::Capacity(_)) => RpcStatus::RateLimited,
+        other => crate::status::unmapped(other, "web_admin"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::status::contract::{assert_shared_classes, wrapped_sso};
+
+    #[test]
+    fn administration_writes_report_shared_failure_classes() {
+        assert_shared_classes("web admin", wrapped_sso, status);
+        assert_eq!(
+            status(crate::Error::Database(foks_server_db::Error::Capacity(
+                "admin writer"
+            ))),
+            RpcStatus::RateLimited
+        );
     }
 }

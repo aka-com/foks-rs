@@ -43,6 +43,7 @@ pub mod rpc;
 mod services;
 pub mod sso;
 mod standalone;
+mod status;
 mod writer;
 
 pub use chunk_storage::externalize_chunks;
@@ -57,9 +58,9 @@ pub use fatal::CoreThread;
 #[doc(hidden)]
 pub use fault::{SessionFaultPoint, SessionFaults};
 pub use metrics::{
-    CheckpointMetricsSnapshot, ExpiryKind, ExpiryMetricsSnapshot, FanoutMetricsSnapshot,
-    KexMetricsSnapshot, RealtimeMetricsSnapshot, ReconcileMetricsSnapshot, ServerMetrics,
-    ServerMetricsSnapshot,
+    AdmissionRejection, CheckpointMetricsSnapshot, ExpiryKind, ExpiryMetricsSnapshot,
+    FanoutMetricsSnapshot, KexMetricsSnapshot, RealtimeMetricsSnapshot, ReconcileMetricsSnapshot,
+    ServerMetrics, ServerMetricsSnapshot,
 };
 pub use net::{start, AcceptErrorKind, RunningServer, ServerAddresses};
 pub use rate_limit::RateLimitConfig;

@@ -30,7 +30,7 @@ pub(crate) fn join_waitlist(
     foks_snowpack::encode(&Value::Binary(id.to_vec())).map_err(map_write_error)
 }
 
-fn map_write_error(error: impl Into<crate::Error>) -> RpcStatus {
+pub(super) fn map_write_error(error: impl Into<crate::Error>) -> RpcStatus {
     match error.into() {
         crate::Error::WriterQueue => RpcStatus::RateLimited,
         crate::Error::Database(foks_server_db::Error::Invalid(message)) => {
@@ -39,11 +39,11 @@ fn map_write_error(error: impl Into<crate::Error>) -> RpcStatus {
         crate::Error::Database(foks_server_db::Error::Duplicate(message)) => {
             RpcStatus::Duplicate(message.to_owned())
         }
-        _ => RpcStatus::TransactionRetry,
+        other => crate::status::unmapped(other, "waitlist_write"),
     }
 }
 
-fn map_identifier_write_error(error: crate::Error) -> RpcStatus {
+pub(super) fn map_identifier_write_error(error: crate::Error) -> RpcStatus {
     if matches!(
         error,
         crate::Error::Database(foks_server_db::Error::Duplicate(_))

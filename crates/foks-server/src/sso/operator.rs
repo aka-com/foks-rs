@@ -7,7 +7,7 @@ use crate::{
 use foks_server_db::{SsoPolicy, SsoPolicyTransition, SsoRolloutStatus};
 
 pub fn status(config: &InstallationConfig) -> Result<Option<SsoRolloutStatus>> {
-    let db = foks_server_db::ReadDatabase::open(&config.database, Default::default())?;
+    let db = foks_server_db::ReadDatabase::open(&config.database, config.database_config())?;
     let host = db
         .host_bootstrap()?
         .ok_or(Error::Config("host has not bootstrapped"))?
@@ -21,7 +21,7 @@ pub fn status(config: &InstallationConfig) -> Result<Option<SsoRolloutStatus>> {
 }
 pub fn start(config: &InstallationConfig, confirm_host: &[u8; 33]) -> Result<SsoPolicy> {
     let guard = DatabaseWriterGuard::acquire(&config.database)?;
-    let mut db = guard.open_database(Default::default())?;
+    let mut db = guard.open_database(config.database_config())?;
     let stored = db
         .host_bootstrap()?
         .ok_or(Error::Config("host has not bootstrapped"))?;
@@ -47,7 +47,7 @@ pub fn transition(
     transition: &SsoPolicyTransition,
 ) -> Result<SsoPolicy> {
     let guard = DatabaseWriterGuard::acquire(&config.database)?;
-    let mut db = guard.open_database(Default::default())?;
+    let mut db = guard.open_database(config.database_config())?;
     let stored = db
         .host_bootstrap()?
         .ok_or(Error::Config("host has not bootstrapped"))?;

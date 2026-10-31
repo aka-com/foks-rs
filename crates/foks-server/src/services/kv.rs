@@ -106,7 +106,7 @@ pub(crate) fn dispatch(
         let offset = chunk.offset;
         let final_chunk = chunk.final_chunk;
         let ciphertext = crate::chunk_storage::ciphertext(chunk, chunk_store)
-            .map_err(|_| RpcStatus::TransactionRetry)?;
+            .map_err(|error| crate::status::unmapped(error, "kv_chunk_read"))?;
         return Ok(Response::Data(
             foks_proto::KvEncryptedChunk {
                 ciphertext,
@@ -491,19 +491,19 @@ fn put_file_chunk(
                 let result = store.put_object(&token.object(), &upload.exact_chunk);
                 writer
                     .settle_chunk_publication(token.clone(), result.is_ok())
-                    .map_err(|_| RpcStatus::TransactionRetry)?;
-                result.map_err(|_| RpcStatus::TransactionRetry)?;
+                    .map_err(map_upload_error)?;
+                result.map_err(map_upload_error)?;
             }
             foks_server_db::ChunkReservationAction::Verify => {
                 let bytes = store
                     .get_object(&token.object())
-                    .map_err(|_| RpcStatus::TransactionRetry)?;
+                    .map_err(map_upload_error)?;
                 if bytes != upload.exact_chunk {
-                    return Err(RpcStatus::TransactionRetry);
+                    return Err(crate::status::invariant("kv_upload_verify"));
                 }
                 writer
                     .confirm_chunk_presence(token.clone())
-                    .map_err(|_| RpcStatus::TransactionRetry)?;
+                    .map_err(map_upload_error)?;
             }
             foks_server_db::ChunkReservationAction::Present => {}
         }
@@ -541,7 +541,7 @@ fn reserve_file_chunk(
     let authority = authority.clone();
     let mut attempt = [0; 16];
     crate::Entropy::fill(&crate::OsEntropy, &mut attempt)
-        .map_err(|_| RpcStatus::TransactionRetry)?;
+        .map_err(|error| crate::status::internal(error, "kv_upload_attempt"))?;
     writer
         .call_with_current_time(Arc::clone(&authority.clock), move |database, now| {
             if !kv_write_is_current(database, &authority, &device, now)? {
@@ -1326,12 +1326,8 @@ fn role_parts(role: foks_proto::Role) -> (u64, i64) {
     )
 }
 
-fn map_write_error(error: crate::Error) -> RpcStatus {
-    if matches!(&error, crate::Error::Database(error) if error.is_quota()) {
-        return RpcStatus::QuotaExceeded;
-    }
+pub(super) fn map_write_error(error: crate::Error) -> RpcStatus {
     match error {
-        crate::Error::AuthorizationChanged => permission_denied(),
         crate::Error::Database(foks_server_db::Error::KvConflict) => {
             RpcStatus::KvRace("KV mutation lost a version race".to_owned())
         }
@@ -1339,46 +1335,31 @@ fn map_write_error(error: crate::Error) -> RpcStatus {
             operation: 2,
             resource: 1,
         },
-        crate::Error::WriterQueue => RpcStatus::RateLimited,
-        _ => RpcStatus::TransactionRetry,
+        other => crate::status::unmapped(other, "kv_write"),
     }
 }
 
-fn map_upload_error(error: crate::Error) -> RpcStatus {
-    if matches!(
-        error,
-        crate::Error::Database(foks_server_db::Error::ChunkAdmission(_))
-    ) {
-        return RpcStatus::RateLimited;
-    }
-    if matches!(&error, crate::Error::Database(error) if error.is_quota()) {
-        return RpcStatus::QuotaExceeded;
-    }
+pub(super) fn map_upload_error(error: crate::Error) -> RpcStatus {
     match error {
-        crate::Error::AuthorizationChanged => permission_denied(),
         crate::Error::Database(foks_server_db::Error::KvConflict) => RpcStatus::KvNoEnt,
         crate::Error::Database(
             foks_server_db::Error::Invalid(_) | foks_server_db::Error::IntegerRange,
         ) => bad_arguments("invalid KV upload transition"),
-        crate::Error::WriterQueue => RpcStatus::RateLimited,
-        _ => RpcStatus::TransactionRetry,
+        // The physical chunk capacity admits no further publication now.
+        crate::Error::Database(foks_server_db::Error::ChunkAdmission(_)) => RpcStatus::RateLimited,
+        other => crate::status::unmapped(other, "kv_upload"),
     }
 }
 
-fn map_lock_error(error: crate::Error) -> RpcStatus {
-    if matches!(&error, crate::Error::Database(error) if error.is_quota()) {
-        return RpcStatus::QuotaExceeded;
-    }
+pub(super) fn map_lock_error(error: crate::Error) -> RpcStatus {
     match error {
-        crate::Error::AuthorizationChanged => permission_denied(),
         crate::Error::Database(foks_server_db::Error::KvLocked) => RpcStatus::Locked,
         crate::Error::Database(foks_server_db::Error::KvLockTimeout) => RpcStatus::LockTimeout,
         crate::Error::Database(foks_server_db::Error::KvConflict) => RpcStatus::KvNoEnt,
         crate::Error::Database(
             foks_server_db::Error::Invalid(_) | foks_server_db::Error::IntegerRange,
         ) => bad_arguments("invalid KV lock transition"),
-        crate::Error::WriterQueue => RpcStatus::RateLimited,
-        _ => RpcStatus::TransactionRetry,
+        other => crate::status::unmapped(other, "kv_lock"),
     }
 }
 

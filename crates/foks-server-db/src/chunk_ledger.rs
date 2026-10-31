@@ -793,6 +793,16 @@ mod tests {
         drop(db);
         let mut db = Database::open(tmp.path().join("db"), Default::default()).unwrap();
         assert_eq!(db.begin_chunk_inventory(false).unwrap(), next);
+        assert!(db
+            .record_chunk_inventory_page(
+                &next,
+                &[ChunkInventoryEntry {
+                    key: "_foks_namespace_v1".into(),
+                    encoded_bytes: 7,
+                }],
+                None,
+            )
+            .is_err());
         db.record_chunk_inventory_page(
             &next,
             &[ChunkInventoryEntry {

@@ -60,6 +60,9 @@ pub struct SessionLimits {
     pub maximum_kex_receive_polls: usize,
     pub maximum_pending_connections: usize,
     pub maximum_in_flight_requests: usize,
+    /// Realtime inbox long polls one account can hold at once, across its
+    /// devices and connections.
+    pub maximum_realtime_polls_per_account: usize,
     pub io_timeout: Duration,
     pub request_timeout: Duration,
 }
@@ -79,8 +82,9 @@ impl Default for SessionLimits {
             maximum_kex_receive_polls: 32,
             maximum_pending_connections: 32,
             maximum_in_flight_requests: 64,
+            maximum_realtime_polls_per_account: 8,
             io_timeout: Duration::from_secs(15),
-            request_timeout: Duration::from_secs(15),
+            request_timeout: Duration::from_secs(30),
         }
     }
 }
@@ -115,6 +119,7 @@ impl SessionLimits {
             || self.maximum_active_connections == 0
             || self.maximum_pending_connections == 0
             || self.maximum_in_flight_requests < 2
+            || self.maximum_realtime_polls_per_account == 0
             || self.maximum_active_connections > tokio::sync::Semaphore::MAX_PERMITS
             || self.maximum_kex_receive_polls > tokio::sync::Semaphore::MAX_PERMITS
             || self.maximum_in_flight_requests > tokio::sync::Semaphore::MAX_PERMITS

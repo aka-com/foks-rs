@@ -196,6 +196,7 @@ fn saturated_anonymous_polls_preserve_public_requests_and_signed_pairing_progres
         "foks_kex_active_polls 0",
         "foks_kex_admitted_total 9",
         "foks_kex_rejected_total 3",
+        "foks_admission_rejected_total{reason=\"kex_receive_polls\"} 3",
         "foks_kex_completed_total{reason=\"delivered\"} 3",
         "foks_kex_completed_total{reason=\"disconnected\"} 6",
     ] {
