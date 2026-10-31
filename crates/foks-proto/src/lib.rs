@@ -135,6 +135,156 @@ mod tests {
         "../../foks-snowpack/tests/fixtures/foks-v0.1.9/foks.app/probe-response.snowp"
     );
 
+    /// Returns the `impl {type_name} {` block of `source`.
+    fn impl_block<'a>(source: &'a str, type_name: &str) -> &'a str {
+        let start = source
+            .find(&format!("\nimpl {type_name} {{\n"))
+            .unwrap_or_else(|| panic!("impl {type_name} not found"));
+        let end = start + source[start..].find("\n}\n").unwrap();
+        &source[start..end]
+    }
+
+    /// Every call in `block` whose callee ends in `decode` or `decode_prefix`
+    /// under any path (`decode(`, `crate::decode(`, `foks_snowpack::decode(`,
+    /// `SomeType::decode(`), with its line, except definitions (`fn decode(`).
+    /// The sensitive decoders end in `_sensitive` and are not matched.
+    fn general_decoder_calls(block: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        for line in block.lines() {
+            for name in ["decode(", "decode_prefix("] {
+                let mut rest = line;
+                while let Some(at) = rest.find(name) {
+                    let before = &rest[..at];
+                    let joined = before
+                        .chars()
+                        .last()
+                        .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+                    if !joined && !before.trim_end().ends_with("fn") {
+                        found.push(line.trim().to_owned());
+                    }
+                    rest = &rest[at + name.len()..];
+                }
+            }
+        }
+        found
+    }
+
+    /// `use` items in `source` that bring a general decoder in under another
+    /// name, or everything from a crate at once, which the call scan would
+    /// not recognise.
+    fn renamed_decoder_imports(source: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        for statement in source.split(';') {
+            let Some(start) = statement
+                .lines()
+                .position(|line| line.trim_start().starts_with("use "))
+            else {
+                continue;
+            };
+            let item = statement.lines().skip(start).collect::<Vec<_>>().join(" ");
+            if !item.contains("foks_snowpack") && !item.contains("crate::") {
+                continue;
+            }
+            if item.contains("foks_snowpack as") || item.contains("::*") {
+                found.push(item.trim().to_owned());
+            }
+            for piece in item.split(['{', '}', ',']) {
+                let mut parts = piece.split(" as ");
+                let path = parts.next().unwrap_or("").trim();
+                let name = path.rsplit("::").next().unwrap_or("").trim();
+                if ["decode", "decode_prefix"].contains(&name) && parts.next().is_some() {
+                    found.push(piece.trim().to_owned());
+                }
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn the_decoder_scans_find_every_reach() {
+        for line in [
+            "let value = decode(bytes)?;",
+            "let value = crate::decode(bytes)?;",
+            "let value = foks_snowpack::decode(&bytes)?;",
+            "let (value, used) = decode_prefix(bytes)?;",
+            "let inner = SecretBox::decode(&encode(&fields[1])?)?;",
+        ] {
+            assert_eq!(general_decoder_calls(line).len(), 1, "{line}");
+        }
+        for line in [
+            "pub fn decode(bytes: &[u8]) -> Result<Self> {",
+            "let value = decode_sensitive(bytes)?;",
+            "let value = foks_snowpack::decode_prefix_sensitive(bytes)?;",
+            "fn decode_set(bytes: &[u8]) -> Result<Self> {",
+        ] {
+            assert!(general_decoder_calls(line).is_empty(), "{line}");
+        }
+        for source in [
+            "use crate::{array, decode as d};",
+            "use foks_snowpack::{codec::decode_prefix as p};",
+            "use foks_snowpack::*;",
+            "use foks_snowpack as s;",
+        ] {
+            assert!(!renamed_decoder_imports(source).is_empty(), "{source}");
+        }
+        assert!(renamed_decoder_imports("use crate::{array, decode, encode};").is_empty());
+    }
+
+    /// The generic decoder copies every binary into an ordinary `Value` that
+    /// is freed without erasure, and `Value::Binary(key.to_vec())` makes the
+    /// same kind of copy when encoding. Secret plaintext payloads use the
+    /// sensitive decoder and either borrow their secrets (`encode_ref`) or
+    /// erase the owned tree after encoding. No other decoder call may appear
+    /// in their impl blocks, under any path or name, except where the
+    /// operand holds no secret.
+    #[test]
+    fn secret_payloads_avoid_unerased_decode_and_encode_copies() {
+        // PpePukBoxPayload::encoded re-reads the public passphrase key as a
+        // value tree to borrow it into the encoding; it holds no secret.
+        const PUBLIC_OPERANDS: &[&str] =
+            &["ValueRef::Owned(crate::decode(&self.passphrase_public_key.encoded()?)?),"];
+        let owned_encode = ["encode(&", "Value::"].concat();
+        for source in [
+            include_str!("passphrase.rs"),
+            include_str!("yubi.rs"),
+            include_str!("kex.rs"),
+        ] {
+            assert_eq!(renamed_decoder_imports(source), Vec::<String>::new());
+        }
+        for (source, type_name, erased_tree) in [
+            (include_str!("passphrase.rs"), "SkmwkList", false),
+            (
+                include_str!("passphrase.rs"),
+                "PpePassphraseBoxPayload",
+                false,
+            ),
+            (include_str!("passphrase.rs"), "PpePukBoxPayload", false),
+            (
+                include_str!("yubi.rs"),
+                "YubiManagementKeyBoxPayload",
+                false,
+            ),
+            (include_str!("kex.rs"), "KexCleartext", true),
+        ] {
+            let block = impl_block(source, type_name);
+            assert!(block.contains("decode_sensitive(bytes)"), "{type_name}");
+            let reaches: Vec<_> = general_decoder_calls(block)
+                .into_iter()
+                .filter(|line| !PUBLIC_OPERANDS.contains(&line.as_str()))
+                .collect();
+            assert_eq!(reaches, Vec::<String>::new(), "{type_name}");
+            if erased_tree {
+                assert!(
+                    block.contains("encode(&zeroize::Zeroizing::new(Value::"),
+                    "{type_name}"
+                );
+            } else {
+                assert!(block.contains("encode_ref(&ValueRef::"), "{type_name}");
+                assert!(!block.contains(&owned_encode), "{type_name}");
+            }
+        }
+    }
+
     fn user_fixture(name: &str) -> Vec<u8> {
         std::fs::read(format!(
             "../foks-snowpack/tests/fixtures/foks-v0.1.9/user/{name}"

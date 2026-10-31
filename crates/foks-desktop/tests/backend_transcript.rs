@@ -546,7 +546,9 @@ fn eighty_four_megabyte_file_uses_bounded_stream_frames_without_inline_content()
 fn replacement_file_stream_is_bound_to_the_inspected_version_and_roles() {
     let values = tempfile::tempdir().unwrap();
     let source = values.path().join("replacement");
-    private_file(&source, b"replacement file");
+    // Larger than the inline limit, so the stream carries an upload handle.
+    const LENGTH: u64 = foks_agent_proto::KV_INLINE_FILE_BYTES + 1;
+    private_file(&source, &vec![b'r'; LENGTH as usize]);
     let mut arguments = strings(&[
         "kv-replace-file",
         "work",
@@ -568,7 +570,7 @@ fn replacement_file_stream_is_bound_to_the_inspected_version_and_roles() {
             header: foks_agent_proto::KvUploadHeader {
                 upload_id: Some(id),
                 adapter: None,
-                total_length: 16,
+                total_length: LENGTH,
                 read_role: KvRole::Member { visibility: -16384 },
                 write_role: KvRole::Admin,
                 precondition: KvPrecondition::ExactVersion { version: 11 },
@@ -577,6 +579,6 @@ fn replacement_file_stream_is_bound_to_the_inspected_version_and_roles() {
             }
         } if id.database_id() == Some([1; 16]) && id.issued_at() == Some(1)
     ));
-    assert_eq!(transcript.total, 16);
+    assert_eq!(transcript.total, LENGTH);
     assert_eq!(transcript.chunks, 1);
 }

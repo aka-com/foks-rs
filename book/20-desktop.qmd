@@ -195,6 +195,32 @@ tool on the machine. The host's `copy_with_hygiene` does three things:
 
 The exit handler performs one best-effort clear before the process ends.
 
+## Command deadlines
+
+Each command that reaches the agent looks its name up in `command_class`
+(`src/commands/deadline.rs`), which gives an agent `DeadlineClass`:
+Ordinary (15 s), Bulk (300 s) or Pairing (300 s). The host captures a
+deadline that far ahead before the command body runs, and a command
+missing from the table fails with `missing-deadline-policy`. The catalog
+reads (`list_catalog`, `list_catalog_progressive` and
+`list_profile_catalog`) are Bulk: one read walks every store of the
+profiles it covers, one `ListKv` page after another, under that single
+budget, while the agent still caps each of those requests at 15 s. A slow
+profile's 30 s catalog job can therefore hold one of the two slots of the
+renderer's reconciliation scheduler (`src/scheduling/reconciliation.ts`)
+for up to that 300 s budget, leaving one slot for the other jobs. The
+renderer runs the walk in a lane of its own in the profile-work queue
+(`src/scheduling/profile-work.ts`), apart from the lane where changes queue:
+a mutation retires and cancels a running walk in the host
+(`begin_mutation`), and the agent admits each of the walk's requests on its
+own, so a Save waits at most for the one request in progress, not for the
+walk. Queued work in a lane fails with `profile-busy` only once the lane has
+admitted nothing for 315 s, the longest class budget plus slack. The
+catalog repair that a mutation runs when its profile's catalog is missing
+or retired shares the mutation's own Ordinary budget, so on a slow server
+with many stores that mutation can end with `deadline-exceeded` before it
+writes.
+
 ## Files: drag-and-drop, upload, and download
 
 A web `<input type="file">` reads bytes into a JavaScript buffer. FOKS
@@ -227,6 +253,17 @@ mismatch is a `response-binding` error. Then `sync_all` flushes the file
 and `persist` renames it into place, which POSIX guarantees is atomic. A
 crash at any earlier point leaves a temporary file, never a partial file
 under the chosen name.
+
+The Uploads button below the Files list calls `list_file_uploads`, which
+returns the durable uploads the agent holds for the selected store and its
+upload capacity; `resume_file_upload` and `cancel_file_upload` act on one
+upload handle. These two check the application lock before the agent call
+but not after it: a lock taken while the agent resumes or cancels does not
+undo the change, and the answer holds no plaintext. An upload whose
+publication the server definitely rejected is listed as
+`publication-rejected`, not `publishing`. Its content is complete, so
+Resume synchronizes the store, checks that the destination still matches
+the recorded intent and publishes again; Cancel releases it.
 
 | Bound | Value |
 |---|---|

@@ -45,6 +45,7 @@ export function decodeFileUpload(value: unknown): FileUpload {
       'uploading',
       'content-complete',
       'publishing',
+      'publication-rejected',
       'verified',
       'completed',
       'blocked',

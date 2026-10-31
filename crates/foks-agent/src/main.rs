@@ -377,7 +377,7 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
                 let run = timers::timers().begin(timers::RETENTION, now_ms);
                 tokio::task::spawn_blocking(move || {
                     let _permit=permit;
-                    match request_control::RequestControl::background(Duration::from_millis(50), CancellationToken::new())
+                    match request_control::RequestControl::background(retention::PASS_BUDGET, CancellationToken::new())
                         .map_err(foks_client_app::Error::from).and_then(|control| control.enter()) {
                         Ok(_scope) => retention::run_one_profile(&state),
                         Err(error) => eprintln!("retention deadline unavailable: {error}"),
@@ -564,14 +564,13 @@ async fn run_scheduled_profiles(
 /// This read takes no profile admission and no profile lock. It is a
 /// consistent SQLite read of one column: a value that changes while it is
 /// read costs at most one further pass, never a missed job, because the
-/// claim itself still happens under the scheduler lock.
+/// claim itself still happens under the scheduler lock. It opens the store
+/// without creating it, so a profile reset that removes the database during
+/// the read does not leave a new database behind outside the profile's locks.
 fn profile_next_run(hard_database: &Path) -> Option<u64> {
-    if !hard_database.exists() {
-        return None;
-    }
-    foks_client::FoksScheduler::new(hard_database, foks_client::SchedulerConfig::default())
+    foks_client_db::HardStateStore::open_existing(hard_database)
         .ok()?
-        .next_run_at()
+        .next_scheduled_run()
         .ok()?
 }
 
@@ -638,13 +637,7 @@ fn scheduled_slice_admission(
     profile: &str,
     now: u64,
 ) -> SliceAdmission {
-    let wide = match hard_database {
-        // Opening a store that does not exist would create one outside the
-        // profile's locks; a profile with no jobs has no wide job either.
-        Some(path) if !path.exists() => Some(false),
-        Some(path) => due_scheduled_job_reaches_other_profiles(path, now),
-        None => None,
-    };
+    let wide = hard_database.and_then(|path| due_scheduled_job_reaches_other_profiles(path, now));
     match wide {
         Some(false) => SliceAdmission::Profile(profile.to_owned()),
         Some(true) | None => SliceAdmission::SecurityRoot,
@@ -652,14 +645,19 @@ fn scheduled_slice_admission(
 }
 
 /// Whether the job a claim would take next can reach a second profile.
-/// `None` when the durable state could not be read.
+/// `None` when the durable state could not be read. A profile with no hard
+/// state has no jobs, so no wide job either.
 ///
 /// This read takes no profile admission and no profile lock, like the due-time
-/// read beside it.
+/// read beside it, and likewise never creates the store.
 fn due_scheduled_job_reaches_other_profiles(hard_database: &Path, now: u64) -> Option<bool> {
+    let store = match foks_client_db::HardStateStore::open_existing(hard_database) {
+        Ok(store) => store,
+        Err(foks_client_db::Error::StateMissing) => return Some(false),
+        Err(_) => return None,
+    };
     Some(
-        foks_client_db::HardStateStore::open(hard_database)
-            .ok()?
+        store
             .next_due_scheduled_job(now)
             .ok()?
             .is_some_and(|job| job.kind.reaches_other_profiles()),
@@ -2932,6 +2930,10 @@ fn remote_status_response(id: u64, status: u64, reason: String) -> Option<Respon
         foks_rpc::STATUS_PERMISSION_ERROR => (
             ErrorCode::OperationFailed,
             "The server refused permission for this action.",
+        ),
+        foks_rpc::STATUS_AUTH_ERROR => (
+            ErrorCode::OperationFailed,
+            "The server does not accept this device's credential. The device may have been revoked.",
         ),
         foks_rpc::STATUS_EXPIRED_ERROR => (
             ErrorCode::OperationFailed,
@@ -7318,6 +7320,11 @@ mod tests {
                 ErrorCode::QuotaExceeded,
                 "capacity limit",
             ),
+            (
+                foks_rpc::STATUS_AUTH_ERROR,
+                ErrorCode::OperationFailed,
+                "may have been revoked",
+            ),
         ] {
             let response = remote_status_response(8, status, format!("remote status {status}"))
                 .expect("known status maps");
@@ -7334,6 +7341,29 @@ mod tests {
             assert_eq!(fields.reason, Some(format!("remote status {status}")));
         }
         assert!(remote_status_response(8, 9999, "unknown".to_owned()).is_none());
+    }
+
+    /// A chat action, or the chat inbox poll, that the server refuses with
+    /// AUTH_ERROR reaches the generic status mapping: `chat::contextual_error`
+    /// classifies only PERMISSION_ERROR as a chat access denial, and a go-foks
+    /// host also answers its own storage faults with AUTH_ERROR.
+    #[test]
+    fn a_chat_action_refused_for_the_device_credential_reports_possible_revocation() {
+        let refused = || -> Box<dyn std::error::Error> {
+            Box::new(foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
+                code: foks_rpc::STATUS_AUTH_ERROR,
+                detail: foks_rpc::StatusDetail::default(),
+            }))
+        };
+        for error in [chat::contextual_error(refused()), refused()] {
+            let response = dispatch_error_response(8, error.as_ref());
+            let foks_agent_proto::ResponseResult::Error { code, message, .. } = response.result
+            else {
+                panic!("AUTH_ERROR returned success");
+            };
+            assert_eq!(code, ErrorCode::OperationFailed);
+            assert!(message.contains("may have been revoked"), "{message}");
+        }
     }
 
     #[test]
@@ -9148,6 +9178,14 @@ mod tests {
             scheduled_slice_admission(Some(&later), "a", 5_999),
             SliceAdmission::Profile("a".into())
         );
+        // A profile with no hard state has no wide job, and the probe does
+        // not create the store outside the profile's locks.
+        let missing = root.join("missing.sqlite");
+        assert_eq!(
+            scheduled_slice_admission(Some(&missing), "a", 10_000),
+            SliceAdmission::Profile("a".into())
+        );
+        assert!(!missing.exists());
 
         let workers = Arc::new(Semaphore::new(1));
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();

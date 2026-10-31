@@ -114,7 +114,11 @@ expired handles. Expiry describes replay eligibility, not proof of an earlier wr
 Time uses a persisted anchor plus a process monotonic clock. A wall-clock jump over
 five minutes, or a restart more than 24 hours beyond the last trusted floor, blocks
 new admission and pruning with `clock-untrusted`. Retained status and recovery still
-work. First use establishes the anchor. Local clock repair requires two commands:
+work. First use establishes the anchor. File uploads keep a separate receipt clock
+with the same rules, repaired with `--domain upload`. Only a file write that needs
+a resumable upload identity consults the upload clock: a file of at most 2,040
+bytes, written inline without an explicit upload handle, is not refused when it
+is untrusted. Local clock repair requires two commands:
 
 ```sh
 foks-rs --state-dir /absolute/client/state retention reanchor \
@@ -125,7 +129,9 @@ foks-rs --state-dir /absolute/client/state retention reanchor \
 ```
 
 Repair preserves the irreversible watermark and performs no admission or pruning.
-`retention status` reports redacted resident maintenance counters. Maintenance runs
+`retention status` reports redacted resident maintenance counters, the number of
+profiles whose latest pass failed and the kind and age of the most recent failure,
+without profile names or error text. Maintenance runs
 at agent startup and every minute on an independent single-flight lane, rotating
 profiles and skipping busy profile locks without making network requests.
 

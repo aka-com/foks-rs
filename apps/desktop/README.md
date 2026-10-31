@@ -427,6 +427,21 @@ The list foot holds the drop hint and the store's Uploads… sheet; the item
 sheets (New Password, New Document, New Folder, Rename or Move) carry the kind
 tile and a subtitle saying where they save.
 
+A dropped or chosen file of at most 2,040 bytes
+(`foks_agent_proto::KV_INLINE_FILE_BYTES`) is written inline and sent without
+an upload handle, so it takes none of the profile's receipt rows; a larger
+file gets a handle before its stream starts. A failed `import_dropped_file` or
+`replace_dropped_file` with a handle names it and points to Uploads only after
+failures that can follow the agent's registration of the handle: an ambiguous
+outcome, `deadline-exceeded`, `cancelled`, `conflict`, `already-exists`,
+`upload-spool-full`, `upload-identity-conflict`, `reauthentication-required`
+and the server failures of the upload itself (`server-unavailable`,
+`rate-limited`, `quota-exceeded`, `operation-failed`). Refusals before
+registration (capability, credential, clock and capacity checks) name no
+handle; after a lost agent connection, `profile-busy`, `busy`,
+`invalid-request` or `rollback-detected`, which can come before or after
+registration, the message says that the agent may have recorded it.
+
 Every bar is 44px with a hairline under it, centred on the lights' line at
 y=30. The panel's first bar (`src/shell/topbar.tsx`) is the list column's on
 Files, Chat, Activity and Devices — the search field (⌘F focuses it; the
@@ -1324,6 +1339,15 @@ reserves its entire set atomically. Registry changes and dynamic federation
 cascades use a conservative state-root barrier. External process locks remain
 authoritative, and lock acquisition is retried only before a callback starts.
 Long chat polls release profile admission while waiting for remote events.
+
+In the renderer, `scheduleProfileWork` (`src/scheduling/profile-work.ts`)
+serializes a profile's requests in three lanes that are admitted
+independently: chat, catalog walks (`list_profile_catalog`, a Bulk command of
+up to 300 s) and everything else, where changes queue. A mutation retires and
+cancels a running walk in the host, so a Save does not wait for one. Queued
+work fails with `profile-busy` once its lane has admitted nothing for the
+longest class budget plus 15 s (315 s); the wait restarts whenever the lane
+admits the work ahead.
 
 Opt-in frontend query and catalog diagnostics report aggregate outcomes and
 latencies without profile names, item paths, input values or response contents.

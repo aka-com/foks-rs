@@ -1,7 +1,7 @@
 //! Agent-owned pending submissions. Callers hold a state-use lease and, for
 //! profile access, a checked session before taking the root-wide ledger lock.
 //! One encrypted envelope atomically publishes an import and its completion marker.
-use crate::{Error, LocalChatIntent, Result};
+use crate::{encode_private_json, Error, LocalChatIntent, Result};
 use foks_keystore::{EncryptedFileSecretStore, SecretStore};
 use fs2::FileExt as _;
 use serde::{Deserialize, Serialize};
@@ -365,7 +365,7 @@ impl PendingChatStore {
             return Err(invalid());
         }
         use sha2::{Digest as _, Sha256};
-        let input = Zeroizing::new(serde_json::to_vec(&(source, binding, intent))?);
+        let input = encode_private_json(&(source, binding, intent))?;
         let commitment = crate::hex(&Sha256::digest(&input));
         if let Some(completion_marker) = self
             .envelope
@@ -409,7 +409,7 @@ impl PendingChatStore {
             .iter()
             .filter(|p| p.profile == profile)
             .collect::<Vec<_>>();
-        let bytes = Zeroizing::new(serde_json::to_vec(&pending)?);
+        let bytes = encode_private_json(&pending)?;
         Ok((
             pending.len(),
             pending.iter().map(|p| p.intent.text.len()).sum(),
@@ -431,7 +431,7 @@ impl PendingChatStore {
     }
     fn persist(&mut self) -> Result<()> {
         self.envelope.validate()?;
-        let bytes = Zeroizing::new(serde_json::to_vec(&self.envelope)?);
+        let bytes = encode_private_json(&self.envelope)?;
         if let Err(error) = self.store.put("state", &bytes) {
             self.failed_write = true;
             return Err(error.into());
@@ -459,7 +459,7 @@ pub(crate) fn rekey(source: &Path, target: &Path, old: &[u8; 32], new: &[u8; 32]
     }
     let mut new_store = EncryptedFileSecretStore::open(target, derive_key(new))?;
     if source.join("state.fks").try_exists()? {
-        new_store.put("state", &Zeroizing::new(serde_json::to_vec(&envelope)?))?;
+        new_store.put("state", &encode_private_json(&envelope)?)?;
     }
     Ok(())
 }

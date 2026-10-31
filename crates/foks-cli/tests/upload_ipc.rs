@@ -161,7 +161,6 @@ fn resident_agent_upload_intent_survives_early_disconnect_and_finishes_without_s
             .unwrap(),
     );
     assert_eq!(receipt["state"], "completed");
-    assert!(receipt["reserved_bytes"].as_u64().unwrap() > 0);
     let repeated = success(
         client
             .call(Operation::ResumeKvUpload {
@@ -170,5 +169,16 @@ fn resident_agent_upload_intent_survives_early_disconnect_and_finishes_without_s
             })
             .unwrap(),
     );
-    assert_eq!(receipt, repeated);
+    // The resident agent's retention maintenance may erase the completed
+    // upload's spool between the two calls, which releases its reservation.
+    // That resume itself never erases the spool is covered without a
+    // resident agent in foks-client-app's upload tests.
+    let without_reservation = |mut report: serde_json::Value| {
+        report.as_object_mut().unwrap().remove("reserved_bytes");
+        report
+    };
+    assert!(
+        repeated["reserved_bytes"].as_u64().unwrap() <= receipt["reserved_bytes"].as_u64().unwrap()
+    );
+    assert_eq!(without_reservation(receipt), without_reservation(repeated));
 }

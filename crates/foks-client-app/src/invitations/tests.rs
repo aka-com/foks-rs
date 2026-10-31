@@ -248,8 +248,7 @@ fn local_invitations_reopen_scope_handles_and_reuse_durable_admission() {
         assert_eq!(pending.len(), 1);
         old[0].time = pending[0].time.saturating_sub(1);
         handles[0].row = foks_proto::encode_team_inbox(&old)?;
-        v.store
-            .put(&key, &Zeroizing::new(serde_json::to_vec(&handles)?))?;
+        v.store.put(&key, &encode_private_json(&handles)?)?;
         assert!(matches!(
             s.invitation_action(
                 "owner",
@@ -271,8 +270,7 @@ fn local_invitations_reopen_scope_handles_and_reuse_durable_admission() {
         old[0] = pending[0].clone();
         old[0].time = pending[0].time - 1;
         handles[0].row = foks_proto::encode_team_inbox(&old)?;
-        v.store
-            .put(&key, &Zeroizing::new(serde_json::to_vec(&handles)?))?;
+        v.store.put(&key, &encode_private_json(&handles)?)?;
         let found = s.invitation_inbox_handle(
             &host,
             FederationCredential::Software(&account.credential),
@@ -604,8 +602,7 @@ fn inbox_count_reports_the_inbox_size_without_expanding_or_storing_rows() {
             .collect();
         let hard = HardStateStore::open(&s.paths.hard_database)?;
         let suffix = key.strip_prefix("invitation-inbox.").unwrap();
-        v.store
-            .put(&key, &Zeroizing::new(serde_json::to_vec(&handles)?))?;
+        v.store.put(&key, &encode_private_json(&handles)?)?;
         assert!(validate_inventory_record(
             v,
             "invitation-inbox",
@@ -616,8 +613,7 @@ fn inbox_count_reports_the_inbox_size_without_expanding_or_storing_rows() {
             id: format!("{:032x}", 2000),
             row: stored[0].row.clone(),
         });
-        v.store
-            .put(&key, &Zeroizing::new(serde_json::to_vec(&handles)?))?;
+        v.store.put(&key, &encode_private_json(&handles)?)?;
         assert!(matches!(
             validate_inventory_record(v, "invitation-inbox", suffix, &hard),
             Err(Error::InvalidAccount(

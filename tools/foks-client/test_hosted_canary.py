@@ -83,5 +83,45 @@ else:
         self.assertEqual(result.stdout, b'')
 
 
+class OnboardingStateRemovalTests(unittest.TestCase):
+    """remove_state must not stop while part of the state tree remains."""
+
+    def load(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            'onboarding_canary', HERE / 'onboarding-canary.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_a_walk_that_loses_a_race_is_retried_until_the_tree_is_gone(self):
+        canary = self.load()
+        with tempfile.TemporaryDirectory() as parent:
+            directory = Path(parent) / 'state'
+            (directory / 'owner/profiles/canary').mkdir(parents=True)
+            (directory / 'owner/profiles/canary/hard.sqlite3-wal').write_text('x')
+            real = shutil.rmtree
+            calls = []
+
+            def racing(path, *args, **kwargs):
+                calls.append(path)
+                if len(calls) == 1:
+                    # An exiting agent removed a sidecar during the walk, which
+                    # stops part way with FileNotFoundError.
+                    (Path(path) / 'owner/profiles/canary/hard.sqlite3-wal').unlink()
+                    raise FileNotFoundError(path)
+                return real(path, *args, **kwargs)
+
+            sleeps = []
+            rmtree, sleep = canary.shutil.rmtree, canary.time.sleep
+            canary.shutil.rmtree, canary.time.sleep = racing, sleeps.append
+            try:
+                canary.remove_state(str(directory))
+            finally:
+                canary.shutil.rmtree, canary.time.sleep = rmtree, sleep
+            self.assertFalse(directory.exists())
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(len(sleeps), 1)
+
 if __name__ == '__main__':
     unittest.main()

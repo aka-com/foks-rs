@@ -21,6 +21,18 @@ use super::support::{
     random_kv_node_id, read_kv_upload_chunk, validate_kv_component, validate_kv_symlink,
 };
 use super::{KvPathScope, KvWriteOptions, KvWriteResult, KvWriteSession};
+
+#[cfg(feature = "test-support")]
+thread_local! {
+    static REJECT_NEXT_NAMESPACE_PUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Makes the next namespace `Put` submitted on this thread fail with a
+/// definite server rejection, without sending it.
+#[cfg(feature = "test-support")]
+pub fn reject_next_namespace_put_for_test() {
+    REJECT_NEXT_NAMESPACE_PUT.set(true);
+}
 use crate::{now_microseconds, random_bytes, Error, MutationCoordinator, MutationDraft, Result};
 
 const KV_NAMESPACE_REQUEST_HASH_TYPE_ID: u64 = 0x4303_44d4_219a_8b1e;
@@ -289,7 +301,10 @@ impl KvWriteSession<'_> {
         if let Some(id) = expected_dirent_id {
             require_selected_entry(&tree, parent, name, id, options.expected_version)?;
         }
-        self.ensure_file_upload_claim(parent, name, expected_size, options, expected_dirent_id)?;
+        // An explicit identity was claimed before the first byte. An implicit
+        // one is claimed below, once the first chunk shows a large file: an
+        // inline write has nothing to resume, so it takes no receipt row and
+        // does not depend on the receipt clock.
         let (first, carry, first_is_final) = read_kv_upload_chunk(reader)?;
         let first_len = first.len();
         let node_type = if first_is_final && first.len() <= Self::SMALL_FILE_BYTES {
@@ -306,6 +321,13 @@ impl KvWriteSession<'_> {
             false,
         )?;
         if node_type == KvNodeType::File {
+            self.ensure_file_upload_claim(
+                parent,
+                name,
+                expected_size,
+                options,
+                expected_dirent_id,
+            )?;
             return self.prepare_and_submit_large_file(
                 parent,
                 name,
@@ -751,6 +773,16 @@ impl KvWriteSession<'_> {
             let operation = self.prepare_namespace_mutation(&request, &dirents)?;
             MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
                 .begin_submission(&operation.operation_id)?;
+            #[cfg(feature = "test-support")]
+            let submission = if REJECT_NEXT_NAMESPACE_PUT.replace(false) {
+                Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
+                    code: 0,
+                    detail: Default::default(),
+                }))
+            } else {
+                self.call(request)
+            };
+            #[cfg(not(feature = "test-support"))]
             let submission = self.call(request);
             if let Err(error) = submission {
                 if is_kv_stale_cache(&error) {

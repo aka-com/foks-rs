@@ -102,7 +102,9 @@ pub(super) fn migrate(connection: &mut Connection) -> Result<()> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     // Another opener may have upgraded while this connection waited for the writer.
     let version: u32 = transaction.pragma_query_value(None, "user_version", |r| r.get(0))?;
-    if version == SCHEMA_VERSION || version == 40 {
+    // Any version the ladder already passed is done; the caller continues
+    // from the version it rereads.
+    if version > 38 && version <= SCHEMA_VERSION {
         return Ok(());
     }
     if version != 38 {
@@ -211,6 +213,46 @@ mod tests {
             }
         }
         bytes
+    }
+
+    /// initialize_or_verify reads version 38 and calls `migrate`, whose
+    /// IMMEDIATE transaction can wait for another opener's writer. If that
+    /// opener has taken the database to any later version meanwhile (41 is
+    /// the one that used to be refused), the step finds the work done and
+    /// changes nothing.
+    #[test]
+    fn a_version_reached_by_another_opener_while_waiting_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hard.sqlite3");
+        drop(crate::HardStateStore::open(&path).unwrap());
+        for version in 39..=SCHEMA_VERSION {
+            let mut connection = Connection::open(&path).unwrap();
+            connection
+                .pragma_update(None, "user_version", version)
+                .unwrap();
+            let schema = |connection: &Connection| -> Vec<String> {
+                connection
+                    .prepare("SELECT sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY name")
+                    .unwrap()
+                    .query_map([], |row| row.get(0))
+                    .unwrap()
+                    .collect::<std::result::Result<_, _>>()
+                    .unwrap()
+            };
+            let before = schema(&connection);
+            migrate(&mut connection).unwrap_or_else(|error| panic!("{version}: {error}"));
+            assert_eq!(schema(&connection), before, "{version}");
+            let after: u32 = connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            assert_eq!(after, version);
+        }
+        // A version the ladder does not know is still refused.
+        let mut connection = Connection::open(&path).unwrap();
+        connection
+            .pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+            .unwrap();
+        assert!(migrate(&mut connection).is_err());
     }
 
     #[test]

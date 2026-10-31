@@ -5,8 +5,10 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import subprocess
 import tempfile
+import time
 
 CAPABILITIES = ("signup", "device-administration", "recovery", "passphrases")
 
@@ -123,7 +125,8 @@ def main():
     if os.environ.get("FOKS_CANARY_ALLOW_DISPOSABLE_SIGNUP") != "1":
         parser.exit(1, "onboarding canary requires explicit disposable-signup authorization\n")
     os.umask(0o077)
-    with tempfile.TemporaryDirectory(prefix="foks-onboarding-canary-") as directory:
+    directory = tempfile.mkdtemp(prefix="foks-onboarding-canary-")
+    try:
         canary = Canary(args.client, args.target, Path(directory), args.ca_der, args.expected_host)
         try:
             capabilities = canary.check(os.environ.get("FOKS_CANARY_SIGNUP_EMAIL", ""),
@@ -132,6 +135,26 @@ def main():
             # Neither exception values nor child stdout/stderr are safe to log.
             parser.exit(1, f"onboarding canary failed at {canary.stage}\n")
         print("\n".join(capabilities))
+    finally:
+        remove_state(directory)
+
+
+def remove_state(directory):
+    """The client leaves a resident agent running in each state root, and its
+    retention maintenance can still open the profile databases. An agent exits
+    within about 250 ms of finding its socket and lock file removed, and may
+    remove its own -wal and -shm files while the tree is walked. A failed or
+    raced walk can leave part of the tree, so the removal is retried until the
+    directory is gone, not merely until a walk ends without an error."""
+    for _ in range(40):
+        try:
+            shutil.rmtree(directory)
+        except OSError:
+            pass
+        if not os.path.lexists(directory):
+            return
+        time.sleep(0.25)
+    shutil.rmtree(directory)
 
 
 if __name__ == "__main__":

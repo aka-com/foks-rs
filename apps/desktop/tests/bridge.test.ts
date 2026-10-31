@@ -61,6 +61,7 @@ import {
 } from '../src/model';
 import { FIXTURE } from '../src/fixture';
 import { mockBridge } from '../src/mock-bridge';
+import { scheduleProfileWork } from '../src/scheduling/profile-work';
 
 test('mock mutations reject a recreated source with the same path and version', async () => {
   const bridge = mockBridge(FIXTURE);
@@ -3082,6 +3083,17 @@ test('scoped native projection uses embedded metadata without querying root list
       .status,
     'verified',
   );
+  // The walk runs in the profile's catalog lane: work holding the default
+  // lane, where changes queue, neither delays it nor is delayed by it.
+  let release!: () => void;
+  const holding = scheduleProfileWork(
+    scoped,
+    profile,
+    () => new Promise<void>((resolve) => (release = resolve)),
+  );
+  await loadProfileSnapshot(scoped, profile, previous, 2);
+  release();
+  await holding;
   await assert.rejects(
     loadProfileSnapshot(
       {

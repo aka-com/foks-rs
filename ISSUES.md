@@ -136,6 +136,25 @@ Required resolution:
 - Add distributed-source flood tests and prove that authenticated administrators
   can still list and decide existing requests at capacity.
 
+## Upload receipt retention per profile
+
+**Priority: low.** Every file write that carries a resumable upload identity
+reserves one of the profile's 8,192 receipt rows (`kv_upload_receipt_limits`,
+`crates/foks-client-db/src/repositories/uploads/schema42.sql`) and keeps it for
+30 days after the upload ends (`UPLOAD_TERMINAL_RETENTION_SECONDS`). Writes
+without an explicit handle claim one only for a large file, and the desktop
+sends a dropped or chosen file of at most `KV_INLINE_FILE_BYTES` (2,040 bytes)
+without a handle, so small files take no row. Desktop drops and replacements
+above that size, and MCP and CLI writes that name a handle, still take one row
+each: a profile that uploads more than about 8,192 such files in 30 days is
+refused further uploads with `upload-retention-full` until rows age out.
+
+Required resolution:
+
+- Decide whether completed receipts need the full 30 days, or whether rows of
+  uploads whose outcome the front end has already observed can be pruned
+  earlier, and whether the row budget should scale with use.
+
 ## Deferred extended-chat prerequisite
 
 The extension capability method uses a locally selected method position rather

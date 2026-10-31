@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import {
+  COMMAND_DEADLINE_CLASS_BUDGET,
+  MAX_QUEUE_WAIT,
   observeProfileWork,
   scheduleProfileWork,
   type WorkTiming,
@@ -30,7 +33,7 @@ test('queued foreground work expires without running or releasing active work', 
     code: 'profile-busy',
     ambiguous: false,
   });
-  t.mock.timers.tick(75_001);
+  t.mock.timers.tick(MAX_QUEUE_WAIT + 1);
   await rejected;
   let started = false;
   const next = scheduleProfileWork(owner, 'p', async () => {
@@ -350,21 +353,139 @@ test('background rotation serves other identities before a repeatedly resubmitte
 });
 
 test('work queued behind a request that uses its whole budget runs once the queue frees', async (t) => {
+  for (const budget of Object.values(COMMAND_DEADLINE_CLASS_BUDGET)) {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const owner = {},
+      gate = deferred();
+    const active = scheduleProfileWork(owner, 'p', () => gate.promise);
+    await flush();
+    let ran = false;
+    const queued = scheduleProfileWork(owner, 'p', async () => {
+      ran = true;
+    });
+    // The command's deadline class budget: the active request settles as it
+    // ends.
+    t.mock.timers.tick(budget);
+    gate.resolve();
+    await active;
+    await queued;
+    assert.equal(ran, true, `budget ${budget}`);
+    t.mock.timers.reset();
+  }
+});
+
+test('the queue wait budgets match the deadline class caps', () => {
+  const source = readFileSync(
+    new URL('../../../crates/foks-agent-proto/src/message.rs', import.meta.url),
+    'utf8',
+  );
+  const variants = source.match(/pub enum DeadlineClass \{([^}]*)\}/);
+  assert.ok(variants, 'DeadlineClass is readable');
+  const classes = new Set(
+    [...variants[1].matchAll(/(\w+),/g)].map(([, name]) => name.toLowerCase()),
+  );
+  const cap = source.match(
+    /pub fn cap\(self\) -> std::time::Duration \{([\s\S]*?)\n {4}\}/,
+  );
+  assert.ok(cap, 'DeadlineClass::cap is readable');
+  const seconds = new Map<string, number>();
+  for (const [, names, value] of cap[1].matchAll(
+    /((?:Self::\w+\s*\|?\s*)+)=>\s*(\d+)/g,
+  ))
+    for (const [, name] of names.matchAll(/Self::(\w+)/g))
+      seconds.set(name.toLowerCase(), Number(value) * 1000);
+  assert.deepEqual(new Set(seconds.keys()), classes, 'every class has one cap');
+  const budgets = new Map(
+    Object.entries(COMMAND_DEADLINE_CLASS_BUDGET).map(([name, budget]) => [
+      name.toLowerCase(),
+      budget,
+    ]),
+  );
+  // Both directions: no class without a budget and no budget without a class.
+  assert.deepEqual(new Set(budgets.keys()), classes);
+  for (const [name, budget] of budgets)
+    assert.equal(budget, seconds.get(name), name);
+});
+
+test('the queue wait restarts each time the lane admits the work ahead', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const owner = {},
-    gate = deferred();
-  const active = scheduleProfileWork(owner, 'p', () => gate.promise);
+    first = deferred(),
+    second = deferred();
+  const active = scheduleProfileWork(owner, 'p', () => first.promise);
   await flush();
+  const middle = scheduleProfileWork(owner, 'p', () => second.promise);
   let ran = false;
-  const queued = scheduleProfileWork(owner, 'p', async () => {
+  const last = scheduleProfileWork(owner, 'p', async () => {
     ran = true;
   });
-  // The agent's own request budget: the active request settles as it ends.
-  t.mock.timers.tick(60_000);
-  gate.resolve();
+  await flush();
+  // Two maximal commands run ahead of the last entry; each ends just before
+  // the wait, so the last entry waits about twice MAX_QUEUE_WAIT in all.
+  t.mock.timers.tick(MAX_QUEUE_WAIT - 1);
+  first.resolve();
   await active;
-  await queued;
+  await flush();
+  t.mock.timers.tick(MAX_QUEUE_WAIT - 1);
+  second.resolve();
+  await middle;
+  await last;
   assert.equal(ran, true);
+});
+
+test('a catalog walk does not hold a change queued in the default lane', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const owner = {},
+    walk = deferred();
+  const signal = new AbortController().signal;
+  const catalog = scheduleProfileWork(
+    owner,
+    'p',
+    () => walk.promise,
+    {
+      key: 'catalog',
+      owner,
+      generation: 1,
+      signal,
+      current: () => true,
+      cancel: () => {},
+      preemptible: false,
+    },
+    'profile-catalog',
+    'catalog',
+  );
+  await flush();
+  let saved = false;
+  const save = scheduleProfileWork(
+    owner,
+    'p',
+    async () => {
+      saved = true;
+    },
+    undefined,
+    'save',
+  );
+  await save;
+  // The Save ran while the walk, a Bulk command, was still in progress.
+  assert.equal(saved, true);
+  // A second walk of the profile still queues behind the first.
+  let second = false;
+  const again = scheduleProfileWork(
+    owner,
+    'p',
+    async () => {
+      second = true;
+    },
+    undefined,
+    'profile-catalog',
+    'catalog',
+  );
+  await flush();
+  assert.equal(second, false);
+  walk.resolve();
+  await catalog;
+  await again;
+  assert.equal(second, true);
 });
 
 test('the chat lane is admitted while the default lane is busy, and stays serialized', async () => {

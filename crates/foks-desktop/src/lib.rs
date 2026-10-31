@@ -5179,11 +5179,20 @@ fn new_upload_id(_length: u64) -> Result<Option<foks_agent_proto::UploadHandle>,
 }
 
 /// Allocate and retain the complete handle before registration or source reads.
+///
+/// `header.total_length` must already be the source's length. A file of at
+/// most [`foks_agent_proto::KV_INLINE_FILE_BYTES`] is written inline, has
+/// nothing to resume and gets no handle: a handle would take one of the
+/// profile's receipt rows for 30 days, so saving many small files would fill
+/// them.
 pub fn ensure_upload_identity(
     transport: &dyn AgentTransport,
     header: &mut KvUploadHeader,
 ) -> Result<(), AgentError> {
-    if header.upload_id.is_none() && header.adapter.is_none() {
+    if header.upload_id.is_none()
+        && header.adapter.is_none()
+        && header.total_length > foks_agent_proto::KV_INLINE_FILE_BYTES
+    {
         let value = transport.call(Operation::KvUploadIssuance {
             store: header.store.clone(),
         })?;
