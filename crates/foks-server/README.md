@@ -958,10 +958,10 @@ exception covers, and a production dependency, direct or transitive, on
 `foks-server-testkit`.
 It also builds `foks-metadata-core` for `wasm32-unknown-unknown`, the
 artifact celld loads, with and without its `read-token-qualification` and
-`list-allocation-qualification` features; `rust-toolchain.toml` lists that
-target so rustup installs it with the toolchain. A 1.95.0 toolchain installed
-before the target was listed may lack it; `rustup target add
-wasm32-unknown-unknown` adds it.
+`list-allocation-qualification` features. The script installs the target with
+`rustup target add wasm32-unknown-unknown`, which does nothing when the target
+is already present; `rust-toolchain.toml` does not list it, so other jobs do
+not download it.
 The optional official-Go frame audit is
 `tools/foks-v019-oracle/run-live-team-compat.sh`; it needs a Go 1.25-compatible
 toolchain and may populate Go compiler/module caches, but does not use a state

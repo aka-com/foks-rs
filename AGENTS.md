@@ -43,9 +43,9 @@ with `tools/run-tool-tests.sh` (the `foks-tools` workflow runs it on changes
 there); tests that need lab artifacts report themselves as skipped.
 
 `tools/foks-server/check.sh` builds `foks-metadata-core` for
-`wasm32-unknown-unknown`. `rust-toolchain.toml` lists that target, but a
-1.95.0 toolchain installed before it did may lack it; add it with
-`rustup target add wasm32-unknown-unknown`.
+`wasm32-unknown-unknown`. The script installs that target for the
+repository toolchain with `rustup target add wasm32-unknown-unknown`
+(a no-op when it is present), which needs network access the first time.
 
 If CLI integration readiness checks report an IPC protocol version mismatch
 while Cargo reports the standalone agent as fresh, force a relink with
