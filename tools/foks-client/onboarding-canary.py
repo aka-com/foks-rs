@@ -142,16 +142,18 @@ def main():
 def remove_state(directory):
     """The client leaves a resident agent running in each state root, and its
     retention maintenance can still open the profile databases. An agent exits
-    within about 250 ms of finding its socket and lock file removed, so the
-    removal is retried until no agent recreates files."""
+    within about 250 ms of finding its socket and lock file removed, and may
+    remove its own -wal and -shm files while the tree is walked. A failed or
+    raced walk can leave part of the tree, so the removal is retried until the
+    directory is gone, not merely until a walk ends without an error."""
     for _ in range(40):
         try:
             shutil.rmtree(directory)
-            return
-        except FileNotFoundError:
-            return
         except OSError:
-            time.sleep(0.25)
+            pass
+        if not os.path.lexists(directory):
+            return
+        time.sleep(0.25)
     shutil.rmtree(directory)
 
 
