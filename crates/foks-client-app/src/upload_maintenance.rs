@@ -11,6 +11,12 @@ thread_local! {
     static STALL_AFTER_SELECTION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+/// Consecutive turns that may run out before an owner's first erasure before
+/// the owner is backed off like a blocked one. Each such turn reports more
+/// work, which reschedules maintenance within 250 ms; without this bound an
+/// owner whose turns always run out would keep that cadence indefinitely.
+const MAX_DEADLINE_MISSES: u8 = 8;
+
 #[derive(Default)]
 pub(crate) struct UploadMaintenanceCursor {
     database_id: Option<[u8; 16]>,
@@ -20,6 +26,8 @@ pub(crate) struct UploadMaintenanceCursor {
     account: Option<(Vec<u8>, Vec<u8>)>,
     full_accounts: BTreeSet<(Vec<u8>, Vec<u8>)>,
     blocked: BTreeMap<[u8; 16], Instant>,
+    /// Consecutive turns per owner that ran out before its first erasure.
+    deadline_misses: BTreeMap<[u8; 16], u8>,
     clock_blocked: BTreeMap<(Vec<u8>, Vec<u8>), (Instant, bool)>,
     burst: u8,
     active: Option<[u8; 16]>,
@@ -276,7 +284,19 @@ impl CheckedProfileSession<'_> {
             && !report.blocked
             && after.is_some_and(|p| p.phase != UploadCleanupPhase::Complete);
         cursor.burst = cursor.burst.saturating_add(1);
-        if !owner_progress && !report.blocked && Instant::now() >= deadline {
+        let missed = !owner_progress && !report.blocked && Instant::now() >= deadline;
+        let misses = if missed {
+            if !cursor.deadline_misses.contains_key(&id) && cursor.deadline_misses.len() >= 128 {
+                cursor.deadline_misses.pop_first();
+            }
+            let misses = cursor.deadline_misses.entry(id).or_default();
+            *misses = misses.saturating_add(1);
+            *misses
+        } else {
+            cursor.deadline_misses.remove(&id);
+            0
+        };
+        if missed && misses < MAX_DEADLINE_MISSES {
             // The turn ran out before this owner's first erasure. That is
             // not a blocked owner, so it is not backed off; it keeps the
             // next turn, but after the burst cap it yields like an owner
@@ -287,6 +307,9 @@ impl CheckedProfileSession<'_> {
                 cursor.active = None;
             }
         } else if !owner_progress || report.blocked {
+            // A blocked owner, or one whose turns kept running out before its
+            // first erasure, rests for 60 s.
+            cursor.deadline_misses.remove(&id);
             if cursor.blocked.len() >= 128 {
                 cursor.blocked.pop_first();
             }
@@ -687,6 +710,46 @@ mod tests {
             assert_eq!(&selected[..3], &[Some(first); 3]);
             assert_ne!(selected[3], Some(first), "the burst cap rotates the owner");
             assert_eq!(selected[4], Some(second));
+            Ok(())
+        });
+    }
+
+    /// An owner whose turns keep running out before its first erasure is
+    /// backed off for 60 s after MAX_DEADLINE_MISSES consecutive turns, so
+    /// maintenance does not rerun every 250 ms indefinitely.
+    #[test]
+    fn consecutive_deadline_misses_back_the_owner_off() {
+        let f = crate::test_support::AccountFixture::start();
+        f.run(|s, _, master| {
+            let sample = s.adapter_clock.sample()?;
+            let id = cancelled_fixture(s, master, 1, 4, sample)?;
+            let mut cursor = UploadMaintenanceCursor::default();
+            let mut reports = Vec::new();
+            STALL_AFTER_SELECTION.set(true);
+            let turns = (0..MAX_DEADLINE_MISSES).try_for_each(|_| {
+                let report = s.maintain_upload_state_until(
+                    &mut cursor,
+                    master,
+                    Instant::now() + Duration::from_millis(100),
+                )?;
+                reports.push((report.more_work, cursor.blocked.contains_key(&id)));
+                Ok::<_, Error>(())
+            });
+            STALL_AFTER_SELECTION.set(false);
+            turns?;
+            let bound = usize::from(MAX_DEADLINE_MISSES);
+            assert!(
+                reports[..bound - 1]
+                    .iter()
+                    .all(|&(more_work, blocked)| more_work && !blocked),
+                "{reports:?}"
+            );
+            assert!(reports[bound - 1].1, "the bound backs the owner off");
+            assert!(cursor.active.is_none());
+            assert!(!cursor.deadline_misses.contains_key(&id));
+            // The next turn skips the resting owner.
+            let report = s.maintain_upload_state(&mut cursor, master)?;
+            assert!(!report.made_progress, "the owner rests for 60 s");
             Ok(())
         });
     }
