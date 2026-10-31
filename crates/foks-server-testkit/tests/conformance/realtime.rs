@@ -1588,8 +1588,10 @@ pub(crate) fn client_chat_multi_team_refresh_budget() {
         }
         eprintln!("chat budget: pass {pass}, two teams, six populated previews, {calls} realtime RPCs, {:?}", started.elapsed());
     }
-    // Corrupt one channel's encrypted content after otherwise valid RPC decoding.
-    // Sibling previews and the other team's account-scoped inbox remain usable.
+    // Substitute already-anchored rows in one channel after otherwise valid RPC
+    // decoding. A changed digest contradicts the anchor ledger, which stops that
+    // channel; sibling previews and the other team's account-scoped inbox remain
+    // usable.
     struct CorruptChannel<'a> {
         connection: &'a mut RealtimeConnection,
         channel: RtChannelId,
@@ -1679,6 +1681,414 @@ pub(crate) fn client_chat_multi_team_refresh_budget() {
             .count(),
         3
     );
+}
+
+/// Any channel writer can store ciphertext the server cannot check. One such
+/// row must not stop other members from paging across it, previewing the
+/// channel or sending after it.
+#[test]
+pub(crate) fn client_chat_continues_past_unverifiable_member_messages() {
+    use foks_client::{ChatContent, ChatSession, EncryptedFileMutationStore};
+    fn send(
+        chat: &mut ChatSession<'_>,
+        rpc: &mut RealtimeConnection,
+        protected: &mut EncryptedFileMutationStore,
+        channel: RtChannelId,
+        text: &str,
+    ) {
+        let op = chat.prepare_send(rpc, protected, channel, text).unwrap();
+        chat.attempt_operation(rpc, protected, &op.id).unwrap();
+    }
+    let fixture = Fixture::start("chat-unverifiable");
+    let owner = fixture
+        .client
+        .create_account(fixture.host(), &TestAccountSpec::new("garbleowner", 0x3a))
+        .unwrap();
+    let client = TestClient::new(&fixture.environment, "chat-unverifiable-member").unwrap();
+    let member_host = client.probe_and_pin().unwrap();
+    let member = client
+        .create_account(
+            &member_host.pinned,
+            &TestAccountSpec::new("garblemember", 0x3b),
+        )
+        .unwrap();
+    let secrets = NamedTeamSecrets {
+        member_min: SecretSeed::new([0xb1; 32]),
+        member: SecretSeed::new([0xb2; 32]),
+        admin: SecretSeed::new([0xb3; 32]),
+        owner: SecretSeed::new([0xb4; 32]),
+        removal_key: SecretSeed::new([0xb5; 32]),
+        team_name_commitment_key: [0xb6; 16],
+    };
+    let created = fixture
+        .client
+        .foks()
+        .create_single_owner_named_team(fixture.host(), &owner.credential, "garbleteam", &secrets)
+        .unwrap();
+    fixture
+        .client
+        .foks()
+        .add_local_user_to_named_team(
+            fixture.host(),
+            &owner.credential,
+            &created.team,
+            &AddLocalTeamMemberRequest {
+                target_user: &member.authenticated.verified,
+                destination_role: Role::member(0),
+                removal_key: &SecretSeed::new([0xb7; 32]),
+            },
+        )
+        .unwrap();
+    let loaded = client
+        .foks()
+        .load_and_pin_team(
+            &member_host.pinned,
+            &member.credential,
+            &member.authenticated.verified,
+            &member.authenticated.puks,
+            &created.team,
+        )
+        .unwrap();
+    let member_key = loaded
+        .ptks
+        .iter()
+        .find(|k| k.role == Role::member(0))
+        .unwrap();
+    let key = RoleAndGeneration {
+        role: Role::member(0),
+        generation: member_key.generation,
+    };
+    let sealer = foks_crypto::derive_realtime_keys(&member_key.seed, RtAppId::Chat).unwrap();
+
+    let mut protected = fixture.client.open_protected_store().unwrap();
+    let mut owner_chat = fixture
+        .client
+        .foks()
+        .chat_session(fixture.host(), &owner.credential, &created.team)
+        .unwrap();
+    let mut owner_rpc = owner_chat.connection().unwrap();
+    let prepared = owner_chat
+        .prepare_channel(
+            &mut owner_rpc,
+            &mut protected,
+            "garbled",
+            "",
+            RtChannelTier::Bottom,
+        )
+        .unwrap();
+    let channel = RtChannelId(prepared.scope.channel);
+    owner_chat
+        .attempt_operation(&mut owner_rpc, &mut protected, &prepared.id)
+        .unwrap();
+    send(
+        &mut owner_chat,
+        &mut owner_rpc,
+        &mut protected,
+        channel,
+        "before",
+    );
+
+    // The member's own transport submits rows a FOKS-RS client would never
+    // produce: ciphertext that does not open, then an authenticated body that
+    // is not UTF-8 (valid on the wire, since Go Basic bodies are bytes).
+    let mut member_chat = client
+        .foks()
+        .chat_session(&member_host.pinned, &member.credential, &created.team)
+        .unwrap();
+    let mut member_rpc = member_chat.connection().unwrap();
+    let mut raw_send = |id: u8, body: Option<&[u8]>| {
+        let Response::Messages(head) = member_rpc
+            .call(&Request::Recents(RtRecentsArgument {
+                channel,
+                limit: 1,
+                stop_at: 0,
+            }))
+            .unwrap()
+        else {
+            panic!()
+        };
+        let previous = &head.messages[0];
+        let noncer = RtMessageNoncer {
+            metadata: RtMessageMetadata {
+                id: RtMessageId([id; 16]),
+                previous_id: previous.metadata.id,
+                previous_sequence: previous.sequence,
+                send_time: 1700000000000,
+                kind: RtMessageType::Basic,
+                further_user_attribution: None,
+            },
+            sender: Some(
+                FqParty::new(
+                    member.credential.uid.clone(),
+                    fixture.host().host_id().clone(),
+                )
+                .unwrap(),
+            ),
+            app: RtAppId::Chat,
+            team: FqParty::new(created.team.clone(), fixture.host().host_id().clone()).unwrap(),
+            channel,
+        };
+        let ciphertext = match body {
+            Some(body) => sealer.seal_basic_message(&noncer, body).unwrap(),
+            None => RtCiphertext(vec![0x5a; 64]),
+        };
+        member_rpc
+            .call(&Request::Send(RtSendArgument {
+                send: RtSend {
+                    metadata: noncer.metadata,
+                    channel: channel.short(),
+                    wrapper: RtMessageWrapper::Encrypted(RtMessageBox { key, ciphertext }),
+                    expected_previous_sequence: 0,
+                },
+            }))
+            .unwrap();
+    };
+    raw_send(0xc1, None);
+
+    // While the undecryptable row is the head, the owner still previews the
+    // channel and sends after it.
+    let path = fixture
+        .environment
+        .client_path("chat-unverifiable", "inbox.sqlite3")
+        .unwrap();
+    let mut soft = foks_client_db::SoftStateStore::open(&path).unwrap();
+    let inbox = owner_chat
+        .sync_inbox(&mut owner_rpc, &mut soft)
+        .unwrap()
+        .inbox;
+    assert!(inbox.blocked_channels.is_empty());
+    let preview = inbox
+        .conversations
+        .iter()
+        .find(|c| c.channel.metadata.id == channel)
+        .and_then(|c| c.preview.as_ref())
+        .unwrap();
+    assert!(matches!(
+        preview.content,
+        foks_client::ChatPreviewContent::Unverifiable { .. }
+    ));
+    send(
+        &mut owner_chat,
+        &mut owner_rpc,
+        &mut protected,
+        channel,
+        "after garbage",
+    );
+    raw_send(0xc2, Some(&[0xff, 0xfe, 0xfd]));
+    send(
+        &mut owner_chat,
+        &mut owner_rpc,
+        &mut protected,
+        channel,
+        "after bytes",
+    );
+
+    // The member pages across both rows. A page that starts after them checks
+    // its first message's predecessor against the fetched row's mapping.
+    let mut member_rpc = member_chat.connection().unwrap();
+    let tail = member_chat
+        .read_thread(&mut member_rpc, channel, 5, 5)
+        .unwrap();
+    assert!(tail.missing_predecessors.is_empty());
+    assert!(
+        matches!(&tail.messages[0].content, ChatContent::Text(t) if t.as_str() == "after bytes")
+    );
+    let recent = member_chat
+        .read_recent(&mut member_rpc, channel, 10)
+        .unwrap();
+    assert!(recent.missing_predecessors.is_empty());
+    let verdicts: Vec<_> = recent
+        .messages
+        .iter()
+        .map(|row| match &row.content {
+            ChatContent::Text(text) => text.as_str().to_owned(),
+            ChatContent::Unverifiable { reason } => format!("unverifiable: {reason}"),
+            ChatContent::Unsupported(_) => "unsupported".to_owned(),
+        })
+        .collect();
+    assert_eq!(
+        verdicts,
+        [
+            "after bytes",
+            "unverifiable: Basic text is not UTF-8",
+            "after garbage",
+            "unverifiable: message authentication failed",
+            "before",
+        ]
+    );
+    let mut member_soft = foks_client_db::SoftStateStore::open(
+        &fixture
+            .environment
+            .client_path("chat-unverifiable-member", "inbox.sqlite3")
+            .unwrap(),
+    )
+    .unwrap();
+    let inbox = member_chat
+        .sync_inbox(&mut member_rpc, &mut member_soft)
+        .unwrap()
+        .inbox;
+    assert!(inbox.blocked_channels.is_empty());
+
+    // A Go v0.1.9 host stores an all-zero author ID unchecked; the Rust server
+    // refuses one, so the transport presents the next row that way. No valid
+    // pointer names that row, so a send chains to the row before it.
+    struct ZeroId<'a> {
+        connection: &'a mut RealtimeConnection,
+        sequence: u64,
+    }
+    impl ChatTransport for ZeroId<'_> {
+        fn request(&mut self, request: &Request) -> foks_client::Result<Response> {
+            let mut response = self.connection.call(request)?;
+            let sequence = self.sequence;
+            let zero = |m: &mut RtMessage| {
+                if m.sequence == sequence {
+                    m.metadata.id = RtMessageId([0; 16]);
+                }
+            };
+            match &mut response {
+                Response::Messages(page) => page.messages.iter_mut().for_each(zero),
+                Response::Thread(page) => {
+                    for range in &mut page.ranges {
+                        range.messages.iter_mut().for_each(zero);
+                    }
+                    page.sequences.iter_mut().for_each(zero);
+                }
+                _ => {}
+            }
+            Ok(response)
+        }
+    }
+    raw_send(0xc3, None);
+    let mut owner_rpc = owner_chat.connection().unwrap();
+    let mut zero = ZeroId {
+        connection: &mut owner_rpc,
+        sequence: 6,
+    };
+    let op = owner_chat
+        .prepare_send(&mut zero, &mut protected, channel, "after zero ID")
+        .unwrap();
+    owner_chat
+        .attempt_operation(&mut zero, &mut protected, &op.id)
+        .unwrap();
+    let recent = member_chat
+        .read_recent(&mut member_rpc, channel, 1)
+        .unwrap();
+    let sent = &recent.messages[0];
+    assert!(matches!(&sent.content, ChatContent::Text(t) if t.as_str() == "after zero ID"));
+    assert_eq!(
+        (
+            sent.message.sequence,
+            sent.message.metadata.previous_sequence
+        ),
+        (7, 5)
+    );
+
+    // A Go v0.1.9 host stores shapes that the Rust server refuses or that no
+    // FOKS-RS client sends, so the transport presents fresh rows that way:
+    // further attribution, a key generation the reader does not hold, another
+    // key role, an unencrypted wrapper, a predecessor pointer at the row
+    // itself, and a team sender. Each is one row's verdict; none fails the
+    // page, the inbox sync, the preview or a send.
+    struct GoShapes<'a> {
+        connection: &'a mut RealtimeConnection,
+        attribution: RtUserId,
+        team: RtPartyId,
+    }
+    impl ChatTransport for GoShapes<'_> {
+        fn request(&mut self, request: &Request) -> foks_client::Result<Response> {
+            let mut response = self.connection.call(request)?;
+            let reshape = |m: &mut RtMessage| match (m.sequence, &mut m.wrapper) {
+                (8, _) => m.metadata.further_user_attribution = Some(self.attribution.clone()),
+                (9, RtMessageWrapper::Encrypted(b)) => b.key.generation += 100,
+                (10, RtMessageWrapper::Encrypted(b)) => b.key.role = Role::OWNER,
+                (11, _) => m.wrapper = RtMessageWrapper::Plaintext(b"plain".to_vec()),
+                (12, _) => m.metadata.previous_sequence = m.sequence,
+                (13, _) => m.sender = Some(self.team.clone()),
+                _ => {}
+            };
+            match &mut response {
+                Response::Messages(page) => page.messages.iter_mut().for_each(reshape),
+                Response::Thread(page) => {
+                    for range in &mut page.ranges {
+                        range.messages.iter_mut().for_each(reshape);
+                    }
+                    page.sequences.iter_mut().for_each(reshape);
+                }
+                _ => {}
+            }
+            Ok(response)
+        }
+    }
+    for text in ["8", "9", "10", "11", "12", "13"] {
+        send(
+            &mut owner_chat,
+            &mut owner_rpc,
+            &mut protected,
+            channel,
+            text,
+        );
+    }
+    let mut member_rpc = member_chat.connection().unwrap();
+    let team = RtPartyId::new(created.team.clone()).unwrap();
+    let mut shapes = GoShapes {
+        connection: &mut member_rpc,
+        attribution: RtUserId::new(owner.credential.uid.clone()).unwrap(),
+        team: team.clone(),
+    };
+    let inbox = member_chat
+        .sync_inbox(&mut shapes, &mut member_soft)
+        .unwrap()
+        .inbox;
+    assert!(inbox.blocked_channels.is_empty());
+    let preview = inbox
+        .conversations
+        .iter()
+        .find(|c| c.channel.metadata.id == channel)
+        .and_then(|c| c.preview.as_ref())
+        .unwrap();
+    assert_eq!(preview.sender, Some(team));
+    assert!(matches!(
+        preview.content,
+        foks_client::ChatPreviewContent::Unverifiable {
+            reason: "unsupported message sender"
+        }
+    ));
+    let mut member_protected = client.open_protected_store().unwrap();
+    let op = member_chat
+        .prepare_send(
+            &mut shapes,
+            &mut member_protected,
+            channel,
+            "after Go shapes",
+        )
+        .unwrap();
+    member_chat
+        .attempt_operation(&mut shapes, &mut member_protected, &op.id)
+        .unwrap();
+    let recent = member_chat.read_recent(&mut shapes, channel, 7).unwrap();
+    assert!(recent.missing_predecessors.is_empty());
+    let verdicts: Vec<_> = recent
+        .messages
+        .iter()
+        .map(|row| match &row.content {
+            ChatContent::Text(text) => text.as_str().to_owned(),
+            ChatContent::Unverifiable { reason } => format!("unverifiable: {reason}"),
+            ChatContent::Unsupported(_) => "unsupported".to_owned(),
+        })
+        .collect();
+    assert_eq!(
+        verdicts,
+        [
+            "after Go shapes",
+            "unverifiable: unsupported message sender",
+            "unverifiable: invalid message metadata",
+            "unverifiable: unencrypted chat message",
+            "unverifiable: message read role mismatch",
+            "unverifiable: message key generation unavailable",
+            "unverifiable: unsupported message attribution",
+        ]
+    );
+    assert_eq!(recent.messages[0].message.metadata.previous_sequence, 13);
 }
 
 #[test]

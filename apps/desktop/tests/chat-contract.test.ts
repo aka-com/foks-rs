@@ -294,6 +294,40 @@ test('shared Rust and TypeScript chat reply fixtures agree', async () => {
   }
 });
 
+test('an unverifiable row with the all-zero ID is keyed by its sequence', () => {
+  const action = { action: 'history' as const, channel, before: null };
+  const row = (sequence: string) => ({
+    id: '0'.repeat(32),
+    sequence,
+    sender: null,
+    send_time: '1700000000000',
+    insert_time: '1700000000001',
+    content: { kind: 'unverifiable' },
+  });
+  const reply = (messages: unknown[], before: string) => ({
+    scope: {
+      store,
+      host: '02' + 'ab'.repeat(32),
+      actor: '01' + 'ab'.repeat(32),
+    },
+    result: {
+      kind: 'history',
+      channel,
+      messages,
+      before,
+      missing_predecessors: [],
+    },
+  });
+  const decoded = decodeChatReply(reply([row('7')], '7'), storeId, action);
+  if (decoded.result.kind !== 'history') throw new Error('history expected');
+  assert.equal(decoded.result.messages[0].id, 'zero:7');
+  // The page-local duplicate check still applies to the wire ID.
+  assert.throws(
+    () => decodeChatReply(reply([row('7'), row('8')], '7'), storeId, action),
+    { code: 'chat-integrity' },
+  );
+});
+
 test('notification history accepts only bounded snippets and retains history scope validation', () => {
   const reply = {
     scope: {

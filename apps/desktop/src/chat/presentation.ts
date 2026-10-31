@@ -6,12 +6,22 @@ import type {
   ChatMessage,
 } from '../chat-contract';
 
-/** Runs use server insertion times, matching the displayed clock and order. */
+/**
+ * Runs use server insertion times, matching the displayed clock and order.
+ * An unverifiable row's sender is an unauthenticated server claim, so such a
+ * row neither starts nor continues a run.
+ */
 export function continuesMessageGroup(
   previous: ChatMessage | undefined,
   current: ChatMessage,
 ): boolean {
-  if (!previous || !current.sender || previous.sender !== current.sender)
+  if (
+    !previous ||
+    !current.sender ||
+    previous.sender !== current.sender ||
+    previous.content.kind === 'unverifiable' ||
+    current.content.kind === 'unverifiable'
+  )
     return false;
   const before = messageDate(previous.insert_time);
   const after = messageDate(current.insert_time);
@@ -234,7 +244,9 @@ export function previewLine(
   const text =
     preview.content.kind === 'text'
       ? preview.content.text
-      : 'Unsupported message';
+      : preview.content.kind === 'unverifiable'
+        ? 'Unverifiable message'
+        : 'Unsupported message';
   return `${sender}: ${text}`;
 }
 

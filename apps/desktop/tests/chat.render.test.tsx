@@ -1229,6 +1229,63 @@ test('a history page with unverified predecessors warns in the conversation', as
   // own behaviour, covered in chat-history-cache.test.ts.
 });
 
+test('an unverifiable message renders as one placeholder row and leaves the channel usable', async () => {
+  await setup(
+    (base) => ({
+      ...base,
+      chat: async (store, action) => {
+        const reply = await base.chat(store, action);
+        if (action.action === 'history' && reply.result.kind === 'history') {
+          const row = (sequence: string) => ({
+            id: sequence.padStart(2, '0').repeat(16),
+            sequence,
+            sender: `01${'cd'.repeat(32)}`,
+            send_time: '1700000000000',
+            insert_time: '1700000000001',
+          });
+          reply.result.messages = [
+            {
+              ...row('1'),
+              content: { kind: 'text' as const, text: 'Before it' },
+            },
+            { ...row('2'), content: { kind: 'unverifiable' as const } },
+            {
+              ...row('3'),
+              content: { kind: 'text' as const, text: 'After it' },
+            },
+            // A team sender is withheld by the agent, and an all-zero ID is
+            // keyed by sequence when the reply is decoded.
+            {
+              ...row('4'),
+              id: 'zero:4',
+              sender: null,
+              content: { kind: 'unverifiable' as const },
+            },
+          ];
+          reply.result.before = null;
+        }
+        return reply;
+      },
+    }),
+    false,
+  );
+  const placeholders = await ui.screen.findAllByText(
+    'This message could not be decrypted or verified.',
+  );
+  assert.equal(placeholders.length, 2);
+  // The row draws its own header rather than continuing the sender's run.
+  const article = placeholders[0].closest('article');
+  assert.ok(article);
+  assert.equal(article.classList.contains('grouped'), false);
+  assert.ok(ui.screen.getByText('Before it'));
+  assert.ok(ui.screen.getByText('After it'));
+  assert.equal(
+    ui.screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message' })
+      .disabled,
+    false,
+  );
+});
+
 for (const offline of [true, false]) {
   test(`pending preparations can be cancelled when channels are ${offline ? 'offline' : 'restricted'}`, async () => {
     let seeded = false;

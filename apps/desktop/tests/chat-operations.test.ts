@@ -154,3 +154,74 @@ test('atomic model handles history before pending and rejects conflicting pages 
     undefined,
   );
 });
+
+test('an unverifiable row that a later read opens is replaced, not a conflict', () => {
+  const action = {
+    action: 'history',
+    channel: op.channel,
+    before: null,
+  } as const;
+  if (history.kind !== 'history') throw new Error('fixture');
+  const row = history.messages[0];
+  const unverifiable = {
+    ...history,
+    messages: [{ ...row, content: { kind: 'unverifiable' as const } }],
+  };
+  // An unverifiable row bearing a sent message's ID is no delivery evidence.
+  const held = conversationResult(
+    { operations: [{ ...op, text: 'hello' }], history: null },
+    action,
+    unverifiable,
+  );
+  assert.equal(held.operations[0].observed, undefined);
+  assert.equal(held.operations[0].text, 'hello');
+  // The reader's team view now holds the key generation the row names.
+  const opened = conversationResult(held, action, history);
+  assert.deepEqual(opened.history?.messages, history.messages);
+  assert.equal(opened.operations[0].observed, true);
+  // A row never goes back to unverifiable, and the server's claims about an
+  // unverifiable row cannot change either.
+  assert.throws(() => conversationResult(opened, action, unverifiable), {
+    code: 'chat-channel-integrity',
+  });
+  assert.throws(
+    () =>
+      conversationResult(held, action, {
+        ...history,
+        messages: [{ ...row, insert_time: '2' }],
+      }),
+    { code: 'chat-channel-integrity' },
+  );
+});
+
+test('unverifiable rows keyed by sequence coexist across pages', () => {
+  const row = (sequence: string) => ({
+    id: `zero:${sequence}`,
+    sequence,
+    sender: null,
+    send_time: '1',
+    insert_time: '1',
+    content: { kind: 'unverifiable' as const },
+  });
+  const page = (sequence: string, before: string | null): ChatResult => ({
+    kind: 'history',
+    channel: op.channel,
+    before,
+    missing_predecessors: [],
+    messages: [row(sequence)],
+  });
+  const newest = conversationResult(
+    emptyConversation(),
+    { action: 'history', channel: op.channel, before: null },
+    page('9', '9'),
+  );
+  const both = conversationResult(
+    newest,
+    { action: 'history', channel: op.channel, before: '9' },
+    page('8', '8'),
+  );
+  assert.deepEqual(
+    both.history?.messages.map((m) => m.id),
+    ['zero:8', 'zero:9'],
+  );
+});

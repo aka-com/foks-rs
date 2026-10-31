@@ -16,12 +16,20 @@ const DEFAULT_PAGE: u64 = 100;
 pub enum ChatPreviewContent {
     Text(Zeroizing<String>),
     Unsupported(RtMessageType),
+    /// See [`super::history::ChatContent::Unverifiable`].
+    Unverifiable {
+        reason: &'static str,
+    },
 }
 impl std::fmt::Debug for ChatPreviewContent {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Text(_) => formatter.write_str("Text([REDACTED])"),
             Self::Unsupported(kind) => formatter.debug_tuple("Unsupported").field(kind).finish(),
+            Self::Unverifiable { reason } => formatter
+                .debug_struct("Unverifiable")
+                .field("reason", reason)
+                .finish(),
         }
     }
 }
@@ -276,6 +284,8 @@ impl ChatSession<'_> {
                     }
                     conversation.preview = preview;
                 }
+                // Content this client cannot open is a per-message verdict, so
+                // this is a contradiction in the server's mapping for one channel.
                 Err(Error::ChatChannelIntegrity(_)) => {
                     // Keep independently verified channel/inbox facts, never publish bad content.
                     inbox
@@ -316,6 +326,9 @@ impl ChatSession<'_> {
                 super::history::ChatContent::Text(text) => ChatPreviewContent::Text(text),
                 super::history::ChatContent::Unsupported(kind) => {
                     ChatPreviewContent::Unsupported(kind)
+                }
+                super::history::ChatContent::Unverifiable { reason } => {
+                    ChatPreviewContent::Unverifiable { reason }
                 }
             },
         }))
