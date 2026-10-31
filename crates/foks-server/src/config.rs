@@ -51,6 +51,9 @@ pub struct SessionLimits {
     pub maximum_working_memory_bytes: usize,
     /// Separate bounded capacity for small status/void responses.
     pub maximum_control_memory_bytes: usize,
+    /// Frames one restricted-list output connection serves before it closes.
+    /// RPC sessions have no frame budget, as go-snowpack-rpc servers have
+    /// none.
     pub maximum_requests: usize,
     pub worker_threads: usize,
     pub maximum_read_connections: usize,

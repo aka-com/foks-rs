@@ -635,8 +635,6 @@ pub enum TestProfile {
     StorageShutdown,
     RateLimited,
     BackupAutomation,
-    /// Ends each connection after `FEW_REQUESTS_PER_CONNECTION` frames.
-    FewRequests,
     /// Closes connections idle for `SHORT_IDLE_TIMEOUT` between requests;
     /// other limits are the defaults.
     ShortIdle,
@@ -648,9 +646,6 @@ pub const SHORT_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_se
 /// Idle allowance between requests under `TestProfile::TightIo`, whose
 /// `io_timeout` is 500 ms.
 pub const TIGHT_IO_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
-
-/// Frame budget of one connection under `TestProfile::FewRequests`.
-pub const FEW_REQUESTS_PER_CONNECTION: usize = 3;
 
 /// Request execution timeout of `TestProfile::ShortRequestTimeout`.
 pub const SHORT_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
@@ -706,7 +701,6 @@ impl TestProfile {
             | Self::StorageShutdown
             | Self::RateLimited
             | Self::BackupAutomation
-            | Self::FewRequests
             | Self::ShortIdle => foks_server_db::Config::default(),
         };
         let limits = foks_server::SessionLimits {
@@ -767,11 +761,6 @@ impl TestProfile {
                 SHORT_IDLE_TIMEOUT
             } else {
                 foks_server::SessionLimits::default().idle_timeout
-            },
-            maximum_requests: if matches!(self, Self::FewRequests) {
-                FEW_REQUESTS_PER_CONNECTION
-            } else {
-                foks_server::SessionLimits::default().maximum_requests
             },
             ..foks_server::SessionLimits::default()
         };

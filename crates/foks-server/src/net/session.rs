@@ -324,15 +324,11 @@ pub(crate) async fn serve(
         limits,
     };
 
-    let mut frames = 0_usize;
+    // A connection has no frame budget, as on a go-snowpack-rpc server: it is
+    // served until the peer closes it, it stays idle past the idle timeout, a
+    // frame fails or the server stops. Long polls still pending then end
+    // unanswered and release their permits.
     let close = loop {
-        // Once the connection's frame budget is spent, the session reads only
-        // to see cancels and end of stream while it answers the long polls
-        // still pending, and ends when none is left.
-        let budget_spent = frames >= limits.maximum_requests;
-        if budget_spent && responder.polls.is_empty() {
-            break Close::Orderly;
-        }
         // The request deadline starts at the first byte of the frame. Body
         // reading, handler execution and queued writes all consume it; idle
         // time between requests does not, and the response write gets its
@@ -345,7 +341,6 @@ pub(crate) async fn serve(
                     limits.request_timeout,
                 ),
                 Some(limits.idle_timeout),
-                budget_spent,
                 &mut stop,
             )
             .await?
@@ -353,7 +348,6 @@ pub(crate) async fn serve(
             Waited::Done(read) => read,
             Waited::End(close) => break close,
         };
-        frames = frames.saturating_add(1);
         let (length, deadline) = match read {
             Ok(length) => length,
             Err(foks_rpc::Error::Io(error))
@@ -395,7 +389,6 @@ pub(crate) async fn serve(
                     ),
                 ),
                 None,
-                false,
                 &mut stop,
             )
             .await?
@@ -525,14 +518,7 @@ pub(crate) async fn serve(
                 // completes, in completion order.
                 // A refused poll is answered at its sequence and the session
                 // goes on: the frame was read in full, and the peer's other
-                // calls on this connection stay pending. Once the frame
-                // budget is spent no new poll is admitted, so the connection
-                // ends when the polls admitted before it have been answered;
-                // ordinary calls are still served meanwhile.
-                if budget_spent {
-                    responder.refuse(&request_memory, sequence, family).await?;
-                    continue;
-                }
+                // calls on this connection stay pending.
                 if responder.polls.len() >= MAXIMUM_PENDING_POLLS {
                     service_data
                         .metrics
@@ -723,7 +709,7 @@ pub(crate) async fn serve(
                 })
             },
         );
-        let execution = match responder.wait(execution, None, false, &mut stop).await? {
+        let execution = match responder.wait(execution, None, &mut stop).await? {
             Waited::Done(execution) => execution?,
             Waited::End(close) => break close,
         };
@@ -777,9 +763,8 @@ struct Responder<'a, W> {
 /// How [`Responder::wait`] ended.
 enum Waited<T> {
     Done(T),
-    /// The session ends: no frame arrived within the idle allowance, the last
-    /// pending poll was answered while waiting `until_drained`, the server is
-    /// stopping, or a poll's response write ended the session.
+    /// The session ends: no frame arrived within the idle allowance, the
+    /// server is stopping, or a poll's response write ended the session.
     End(Close),
 }
 
@@ -806,13 +791,11 @@ enum Close {
 impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
     /// Awaits `operation` while writing the response of each long poll that
     /// completes meanwhile. With `idle`, gives up once no poll has been
-    /// pending for that long; with `until_drained`, gives up as soon as the
-    /// last pending poll has been answered.
+    /// pending for that long.
     async fn wait<F: std::future::Future>(
         &mut self,
         operation: F,
         idle: Option<std::time::Duration>,
-        until_drained: bool,
         stop: &mut watch::Receiver<bool>,
     ) -> Result<Waited<F::Output>> {
         tokio::pin!(operation);
@@ -839,9 +822,6 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
                     {
                         Flow::Continue => {}
                         Flow::End(close) => return Ok(Waited::End(close)),
-                    }
-                    if until_drained && self.polls.is_empty() {
-                        return Ok(Waited::End(Close::Orderly));
                     }
                     if self.polls.is_empty() {
                         idle_deadline = idle.and_then(idle_after);
