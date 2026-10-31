@@ -1173,6 +1173,7 @@ test('the More menu offers each login copy and no whole-value copy', async () =>
   assert.ok(labels.includes('Copy Password'));
   assert.ok(labels.includes('Copy User Name'));
   assert.equal(labels.includes('Copy Value'), false);
+  assert.equal(labels.includes('Copy All Fields'), false);
   ui.fireEvent.click(
     ui.screen.getByRole('menuitem', { name: 'Copy User Name' }),
   );
@@ -1184,7 +1185,7 @@ test('the More menu offers each login copy and no whole-value copy', async () =>
   );
 });
 
-test('a Password known only by its path also offers its whole value', async () => {
+test('a Password known only by its path also offers all its fields at once', async () => {
   const p = await setup(
     undefined,
     (item) => item.path === '/logins/github.com',
@@ -1198,7 +1199,8 @@ test('a Password known only by its path also offers its whole value', async () =
   const rendered = ui.render(p.draw());
   ui.fireEvent.click(rendered.getByRole('button', { name: 'More actions' }));
   ui.fireEvent.click(
-    await ui.screen.findByRole('menuitem', { name: 'Copy Value' }),
+    // Labelled so it does not read as a password copy.
+    await ui.screen.findByRole('menuitem', { name: 'Copy All Fields' }),
   );
   await ui.waitFor(() =>
     assert.deepEqual(
@@ -1242,6 +1244,14 @@ test('showing one login row reads once and reveals only that row', async () => {
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Show Website' }));
   await rendered.findByText('https://github.com/login');
   assert.equal(reads, 2);
+  // With any row shown, the More menu hides them all.
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'More actions' }));
+  ui.fireEvent.click(
+    await ui.screen.findByRole('menuitem', { name: 'Hide Values' }),
+  );
+  await ui.waitFor(() =>
+    assert.equal(rendered.queryByText('https://github.com/login'), null),
+  );
 });
 
 test('window blur and the conceal signal remask shown login rows', async () => {
