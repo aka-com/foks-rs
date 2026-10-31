@@ -175,6 +175,7 @@ sites = [
     "apps/desktop/src-tauri/src/commands/accounts.rs",
     "apps/desktop/src-tauri/src/commands/servers.rs",
     "apps/desktop/src-tauri/src/commands/validation.rs",
+    "apps/desktop/src-tauri/src/commands/vault.rs",
 ]
 
 [[exception]]
