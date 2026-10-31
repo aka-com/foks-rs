@@ -280,7 +280,10 @@ fn rename_rejects_foreign_expired_and_racing_intent() {
     assert!(
         matches!(
             rejected,
-            Err(foks_rpc::Error::RemoteStatus { code: 1013, .. }) | Err(foks_rpc::Error::Io(_))
+            Err(foks_rpc::Error::RemoteStatus {
+                code: foks_rpc::STATUS_AUTH_ERROR,
+                ..
+            })
         ),
         "{rejected:?}"
     );

@@ -334,6 +334,17 @@ and it means the server's notion of "who is calling" is the same public key
 that appears in the user's chain, not merely a certificate the server once
 signed.
 
+The TLS verifier checks only the chain, so a revoked device whose
+certificate is still within its seven days completes the handshake. The
+binding check runs per request and a failure does not close the connection:
+as on a Go v0.1.9 host, which answers every call of a connection that failed
+authentication with `AUTH_ERROR`, the request receives status 1006 at its
+sequence number, and the next request is checked again. This holds for
+ordinary routes and for the realtime inbox poll. A database fault during the
+lookup is not a verdict on the certificate; it receives the status the server
+gives that fault on every route (transaction retry, 1014, for a busy or
+failing database) and is counted in `foks_request_internal_errors_total`.
+
 ### Why "untrusted transport" still holds
 
 The threat model in [Chapter 1](01-problem.qmd) says the server is not
