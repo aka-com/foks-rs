@@ -11,11 +11,15 @@ cargo-fuzz = true
 members = ["."]
 
 [dependencies]
+# Exact: updated together with the cargo-fuzz version in
+# .github/workflows/foks-fuzz.yml.
 libfuzzer-sys = "=0.4.10"
 foks-snowpack = { path = "../crates/foks-snowpack" }
 foks-rpc = { path = "../crates/foks-rpc" }
 foks-keystore = { path = "../crates/foks-keystore" }
 foks-agent-proto = { path = "../crates/foks-agent-proto" }
+foks-proto = { path = "../crates/foks-proto" }
+foks-verify = { path = "../crates/foks-verify" }
 # Builds the fixed deadline envelope in agent_frames and seed_corpus.
 serde_json = "1"
 chacha20poly1305 = "0.11"
@@ -56,6 +60,31 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "proto_schema"
+path = "fuzz_targets/proto_schema.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "server_arguments"
+path = "fuzz_targets/server_arguments.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "verify"
+path = "fuzz_targets/verify.rs"
+test = false
+doc = false
+bench = false
+
 [[test]]
 name = "archive_scenarios"
 path = "tests/archive_scenarios.rs"
+
+[[test]]
+name = "corpus_seeds"
+path = "tests/corpus_seeds.rs"
