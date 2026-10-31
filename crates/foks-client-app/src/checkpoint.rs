@@ -700,13 +700,12 @@ impl ClientCredentials {
             Ok(m.records
                 .contains_key(&crate::portability::readiness::key(&session.profile.name)?))
         })?;
-        if external || !hard_state_artifacts_exist(&session.paths.hard_database)? {
-            return Ok(external);
-        }
-        Ok(
-            foks_client_db::HardStateStore::open(&session.paths.hard_database)?
-                .requires_import_verification()?,
-        )
+        // The non-creating read reports no gate for an absent database, so a
+        // read outside the profile lock never creates hard state.
+        Ok(external
+            || crate::portability::readiness::hard_state_requires_verification(
+                &session.paths.hard_database,
+            )?)
     }
 
     pub(crate) fn with_import_session<T>(
@@ -2958,6 +2957,31 @@ mod admission_tests {
             })
             .unwrap();
         (temporary, root)
+    }
+
+    #[test]
+    fn import_gate_read_after_reset_does_not_recreate_hard_state() {
+        let (_temporary, root) = one_profile_state();
+        let credentials = ClientCredentials::open(&root).unwrap();
+        let registry = ProfileRegistry::open(&root).unwrap();
+        let session = ProfileSession::open(&registry, "a").unwrap();
+        let database = &session.paths.hard_database;
+        credentials
+            .with_checked_session(&session, |_| Ok::<_, Error>(()))
+            .unwrap();
+        assert!(hard_state_artifacts_exist(database).unwrap());
+        credentials.reset_hard_state(&session).unwrap();
+        assert!(!hard_state_artifacts_exist(database).unwrap());
+
+        // The agent's overview and SSO handlers read the gate outside any
+        // checked session; only exclusive admission may create hard state.
+        assert!(!credentials.requires_import_verification(&session).unwrap());
+        assert!(!hard_state_artifacts_exist(database).unwrap());
+
+        credentials
+            .with_checked_session(&session, |_| Ok::<_, Error>(()))
+            .unwrap();
+        assert!(hard_state_artifacts_exist(database).unwrap());
     }
 
     #[test]

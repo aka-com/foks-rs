@@ -681,6 +681,8 @@ pub enum Error {
     InvalidSnapshot(&'static str),
     #[error("hard-state database path must not be a symbolic link")]
     SymlinkDatabase,
+    #[error("hard-state database does not exist or is not initialized")]
+    StateMissing,
     #[error("hard-state database has application id {found:#x}, expected {expected:#x}")]
     WrongApplicationId { found: i64, expected: i64 },
     #[error(
@@ -796,7 +798,13 @@ struct StoredHost {
     public_zone_bytes: Vec<u8>,
 }
 
-fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
+/// Reads a database file's application id and schema version without writing.
+///
+/// Returns `None` for an uninitialized file, one with no application id, no
+/// schema version and no schema objects, which [`initialize_or_verify`]
+/// initializes. Returns the schema version of a file carrying the FOKS
+/// application id, and [`Error::WrongApplicationId`] for any other file.
+fn hard_state_version(connection: &Connection) -> Result<Option<u32>> {
     let application_id: i64 =
         connection.pragma_query_value(None, "application_id", |row| row.get(0))?;
     let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
@@ -806,12 +814,21 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
             [],
             |row| row.get(0),
         )?;
-        if object_count != 0 {
-            return Err(Error::WrongApplicationId {
-                found: application_id,
-                expected: APPLICATION_ID,
-            });
+        if object_count == 0 {
+            return Ok(None);
         }
+    }
+    if application_id != APPLICATION_ID {
+        return Err(Error::WrongApplicationId {
+            found: application_id,
+            expected: APPLICATION_ID,
+        });
+    }
+    Ok(Some(version))
+}
+
+fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
+    let Some(version) = hard_state_version(connection)? else {
         let mut database_id = [0u8; 16];
         getrandom::fill(&mut database_id).map_err(|_| Error::Randomness)?;
         let mut write_token = [0u8; 16];
@@ -831,13 +848,7 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
         transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         transaction.commit()?;
         return Ok(());
-    }
-    if application_id != APPLICATION_ID {
-        return Err(Error::WrongApplicationId {
-            found: application_id,
-            expected: APPLICATION_ID,
-        });
-    }
+    };
     if version == 38 {
         merkle_checkpoint::migrate(connection)?;
         return initialize_or_verify(connection);

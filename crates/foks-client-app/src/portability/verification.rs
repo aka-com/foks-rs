@@ -31,7 +31,8 @@ pub fn verify_imported_profile(
     secrets: &BTreeMap<String, VerificationSecret<'_>>,
 ) -> Result<ProfileVerificationReport> {
     // An already completed attempt still goes through ordinary rollback checks.
-    if !HardStateStore::open(&session.paths.hard_database)?.requires_import_verification()? {
+    // This runs before the profile lock, so it must not create hard state.
+    if !readiness::hard_state_requires_verification(&session.paths.hard_database)? {
         let absent = credentials.with_native_manifest(|m| {
             Ok(!m
                 .records
@@ -177,7 +178,7 @@ pub fn verify_imported_profile(
         }
         let verified = proofs.len() == state.accounts.len();
         if verified {
-            let mut db = HardStateStore::open(&session.paths.hard_database)?;
+            let mut db = HardStateStore::open_existing(&session.paths.hard_database)?;
             // Re-run after a crash between DB completion and native publication.
             if !state.required {
                 db.install_import_readiness(state.archive_id, state.attempt, &state.accounts)?;
