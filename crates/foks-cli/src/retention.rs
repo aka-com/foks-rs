@@ -120,7 +120,17 @@ pub fn run(state: &Path, command: RetentionCommand) -> Result<(), Box<dyn std::e
             }
         }
     };
-    let reply = super::deadline::agent_client(state)?.call(operation)?;
+    // `retention status` reads a running agent's counters without starting
+    // one, so a version refusal is diagnosed here as `ensure_agent` would.
+    let reply = super::deadline::agent_client(state)?
+        .call(operation)
+        .map_err(|error| -> Box<dyn std::error::Error> {
+            if error.is_version_mismatch() {
+                super::mcp::incompatible_agent_message(&error).into()
+            } else {
+                error.into()
+            }
+        })?;
     match reply.result {
         ResponseResult::Success { value } => super::deadline::print_agent_value(value),
         ResponseResult::Error { code, message, .. } => Err(format!("{code:?}: {message}").into()),
@@ -206,6 +216,54 @@ pub(super) fn preflight(state: &Path, session: &ProfileSession) {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    /// An agent left running by an older build refuses the status request's
+    /// version; the CLI names both versions and the remedy instead of a bare
+    /// protocol error.
+    #[cfg(unix)]
+    #[test]
+    fn status_from_an_older_agent_is_diagnosed_as_incompatible() {
+        use std::io::{Read as _, Write as _};
+        use std::os::unix::fs::PermissionsExt as _;
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("foks-rs.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut prefix = [0u8; 4];
+            stream.read_exact(&mut prefix).unwrap();
+            let mut frame = vec![0; 4 + u32::from_be_bytes(prefix) as usize];
+            frame[..4].copy_from_slice(&prefix);
+            stream.read_exact(&mut frame[4..]).unwrap();
+            let refusal = serde_json::json!({
+                "version": 34,
+                "id": foks_agent_proto::request_id(&frame),
+                "status": "error",
+                "code": "version-mismatch",
+                "message": "unsupported protocol version",
+            });
+            stream
+                .write_all(&foks_agent_proto::encode(&refusal).unwrap())
+                .unwrap();
+        });
+        let _scope =
+            super::super::deadline::CommandScope::enter(std::time::Duration::from_secs(15))
+                .unwrap();
+        let error = run(directory.path(), RetentionCommand::Status)
+            .unwrap_err()
+            .to_string();
+        server.join().unwrap();
+        assert_eq!(
+            error,
+            format!(
+                "the running foks-agent is incompatible: agent protocol version 34 does not \
+                 match client protocol version {}; stop it (quit the FOKS app or end the \
+                 foks-agent process) and retry",
+                foks_agent_proto::PROTOCOL_VERSION
+            )
+        );
+    }
     #[test]
     fn maintenance_cli_has_explicit_bounded_policy() {
         let parse = |extra: &[&str]| {
