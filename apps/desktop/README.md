@@ -427,17 +427,20 @@ The list foot holds the drop hint and the store's Uploads… sheet; the item
 sheets (New Password, New Document, New Folder, Rename or Move) carry the kind
 tile and a subtitle saying where they save.
 
-A failed `import_dropped_file` or `replace_dropped_file` names the upload
-handle the host issued and points to Uploads only after failures that can
-follow the agent's registration of the handle: an ambiguous outcome,
-`deadline-exceeded`, `cancelled`, `conflict`, `already-exists`,
+A dropped or chosen file of at most 2,040 bytes
+(`foks_agent_proto::KV_INLINE_FILE_BYTES`) is written inline and sent without
+an upload handle, so it takes none of the profile's receipt rows; a larger
+file gets a handle before its stream starts. A failed `import_dropped_file` or
+`replace_dropped_file` with a handle names it and points to Uploads only after
+failures that can follow the agent's registration of the handle: an ambiguous
+outcome, `deadline-exceeded`, `cancelled`, `conflict`, `already-exists`,
 `upload-spool-full`, `upload-identity-conflict`, `reauthentication-required`
 and the server failures of the upload itself (`server-unavailable`,
-`rate-limited`, `quota-exceeded`, `operation-failed`). Refusals before registration (capability,
-credential, clock and capacity checks) name no handle; after a lost agent
-connection, `profile-busy`, `busy`, `invalid-request` or `rollback-detected`,
-which can come before or after registration, the message says that the
-agent may have recorded it.
+`rate-limited`, `quota-exceeded`, `operation-failed`). Refusals before
+registration (capability, credential, clock and capacity checks) name no
+handle; after a lost agent connection, `profile-busy`, `busy`,
+`invalid-request` or `rollback-detected`, which can come before or after
+registration, the message says that the agent may have recorded it.
 
 Every bar is 44px with a hairline under it, centred on the lights' line at
 y=30. The panel's first bar (`src/shell/topbar.tsx`) is the list column's on

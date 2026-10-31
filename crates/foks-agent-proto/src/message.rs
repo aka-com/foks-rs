@@ -377,6 +377,12 @@ pub struct KvChunkResult {
     pub eof: bool,
 }
 
+/// The largest file a client writes inline, in one KV node, rather than as a
+/// chunked large file (`SMALL_FILE_BYTES` in foks-client). An inline write
+/// has nothing to resume, so a front end that sends such a file needs no
+/// upload handle, and sending one costs a receipt row for 30 days.
+pub const KV_INLINE_FILE_BYTES: u64 = 2048 - 8;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct KvUploadHeader {
     /// Caller allocated before source streaming; retries resume this durable operation.

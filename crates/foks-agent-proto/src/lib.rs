@@ -32,7 +32,7 @@ pub use message::{
     ResetArtifactKind, ResetArtifactSummary, ResetStatePreview, Response, ResponseResult,
     ResponseTiming, SecretString, ServerStatusSnapshot, StoredHostStatus, TeamDetailsSummary,
     TeamKind, TeamRole, TeamStoreRef, TeamSummary, TimerStatus, YubiFederationUnlockInput,
-    YubiRetryConfiguration, PROTOCOL_VERSION,
+    YubiRetryConfiguration, KV_INLINE_FILE_BYTES, PROTOCOL_VERSION,
 };
 
 #[cfg(test)]
