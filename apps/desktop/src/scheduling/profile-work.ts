@@ -31,6 +31,8 @@ type Work = {
   promise: Promise<unknown>;
   run(): Promise<void>;
   cancel(this: void): void;
+  /** Restarts the admission wait: the lane admitted the work ahead of this. */
+  rearm(): void;
 };
 type Lane = {
   active?: Work;
@@ -44,9 +46,15 @@ type Lane = {
  * the agent already admits a chat request against its store and admits one
  * inbox poll per account: waiting here behind a catalog walk or an
  * invitation read for the same profile is a second wait that buys nothing.
- * Work within a lane stays serialized.
+ * Catalog walks have their own because one walk is a Bulk command that reads
+ * every store of the profile, page after page, for up to 300 s, while the
+ * host and the agent already order it against changes: a mutation retires
+ * and cancels a running walk between its requests (`begin_mutation` in
+ * `src-tauri/src/commands/context.rs`), and the agent admits each of the
+ * walk's requests separately. Queued behind a walk in this lane, a Save
+ * would wait for the whole walk. Work within a lane stays serialized.
  */
-export type WorkLane = 'default' | 'chat';
+export type WorkLane = 'default' | 'chat' | 'catalog';
 type Queue = Record<WorkLane, Lane>;
 const newLane = (): Lane => ({
   foreground: [],
@@ -55,6 +63,11 @@ const newLane = (): Lane => ({
 });
 const idle = (entries: Lane): boolean =>
   !entries.draining && !entries.foreground.length && !entries.background.length;
+const newQueue = (): Queue => ({
+  default: newLane(),
+  chat: newLane(),
+  catalog: newLane(),
+});
 /**
  * The budget of each command deadline class, in milliseconds. The host runs
  * a command under the cap of its class (`command_class` in
@@ -64,15 +77,18 @@ const idle = (entries: Lane): boolean =>
  */
 export const COMMAND_DEADLINE_CLASS_BUDGET = {
   ordinary: 15_000,
+  chatPoll: 60_000,
   bulk: 300_000,
   pairing: 300_000,
 } as const;
 /**
- * How long queued work waits for admission. Pairing commands such as
- * accepting a device pairing run in the default lane, so work can be queued
- * behind a command of the longest class. Such work has to outlast that
- * budget plus the scheduling and IPC slack around it; a wait equal to the
- * budget expired it at the moment the queue freed.
+ * How long queued work waits without its lane admitting anything. Pairing
+ * commands such as accepting a device pairing run in the default lane, so
+ * work can be queued behind a command of the longest class. Such work has to
+ * outlast that budget plus the scheduling and IPC slack around it; a wait
+ * equal to the budget expired it at the moment the queue freed. The wait
+ * restarts each time the lane admits the work ahead, so it covers the one
+ * command running ahead, never the sum of several queued ones.
  */
 export const MAX_QUEUE_WAIT =
   Math.max(...Object.values(COMMAND_DEADLINE_CLASS_BUDGET)) + 15_000;
@@ -121,8 +137,7 @@ export function scheduleProfileWork<T>(
   let profiles = owners.get(owner);
   if (!profiles) owners.set(owner, (profiles = new Map<string, Queue>()));
   let queue = profiles.get(profile);
-  if (!queue)
-    profiles.set(profile, (queue = { default: newLane(), chat: newLane() }));
+  if (!queue) profiles.set(profile, (queue = newQueue()));
   const track = queue[lane];
   if (background) {
     const duplicate = track.background.find(
@@ -212,6 +227,11 @@ export function scheduleProfileWork<T>(
         report(performance.now(), 'cancelled');
       }
     },
+    rearm() {
+      if (settled || track.active === entry) return;
+      clearTimeout(admissionTimer);
+      admissionTimer = setTimeout(expire, MAX_QUEUE_WAIT);
+    },
     async run() {
       clearTimeout(admissionTimer);
       const started = performance.now();
@@ -242,7 +262,7 @@ export function scheduleProfileWork<T>(
     },
   };
   (background ? track.background : track.foreground).push(entry);
-  const admissionTimer = setTimeout(() => {
+  const expire = () => {
     if (settled || track.active === entry) return;
     const waiting = background ? track.background : track.foreground;
     const index = waiting.indexOf(entry);
@@ -252,7 +272,8 @@ export function scheduleProfileWork<T>(
       queueBusy('Profile queue deadline exceeded; request did not start.'),
     );
     report(performance.now(), 'error', true);
-  }, MAX_QUEUE_WAIT);
+  };
+  let admissionTimer = setTimeout(expire, MAX_QUEUE_WAIT);
   background?.signal.addEventListener('abort', entry.cancel, { once: true });
   const drain = async () => {
     if (track.draining) return;
@@ -268,6 +289,10 @@ export function scheduleProfileWork<T>(
           track.last = next.background!.key;
         }
         track.active = next;
+        // The lane made progress, so each entry still waiting is one
+        // admission closer and its wait restarts.
+        for (const waiting of [...track.foreground, ...track.background])
+          waiting.rearm();
         await next.run();
         track.active = undefined;
       }
@@ -277,7 +302,8 @@ export function scheduleProfileWork<T>(
       if (
         profiles.get(profile) === queue &&
         idle(queue.default) &&
-        idle(queue.chat)
+        idle(queue.chat) &&
+        idle(queue.catalog)
       )
         profiles.delete(profile);
       if (!profiles.size && owners.get(owner) === profiles)
