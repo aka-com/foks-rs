@@ -194,7 +194,9 @@ fails to open and is discarded by the receiver. Because anyone can send, the
 relay's capacity is bounded and shared: it holds at most 4,096 packets or
 32 MiB for up to two hours, and one source (an IPv4 address or an IPv6 /64)
 at most a sixteenth of either, so one client cannot fill the relay and
-block pairing for everyone else.
+block pairing for everyone else. Loopback peers and the operator's configured
+`trusted_sources`, such as a reverse proxy or NAT that presents many clients
+as one address, are exempt from the per-source share.
 
 The provisionee's checks on the `PleaseSign` link are the heart of the
 protocol. It decodes the proposed chain link and requires that it names

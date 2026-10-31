@@ -352,8 +352,10 @@ authentication with `AUTH_ERROR`, the request receives status 1006 at its
 sequence number, and the next request is checked again. This holds for
 ordinary routes and for the realtime inbox poll. A database fault during the
 lookup is not a verdict on the certificate; it receives the status the server
-gives that fault on every route (transaction retry, 1014, for a busy or
-failing database) and is counted in `foks_request_internal_errors_total`.
+gives that fault on every route: rate limiting (1012) when every pooled read
+connection is in use, counted in `foks_reader_pool_exhausted_total`, and
+transaction retry (1014) for a busy or failing database, counted in
+`foks_request_internal_errors_total`.
 
 ### Why "untrusted transport" still holds
 

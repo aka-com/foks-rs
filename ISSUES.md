@@ -177,10 +177,14 @@ client down, so clients that rotate source addresses can grow the table until
 `maximum_database_bytes` is reached, after which every write on the host fails
 with status 1060. The stored addresses are also kept indefinitely.
 
-The bound on our branch (a disabled-by-default route, a unique case-folded
-address index, an entry cap with a one-row count, retention expiry and
-`foks-server waitlist list/export/purge`) needs server schema 60 and was not
-ported, by maintainer decision; the schema stays at 59.
+A bound was designed in 454cc8b and c871f5a: the route is off by default and
+answers `Unsupported` until `[waitlist]` enables it; a unique index on the
+address under ASCII case folding makes a repeated join return the stored
+identifier; an entry cap (10,000 by default) is checked against a one-row
+count kept by triggers; maintenance expires entries after a retention period;
+and `foks-server waitlist list/export/purge` gives operators access. It needs
+server schema 60, so it was not ported, by maintainer decision; the schema
+stays at 59.
 
 Required resolution:
 
