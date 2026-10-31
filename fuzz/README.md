@@ -71,12 +71,20 @@ cargo run --locked --manifest-path fuzz/Cargo.toml --example seed_corpus
 
 `fuzz/Cargo.lock` must be refreshed whenever a crate the targets use gains a
 dependency, including a workspace path dependency. The standalone `server fast`
-job resolves it with `--locked` on every push and fails while it is stale.
-Refresh it without upgrading other packages:
+job runs on pushes that match its path filter (the Rust crates, the root and
+fuzz manifests and lockfiles, and the server tools; see
+`.github/workflows/foks-standalone.yml`). It resolves the fuzz graph with
+`--locked`, failing while the lockfile is stale, and checks the targets, tests
+and seed generator on the stable toolchain, failing when a crate API change
+breaks them. Refresh the lockfile without upgrading other packages:
 
 ```sh
-cargo metadata --offline --format-version 1 --manifest-path fuzz/Cargo.toml >/dev/null
+cargo metadata --format-version 1 --manifest-path fuzz/Cargo.toml >/dev/null
 ```
+
+This adds the missing packages at the newest compatible versions; when the
+workspace `Cargo.lock` already has them, compare and align the two lockfiles.
+`--offline` also works, and picks versions already in the local Cargo cache.
 
 Twelve `server_arguments` selectors have no seed yet. No Go request fixture
 covers them, and their client encoders take signatures, registration

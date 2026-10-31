@@ -131,10 +131,18 @@ jobs:
         run: cargo fetch --locked
       # The fuzz crate is its own workspace with its own lockfile, and the
       # fuzz workflow runs only on pull requests and weekly. A path dependency
-      # added to a crate the fuzz targets use leaves fuzz/Cargo.lock stale;
-      # this resolves the fuzz graph without updating the lockfile.
+      # added to a crate the fuzz targets use leaves fuzz/Cargo.lock stale,
+      # and an API change in those crates breaks the targets. Fetch the fuzz
+      # graph first so the checks below do not depend on the index; both
+      # then fail if the lockfile would have to change.
+      - name: Fetch the locked fuzz dependency graph
+        run: cargo fetch --locked --manifest-path fuzz/Cargo.toml
       - name: Check that the fuzz lockfile matches the workspace crates
-        run: cargo metadata --locked --format-version 1 --manifest-path fuzz/Cargo.toml >/dev/null
+        run: cargo metadata --offline --locked --format-version 1 --manifest-path fuzz/Cargo.toml >/dev/null
+      # libfuzzer-sys builds on the repository's stable toolchain; only the
+      # coverage-instrumented campaign needs nightly and cargo-fuzz.
+      - name: Check that the fuzz targets, tests and seed generator compile
+        run: cargo check --offline --locked --manifest-path fuzz/Cargo.toml --target-dir target --bins --tests --examples
       - name: Install Linux server dependencies
         run: sudo apt-get update && sudo apt-get install -y libpcsclite-dev
       - name: Fetch the pinned Go protocol module
