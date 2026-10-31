@@ -380,7 +380,8 @@ fn independent_stdio_client_reads_through_real_agent_and_keeps_agent_after_eof()
         json!({"path":"/must-not-execute","content":"legacy","submission_id":"12".repeat(16)}),
     );
     assert_eq!(legacy["result"]["isError"], true, "{legacy}");
-    // Local status has reserved worker capacity and contains counters only.
+    // Local status has reserved worker capacity and contains counters and a
+    // redacted failure kind only.
     let retention = foks_agent_client::AgentClient::new(state.join("foks-rs.sock"))
         .call(foks_agent_proto::Operation::RetentionStatus)
         .unwrap();
