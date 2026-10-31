@@ -47,7 +47,14 @@ fn reaches(table: &[schema::Decoder], name: &str, bytes: &[u8]) -> bool {
 #[test]
 fn every_decoder_handles_every_go_fixture() {
     let fixtures = fixtures::snowp();
-    assert_eq!(fixtures.len(), 137);
+    // Pinned so that a lost fixture directory fails here. After adding or
+    // removing a fixture, rerun seed_corpus and update the count (see
+    // crates/foks-snowpack/README.md).
+    assert_eq!(
+        fixtures.len(),
+        137,
+        "the .snowp fixture set changed: rerun seed_corpus and update this count"
+    );
     for table in [schema::PROTO, schema::SERVER] {
         assert!(table.len() <= 256);
     }
@@ -67,7 +74,11 @@ fn every_decoder_handles_every_go_fixture() {
 #[test]
 fn every_decoder_handles_every_go_call_argument() {
     let calls = fixtures::call_arguments();
-    assert_eq!(calls.len(), 90);
+    assert_eq!(
+        calls.len(),
+        90,
+        "the Go call fixture set changed: rerun seed_corpus and update this count"
+    );
     let mut accepted = 0;
     for (name, bytes) in &calls {
         reaches(schema::PROTO, name, bytes);
