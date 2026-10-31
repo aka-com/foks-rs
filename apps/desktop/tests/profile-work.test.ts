@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import {
+  COMMAND_DEADLINE_CLASS_BUDGET,
+  MAX_QUEUE_WAIT,
   observeProfileWork,
   scheduleProfileWork,
   type WorkTiming,
@@ -30,7 +33,7 @@ test('queued foreground work expires without running or releasing active work', 
     code: 'profile-busy',
     ambiguous: false,
   });
-  t.mock.timers.tick(75_001);
+  t.mock.timers.tick(MAX_QUEUE_WAIT + 1);
   await rejected;
   let started = false;
   const next = scheduleProfileWork(owner, 'p', async () => {
@@ -350,21 +353,44 @@ test('background rotation serves other identities before a repeatedly resubmitte
 });
 
 test('work queued behind a request that uses its whole budget runs once the queue frees', async (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  const owner = {},
-    gate = deferred();
-  const active = scheduleProfileWork(owner, 'p', () => gate.promise);
-  await flush();
-  let ran = false;
-  const queued = scheduleProfileWork(owner, 'p', async () => {
-    ran = true;
-  });
-  // The agent's own request budget: the active request settles as it ends.
-  t.mock.timers.tick(60_000);
-  gate.resolve();
-  await active;
-  await queued;
-  assert.equal(ran, true);
+  for (const budget of Object.values(COMMAND_DEADLINE_CLASS_BUDGET)) {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const owner = {},
+      gate = deferred();
+    const active = scheduleProfileWork(owner, 'p', () => gate.promise);
+    await flush();
+    let ran = false;
+    const queued = scheduleProfileWork(owner, 'p', async () => {
+      ran = true;
+    });
+    // The command's deadline class budget: the active request settles as it
+    // ends.
+    t.mock.timers.tick(budget);
+    gate.resolve();
+    await active;
+    await queued;
+    assert.equal(ran, true, `budget ${budget}`);
+    t.mock.timers.reset();
+  }
+});
+
+test('the queue wait budgets match the deadline class caps', () => {
+  const source = readFileSync(
+    new URL('../../../crates/foks-agent-proto/src/message.rs', import.meta.url),
+    'utf8',
+  );
+  const cap = source.match(
+    /pub fn cap\(self\) -> std::time::Duration \{([\s\S]*?)\n {4}\}/,
+  );
+  assert.ok(cap, 'DeadlineClass::cap is readable');
+  const seconds = new Map<string, number>();
+  for (const [, classes, value] of cap[1].matchAll(
+    /((?:Self::\w+\s*\|?\s*)+)=>\s*(\d+)/g,
+  ))
+    for (const [, name] of classes.matchAll(/Self::(\w+)/g))
+      seconds.set(name.toLowerCase(), Number(value) * 1000);
+  for (const [name, budget] of Object.entries(COMMAND_DEADLINE_CLASS_BUDGET))
+    assert.equal(budget, seconds.get(name), name);
 });
 
 test('the chat lane is admitted while the default lane is busy, and stays serialized', async () => {
