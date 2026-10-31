@@ -249,9 +249,10 @@ minute window, or lower `idle_timeout_seconds` (at the cost of Go calls that
 race a server-side close).
 
 Each request has one deadline, `request_timeout_seconds` after the first byte
-of its frame arrives. Reading the rest of the frame, waiting for a handler
-permit, reader checkout, the handler, its queued writes and external chunk
-transfers all consume it; idle time between requests does not. Once the
+of its frame arrives. Reading the rest of the frame, reader checkout, the
+handler, its queued writes and external chunk transfers all consume it; idle
+time between requests does not. A request does not wait for a handler permit:
+when every permit is in use it is answered at once with status 1012. Once the
 handler has returned, the response write gets a fresh `io_timeout` allowance,
 so a response whose work used most of the deadline is still delivered to a
 slow reader instead of being discarded. A request that reaches its deadline
@@ -877,7 +878,7 @@ Both commands open the database with the compiled limits unless `--config
 tables; the paths still come from the flags.
 
 Restore and retention validation also accept the same prior schemas as server
-startup (43 through 49, upgraded to 50). They copy the database and any WAL into
+startup (43 through 58, upgraded to 59). They copy the database and any WAL into
 a private temporary directory, apply the normal transactional migrations,
 checkpoint, and validate that copy. Restore installs the migrated database;
 validation never opens or changes the original snapshot in SQLite. Retention
