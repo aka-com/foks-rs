@@ -390,7 +390,7 @@ canonicality.
 | Maximum message | 1 MiB |
 | Envelope reserve | 32 KiB |
 | Maximum KV payload per frame | 700 KiB |
-| Protocol version | 30 |
+| Protocol version | 38 |
 
 Byte payloads are carried as base64 strings rather than JSON integer arrays.
 The module documentation works out why: a uniformly random byte costs about
@@ -403,12 +403,25 @@ test confirms the worst-case envelope still fits. A request that asks for
 more is refused as invalid; nothing is ever truncated. Every message carries
 a version and a correlation ID, and a response binds to its request's ID.
 
+A message must carry exactly the version its reader was built for, because
+responses are not shaped per version and many of their types reject unknown
+fields. Two shapes are frozen so that a reader of one version can still
+diagnose a peer of another: a Hello, which the agent answers before checking
+the version with its own version, the range it accepts and a list of
+capabilities; and the agent's `version-mismatch` refusal, which names the same
+range. Later versions may add fields to these two shapes but never remove or
+retype one. The agent refuses a message of another version before decoding
+its operation, so a client reports a refused mutation as not run rather than
+as an unknown outcome.
+
 Every request also carries a `deadline` envelope: an expiry in nanoseconds of
 a named same-host monotonic clock (the clock and the boot it belongs to), which
 the agent intersects with its own cap for the operation's deadline class
 (15 seconds for ordinary operations, 60 for a chat poll, 300 for pairing and
 bulk transfers). A request without a deadline, or whose clock domain does not
-match the agent's, is refused before it runs.
+match the agent's, is refused before it runs. The Hello carries no deadline:
+the agent recognizes it after the request decode fails, so a version mismatch
+is still reported as one.
 
 On Linux the clock is `CLOCK_MONOTONIC`, and its domain is the boot
 identifier together with the device and inode of
@@ -441,7 +454,7 @@ on the socket itself: ownership, permissions, and peer credentials.
   `auth/principal.rs` (certificate-to-credential binding),
   `services/signup.rs` (certificate issuance), `net/session.rs` (asynchronous
   frame reading, memory permits).
-- `foks-agent-proto`: `frame.rs`, `base64_bytes.rs`, `message.rs`.
+- `foks-agent-proto`: `frame.rs`, `hello.rs`, `base64_bytes.rs`, `message.rs`.
 - `tools/foks-protocol-sync`: `internal/extract/extract.go`
   (`bindingUsesDataWrap`).
 

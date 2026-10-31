@@ -1,7 +1,10 @@
 //! Regenerate small, synthetic protocol seeds with the current public encoders,
 //! and seed the schema, envelope and verification corpora with the canonical Go
 //! v0.1.9 fixtures.
-use foks_agent_proto::{KvUploadFrame, KvUploadPayload, Operation, Request, PROTOCOL_VERSION};
+use foks_agent_proto::{
+    HelloReply, HelloRequest, KvUploadFrame, KvUploadPayload, Operation, Peer, Request, Response,
+    PROTOCOL_VERSION,
+};
 use std::{io::Cursor, path::PathBuf};
 
 #[path = "../support/fixtures.rs"]
@@ -335,6 +338,29 @@ fn main() {
             &foks_agent_proto::encode(&frame).unwrap(),
         );
     }
+    // The frozen handshake shapes: a Hello, the agent's reply to it, and the
+    // version-mismatch refusal an agent of another version sends.
+    let hello = HelloRequest::new(1, Peer::new("foks-rs", "0.1.0"));
+    seed(
+        "agent_frames",
+        "hello",
+        &foks_agent_proto::encode(&hello).unwrap(),
+    );
+    let reply = HelloReply::new(
+        Peer::new("foks-agent", "0.1.0"),
+        &[foks_agent_proto::hello::capability::HISTORY_AFTER],
+    );
+    seed(
+        "agent_frames",
+        "hello-reply",
+        &foks_agent_proto::encode(&Response::success(1, serde_json::to_value(reply).unwrap()))
+            .unwrap(),
+    );
+    seed(
+        "agent_frames",
+        "version-mismatch",
+        &foks_agent_proto::encode(&Response::version_mismatch(Some(1))).unwrap(),
+    );
     for scenario in 0..13 {
         seed(
             "state_archive",

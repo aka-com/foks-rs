@@ -467,6 +467,24 @@ pub fn agent_client_error(error: impl std::borrow::Borrow<foks_agent_client::Err
             message: "desktop and agent protocol versions do not match".to_owned(),
             fields: Box::default(),
         },
+        // The agent refused the request before decoding it, so this is
+        // definite even for a mutation.
+        Error::Protocol(foks_agent_proto::Error::VersionMismatch { agent, supported }) => {
+            let accepted = match supported {
+                Some(range) if *range != foks_agent_proto::ProtocolRange::exactly(*agent) => {
+                    format!(" (accepted: {range})")
+                }
+                _ => String::new(),
+            };
+            AgentError::Protocol {
+                code: ErrorCode::VersionMismatch,
+                message: format!(
+                    "desktop protocol version {} does not match agent protocol version {agent}{accepted}",
+                    foks_agent_proto::PROTOCOL_VERSION
+                ),
+                fields: Box::default(),
+            }
+        }
         Error::Io(_) if connection_lost => AgentError::Transport(message),
         Error::Io(_) => ipc(IpcErrorCode::Io),
         Error::UploadSource(_) => ipc(IpcErrorCode::UploadSource),
@@ -491,6 +509,8 @@ mod ipc_error_tests {
             reason: Some("schema mismatch".into()),
             found_schema: Some(3),
             supported_schema: Some(2),
+            minimum_protocol: Some(35),
+            maximum_protocol: Some(36),
         };
         for (code, transient, ambiguous, fatal) in [
             (ErrorCode::DeadlineExceeded, true, true, false),
@@ -4306,6 +4326,33 @@ mod tests {
             foks_agent_proto::Error::Version,
         ));
         assert!(decoded_mismatch.fatal());
+
+        // The frozen refusal names the agent's versions and is definite: the
+        // agent did not decode the request, mutation or not.
+        let refused = agent_client_error(foks_agent_client::Error::Protocol(
+            foks_agent_proto::Error::VersionMismatch {
+                agent: 34,
+                supported: Some(foks_agent_proto::ProtocolRange::exactly(34)),
+            },
+        ));
+        assert!(refused.fatal());
+        assert!(!refused.ambiguous());
+        assert!(!refused.transient());
+        let AgentError::Protocol {
+            code: ErrorCode::VersionMismatch,
+            message,
+            ..
+        } = &refused
+        else {
+            panic!("unexpected mapping {refused:?}");
+        };
+        assert_eq!(
+            *message,
+            format!(
+                "desktop protocol version {} does not match agent protocol version 34",
+                foks_agent_proto::PROTOCOL_VERSION
+            )
+        );
     }
 
     #[test]

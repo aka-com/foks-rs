@@ -395,7 +395,7 @@ pub async fn initialize_client_state(
         )
         .await
     }?;
-    Ok(status.into())
+    Ok(AgentStatusDto::from_agent(status, &state.agent))
 }
 
 fn read_agent_status(

@@ -5,6 +5,17 @@ Messages are JSON inside a four-byte big-endian length frame, capped at 1 MiB.
 Every response is bound to a request ID and contains either a JSON value or a
 stable error category.
 
+Every frame must carry exactly `PROTOCOL_VERSION`, except two frozen shapes in
+`hello.rs` that any agent and client decode whatever their versions. A Hello
+names the client and the versions it accepts; the agent answers it before the
+version check with its own version, the versions it accepts and its
+capabilities (for example `history-after`). A request of another version gets
+the `version-mismatch` error, whose `fields.minimum_protocol` and
+`fields.maximum_protocol` name the accepted range; clients decode it as
+`Error::VersionMismatch`, and since the agent did not decode the operation, a
+mutation refused that way did not run. Responses are not shaped per version and
+many types reject unknown fields, so a build accepts only its own version.
+
 The current operation set includes bootstrap/ready status, state initialization,
 profile lifecycle, profile/account listing, probe,
 user/team synchronization, paged KV listing, version-bound KV reads and chunks,

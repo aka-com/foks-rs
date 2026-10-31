@@ -14,13 +14,19 @@ pub mod bot;
 pub mod chat;
 pub mod data;
 mod frame;
+pub mod hello;
 pub mod invitations;
 mod message;
 pub mod sso;
 
 pub use frame::{
-    decode_request, decode_response, decode_upload_frame, encode, request_id, Error, Result,
-    FRAME_ENVELOPE_RESERVE_BYTES, MAXIMUM_KV_PAYLOAD_BYTES, MAXIMUM_MESSAGE_BYTES,
+    decode_hello, decode_hello_response, decode_request, decode_response, decode_upload_frame,
+    encode, request_id, Error, HelloResponse, Result, FRAME_ENVELOPE_RESERVE_BYTES,
+    MAXIMUM_KV_PAYLOAD_BYTES, MAXIMUM_MESSAGE_BYTES,
+};
+pub use hello::{
+    HelloReply, HelloRequest, Peer, ProtocolRange, MAXIMUM_HELLO_CAPABILITIES,
+    MAXIMUM_HELLO_FIELD_BYTES, SUPPORTED_PROTOCOL_VERSIONS,
 };
 pub use message::{
     AccountStoreRef, AccountSummary, AgentStatus, BackupEnrollmentSummary, CompatibilityFailure,
@@ -47,7 +53,7 @@ mod tests {
 
     #[test]
     fn selected_reads_require_identity_and_reject_pre_identity_ipc() {
-        assert_eq!(PROTOCOL_VERSION, 37);
+        const { assert!(PROTOCOL_VERSION >= 35) };
         for operation in [
             Operation::ReadKv {
                 store: KvStoreRef::Account(AccountStoreRef {
@@ -744,7 +750,7 @@ mod tests {
 
     #[test]
     fn reconcile_is_a_local_v29_mutation_with_no_initial_trust_inputs() {
-        assert_eq!(PROTOCOL_VERSION, 37);
+        const { assert!(PROTOCOL_VERSION >= 29) };
         let operation = Operation::ReconcileProfile {
             profile: "saved".into(),
         };
@@ -761,7 +767,7 @@ mod tests {
 
     #[test]
     fn submit_message_is_a_local_v29_mutation() {
-        assert_eq!(PROTOCOL_VERSION, 37);
+        const { assert!(PROTOCOL_VERSION >= 29) };
         let request = test_request(
             20,
             Operation::Chat {
@@ -1358,7 +1364,7 @@ mod tests {
     }
     #[test]
     fn deadline_is_mandatory_only_after_bounded_version_dispatch() {
-        let old = serde_json::json!({"version":36,"id":7,"operation":{"operation":"ping"}});
+        let old = serde_json::json!({"version":PROTOCOL_VERSION - 1,"id":7,"operation":{"operation":"ping"}});
         assert!(matches!(
             decode_request(&encode(&old).unwrap()),
             Err(Error::Version)

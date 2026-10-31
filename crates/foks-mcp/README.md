@@ -149,11 +149,15 @@ are reclaimed in bounded, restartable batches. Server maintenance metrics report
 failures, reclaimed bytes and deferred work. Pinned Go-host upload retention remains
 that host's responsibility; these changes add no remote FOKS methods.
 
-The current hard-state schema is 40 and the agent IPC protocol is 33. Opening a
-supported schema-38 or schema-39 database upgrades it to schema 40; other older
-development schemas are rejected. Upgrade the CLI and resident agent together,
-and restart the agent so their IPC versions match. This does not convert legacy
-submission IDs or make pending operations eligible for replay.
+The current hard-state schema is 42 and the agent IPC protocol is 38. Opening a
+supported schema-38 through schema-41 database upgrades it to schema 42; other
+older development schemas are rejected. Upgrade the CLI and resident agent
+together, and restart the agent so their IPC versions match. Before serving, the
+CLI exchanges a version-independent Hello; when a resident agent of another
+version answers, it reports both versions and does not start a second agent.
+Tool calls fail with `incompatible local agent` rather than an unknown outcome,
+because that agent refuses each request before running it. This does not
+convert legacy submission IDs or make pending operations eligible for replay.
 
 The server advertises MCP 2025-11-25 and negotiates 2025-06-18, 2025-03-26 and
 2024-11-05 through the official pinned Rust SDK. The ten upstream tool names and
