@@ -947,12 +947,15 @@ tools/foks-server/test-small-team.sh
 tools/foks-server/test-small-team-repeat.sh 5
 ```
 
-The gate rejects any FOKS package defined outside
-`crates/foks-*` or `apps/desktop/src-tauri`, and any local path dependency that reaches
-outside those directories — under the default feature set and under
-`--all-features`, so a dependency hidden behind an optional feature is caught
-too. It inspects the Cargo graph rather than changed file paths to verify that
-FOKS packages retain a standalone dependency graph.
+The gate first runs `scripts/check-crate-layers.py` (Python 3.11 or newer),
+which reads the declared dependencies from `cargo metadata` (optional and
+target-specific ones included) and checks them against
+`tools/crate-layers.toml`. It rejects a workspace package defined outside
+`crates/foks-*` or `apps/desktop/src-tauri`, a path dependency that is not a
+workspace package, a server crate that depends on a client, device, agent or
+front-end crate, any other edge the layer rules do not allow and no listed
+exception covers, and a production dependency, direct or transitive, on
+`foks-server-testkit`.
 It also builds `foks-metadata-core` for `wasm32-unknown-unknown`, the
 artifact celld loads, with and without its `read-token-qualification` and
 `list-allocation-qualification` features; `rust-toolchain.toml` lists that
