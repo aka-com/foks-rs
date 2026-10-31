@@ -333,10 +333,17 @@ pub struct KvEntryMetadata {
     /// absent for every other node type and carries no field value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shape: Option<KvEntryShape>,
+    /// For a directory, how many entries directly in it this account cannot
+    /// read; the listing omits them. Absent for other node types and from an
+    /// agent that predates the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreadable_entries: Option<u32>,
 }
 
-/// The content classes [`KvEntryMetadata::shape`] distinguishes.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// The content classes [`KvEntryMetadata::shape`] distinguishes. A value
+/// this build does not know decodes as [`KvEntryShape::Other`], so a class a
+/// later agent adds never fails a catalog page.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum KvEntryShape {
     /// UTF-8 text whose lines are all `key: value` lines, one with the key
@@ -344,6 +351,17 @@ pub enum KvEntryShape {
     Login,
     /// Any other small file.
     Other,
+}
+
+impl<'de> Deserialize<'de> for KvEntryShape {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = std::borrow::Cow::<'de, str>::deserialize(deserializer)?;
+        Ok(if name == "login" {
+            Self::Login
+        } else {
+            Self::Other
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

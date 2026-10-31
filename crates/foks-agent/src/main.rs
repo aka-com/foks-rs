@@ -3356,6 +3356,7 @@ fn paginate_catalog(
             read_role: catalog_role(entry.read_role),
             write_role: catalog_role(entry.write_role),
             shape: entry.shape,
+            unreadable_entries: entry.unreadable_entries,
         };
         let mut measured = CountingWriter(0);
         serde_json::to_writer(&mut measured, &entry)?;
@@ -9836,6 +9837,7 @@ mod tests {
                     read_role: foks_client_app::KvRoleSummary::Owner,
                     write_role: foks_client_app::KvRoleSummary::Owner,
                     shape: None,
+                    unreadable_entries: None,
                 })
                 .collect(),
         }
@@ -10057,6 +10059,7 @@ mod tests {
                     read_role: foks_client_app::KvRoleSummary::Owner,
                     write_role: foks_client_app::KvRoleSummary::Owner,
                     shape: None,
+                    unreadable_entries: None,
                 })
                 .collect(),
         };
@@ -10140,6 +10143,7 @@ mod tests {
                     read_role: foks_client_app::KvRoleSummary::Owner,
                     write_role: foks_client_app::KvRoleSummary::Owner,
                     shape: None,
+                    unreadable_entries: None,
                 })
                 .collect(),
         };
@@ -10270,6 +10274,7 @@ mod tests {
                     read_role: foks_client_app::KvRoleSummary::Owner,
                     write_role: foks_client_app::KvRoleSummary::Owner,
                     shape: None,
+                    unreadable_entries: None,
                 })
                 .collect(),
         };
