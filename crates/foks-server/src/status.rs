@@ -2,12 +2,15 @@
 //!
 //! Each route family maps its own domain variants, such as a KV version race,
 //! a stale team head or a duplicate name, and passes every other error through
-//! [`shared`]. A full database, a saturated writer queue, a write skipped
-//! because its request deadline passed in the queue, a credential revoked
-//! while its write was queued and an SQLite fault that the request did not
-//! cause therefore carry the same status on every route. `Capacity` stays
-//! with each family: some of its values are retained-storage limits and
-//! others are concurrency caps that the route reports as rate limiting.
+//! [`shared`]. A full database, a saturated writer queue, a credential
+//! revoked while its write was queued and an SQLite fault that the request did
+//! not cause therefore carry the same status on every route. A write skipped
+//! because its request deadline passed maps to `RateLimited` here, but an RPC
+//! session never sends that status: a handler that returns after its deadline
+//! is closed without a response (`finished_by` in `net/session.rs`).
+//! `Capacity` stays with each family: some of its values are retained-storage
+//! limits and others are concurrency caps that the route reports as rate
+//! limiting.
 //!
 //! Statuses carry fixed strings. The `Display` text of [`Error`] can include
 //! SQLite messages and must not reach clients. The epoch-limit detail is the

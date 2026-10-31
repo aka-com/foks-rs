@@ -1150,11 +1150,27 @@ where
         }
         result = tokio::time::timeout_at(deadline.instant().into(), &mut task) => {
             match result {
-                Ok(Ok(value)) => Ok(BoundedExecution::Completed(value)),
+                Ok(Ok(value)) => Ok(finished_by(deadline, value)),
                 Ok(Err(_)) => Err(crate::Error::Thread),
                 Err(_) => Ok(BoundedExecution::TimedOut),
             }
         }
+    }
+}
+
+/// The outcome of an operation that returned before its timer fired. The
+/// timer fires at or after the deadline, so an operation can still return
+/// after its deadline has passed. Its outcome is discarded as a timeout: a
+/// handler that made several writer calls may have committed one before a
+/// later call was skipped with `DeadlineExceeded`, so neither its status nor
+/// its response may reach the client as a definite answer. The connection
+/// then closes without a response, as for any request that reaches its
+/// deadline.
+fn finished_by<T>(deadline: crate::deadline::Deadline, value: T) -> BoundedExecution<T> {
+    if deadline.remaining().is_err() {
+        BoundedExecution::TimedOut
+    } else {
+        BoundedExecution::Completed(value)
     }
 }
 
@@ -2171,6 +2187,42 @@ mod tests {
         .await
         .is_err());
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn an_outcome_returned_after_the_deadline_is_a_timeout() {
+        let now = std::time::Instant::now();
+        let passed = crate::deadline::Deadline::at(now);
+        assert!(matches!(
+            finished_by(passed, Err::<(), _>(crate::Error::DeadlineExceeded)),
+            BoundedExecution::TimedOut
+        ));
+        assert!(matches!(
+            finished_by(passed, 1_u8),
+            BoundedExecution::TimedOut
+        ));
+        let open = crate::deadline::Deadline::at(now + std::time::Duration::from_secs(60));
+        assert!(matches!(
+            finished_by(open, 1_u8),
+            BoundedExecution::Completed(1)
+        ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_operation_that_overruns_its_deadline_is_a_timeout() {
+        let execution = Arc::new(Semaphore::new(1));
+        let (_stop, mut receiver) = watch::channel(false);
+        let deadline =
+            crate::deadline::Deadline::after(std::time::Duration::from_millis(20)).unwrap();
+        let result = execute_bounded(Arc::clone(&execution), deadline, &mut receiver, move || {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            // A writer call made now is skipped; the session must not answer
+            // with the status a handler would map it to.
+            crate::deadline::check()
+        })
+        .await
+        .unwrap();
+        assert!(matches!(result, BoundedExecution::TimedOut));
     }
 
     #[tokio::test(flavor = "current_thread")]

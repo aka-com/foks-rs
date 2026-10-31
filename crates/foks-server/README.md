@@ -254,8 +254,11 @@ permit, reader checkout, the handler, its queued writes and external chunk
 transfers all consume it; idle time between requests does not. Once the
 handler has returned, the response write gets a fresh `io_timeout` allowance,
 so a response whose work used most of the deadline is still delivered to a
-slow reader instead of being discarded. A request that reaches its deadline before the handler returns is
-closed without a response. If its write is still in the writer queue at that
+slow reader instead of being discarded. A request that reaches its deadline
+before the handler returns is closed without a response, and so is one whose
+handler returns only after the deadline has passed: such a handler may have
+committed one write before a later one was skipped, so no status may present
+its outcome as definite. If its write is still in the writer queue at that
 point, the writer does not run it: it opens no transaction for the job and
 counts it in `foks_writer_expired_total`. A write that the handler submits
 after that point is refused without entering the queue and is counted the same
