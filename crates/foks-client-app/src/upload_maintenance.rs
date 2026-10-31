@@ -5,6 +5,12 @@ use foks_client_db::{UploadCleanupPhase, UploadState};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
+#[cfg(test)]
+thread_local! {
+    /// Holds a maintenance turn after it selected an owner until its deadline.
+    static STALL_AFTER_SELECTION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 #[derive(Default)]
 pub(crate) struct UploadMaintenanceCursor {
     database_id: Option<[u8; 16]>,
@@ -100,6 +106,10 @@ impl CheckedProfileSession<'_> {
             summary.internal_id
         };
         report.examined += 1;
+        #[cfg(test)]
+        if STALL_AFTER_SELECTION.get() {
+            std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+        }
         let before = hard.upload_cleanup(&id)?;
         let before_revision = hard.metadata()?;
         let mut scanned = false;
@@ -266,7 +276,17 @@ impl CheckedProfileSession<'_> {
             && !report.blocked
             && after.is_some_and(|p| p.phase != UploadCleanupPhase::Complete);
         cursor.burst = cursor.burst.saturating_add(1);
-        if !owner_progress || report.blocked {
+        if !owner_progress && !report.blocked && Instant::now() >= deadline {
+            // The turn ran out before this owner's first erasure. That is
+            // not a blocked owner, so it is not backed off; it keeps the
+            // next turn, but after the burst cap it yields like an owner
+            // that makes progress, so one whose turns keep running out
+            // cannot starve the others.
+            report.more_work = true;
+            if cursor.burst >= 4 {
+                cursor.active = None;
+            }
+        } else if !owner_progress || report.blocked {
             if cursor.blocked.len() >= 128 {
                 cursor.blocked.pop_first();
             }
@@ -608,6 +628,66 @@ mod tests {
                 "bounded cleanup failed to drain: {:?}",
                 hard.upload_cleanup(&big)?
             );
+        });
+    }
+
+    /// An owner whose turn expired before its first erasure is kept active
+    /// and reported as more work, not backed off as blocked for 60 s.
+    #[test]
+    fn deadline_before_first_erasure_does_not_block_the_owner() {
+        let f = crate::test_support::AccountFixture::start();
+        f.run(|s, _, master| {
+            let sample = s.adapter_clock.sample()?;
+            let id = cancelled_fixture(s, master, 1, 4, sample)?;
+            let hard = HardStateStore::open(&s.paths.hard_database)?;
+            let before = hard.upload_cleanup(&id)?;
+            let mut cursor = UploadMaintenanceCursor::default();
+            STALL_AFTER_SELECTION.set(true);
+            let report = s.maintain_upload_state_until(
+                &mut cursor,
+                master,
+                Instant::now() + Duration::from_secs(1),
+            );
+            STALL_AFTER_SELECTION.set(false);
+            let report = report?;
+            assert_eq!(hard.upload_cleanup(&id)?, before, "nothing was erased");
+            assert!(!cursor.blocked.contains_key(&id));
+            assert_eq!(cursor.active, Some(id));
+            assert!(report.more_work);
+            s.maintain_upload_state(&mut cursor, master)?;
+            assert_ne!(hard.upload_cleanup(&id)?, before);
+            Ok(())
+        });
+    }
+
+    /// An owner whose turns keep running out before its first erasure
+    /// yields to the next owner after the burst cap, without a back-off.
+    #[test]
+    fn repeated_deadline_misses_rotate_to_the_next_owner() {
+        let f = crate::test_support::AccountFixture::start();
+        f.run(|s, _, master| {
+            let sample = s.adapter_clock.sample()?;
+            let first = cancelled_fixture(s, master, 1, 4, sample)?;
+            let second = cancelled_fixture(s, master, 2, 4, sample)?;
+            let mut cursor = UploadMaintenanceCursor::default();
+            let mut selected = Vec::new();
+            STALL_AFTER_SELECTION.set(true);
+            let turns = (0..5).try_for_each(|_| {
+                s.maintain_upload_state_until(
+                    &mut cursor,
+                    master,
+                    Instant::now() + Duration::from_millis(500),
+                )?;
+                selected.push(cursor.active);
+                Ok::<_, Error>(())
+            });
+            STALL_AFTER_SELECTION.set(false);
+            turns?;
+            assert!(cursor.blocked.is_empty(), "a deadline miss is not a block");
+            assert_eq!(&selected[..3], &[Some(first); 3]);
+            assert_ne!(selected[3], Some(first), "the burst cap rotates the owner");
+            assert_eq!(selected[4], Some(second));
+            Ok(())
         });
     }
 
