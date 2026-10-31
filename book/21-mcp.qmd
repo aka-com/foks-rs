@@ -216,7 +216,12 @@ confirms the computer's current time in the desktop app's account
 settings (for this clock only), or with the two-step
 `foks-rs retention reanchor` command. Both
 send the agent a preview, which returns a digest of the displayed clock
-state, and then a confirmation carrying that digest. The agent pairs the
+state, and then a confirmation carrying that digest. Unlike the status,
+the preview and the confirmation name the account by its authenticated
+identity, which `data_identity` obtains by authenticating the device
+credential to the account's server, so a repair needs that server to be
+reachable; offline, it fails with the connection error and the clock stays
+paused until the server answers. The agent pairs the
 confirmed time with its own monotonic reading at confirmation, so it
 accepts a confirmation only within one minute of the wall time read with
 that monotonic reading; a staler time would consume the skew that later

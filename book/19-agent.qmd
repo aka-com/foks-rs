@@ -191,6 +191,14 @@ two SQLite databases with different application IDs, schemas, and rules.
 | On schema mismatch | migrate supported versions 38 through 42 to 43, one version at a time; refuse other versions | refuse and name the recovery path: delete and rebuild |
 | Losing it | a security event | a re-download |
 
+Hard-state migrations only go forward. A build refuses a schema newer than
+its own, so once an agent has migrated a profile to schema 43, an older
+build cannot open that profile and there is no downgrade path. An older
+desktop app that replaces a newer running agent (its takeover of an agent
+of another protocol version) starts its own agent, which then refuses the
+profile's schema; the remedy is to run a build at least as new as the one
+that migrated it.
+
 **Hard state** is evidence: signed chain links, Merkle roots, the exact
 bytes a verifier accepted, and journals recording which mutations have
 been sent. The crate that owns it sits deliberately below the protocol

@@ -164,6 +164,9 @@ writes may use. It refuses a preview more than five minutes from the computer's
 clock and a confirmation more than one minute from it: confirm within a minute of
 the preview, or preview again, and correct the system clock first if it is wrong.
 Repair preserves the irreversible watermark and performs no admission or pruning.
+Status reads local state only, but the preview and the confirmation
+authenticate the account to its server to name it, so a repair needs the server
+to be reachable.
 The restriction to the CLI and the desktop applies to the MCP tool list; the
 agent socket accepts the repair from any process of the same user, which can run
 the CLI anyway.
