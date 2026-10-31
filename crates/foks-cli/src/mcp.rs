@@ -182,7 +182,7 @@ fn no_listener(error: &foks_agent_client::Error) -> bool {
 
 /// The diagnosis for an agent of another protocol version, which holds the
 /// state directory's lock, so a second agent cannot start beside it.
-fn incompatible_agent_message(error: &foks_agent_client::Error) -> String {
+pub(super) fn incompatible_agent_message(error: &foks_agent_client::Error) -> String {
     let detail = error
         .version_mismatch()
         .map_or_else(|| error.to_string(), ToString::to_string);
