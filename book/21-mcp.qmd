@@ -201,9 +201,10 @@ a persisted anchor, a wall time paired with a monotonic reading, and each
 later wall time must match the anchor plus monotonic elapsed time within
 five minutes. The monotonic clock keeps counting while the computer sleeps
 (`CLOCK_BOOTTIME` on Linux, `CLOCK_MONOTONIC_RAW` on macOS), so suspend does not
-read as a wall-clock jump. The anchor also records the kernel's boot
-identifier, so an agent restarted within the same boot measures the gap
-with the same clock however long it was. A wall-clock jump of more than
+read as a wall-clock jump. The anchor also records an identity of that
+clock, derived from the kernel's boot identifier and, on Linux, the time
+namespace, so an agent restarted within the same boot and namespace
+measures the gap with the same clock however long it was. A wall-clock jump of more than
 five minutes within one process, or a restart more than 24 hours past the
 last trusted floor that the boot clock does not account for, blocks new
 admission with `clock-untrusted` while status and recovery continue to

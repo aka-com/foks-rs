@@ -150,7 +150,7 @@ impl DeadlineEnvelope {
 #[cfg(feature = "clock")]
 mod clock;
 #[cfg(feature = "clock")]
-pub use clock::{boot_id, sample, ClockSample, Deadline};
+pub use clock::{boot_id, sample, time_namespace, ClockSample, Deadline};
 
 #[cfg(test)]
 mod tests;

@@ -405,8 +405,9 @@ CREATE TABLE mutation_operations (
     updated_at INTEGER NOT NULL CHECK (updated_at >= created_at)
 ) STRICT, WITHOUT ROWID;
 
--- boot_id identifies the boot whose suspend-inclusive clock produced
--- anchor_monotonic; NULL when the platform provides none. Version 43 added it
+-- boot_id identifies the boot clock (the boot and, on Linux, the time
+-- namespace) whose suspend-inclusive reading produced anchor_monotonic;
+-- NULL when the platform provides none. Version 43 added it
 -- with ALTER TABLE ADD COLUMN, so the column sits where SQLite inserts it and
 -- migrated and new databases store the same schema text.
 CREATE TABLE kv_adapter_clocks (

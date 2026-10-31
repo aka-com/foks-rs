@@ -113,8 +113,9 @@ expired handles. Expiry describes replay eligibility, not proof of an earlier wr
 
 Time uses a persisted anchor plus a monotonic clock that keeps counting during
 sleep (`CLOCK_BOOTTIME` on Linux, `CLOCK_MONOTONIC_RAW` on macOS). The anchor
-records the kernel boot identifier, so an agent restarted within the same boot
-checks the elapsed time across the restart. A wall-clock jump over five minutes
+records an identity derived from the kernel boot identifier and, on Linux, the
+time namespace, so an agent restarted within the same boot and namespace checks
+the elapsed time across the restart. A wall-clock jump over five minutes
 within one process, or a restart more than 24 hours beyond the last trusted floor
 that the boot clock does not account for, blocks new admission and pruning with
 `clock-untrusted`. A trusted clock that is still behind the irreversible
