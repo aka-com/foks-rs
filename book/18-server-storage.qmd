@@ -135,7 +135,9 @@ transfers all consume it; the response write of a completed request gets a
 fresh allowance of the I/O timeout (15 s), so finished work is not discarded
 because the deadline ran short. The session stops waiting for the
 handler at the deadline and closes the connection without a response, and the
-client treats the outcome as ambiguous. The handler runs inside a thread-local
+client treats the outcome as ambiguous. A handler that returns after the
+deadline has passed is treated the same way, whatever it returned: it may
+have committed one write before a later one was skipped. The handler runs inside a thread-local
 deadline scope, and `WriterHandle::call` records the scope's deadline with the
 job. If the writer reaches a queued job at or after it, the job is answered
 with `DeadlineExceeded` without opening a transaction and is counted in
