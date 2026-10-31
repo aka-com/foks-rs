@@ -216,15 +216,30 @@ impl ChatSession<'_> {
         if recent.messages.len() > 1 {
             return Err(Error::ChatIntegrity("recent response exceeds request"));
         }
-        let history = self.verify_page(rpc, &md, recent.messages)?;
-        let previous = history.messages.first().map(|m| &m.message);
+        let mut history = self.verify_page(rpc, &md, recent.messages)?;
+        // Chain to the latest observed row whatever its verdict: the server
+        // checks only the (sequence, ID) mapping, and refusing here would let
+        // one unreadable row stop every later send in the channel. A Go v0.1.9
+        // host also stores an author's all-zero ID, which no valid pointer can
+        // name; IDs are unique within a page, so the row before it can.
+        let head = history.messages.first().map_or(0, |m| m.message.sequence);
         if history
             .messages
-            .iter()
-            .any(|m| matches!(m.content, crate::ChatContent::Unsupported(_)))
+            .first()
+            .is_some_and(|m| m.message.metadata.id.0 == [0; 16] && head > 1)
         {
-            return Err(Error::ChatUnsupported(
-                "latest message has unsupported content",
+            let rows = self.range(rpc, channel, head, head - 1)?;
+            history = self.verify_page(rpc, &md, rows)?;
+        }
+        let previous = history
+            .messages
+            .iter()
+            .map(|m| &m.message)
+            .find(|m| m.metadata.id.0 != [0; 16]);
+        // Only a channel whose sole row has a zero ID is chained as if empty.
+        if previous.is_none() && head > 1 {
+            return Err(Error::ChatChannelIntegrity(
+                "history omits the message before the latest",
             ));
         }
         let lower = previous.map_or(0, |m| m.sequence);

@@ -270,10 +270,11 @@ remain explicitly incomplete when a Go page is entirely filtered.
 
 Basic realtime chat supports encrypted named-team channels, authenticated
 history and inbox synchronization, bounded polling, exact unread evidence when
-synchronization completes, durable pending-send reconciliation, and
-channel-local quarantine for corrupt content. Ad-hoc-team Basic chat is not yet
-admitted by the Rust server policy; managed extended channels and content
-actions remain outside the implemented protocol surface.
+synchronization completes, durable pending-send reconciliation, per-message
+verdicts for rows that do not decrypt or authenticate, and channel-local
+quarantine for contradictions in the server's sequence/ID mapping. Ad-hoc-team
+Basic chat is not yet admitted by the Rust server policy; managed extended
+channels and content actions remain outside the implemented protocol surface.
 
 OIDC support covers protected software and YubiKey signup, browser-flow recovery,
 signed provider bindings, explicit linkage of existing accounts, reauthentication,

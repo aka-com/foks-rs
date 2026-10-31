@@ -48,3 +48,16 @@ test('a new local day starts a fresh group even within five minutes', () => {
     false,
   );
 });
+
+test('an unverifiable row neither starts nor continues a group', () => {
+  const unverifiable = (at: number): ChatMessage => ({
+    ...message(at),
+    content: { kind: 'unverifiable' },
+  });
+  assert.equal(continuesMessageGroup(message(noon), unverifiable(noon)), false);
+  assert.equal(continuesMessageGroup(unverifiable(noon), message(noon)), false);
+  assert.equal(
+    continuesMessageGroup(unverifiable(noon), unverifiable(noon)),
+    false,
+  );
+});

@@ -68,9 +68,17 @@ fn preview_text(text: &str) -> String {
     }
     format!("{}…", &text[..end])
 }
+/// The IPC contract names only user senders. A Go v0.1.9 host stores a team
+/// sender unchecked, and foks-client gives that row an unverifiable verdict,
+/// so the agent reports it with no sender.
+fn user_sender(sender: Option<foks_proto::RtPartyId>) -> Option<String> {
+    sender
+        .filter(|s| s.entity().entity_type() == foks_proto::ENTITY_USER)
+        .map(|s| hex(s.entity().as_bytes()))
+}
 fn preview(value: foks_client::ChatPreview) -> ChatPreview {
     ChatPreview {
-        sender: value.sender.map(|sender| hex(sender.entity().as_bytes())),
+        sender: user_sender(value.sender),
         send_time: value.send_time.to_string(),
         insert_time: value.insert_time.to_string(),
         content: match value.content {
@@ -78,6 +86,7 @@ fn preview(value: foks_client::ChatPreview) -> ChatPreview {
                 text: SecretString::new(preview_text(&text)),
             },
             foks_client::ChatPreviewContent::Unsupported(_) => ChatContent::Unsupported,
+            foks_client::ChatPreviewContent::Unverifiable { .. } => ChatContent::Unverifiable,
         },
     }
 }
@@ -270,7 +279,8 @@ fn bounded_preview(preview: foks_client::ChatPreview) -> foks_client::ChatPrevie
             content: foks_client::ChatPreviewContent::Text(Zeroizing::new(preview_text(&text))),
             ..preview
         },
-        foks_client::ChatPreviewContent::Unsupported(_) => preview,
+        foks_client::ChatPreviewContent::Unsupported(_)
+        | foks_client::ChatPreviewContent::Unverifiable { .. } => preview,
     }
 }
 
@@ -716,7 +726,7 @@ fn dispatch_with_page_rows(
                         .map(|row| ChatMessage {
                             id: hex(&row.message.metadata.id.0),
                             sequence: row.message.sequence.to_string(),
-                            sender: row.message.sender.map(|s| hex(s.entity().as_bytes())),
+                            sender: user_sender(row.message.sender),
                             send_time: row.message.metadata.send_time.to_string(),
                             insert_time: row.message.insert_time.to_string(),
                             content: match row.content {
@@ -736,6 +746,9 @@ fn dispatch_with_page_rows(
                                 foks_client::ChatContent::Text(_) => ChatContent::Oversized,
                                 foks_client::ChatContent::Unsupported(_) => {
                                     ChatContent::Unsupported
+                                }
+                                foks_client::ChatContent::Unverifiable { .. } => {
+                                    ChatContent::Unverifiable
                                 }
                             },
                         })
@@ -1315,5 +1328,28 @@ mod tests {
         assert!(cache
             .get(&preview_key(2, 9, PREVIEW_CACHE_ENTRIES as u64 + 1, 1))
             .is_some());
+    }
+
+    /// Only an unverifiable row can carry a team sender, and the desktop
+    /// contract accepts only user senders, so the agent withholds it.
+    #[test]
+    fn only_user_senders_cross_the_ipc_boundary() {
+        let party = |kind: u8| {
+            let mut bytes = vec![kind];
+            bytes.extend_from_slice(&[0xab; 32]);
+            foks_proto::RtPartyId::new(
+                foks_proto::EntityId::from_bytes(bytes).expect("entity identifier is well formed"),
+            )
+            .expect("party entity type")
+        };
+        assert_eq!(
+            user_sender(Some(party(foks_proto::ENTITY_USER))),
+            Some(format!("01{}", "ab".repeat(32)))
+        );
+        assert_eq!(
+            user_sender(Some(party(foks_proto::ENTITY_NAMED_TEAM))),
+            None
+        );
+        assert_eq!(user_sender(None), None);
     }
 }

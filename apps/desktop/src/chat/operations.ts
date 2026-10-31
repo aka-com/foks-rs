@@ -1,4 +1,4 @@
-import type { ChatOperation } from '../chat-contract';
+import type { ChatMessage, ChatOperation } from '../chat-contract';
 import type { ConversationEvent } from './conversation-events';
 import { CHAT_HISTORY_BYTES, CHAT_PENDING_ROWS } from '../chat-limits';
 
@@ -58,7 +58,7 @@ export function reconcileOperations(
   }
   // This event is dispatched only after the entire page is accepted into history.
   if (result.kind === 'history') {
-    return observeMessages(old, new Set(result.messages.map((m) => m.id)));
+    return observeMessages(old, delivered(result.messages));
   }
   if (result.kind === 'channels')
     return old.filter(
@@ -70,6 +70,12 @@ export function reconcileOperations(
         ),
     );
   return old;
+}
+/** An unverifiable row's ID is an unauthenticated claim, not evidence of delivery. */
+export function delivered(messages: readonly ChatMessage[]): Set<string> {
+  return new Set(
+    messages.filter((m) => m.content.kind !== 'unverifiable').map((m) => m.id),
+  );
 }
 export function observeMessages(
   old: TrackedOperation[],
