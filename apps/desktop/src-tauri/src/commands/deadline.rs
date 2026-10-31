@@ -59,10 +59,17 @@ fn command_class(name: &str) -> Result<Option<DeadlineClass>, AgentError> {
         | "sso_request"
         | "take_agent_connection_loss" => None,
         // Empty Trash removes every named entry, and a folder's whole
-        // subtree, under one mutation.
-        "empty_trash" | "import_dropped_file" | "replace_dropped_file" | "resume_file_upload" => {
-            Some(DeadlineClass::Bulk)
-        }
+        // subtree, under one mutation. Moving an entry into Trash or back
+        // can take four writes in sequence (`/.trash`, its role folder, the
+        // `.origin` file and the move, or a parent folder, the move and the
+        // `.origin` removal), each awaiting the server's sync, which an
+        // Ordinary 15 s budget does not hold on a slow server.
+        "empty_trash"
+        | "import_dropped_file"
+        | "replace_dropped_file"
+        | "restore_trash_item"
+        | "resume_file_upload"
+        | "trash_item" => Some(DeadlineClass::Bulk),
         // A catalog read walks every store of every profile it covers, one
         // ListKv page after another, under this one budget. The agent caps
         // each of those requests by its own class (Ordinary, 15 s), so the
@@ -150,7 +157,6 @@ fn command_class(name: &str) -> Result<Option<DeadlineClass>, AgentError> {
         | "resume_owner_recovery"
         | "resume_yubi_account"
         | "resume_yubi_management_key"
-        | "restore_trash_item"
         | "revoke_owner_backup"
         | "revoke_yubi_device"
         | "rotate_yubi_management_key"
@@ -160,7 +166,6 @@ fn command_class(name: &str) -> Result<Option<DeadlineClass>, AgentError> {
         | "set_server_label"
         | "set_yubi_passphrase"
         | "sync_yubi_account"
-        | "trash_item"
         | "unblock_yubi_pin"
         | "verify_account_passphrase"
         | "verify_yubi_passphrase"
@@ -265,29 +270,26 @@ mod tests {
 
     #[test]
     fn vault_item_and_trash_commands_have_deadline_classes() {
-        for name in [
-            "copy_item_field",
-            "copy_item_value",
-            "trash_item",
-            "restore_trash_item",
-            "remove_item",
-        ] {
-            let admitted = CommandState::admitted(&state(), name).unwrap();
-            let remaining = admitted
-                .deadline()
+        let remaining = |name: &str| {
+            CommandState::admitted(&state(), name)
                 .unwrap()
-                .instant()
-                .saturating_duration_since(std::time::Instant::now());
-            assert!(remaining <= std::time::Duration::from_secs(15), "{name}");
-        }
-        let empty = CommandState::admitted(&state(), "empty_trash").unwrap();
-        assert!(
-            empty
                 .deadline()
                 .unwrap()
                 .instant()
                 .saturating_duration_since(std::time::Instant::now())
-                > std::time::Duration::from_secs(290)
-        );
+        };
+        for name in ["copy_item_field", "copy_item_value", "remove_item"] {
+            assert!(
+                remaining(name) <= std::time::Duration::from_secs(15),
+                "{name}"
+            );
+        }
+        // A move into or out of Trash can take four synced writes in turn.
+        for name in ["trash_item", "restore_trash_item", "empty_trash"] {
+            assert!(
+                remaining(name) > std::time::Duration::from_secs(290),
+                "{name}"
+            );
+        }
     }
 }

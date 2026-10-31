@@ -60,6 +60,7 @@ fn catalog_activity_and_profile_health_gate_group_writes() {
                 read_role: KvRole::Owner,
                 write_role: KvRole::Owner,
                 shape: None,
+                unreadable_entries: None,
             },
         }],
         ..Default::default()
@@ -95,6 +96,7 @@ fn catalog_activity_and_profile_health_gate_group_writes() {
                 read_role: KvRole::Owner,
                 write_role: KvRole::Owner,
                 shape: None,
+                unreadable_entries: None,
             },
         }],
         ..Default::default()

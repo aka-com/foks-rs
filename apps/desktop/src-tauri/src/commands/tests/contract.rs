@@ -728,6 +728,7 @@ fn wire_contract_fixture_matches_serialized_shapes() {
             read: KvRole::Member { visibility: -16384 }.into(),
             write: KvRole::Admin.into(),
             shape: Some("other"),
+            unreadable_entries: None,
         }],
         failures: vec![
             CatalogFailureDto {

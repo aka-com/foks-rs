@@ -65,6 +65,10 @@ pub struct ItemDto {
     /// absent for other node types. It carries no field value.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shape: Option<&'static str>,
+    /// For a folder, how many entries directly in it this account cannot
+    /// read, as the agent's listing reported it; absent for other node types.
+    #[serde(rename = "unreadableEntries", skip_serializing_if = "Option::is_none")]
+    pub unreadable_entries: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -311,6 +315,7 @@ fn item_dto(item: &CatalogItem) -> Result<ItemDto, AgentError> {
             KvEntryShape::Login => "login",
             KvEntryShape::Other => "other",
         }),
+        unreadable_entries: item.metadata.unreadable_entries,
     })
 }
 
