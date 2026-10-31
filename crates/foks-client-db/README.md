@@ -45,7 +45,11 @@ import gate check and the agent's scheduler probes, use
 `HardStateStore::open_existing`. It returns `StateMissing` for an absent or
 uninitialized file and rejects a file without the FOKS application id, in
 each case without writing to the filesystem, so a read after a profile reset
-does not recreate the database before the next exclusive admission.
+does not recreate the database before the next exclusive admission. An
+existing FOKS database is opened as `open` opens it: switched to WAL,
+verified and, at an older schema version, migrated. The migration ladder runs
+each step in an IMMEDIATE transaction that rereads the version, so concurrent
+openers serialize and the database is migrated once.
 
 The separate soft-state schema stores complete verified KV roots,
 directories, dirent versions, and content projections. It reconstructs durable
