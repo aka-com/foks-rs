@@ -314,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn pin_rule_matches_shared_frontend_fixture() {
+    fn pin_rule_matches_pin_policy_fixture() {
         let fixture = fixture();
         for value in strings(&fixture["pin"]["accepted"]) {
             assert!(Pin::new(value).is_ok(), "{value:?}");
@@ -328,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn retry_range_matches_shared_frontend_fixture() {
+    fn retry_range_matches_pin_policy_fixture() {
         let fixture = fixture();
         let min = u8::try_from(fixture["retries"]["min"].as_u64().unwrap()).unwrap();
         let max = u8::try_from(fixture["retries"]["max"].as_u64().unwrap()).unwrap();
@@ -339,7 +339,7 @@ mod tests {
     }
 
     #[test]
-    fn refusal_messages_match_shared_frontend_fixture() {
+    fn refusal_messages_match_pin_policy_fixture() {
         for refusal in fixture()["refusals"].as_array().unwrap() {
             let error = match refusal["remaining"].as_u64() {
                 Some(remaining) => crate::Error::PinRejected {
