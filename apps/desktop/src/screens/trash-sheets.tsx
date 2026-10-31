@@ -12,6 +12,7 @@ import {
   storeOf,
   trashEntries,
   trashEntryLabel,
+  trashRemovalProblem,
 } from '../model';
 import type { AgentSnapshot, Item } from '../model';
 import type { Bridge } from '../bridge';
@@ -41,6 +42,7 @@ export function EmptyTrashSheet({
   setWorkflow,
   onApplied,
   onMutationError,
+  onBeforeRemoval,
   accessNow,
 }: {
   snapshot: AgentSnapshot;
@@ -49,14 +51,22 @@ export function EmptyTrashSheet({
   setWorkflow: (workflow: WriteWorkflow) => void;
   onApplied: (message: string, profile?: string) => Promise<void>;
   onMutationError: MutationFailureHandler;
+  /** Resolves once automatic emptying, if it is running, has finished. */
+  onBeforeRemoval: () => Promise<void>;
   accessNow: () => number;
 }): ReactNode {
   const [listed] = useState(() => trashEntries(snapshot, workflow.store));
   const entries = useTrashOrigins(bridge, listed);
   const [emptying, setEmptying] = useState(false);
   const store = storeOf(snapshot, workflow.store);
-  const problems = entries.map((entry) =>
-    itemActionProblem(snapshot, entry.item, true, accessNow()),
+  const canRemove = (item: Item): boolean =>
+    !itemActionProblem(snapshot, item, true, accessNow());
+  // A folder goes with everything in it, so it stays when anything under it
+  // is an entry this account could not remove.
+  const problems = entries.map(
+    (entry) =>
+      itemActionProblem(snapshot, entry.item, true, accessNow()) ??
+      trashRemovalProblem(snapshot, entry, canRemove),
   );
   const removable = entries.filter((_, index) => !problems[index]);
   const kept = entries.length - removable.length;
@@ -74,6 +84,7 @@ export function EmptyTrashSheet({
     setEmptying(true);
     void (async () => {
       try {
+        await onBeforeRemoval();
         await bridge.emptyTrash({
           storeId: workflow.store,
           entries: removable.map(({ item }) => ({
@@ -141,7 +152,8 @@ export function EmptyTrashSheet({
       {kept && removable.length ? (
         <p>
           {kept} {kept === 1 ? 'item stays' : 'items stay'} in Trash because
-          this account cannot change {kept === 1 ? 'it' : 'them'}.
+          this account cannot remove {kept === 1 ? 'it' : 'them'}, or an entry
+          inside {kept === 1 ? 'it' : 'them'}.
         </p>
       ) : null}
       <ul className="trash-empty-list">
@@ -178,7 +190,10 @@ export function RestoreConflictSheet({
   snapshot: AgentSnapshot;
   workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'restore-conflict' }>;
   setWorkflow: (workflow: WriteWorkflow) => void;
-  onRestoreTrash: (item: Item, destination: string) => Promise<void>;
+  onRestoreTrash: (
+    item: Item,
+    destination: string,
+  ) => Promise<'restored' | 'sheet' | 'failed'>;
 }): ReactNode {
   const [restoring, setRestoring] = useState(false);
   const { item, destination } = workflow;
@@ -222,10 +237,15 @@ export function RestoreConflictSheet({
             onClick={() => {
               if (restoring) return;
               setRestoring(true);
-              void onRestoreTrash(item, copy).finally(() => {
-                setRestoring(false);
-                setWorkflow(null);
-              });
+              void onRestoreTrash(item, copy).then(
+                (outcome) => {
+                  setRestoring(false);
+                  // Another sheet that took over, such as a conflict on the
+                  // new name, stays; a failure keeps this one for Cancel.
+                  if (outcome === 'restored') setWorkflow(null);
+                },
+                () => setRestoring(false),
+              );
             }}
           >
             {restoring ? 'Restoring…' : `Restore as ${nameOf(copy)}`}

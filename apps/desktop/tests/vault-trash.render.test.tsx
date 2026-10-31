@@ -330,3 +330,154 @@ test('Empty Trash deletes every entry in the vault Trash after confirming', asyn
     assert.match(rendered.container.textContent ?? '', /Trash Is Empty/),
   );
 });
+
+const CONFLICT = {
+  code: 'conflict',
+  message: 'The entry changed.',
+  retryable: false,
+  fatal: false,
+  ambiguous: false,
+};
+
+test('a restore refused because the entry left Trash says so instead of opening an edit conflict', async () => {
+  const { rendered, store } = await mount((base) => ({
+    restoreTrashItem: async (request) => {
+      // Another session restored it first.
+      await base.restoreTrashItem(request);
+      throw CONFLICT;
+    },
+  }));
+  await trashSelected('github.com');
+  await openTrash(rendered, store);
+  await ui.waitFor(() => assert.ok(trashRow('github.com')));
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(trashRow('github.com')).getByRole('button', {
+        name: 'Restore github.com',
+      }),
+    );
+  });
+  await ui.waitFor(() =>
+    assert.match(toasts(), /already restored or removed elsewhere/),
+  );
+  assert.equal(rendered.queryByText('Item Changed Elsewhere'), null);
+  assert.equal(document.querySelector('[role="dialog"]'), null);
+});
+
+test('the restore-conflict sheet stays when its copy name was taken meanwhile', async () => {
+  const { rendered, store, base } = await mount((base) => ({
+    restoreTrashItem: async (request) => {
+      // Someone saves the copy's name just before the restore lands.
+      if (request.destination.endsWith('(restored)'))
+        await base
+          .createTextItem({
+            storeId: 'acct:personal',
+            path: request.destination,
+            value: 'user: x\npassword: y',
+          })
+          .catch(() => undefined);
+      return base.restoreTrashItem(request);
+    },
+  }));
+  await trashSelected('github.com');
+  await base.createTextItem({
+    storeId: 'acct:personal',
+    path: PATH,
+    value: 'user: new\npassword: other',
+  });
+  await openTrash(rendered, store);
+  await ui.waitFor(() => assert.ok(trashRow('github.com')));
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(trashRow('github.com')).getByRole('button', {
+        name: 'Restore github.com',
+      }),
+    );
+  });
+  const first = await rendered.findByRole('dialog', {
+    name: 'github.com Is Already in Use',
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(first).getByRole('button', {
+        name: 'Restore as github.com (restored)',
+      }),
+    );
+  });
+  // The sheet for the taken copy name replaces it rather than vanishing.
+  await rendered.findByRole('dialog', {
+    name: 'github.com (restored) Is Already in Use',
+  });
+});
+
+test('a permanent deletion refused as a conflict reports the entry gone, not an edit conflict', async () => {
+  const { rendered, store } = await mount((base) => ({
+    removeItem: async (request) => {
+      // Another session deleted it first.
+      await base.removeItem(request);
+      throw CONFLICT;
+    },
+  }));
+  await ui.act(async () => store.select({ store: 'acct:personal', path: PDF }));
+  await trashSelected('passport-scan.pdf');
+  await openTrash(rendered, store);
+  await ui.waitFor(() => assert.ok(trashRow('passport-scan.pdf')));
+  ui.fireEvent.click(
+    ui.within(trashRow('passport-scan.pdf')).getByRole('button', {
+      name: 'Delete passport-scan.pdf Permanently',
+    }),
+  );
+  const sheet = await rendered.findByRole('alertdialog');
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(sheet).getByRole('button', { name: 'Delete Permanently' }),
+    );
+  });
+  await ui.waitFor(() => assert.match(toasts(), /already deleted elsewhere/));
+  assert.equal(rendered.queryByText('Item Changed Elsewhere'), null);
+});
+
+test('a folder holding entries this account cannot remove stays in Trash', async () => {
+  const hide = (catalog: Awaited<ReturnType<Bridge['listCatalog']>>) => ({
+    ...catalog,
+    items: catalog.items.map((item) =>
+      item.path.endsWith('~%2Fops') ? { ...item, unreadableEntries: 2 } : item,
+    ),
+  });
+  const { rendered, store, base } = await mount((base) => ({
+    listCatalog: async (...args) => hide(await base.listCatalog(...args)),
+    listProfileCatalog: async (profile) =>
+      hide(await base.listProfileCatalog(profile)),
+  }));
+  await base.createFolder({ storeId: 'acct:personal', path: '/ops' });
+  await base.createTextItem({
+    storeId: 'acct:personal',
+    path: '/ops/runbook',
+    value: 'restart',
+  });
+  const ops = (await base.listCatalog()).items.find(
+    (item) => item.path === '/ops',
+  )!;
+  await base.trashItem({
+    storeId: 'acct:personal',
+    path: '/ops',
+    version: ops.version,
+    direntId: ops.direntId,
+  });
+  // The host selects the next item from a catalog read after this write.
+  await base.listCatalog();
+  // Moving github.com to Trash reads the vault again, with /ops in Trash.
+  await trashSelected('github.com');
+  await openTrash(rendered, store);
+  await ui.waitFor(() => assert.ok(trashRow('ops')));
+  const remove = ui.within(trashRow('ops')).getByRole('button', {
+    name: 'Delete ops Permanently',
+  });
+  assert.ok(remove.hasAttribute('disabled'));
+  assert.match(remove.title, /holds 2 entries you cannot remove/);
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Empty Trash…' }));
+  const sheet = await rendered.findByRole('alertdialog', {
+    name: 'Permanently Delete 1 Item?',
+  });
+  assert.match(sheet.textContent ?? '', /stays in Trash/);
+});

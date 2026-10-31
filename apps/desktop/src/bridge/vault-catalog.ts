@@ -47,6 +47,11 @@ export interface ItemDto {
   write: RoleDto;
   /** Whether a small file holds a login; absent for other node types. */
   shape?: ItemShape;
+  /**
+   * For a folder, how many entries directly in it this account cannot read;
+   * the listing omits them. Absent for other kinds and from an older agent.
+   */
+  unreadableEntries?: number;
 }
 
 export interface CatalogInventoryDto {
@@ -285,14 +290,25 @@ function decodeItem(value: unknown, at: string): ItemDto {
     read: decodeRole(item.read, `${at}.read`),
     write: decodeRole(item.write, `${at}.write`),
     ...decodeShape(item.shape, `${at}.shape`),
+    ...(item.unreadableEntries === undefined
+      ? {}
+      : {
+          unreadableEntries: integer(
+            item.unreadableEntries,
+            `${at}.unreadableEntries`,
+          ),
+        }),
   };
 }
 
+/**
+ * A listed shape: `login`, or `other` for every other name, so a class a
+ * later agent adds reads as an ordinary small file rather than failing the
+ * whole catalog.
+ */
 function decodeShape(value: unknown, at: string): { shape?: ItemShape } {
   if (value === undefined) return {};
-  if (value !== 'login' && value !== 'other')
-    throw new Error(`${at} is not login or other`);
-  return { shape: value };
+  return { shape: string(value, at) === 'login' ? 'login' : 'other' };
 }
 
 function decodeFailure(value: unknown, at: string): CatalogFailureDto {

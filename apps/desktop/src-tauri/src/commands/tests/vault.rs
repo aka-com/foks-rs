@@ -414,6 +414,7 @@ pub(super) fn download_item(_total: u64) -> CatalogItem {
             read_role: KvRole::Owner,
             write_role: KvRole::Owner,
             shape: None,
+            unreadable_entries: None,
         },
     }
 }
@@ -434,6 +435,7 @@ fn read_text_issues_exactly_one_version_bound_read() {
             read_role: KvRole::Owner,
             write_role: KvRole::Owner,
             shape: None,
+            unreadable_entries: None,
         },
     };
     let transport = Arc::new(ReadTransport {
@@ -513,6 +515,7 @@ fn catalog_dto_rejects_unknown_kinds_and_preserves_unknown_sizes() {
                 read_role: KvRole::Owner,
                 write_role: KvRole::Owner,
                 shape: None,
+                unreadable_entries: None,
             },
         }],
         ..CatalogSnapshot::default()
@@ -730,6 +733,7 @@ fn team_create_edit_link_folder_and_remove_transcripts_bind_roles_and_guards() {
             read_role: KvRole::Member { visibility: -2 },
             write_role: KvRole::Admin,
             shape: None,
+            unreadable_entries: None,
         },
     };
     let transport = MutationTransport {
@@ -903,6 +907,7 @@ fn team_create_and_edit_conflicts_are_returned_after_one_attempt_without_retry()
             read_role: KvRole::Owner,
             write_role: KvRole::Owner,
             shape: None,
+            unreadable_entries: None,
         },
     };
     let create_transport = ConflictTransport {

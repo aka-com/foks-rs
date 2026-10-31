@@ -1179,6 +1179,7 @@ export function VaultShell({
         mutationError={mutationError}
         refreshSnapshot={refreshSnapshot}
         restoreTrash={trash.restoreTo}
+        trashSettled={trash.settled}
         setResumeDraft={setResumeDraft}
         setConcealSignal={setConcealSignal}
         setLatest={setLatest}

@@ -12,9 +12,11 @@ import {
   ownersOnly,
   trashEntries,
   trashEntryLabel,
+  trashRemovalProblem,
   trashUnavailable,
 } from '../model';
-import type { AgentSnapshot, Store, TrashEntry } from '../model';
+import type { AgentSnapshot, Item, Store, TrashEntry } from '../model';
+import { restoreFocusIfLost, rowByKey } from '/kit/focus-keeper';
 import type { Bridge } from '../bridge';
 import { itemTile } from './item-tile';
 import { itemActionProblem } from './store-access';
@@ -42,16 +44,45 @@ function originalLabel(entry: TrashEntry): string {
 }
 
 /** How many entries a store's Trash holds, and why Empty Trash is off, if it is. */
+/**
+ * Why `entry` cannot be deleted permanently: this account cannot change it,
+ * or, for a folder, cannot remove everything in it.
+ */
+function removalProblem(
+  snapshot: AgentSnapshot,
+  entry: TrashEntry,
+  accessNow: () => number,
+): string | undefined {
+  const canRemove = (item: Item): boolean =>
+    !itemActionProblem(snapshot, item, true, accessNow());
+  return (
+    itemActionProblem(snapshot, entry.item, true, accessNow()) ??
+    trashRemovalProblem(snapshot, entry, canRemove)
+  );
+}
+
+/** The row to focus once the entry at `index` leaves the list. */
+function neighbourRow(
+  entries: readonly TrashEntry[],
+  index: number,
+): () => HTMLElement | undefined {
+  const next = entries[index + 1] ?? entries[index - 1];
+  return next
+    ? rowByKey(`${next.item.store}|${next.item.path}`)
+    : () =>
+        document.querySelector<HTMLElement>('.main .trash-view') ?? undefined;
+}
+
 export function emptyTrashProblem(
   snapshot: AgentSnapshot,
   store: Store,
   accessNow: () => number,
 ): { count: number; problem: string | undefined } {
-  // Empty Trash removes the entries this account can change and leaves the
+  // Empty Trash removes the entries this account can remove and leaves the
   // rest; it is unavailable only when there are none.
   const all = trashEntries(snapshot, store.id);
   const problems = all.map((entry) =>
-    itemActionProblem(snapshot, entry.item, true, accessNow()),
+    removalProblem(snapshot, entry, accessNow),
   );
   return {
     count: all.length,
@@ -78,7 +109,7 @@ export function TrashView({
 }): ReactNode {
   const entries = useTrashOrigins(bridge, listed);
   return (
-    <div className="trash-view">
+    <div className="trash-view" tabIndex={-1}>
       {trashUnavailable(snapshot, store.id) ? (
         <Notice severity="info" title="Trash is not set up">
           <p>
@@ -102,7 +133,7 @@ export function TrashView({
           role="list"
           aria-label={`Trash · ${store.name}`}
         >
-          {entries.map((entry) => {
+          {entries.map((entry, index) => {
             const label = trashEntryLabel(entry);
             const problem = itemActionProblem(
               snapshot,
@@ -110,6 +141,8 @@ export function TrashView({
               true,
               accessNow(),
             );
+            const deleteProblem =
+              problem ?? removalProblem(snapshot, entry, accessNow);
             const tile =
               entry.item.kind === 'Folder'
                 ? { className: 'folder', icon: 'folder' as const }
@@ -120,6 +153,9 @@ export function TrashView({
                 className="row trash-row"
                 role="listitem"
                 data-trash-path={entry.item.path}
+                // The row the focus moves to when a neighbour leaves Trash.
+                data-row-key={`${entry.item.store}|${entry.item.path}`}
+                tabIndex={-1}
               >
                 <span className={`tile ${tile.className}`} aria-hidden="true">
                   <Icon name={tile.icon} />
@@ -144,7 +180,10 @@ export function TrashView({
                     disabled={Boolean(problem)}
                     title={problem ?? `Restore ${label}`}
                     aria-label={`Restore ${label}`}
-                    onClick={() => onRestore(entry)}
+                    onClick={() => {
+                      restoreFocusIfLost(neighbourRow(entries, index));
+                      onRestore(entry);
+                    }}
                   >
                     Restore
                   </Button>
@@ -153,8 +192,8 @@ export function TrashView({
                     variant="quiet"
                     danger
                     icon="trash"
-                    disabled={Boolean(problem)}
-                    title={problem ?? `Delete ${label} Permanently`}
+                    disabled={Boolean(deleteProblem)}
+                    title={deleteProblem ?? `Delete ${label} Permanently`}
                     aria-label={`Delete ${label} Permanently`}
                     onClick={() => onDeletePermanently(entry)}
                   />

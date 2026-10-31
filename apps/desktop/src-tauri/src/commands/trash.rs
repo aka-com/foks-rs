@@ -29,7 +29,7 @@ use crate::commands::execution::{execute_kv_mutation, run_kv_writes, MutationKin
 use crate::commands::preparation::{check_mutation_access, prepare_catalog_mutation};
 use crate::commands::types::MutationDto;
 use crate::commands::validation::{invalid_request, require_main_window};
-use crate::commands::vault::protocol_store;
+use crate::commands::vault::{protocol_store, store_id};
 use foks_agent_proto::{KvPrecondition, KvRole, Operation};
 use foks_desktop::{CatalogItem, CatalogStoreReadState, CatalogStoreRef, KvAccountMutation};
 use serde::{Deserialize, Serialize};
@@ -72,6 +72,100 @@ pub(super) const TRASH_UNAVAILABLE: &str = "trash-unavailable";
 /// The code the agent reports a write refused by role with.
 const ROLE_REFUSAL: &str = "operation-failed";
 
+/// The code permanent removal of a Trash folder is refused with when it
+/// would reach entries this account cannot remove one by one.
+pub(super) const TRASH_FOLDER_PROTECTED: &str = "trash-folder-protected";
+
+/// What decides whether this account may permanently remove a folder in
+/// Trash and everything under it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct RemovalAccess {
+    /// The role this account holds in the store, when it is known: Owner in
+    /// an account store, and the roster's role in a team.
+    pub(super) role: Option<KvRole>,
+    /// Whether the catalog read every entry of the store.
+    pub(super) complete: bool,
+}
+
+/// Whether a holder of `held` may write an entry whose write role is
+/// `required`: Owner admits every role, Admin every role but Owner, and a
+/// Member role every Member role of the same or a lower visibility.
+pub(super) fn role_admits(held: KvRole, required: KvRole) -> bool {
+    match (held, required) {
+        (KvRole::Owner, _) => true,
+        (KvRole::Admin, KvRole::Owner) => false,
+        (KvRole::Admin, _) => true,
+        (KvRole::Member { visibility: held }, KvRole::Member { visibility: needed }) => {
+            held >= needed
+        }
+        (KvRole::Member { .. }, _) => false,
+    }
+}
+
+/// Refuses permanently removing a folder in Trash when the recursive
+/// removal would reach entries this account could not remove itself. The
+/// server checks only the folder's own dirent and its parent, so without
+/// this check a member could destroy entries that need a higher write role,
+/// or that it cannot even read. Every entry under the folder must be listed
+/// (the store's catalog read completely, and no folder reporting entries
+/// this account cannot read), and this account's role must admit the write
+/// role of each.
+pub(super) fn check_folder_removal(
+    store_items: &[CatalogItem],
+    folder: &CatalogItem,
+    access: RemovalAccess,
+) -> Result<(), AgentError> {
+    if folder.metadata.node_type != "directory" {
+        return Ok(());
+    }
+    if !access.complete {
+        return Err(AgentError::new(
+            "catalog-required",
+            "Refresh the vault before deleting a folder permanently: every entry in it must be listed first.",
+            true,
+        ));
+    }
+    let role = access.role.ok_or_else(|| {
+        AgentError::new(
+            "roster-required",
+            "Refresh this team's member list before deleting a folder permanently.",
+            true,
+        )
+    })?;
+    let prefix = format!("{}/", folder.metadata.path);
+    let mut blocked: u64 = 0;
+    for entry in std::iter::once(folder).chain(
+        store_items
+            .iter()
+            .filter(|item| item.metadata.path.starts_with(&prefix)),
+    ) {
+        if entry.metadata.node_type == "directory" {
+            let Some(hidden) = entry.metadata.unreadable_entries else {
+                return Err(AgentError::new(
+                    "catalog-required",
+                    "The agent did not report whether this folder holds entries this account cannot read. Update FOKS and refresh the vault before deleting the folder permanently.",
+                    false,
+                ));
+            };
+            blocked += u64::from(hidden);
+        }
+        if !std::ptr::eq(entry, folder) && !role_admits(role, entry.metadata.write_role) {
+            blocked += 1;
+        }
+    }
+    if blocked == 0 {
+        return Ok(());
+    }
+    Err(AgentError::new(
+        TRASH_FOLDER_PROTECTED,
+        format!(
+            "This folder holds {blocked} {} this account cannot remove, so it cannot be deleted permanently. Restore it, or ask a member who can change those entries to delete it.",
+            if blocked == 1 { "entry" } else { "entries" }
+        ),
+        false,
+    ))
+}
+
 /// One Trash entry named by the renderer, as `empty_trash` takes it.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -96,6 +190,10 @@ pub(super) struct TrashStep {
     /// main writes. Its failure leaves the command applied: an `.origin`
     /// file without its entry is harmless.
     pub(super) cleanup: bool,
+    /// Whether `already-exists` counts as success: a Trash folder that
+    /// another client created after this plan read the catalog serves the
+    /// same purpose, so the plan goes on with its next write.
+    pub(super) existing_ok: bool,
 }
 
 /// The writes that carry out one Trash command, in order, and the path the
@@ -304,6 +402,7 @@ fn mkdir_step(
         failure: Some(failure),
         refusal: None,
         cleanup: false,
+        existing_ok: false,
     }
 }
 
@@ -315,6 +414,7 @@ fn remove_step(item: &CatalogItem, cleanup: bool) -> Result<TrashStep, AgentErro
         failure: None,
         refusal: None,
         cleanup,
+        existing_ok: false,
     })
 }
 
@@ -325,6 +425,7 @@ fn move_step(item: &CatalogItem, destination: &str) -> Result<TrashStep, AgentEr
         failure: None,
         refusal: None,
         cleanup: false,
+        existing_ok: false,
     })
 }
 
@@ -402,6 +503,7 @@ pub(super) fn trash_plan(
                 "Trash could not be created at the top level of this vault. In a team, only an owner can create it; an owner who moves any item to Trash creates it for everyone.",
             );
             step.refusal = refusal;
+            step.existing_ok = true;
             steps.push(step);
         }
         Some(existing) if existing.metadata.node_type != "directory" => {
@@ -413,14 +515,18 @@ pub(super) fn trash_plan(
     }
     let folder = role_folder(store_items, read_role)?;
     if find(store_items, &folder).is_none() {
-        steps.push(mkdir_step(
+        let mut step = mkdir_step(
             &item.store,
             &folder,
             read_role,
             read_role,
             false,
             "The Trash folder for this item's read access could not be created.",
-        ));
+        );
+        // Another desktop creates this name with the same read role, which
+        // the role tag names.
+        step.existing_ok = true;
+        steps.push(step);
     }
     let (name, origin) = trash_entry_name(&utc_stamp(seconds), path);
     let destination = format!("{folder}/{name}");
@@ -449,6 +555,7 @@ pub(super) fn trash_plan(
             ),
             refusal: None,
             cleanup: false,
+            existing_ok: false,
         });
     }
     steps.push(move_step(item, &destination)?);
@@ -538,10 +645,13 @@ pub(super) fn restore_plan(
 
 /// Plans permanently removing an entry in Trash: recursively for a folder,
 /// together with the `.origin` file of a hashed entry. Items outside Trash
-/// are refused; they are moved to Trash instead.
+/// are refused; they are moved to Trash instead. A folder is refused when
+/// [`check_folder_removal`] finds entries under it this account could not
+/// remove.
 pub(super) fn removal_plan(
     store_items: &[CatalogItem],
     item: &CatalogItem,
+    access: RemovalAccess,
 ) -> Result<TrashPlan, AgentError> {
     let path = item.metadata.path.as_str();
     if !path
@@ -552,6 +662,7 @@ pub(super) fn removal_plan(
             "Only items in Trash can be deleted permanently. Move this item to Trash first.",
         ));
     }
+    check_folder_removal(store_items, item, access)?;
     let mut steps = vec![remove_step(item, false)?];
     if let Some(origin) = origin_of(store_items, path) {
         steps.push(remove_step(origin, true)?);
@@ -605,20 +716,56 @@ pub(super) fn removal_without_trash_plan(
     })
 }
 
+/// How long an `.origin` file without its entry is left alone. Moving an
+/// entry to Trash writes the `.origin` file before the move, so another
+/// client's catalog read between the two writes sees it without its entry.
+pub(super) const ORIGIN_ORPHAN_GRACE_SECONDS: u64 = 10 * 60;
+
+/// Seconds since the Unix epoch for a `yyyymmddThhmmss` stamp, the inverse
+/// of [`utc_stamp`]; `None` for a stamp that is not a valid UTC time.
+pub(super) fn stamp_seconds(stamp: &str) -> Option<u64> {
+    let digits = |range: std::ops::Range<usize>| stamp.get(range)?.parse::<i64>().ok();
+    if stamp.len() != 15 || stamp.as_bytes()[8] != b'T' {
+        return None;
+    }
+    let (year, month, day) = (digits(0..4)?, digits(4..6)?, digits(6..8)?);
+    let (hours, minutes, seconds) = (digits(9..11)?, digits(11..13)?, digits(13..15)?);
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hours > 23
+        || minutes > 59
+        || seconds > 59
+    {
+        return None;
+    }
+    // Days from a civil date (H. Hinnant), the inverse of `utc_stamp`'s.
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let yoe = year - era * 400;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    u64::try_from(days * 86_400 + hours * 3_600 + minutes * 60 + seconds).ok()
+}
+
 /// Plans permanently removing every one of `entries`, which must all be in
 /// Trash, from one catalog read: recursively for a folder, together with the
-/// `.origin` files of hashed entries. When the store's catalog is
-/// `complete`, `.origin` files whose entry is gone are removed too; a move
-/// into Trash that failed after its `.origin` file was written leaves one.
+/// `.origin` files of hashed entries. When the store's catalog is complete,
+/// `.origin` files whose entry is gone are removed too, once their stamp is
+/// [`ORIGIN_ORPHAN_GRACE_SECONDS`] older than `seconds`; a move into Trash
+/// that failed after its `.origin` file was written leaves one.
 pub(super) fn empty_trash_plan(
     store_items: &[CatalogItem],
     entries: &[CatalogItem],
-    complete: bool,
+    access: RemovalAccess,
+    seconds: u64,
 ) -> Result<TrashPlan, AgentError> {
+    let complete = access.complete;
     let mut main = Vec::new();
     let mut cleanup = Vec::new();
     for entry in entries {
-        for step in removal_plan(store_items, entry)?.steps {
+        for step in removal_plan(store_items, entry, access)?.steps {
             if step.cleanup {
                 cleanup.push(step);
             } else {
@@ -634,7 +781,13 @@ pub(super) fn empty_trash_plan(
                 Some(TrashName::Origin)
             ) && path
                 .strip_suffix(ORIGIN_SUFFIX)
-                .is_some_and(|entry| find(store_items, entry).is_none());
+                .is_some_and(|entry| find(store_items, entry).is_none())
+                && trash_entry_component(path)
+                    .and_then(|name| name.split_once('~'))
+                    .and_then(|(stamp, _)| stamp_seconds(stamp))
+                    .is_some_and(|stamped| {
+                        seconds.saturating_sub(stamped) >= ORIGIN_ORPHAN_GRACE_SECONDS
+                    });
             if orphaned {
                 cleanup.push(remove_step(item, true)?);
             }
@@ -673,6 +826,9 @@ pub(super) fn execute_trash_plan(
         let Err(mut error) = result else {
             continue;
         };
+        if step.existing_ok && error.code == "already-exists" {
+            continue;
+        }
         if step.cleanup {
             cleanup_unknown |= error.ambiguous;
             continue;
@@ -737,6 +893,47 @@ fn store_items(
         .filter(|item| &item.store == store)
         .collect();
     Ok((items, complete))
+}
+
+/// The role this account holds in `store`: Owner in its own account store,
+/// and in a team the role the retained roster gives the account's user.
+/// `None` when the roster or the account is not loaded, or the roster does
+/// not list the account exactly once.
+fn own_store_role(state: &AppState, selected: &str, store: &CatalogStoreRef) -> Option<KvRole> {
+    let CatalogStoreRef::Team(team) = store else {
+        return Some(KvRole::Owner);
+    };
+    let account = store_id(&CatalogStoreRef::Account(
+        foks_agent_proto::AccountStoreRef {
+            profile: team.profile.clone(),
+            account_alias: team.account_alias.clone(),
+        },
+    ));
+    let username = state
+        .accounts
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&account)?
+        .username
+        .clone();
+    let rosters = state
+        .rosters
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut own = rosters.get(selected)?.iter().filter(|party| {
+        party.party_kind == "user"
+            && party.locally_manageable
+            && party.username.as_deref() == Some(username.as_str())
+    });
+    let party = own.next()?;
+    if own.next().is_some() {
+        return None;
+    }
+    match super::groups::member_role_from_dto(&party.destination_role).ok()? {
+        super::groups::MemberRole::Owner => Some(KvRole::Owner),
+        super::groups::MemberRole::Admin => Some(KvRole::Admin),
+        super::groups::MemberRole::Member { visibility } => Some(KvRole::Member { visibility }),
+    }
 }
 
 fn now_seconds() -> Result<u64, AgentError> {
@@ -817,7 +1014,11 @@ pub async fn remove_item(
     let plan = if outside_trash {
         removal_without_trash_plan(&store_items, &item, complete)?
     } else {
-        removal_plan(&store_items, &item)?
+        let access = RemovalAccess {
+            role: own_store_role(&state, &store_id, &item.store),
+            complete,
+        };
+        removal_plan(&store_items, &item, access)?
     };
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_trash_plan(&state, &item.store, plan)
@@ -856,7 +1057,11 @@ pub async fn empty_trash(
         .collect::<Result<Vec<_>, _>>()?;
     let store = entries[0].store.clone();
     let (store_items, complete) = store_items(&state, &store)?;
-    let plan = empty_trash_plan(&store_items, &entries, complete)?;
+    let access = RemovalAccess {
+        role: own_store_role(&state, &store_id, &store),
+        complete,
+    };
+    let plan = empty_trash_plan(&store_items, &entries, access, now_seconds()?)?;
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_trash_plan(&state, &store, plan)
         .await

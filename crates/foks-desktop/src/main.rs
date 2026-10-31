@@ -1336,6 +1336,7 @@ fn catalog_item(
             read_role: roles.read_role,
             write_role: roles.write_role,
             shape: None,
+            unreadable_entries: None,
         },
     }
 }

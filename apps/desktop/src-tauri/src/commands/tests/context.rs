@@ -37,6 +37,7 @@ fn chat_catalog() -> CatalogSnapshot {
             read_role: foks_agent_proto::KvRole::Owner,
             write_role: foks_agent_proto::KvRole::Owner,
             shape: None,
+            unreadable_entries: None,
         },
     });
     let success = |value| foks_agent_proto::ResponseResult::Success { value };
@@ -409,6 +410,7 @@ fn a_write_discards_only_the_items_of_the_store_it_landed_in() {
             read_role: foks_agent_proto::KvRole::Owner,
             write_role: foks_agent_proto::KvRole::Owner,
             shape: None,
+            unreadable_entries: None,
         },
     });
     catalog.store_reads.push(foks_desktop::CatalogStoreRead {
