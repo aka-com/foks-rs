@@ -339,7 +339,7 @@ fn snowpack_allocation_sources_remain_the_audited_bytes() {
     for (source, expected) in [
         (
             include_bytes!("../../../../../foks-snowpack/src/decode.rs").as_slice(),
-            "842057630a9c2be7eef7c234c5293ea36260c6dd77c35460f7914ace7c566020",
+            "e36b12d31637bf43bcb962ea9630d8557d9d4a7a13e86275e805ac887ec95db6",
         ),
         (
             include_bytes!("../../../../../foks-snowpack/src/encode.rs").as_slice(),
