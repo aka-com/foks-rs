@@ -47,6 +47,11 @@ export interface ItemDto {
   write: RoleDto;
   /** Whether a small file holds a login; absent for other node types. */
   shape?: ItemShape;
+  /**
+   * For a folder, how many entries directly in it this account cannot read;
+   * the listing omits them. Absent for other kinds and from an older agent.
+   */
+  unreadableEntries?: number;
 }
 
 export interface CatalogInventoryDto {
@@ -285,6 +290,14 @@ function decodeItem(value: unknown, at: string): ItemDto {
     read: decodeRole(item.read, `${at}.read`),
     write: decodeRole(item.write, `${at}.write`),
     ...decodeShape(item.shape, `${at}.shape`),
+    ...(item.unreadableEntries === undefined
+      ? {}
+      : {
+          unreadableEntries: integer(
+            item.unreadableEntries,
+            `${at}.unreadableEntries`,
+          ),
+        }),
   };
 }
 

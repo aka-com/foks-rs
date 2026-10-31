@@ -217,7 +217,8 @@ export function useCatalogRuntime({
           );
         return;
       }
-      toasts.show(message, options);
+      // A caller that already said what changed passes no message.
+      if (message) toasts.show(message, options);
     },
     [reloadApplied, toasts],
   );

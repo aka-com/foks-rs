@@ -226,9 +226,16 @@ permanent actions keep a confirmation, which says the deletion is for
 everyone and that earlier encrypted versions may remain on the server;
 `remove_item` and `empty_trash` refuse anything outside `/.trash`, except a
 file in a team whose Trash a non-owner cannot set up yet, which the
-confirmation then deletes permanently. Settings › Preferences › Trash can
+confirmation then deletes permanently. A folder is deleted permanently only
+when every entry under it is listed and is one this account could remove
+itself: the server checks only the folder, so the host refuses a folder
+holding an entry with a higher write role, or entries the listing could not
+show, with `trash-folder-protected`, and the Trash view and Empty Trash leave
+such a folder in Trash with the reason. Settings › Preferences › Trash can
 empty Trash automatically after 30 or 90 days on this device, off by
-default. Trash is not part of the folders, All Items or search, and Go FOKS
+default; an entry's age counts from the later of the stamp in its name and
+the time this device first listed it, and an entry stamped in the future
+never expires. Trash is not part of the folders, All Items or search, and Go FOKS
 clients list `.trash` as an ordinary folder. See book/20 for the layout.
 
 **Unsupported operations:** Link editing is not supported directly; links must be

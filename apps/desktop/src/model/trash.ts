@@ -195,15 +195,67 @@ function lastComponent(path: string): string {
 }
 
 /**
- * Whether an entry was deleted at least `ageMs` before `now`, so automatic
- * emptying removes it. An entry whose name has no deletion stamp never is.
+ * Whether automatic emptying may remove an entry: it was deleted at least
+ * `ageMs` before `now`. The deletion time comes from the entry's name, which
+ * the deleting device stamped with its own clock, so it is not trusted on
+ * its own. An entry stamped later than `now` never expires, and the age is
+ * counted from the later of the stamp and `firstSeen`, the time this device
+ * first listed the entry: one another device moved to Trash with a clock
+ * set back, or a minute ago, is kept for the full age here. An entry whose
+ * name has no deletion stamp never expires.
  */
 export function trashEntryExpired(
   entry: TrashEntry,
   now: number,
   ageMs: number,
+  firstSeen: number = entry.deletedAt ?? now,
 ): boolean {
-  return entry.deletedAt !== null && now - entry.deletedAt >= ageMs;
+  if (entry.deletedAt === null || entry.deletedAt > now) return false;
+  return now - Math.max(entry.deletedAt, firstSeen) >= ageMs;
+}
+
+/**
+ * How many entries a permanent removal of `entry` would reach that this
+ * account could not remove itself, or `null` when that is not known. A file
+ * reaches only itself, which the host checks. A folder is removed with
+ * everything under it, while the server checks only the folder: each entry
+ * under it must be one `canRemove` admits, and no folder may hold entries
+ * the listing could not show (`unreadableEntries`; unknown from an agent
+ * that does not report it). The host refuses the same folders.
+ */
+export function trashRemovalBlocked(
+  snapshot: AgentSnapshot,
+  entry: Item | Pick<TrashEntry, 'item'>,
+  canRemove: (item: Item) => boolean,
+): number | null {
+  const folder = 'item' in entry ? entry.item : entry;
+  if (folder.kind !== 'Folder') return 0;
+  const prefix = `${folder.path}/`;
+  let blocked = 0;
+  for (const item of snapshot.items) {
+    if (item.store !== folder.store) continue;
+    const under = item.path.startsWith(prefix);
+    if (item.path !== folder.path && !under) continue;
+    if (item.kind === 'Folder') {
+      if (item.unreadableEntries === undefined) return null;
+      blocked += item.unreadableEntries;
+    }
+    if (under && !canRemove(item)) blocked += 1;
+  }
+  return blocked;
+}
+
+/** Why `entry` cannot be deleted permanently, by {@link trashRemovalBlocked}. */
+export function trashRemovalProblem(
+  snapshot: AgentSnapshot,
+  entry: Item | Pick<TrashEntry, 'item'>,
+  canRemove: (item: Item) => boolean,
+): string | undefined {
+  const blocked = trashRemovalBlocked(snapshot, entry, canRemove);
+  if (blocked === null)
+    return 'This folder may hold entries this account cannot see. Refresh the vault before deleting it permanently.';
+  if (!blocked) return undefined;
+  return `This folder holds ${blocked} ${blocked === 1 ? 'entry' : 'entries'} you cannot remove, so it cannot be deleted permanently.`;
 }
 
 /** What an entry is called: its original name, or its name in Trash. */

@@ -98,6 +98,11 @@ export interface Item {
    * Absent when no listing classified it; the value itself is never here.
    */
   shape?: ItemShape;
+  /**
+   * For a Folder, how many entries directly in it this account cannot read,
+   * as the agent's listing reported it; the catalog omits those entries.
+   */
+  unreadableEntries?: number;
   /** Symlink target, on a Link. */
   target?: string;
 }

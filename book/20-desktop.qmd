@@ -456,7 +456,12 @@ into `/.trash` in the same vault, as one `MoveKv` namespace mutation: a
 tombstone at the source and a dirent at the destination. Nothing is
 destroyed, so Move to Trash, its menu items and ⌘⌫ ask for no
 confirmation. The toast it shows offers Undo for eight seconds, and ⌘Z does
-the same while it shows. A child that another device adds to a folder while
+the same while it shows; the toast appears as soon as the move is applied,
+even when reading the catalog again afterwards fails. A move into Trash or
+back can take four writes in turn, each awaiting the server's sync, so
+`trash_item` and `restore_trash_item` have the Bulk deadline, and a Trash
+folder or `/.trash` another client created after the catalog read
+(`already-exists`) is used as it is. A child that another device adds to a folder while
 it is moved goes with the folder, which a recursive delete could not
 promise.
 
@@ -512,6 +517,18 @@ there and never replaces it. Delete Permanently and Empty Trash use
 cannot promise: the server keeps every dirent version, so earlier encrypted
 versions may remain on it.
 
+A recursive `RemoveKv` tombstones only the folder's dirent, and the server
+checks only that dirent and its parent, so removing a folder would also
+destroy every entry under it whatever its write role. The host therefore
+removes a folder in Trash only when the store's catalog was read completely,
+the roster gives this account's role, every entry under the folder has a
+write role that role admits, and no folder under it holds entries this
+account cannot read. The listing reports that last count per folder
+(`unreadable_entries`, an optional field of the agent's catalog entries
+alongside `shape`), since it omits the entries themselves. A folder that
+fails the check is refused with `trash-folder-protected`, naming how many
+entries stand in the way; Restore still works, and someone who can change
+those entries can delete it.
 Entries keep their own write roles in a role folder, so a member can list
 an entry that only an admin can remove. Empty Trash removes the entries
 this account can change and lists the ones that stay. It sends them to
@@ -520,7 +537,9 @@ them one command at a time would fail after the first, because each write
 discards the store's catalog items. `empty_trash` also removes `.origin`
 files whose entry is gone, which a move into Trash that failed after
 writing its `.origin` file leaves behind, but only when the store's catalog
-was read completely. Removing a hashed entry's `.origin` file is the last
+was read completely and the stamp in the file's name is more than ten
+minutes old: another client's move writes the `.origin` file before the
+move, so a catalog read between the two sees the file alone. Removing a hashed entry's `.origin` file is the last
 write of a restore or permanent removal, and its failure does not fail the
 command: the entry has already moved, and an `.origin` file without its
 entry is harmless.
@@ -528,8 +547,13 @@ entry is harmless.
 Trash is emptied by hand unless a device opts in. Settings › Preferences ›
 Trash can empty it automatically after 30 or 90 days, a choice kept in that
 device's local storage. While the app runs, it removes the entries older
-than that which this account can change, through `empty_trash`, one store
-at a time and at most hourly per store. It starts only after the catalog has
+than that which this account can remove, through `empty_trash`, one store
+at a time and at most hourly per store. The stamp in an entry's name is the
+deleting device's clock, so it is not trusted alone: an entry stamped in the
+future never expires, and an entry's age counts from the later of its stamp
+and the time this device first listed it, which the device records beside
+the setting and drops once the entry leaves Trash. An entry another device
+moved to Trash a minute ago is therefore kept for the full age here. It starts only after the catalog has
 been unchanged for three seconds, and not while a dialog is open, a Trash
 action or an Undo runs, or an Undo is offered. A move to Trash or a restore
 started while it runs waits for it instead of being refused for the host's

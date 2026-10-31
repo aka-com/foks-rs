@@ -7,6 +7,7 @@ import {
   type SetStateAction,
 } from 'react';
 import type { ToastController, ToastOptions } from '/kit/toasts';
+import { focusWhenRendered, rowByKey } from '/kit/focus-keeper';
 import { commandKey } from '/kit/keys';
 import { anyDialogOpen } from '/kit/overlay-primitives';
 import { normalizeCommandError, type Bridge } from '../bridge';
@@ -17,6 +18,7 @@ import {
   storeOf,
   trashEntries,
   trashEntryExpired,
+  trashRemovalBlocked,
   trashUnavailable,
   UNDO_DURATION_MS,
   type AgentSnapshot,
@@ -26,7 +28,11 @@ import {
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { itemActionProblem } from '../screens/store-access';
 import type { WriteWorkflow } from '../screens/write-workflows';
-import { storedTrashAutoEmpty } from '../trash-auto-empty';
+import {
+  rememberTrashEntriesSeen,
+  storedTrashAutoEmpty,
+  trashSeenKey,
+} from '../trash-auto-empty';
 
 /** How often automatic emptying looks at one store's Trash again. */
 const AUTO_EMPTY_INTERVAL_MS = 60 * 60 * 1000;
@@ -52,9 +58,24 @@ export interface TrashActions {
    * opens the restore-conflict sheet instead.
    */
   restore: (entry: TrashEntry) => void;
-  /** Moves a Trash entry to `destination`; the conflict sheet's step. */
-  restoreTo: (item: Item, destination: string) => Promise<void>;
+  /**
+   * Moves a Trash entry to `destination`; the conflict sheet's step. Says
+   * whether the entry was restored, or another sheet took over.
+   */
+  restoreTo: (item: Item, destination: string) => Promise<RestoreOutcome>;
+  /**
+   * Resolves once automatic emptying, if it is running, has finished, so a
+   * permanent deletion the person asks for waits for it instead of being
+   * refused for the host's single mutation permit.
+   */
+  settled: () => Promise<void>;
 }
+
+/**
+ * How a restore ended: `restored`, `sheet` when the restore-conflict sheet
+ * opened in its place, or `failed`, already reported.
+ */
+export type RestoreOutcome = 'restored' | 'sheet' | 'failed';
 
 function occupied(
   snapshot: AgentSnapshot,
@@ -131,7 +152,11 @@ export function useTrashActions({
   const autoEmptied = useRef(new Map<string, number>());
 
   const restoreTo = useCallback(
-    async (item: Item, destination: string): Promise<void> => {
+    async (
+      item: Item,
+      destination: string,
+      land = false,
+    ): Promise<RestoreOutcome> => {
       const profile = storeOf(shown, item.store)?.server;
       await emptying.current;
       try {
@@ -143,36 +168,77 @@ export function useTrashActions({
           destination,
         });
       } catch (error) {
-        if (normalizeCommandError(error).code === 'already-exists') {
+        const { code } = normalizeCommandError(error);
+        if (code === 'already-exists') {
           await mutationError(error, { report: false });
           setWorkflow({ kind: 'restore-conflict', item, destination });
-          return;
+          return 'sheet';
         }
-        await mutationError(error, { item });
-        return;
+        if (code === 'conflict') {
+          // Gone or changed in Trash since it was listed: a refresh tells
+          // which. A restore is not an edit, so no edit conflict opens.
+          await mutationError(error, { report: false });
+          const next = await refreshSnapshot(true);
+          toasts.show(
+            next.items.some(
+              (candidate) =>
+                candidate.store === item.store && candidate.path === item.path,
+            )
+              ? 'This entry changed in Trash since it was listed. Try again.'
+              : 'This entry was already restored or removed elsewhere.',
+            { tone: 'warning' },
+          );
+          return 'failed';
+        }
+        await mutationError(error);
+        return 'failed';
+      }
+      const key = `${item.store}|${destination}`;
+      if (land) {
+        // Undo puts the item back where the person was looking: select it
+        // and focus its row once the refresh lists it again.
+        locations.select({ store: item.store, path: destination });
+        focusWhenRendered(rowByKey(key));
       }
       await refresh(`Restored ${nameOf(destination)}`, profile, {
         action: {
           label: 'Show',
-          onAction: () =>
+          onAction: () => {
             locations.navigateAndSelect(
               { kind: 'store', ref: item.store },
               { store: item.store, path: destination },
-            ),
+            );
+            focusWhenRendered(rowByKey(key));
+          },
         },
         durationMs: UNDO_DURATION_MS,
       });
+      return 'restored';
     },
-    [bridge, locations, mutationError, refresh, setWorkflow, shown],
+    [
+      bridge,
+      locations,
+      mutationError,
+      refresh,
+      refreshSnapshot,
+      setWorkflow,
+      shown,
+      toasts,
+    ],
   );
 
   const restoreItem = useCallback(
-    (snapshot: AgentSnapshot, item: Item, destination: string) => {
+    async (
+      snapshot: AgentSnapshot,
+      item: Item,
+      destination: string,
+      land = false,
+    ): Promise<void> => {
       if (occupied(snapshot, item.store, destination)) {
         setWorkflow({ kind: 'restore-conflict', item, destination });
-        return Promise.resolve();
+        return;
       }
-      return restoreTo(item, destination);
+      await restoreTo(item, destination, land);
     },
     [restoreTo, setWorkflow],
   );
@@ -204,7 +270,7 @@ export function useTrashActions({
         }
         await restoreItem(shown, entry.item, destination);
       })()
-        .catch((error: unknown) => mutationError(error, { item: entry.item }))
+        .catch((error: unknown) => mutationError(error))
         .finally(() => {
           busy.current = false;
         });
@@ -227,9 +293,9 @@ export function useTrashActions({
           toasts.show('This item is no longer in Trash.', { tone: 'warning' });
           return;
         }
-        await restoreItem(next, entry, original.path);
+        await restoreItem(next, entry, original.path, true);
       })()
-        .catch((error: unknown) => mutationError(error, { item: original }))
+        .catch((error: unknown) => mutationError(error))
         .finally(() => {
           undoing.current = false;
         });
@@ -308,19 +374,19 @@ export function useTrashActions({
           if (fromKeyboard) toasts.show(`Restoring ${name}…`, { dedupeKey });
           undo(item, path);
         };
+        // The move has happened, so Undo is offered at once and whether or
+        // not the refresh after it succeeds. ⌘Z is armed for exactly as long
+        // as the toast shows.
+        toasts.show(`Moved ${name} to Trash`, {
+          action: { label: 'Undo', onAction: () => run() },
+          durationMs: UNDO_DURATION_MS,
+          dedupeKey,
+        });
         pendingUndo.current = {
           run: () => run(true),
           until: Date.now() + UNDO_DURATION_MS,
         };
-        await refresh(
-          `Moved ${name} to Trash`,
-          storeOf(shown, item.store)?.server,
-          {
-            action: { label: 'Undo', onAction: () => run() },
-            durationMs: UNDO_DURATION_MS,
-            dedupeKey,
-          },
-        );
+        await refresh('', storeOf(shown, item.store)?.server);
       })()
         .catch((error: unknown) => mutationError(error, { item }))
         .finally(() => {
@@ -366,13 +432,31 @@ export function useTrashActions({
       )
         return;
       const now = Date.now();
+      // The stamp in an entry's name is the deleting device's clock, so an
+      // entry's age also counts from when this device first listed it.
+      const listed = shown.stores.flatMap((store) =>
+        trashEntries(shown, store.id),
+      );
+      const seen = rememberTrashEntriesSeen(
+        listed.map((entry) => trashSeenKey(entry.item)),
+        now,
+      );
+      const canRemove = (item: Item): boolean =>
+        !itemActionProblem(shown, item, true, accessNow());
       for (const store of shown.stores) {
         const last = autoEmptied.current.get(store.id);
         if (last !== undefined && now - last < AUTO_EMPTY_INTERVAL_MS) continue;
         const expired = trashEntries(shown, store.id).filter(
           (entry) =>
-            trashEntryExpired(entry, now, days * DAY_MS) &&
-            !itemActionProblem(shown, entry.item, true, accessNow()),
+            trashEntryExpired(
+              entry,
+              now,
+              days * DAY_MS,
+              seen.get(trashSeenKey(entry.item)) ?? now,
+            ) &&
+            canRemove(entry.item) &&
+            // A folder holding entries this account cannot remove stays.
+            trashRemovalBlocked(shown, entry, canRemove) === 0,
         );
         if (!expired.length) continue;
         autoEmptied.current.set(store.id, now);
@@ -435,8 +519,18 @@ export function useTrashActions({
     return () => document.removeEventListener('keydown', onKeyDown);
   }, []);
 
+  const settled = useCallback(async (): Promise<void> => {
+    await emptying.current;
+  }, []);
+
   return useMemo(
-    () => ({ moveToTrash, restore, restoreTo }),
-    [moveToTrash, restore, restoreTo],
+    () => ({
+      moveToTrash,
+      restore,
+      restoreTo: (item: Item, destination: string) =>
+        restoreTo(item, destination),
+      settled,
+    }),
+    [moveToTrash, restore, restoreTo, settled],
   );
 }

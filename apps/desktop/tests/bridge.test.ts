@@ -289,6 +289,19 @@ test('decodeCatalog reads a small file shape as login or other', () => {
   for (const shape of ['text', 'Login', 'passkey'])
     assert.equal(withShape(shape).items[0]?.shape, 'other');
   for (const shape of [null, 1]) assert.throws(() => withShape(shape), /shape/);
+  const folder = decodeCatalog({
+    ...catalog,
+    items: [{ ...catalog.items[0], kind: 'Folder', unreadableEntries: 2 }],
+  }).items[0];
+  assert.equal(folder?.unreadableEntries, 2);
+  assert.throws(
+    () =>
+      decodeCatalog({
+        ...catalog,
+        items: [{ ...catalog.items[0], unreadableEntries: -1 }],
+      }),
+    /unreadableEntries/,
+  );
 });
 
 test('copyItemField sends the exact version and the field to the host', async () => {
