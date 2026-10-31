@@ -1683,9 +1683,10 @@ pub(crate) fn client_chat_multi_team_refresh_budget() {
     );
 }
 
-/// Any channel writer can store ciphertext the server cannot check. One such
-/// row must not stop other members from paging across it, previewing the
-/// channel or sending after it.
+/// Any channel writer can store ciphertext the server cannot check, and a Go
+/// v0.1.9 host stores its predecessor pointer unchecked. One such row must not
+/// stop other members from paging across it, previewing the channel or
+/// sending after it.
 #[test]
 pub(crate) fn client_chat_continues_past_unverifiable_member_messages() {
     use foks_client::{ChatContent, ChatSession, EncryptedFileMutationStore};
@@ -1929,8 +1930,8 @@ pub(crate) fn client_chat_continues_past_unverifiable_member_messages() {
         .inbox;
     assert!(inbox.blocked_channels.is_empty());
 
-    // A Go v0.1.9 host stores an all-zero author ID unchecked; the Rust server
-    // refuses one, so the transport presents the next row that way. No valid
+    // A Go v0.1.9 host checks an author's ID only for uniqueness, so it can
+    // store one all-zero ID; the Rust server refuses one, so the transport presents the next row that way. No valid
     // pointer names that row, so a send chains to the row before it.
     struct ZeroId<'a> {
         connection: &'a mut RealtimeConnection,
@@ -2089,6 +2090,179 @@ pub(crate) fn client_chat_continues_past_unverifiable_member_messages() {
         ]
     );
     assert_eq!(recent.messages[0].message.metadata.previous_sequence, 13);
+
+    // A Go v0.1.9 host stores the author's predecessor pointer without
+    // checking it against its mapping, so a member can seal authentic text
+    // whose pointer names the wrong ID. The Rust server refuses that send, so
+    // the member sends a valid row and the transport presents the row as the
+    // Go host would store it: same ID and sequence, the forged pointer, and
+    // ciphertext sealed over that pointer.
+    struct Contradiction<'a> {
+        connection: &'a mut RealtimeConnection,
+        forged: RtMessage,
+        /// Also present the predecessor as a row that does not open, so its
+        /// mapping is not anchored.
+        break_predecessor: bool,
+    }
+    impl ChatTransport for Contradiction<'_> {
+        fn request(&mut self, request: &Request) -> foks_client::Result<Response> {
+            let mut response = self.connection.call(request)?;
+            let forged = &self.forged;
+            let predecessor = forged.metadata.previous_sequence;
+            let break_predecessor = self.break_predecessor;
+            let reshape = |m: &mut RtMessage| {
+                if m.sequence == forged.sequence {
+                    *m = forged.clone();
+                } else if break_predecessor && m.sequence == predecessor {
+                    if let RtMessageWrapper::Encrypted(b) = &mut m.wrapper {
+                        b.key.generation += 100;
+                    }
+                }
+            };
+            match &mut response {
+                Response::Messages(page) => page.messages.iter_mut().for_each(reshape),
+                Response::Thread(page) => {
+                    for range in &mut page.ranges {
+                        range.messages.iter_mut().for_each(reshape);
+                    }
+                    page.sequences.iter_mut().for_each(reshape);
+                }
+                _ => {}
+            }
+            Ok(response)
+        }
+    }
+    let mut owner_rpc = owner_chat.connection().unwrap();
+    send(
+        &mut owner_chat,
+        &mut owner_rpc,
+        &mut protected,
+        channel,
+        "anchored",
+    );
+    // The owner anchors its message before the forged row exists.
+    let anchored = owner_chat
+        .read_recent(&mut owner_rpc, channel, 1)
+        .unwrap()
+        .messages
+        .remove(0)
+        .message;
+    let mut member_rpc = member_chat.connection().unwrap();
+    let metadata = RtMessageMetadata {
+        id: RtMessageId([0xc4; 16]),
+        previous_id: anchored.metadata.id,
+        previous_sequence: anchored.sequence,
+        send_time: 1700000000000,
+        kind: RtMessageType::Basic,
+        further_user_attribution: None,
+    };
+    let sender = FqParty::new(
+        member.credential.uid.clone(),
+        fixture.host().host_id().clone(),
+    )
+    .unwrap();
+    let noncer = |metadata: RtMessageMetadata| RtMessageNoncer {
+        metadata,
+        sender: Some(sender.clone()),
+        app: RtAppId::Chat,
+        team: FqParty::new(created.team.clone(), fixture.host().host_id().clone()).unwrap(),
+        channel,
+    };
+    member_rpc
+        .call(&Request::Send(RtSendArgument {
+            send: RtSend {
+                metadata: metadata.clone(),
+                channel: channel.short(),
+                wrapper: RtMessageWrapper::Encrypted(RtMessageBox {
+                    key,
+                    ciphertext: sealer
+                        .seal_basic_message(&noncer(metadata.clone()), b"contradicts")
+                        .unwrap(),
+                }),
+                expected_previous_sequence: 0,
+            },
+        }))
+        .unwrap();
+    let Response::Messages(head) = member_rpc
+        .call(&Request::Recents(RtRecentsArgument {
+            channel,
+            limit: 1,
+            stop_at: 0,
+        }))
+        .unwrap()
+    else {
+        panic!()
+    };
+    let mut forged = head.messages[0].clone();
+    assert_eq!(forged.metadata.id, metadata.id);
+    forged.metadata.previous_id = RtMessageId([0xee; 16]);
+    forged.wrapper = RtMessageWrapper::Encrypted(RtMessageBox {
+        key,
+        ciphertext: sealer
+            .seal_basic_message(&noncer(forged.metadata.clone()), b"contradicts")
+            .unwrap(),
+    });
+    let contradiction = "unverifiable: predecessor pointer contradicts an anchored message";
+
+    // While the predecessor does not open, its mapping is not anchored, and
+    // the contradiction could be a substituted predecessor: the page fails.
+    let mut unanchored = Contradiction {
+        connection: &mut member_rpc,
+        forged: forged.clone(),
+        break_predecessor: true,
+    };
+    assert!(matches!(
+        member_chat.read_recent(&mut unanchored, channel, 2),
+        Err(foks_client::Error::ChatChannelIntegrity(_))
+    ));
+
+    // The member has not read the predecessor. A send fetches it as the
+    // latest row's predecessor, authenticates it, and chains past the forged
+    // row.
+    let mut contradicted = Contradiction {
+        connection: &mut member_rpc,
+        forged: forged.clone(),
+        break_predecessor: false,
+    };
+    let op = member_chat
+        .prepare_send(
+            &mut contradicted,
+            &mut member_protected,
+            channel,
+            "after contradiction",
+        )
+        .unwrap();
+    member_chat
+        .attempt_operation(&mut contradicted, &mut member_protected, &op.id)
+        .unwrap();
+
+    // The owner, which anchored the predecessor before, pages across the
+    // forged row and keeps its channel in the inbox.
+    let mut owner_rpc = owner_chat.connection().unwrap();
+    let mut contradicted = Contradiction {
+        connection: &mut owner_rpc,
+        forged,
+        break_predecessor: false,
+    };
+    let recent = owner_chat
+        .read_recent(&mut contradicted, channel, 3)
+        .unwrap();
+    assert!(recent.missing_predecessors.is_empty());
+    let verdicts: Vec<_> = recent
+        .messages
+        .iter()
+        .map(|row| match &row.content {
+            ChatContent::Text(text) => text.as_str().to_owned(),
+            ChatContent::Unverifiable { reason } => format!("unverifiable: {reason}"),
+            ChatContent::Unsupported(_) => "unsupported".to_owned(),
+        })
+        .collect();
+    assert_eq!(verdicts, ["after contradiction", contradiction, "anchored"]);
+    let inbox = owner_chat
+        .sync_inbox(&mut contradicted, &mut soft)
+        .unwrap()
+        .inbox;
+    assert!(inbox.blocked_channels.is_empty());
 }
 
 #[test]

@@ -226,6 +226,26 @@ Required resolution:
 - Offer the upload-clock status and the preview-then-confirm repair in the
   desktop app, as for the adapter clock.
 
+## Go-host chat pointer contradictions against unanchored predecessors
+
+**Priority: low.** A Go v0.1.9 host stores a message's predecessor pointer
+without checking it against its `(sequence, ID)` mapping. The client gives a
+text message whose pointer contradicts an anchored predecessor an unverifiable
+verdict (`crates/foks-client/src/realtime/history.rs`, `verify_page`), but when
+the predecessor does not authenticate (it does not decrypt, or is of a kind the
+client does not open) the contradiction cannot be told from a server that
+substituted the predecessor, and the page fails. A member of a channel on a Go
+host can therefore still stop that channel, for every reader whose ledger does
+not settle the mapping, by sending text whose pointer contradicts an
+unverifiable or unsupported row; if that text is the latest row, sends fail too.
+
+Required resolution:
+
+- Decide whether a contradiction against an unauthenticated predecessor may be
+  downgraded once the predecessor's mapping is corroborated by other evidence
+  (for example an authenticated successor that names it), or document the
+  residual risk for Go-hosted channels.
+
 ## Restricted-list qualification listener ends on any accept error
 
 **Priority: low.** The native personal-list qualification listener
