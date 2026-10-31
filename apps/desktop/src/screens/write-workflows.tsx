@@ -32,6 +32,7 @@ import {
   leaseLapsed,
   loginField,
   parseTrashName,
+  trashRemovalProblem,
   loginFieldOf,
   loginLines,
   nameOf,
@@ -1181,6 +1182,7 @@ export function WriteOverlay({
   onDeleted,
   onOpenExisting,
   onRestoreTrash,
+  onBeforeRemoval = () => Promise.resolve(),
   accessNow = () => Date.now() / 1000,
 }: {
   snapshot: AgentSnapshot;
@@ -1213,8 +1215,19 @@ export function WriteOverlay({
   onOpenExisting: (
     workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'exists' }>,
   ) => Promise<void>;
-  /** Moves a Trash entry to `destination`, outside Trash. */
-  onRestoreTrash: (item: Item, destination: string) => Promise<void>;
+  /**
+   * Moves a Trash entry to `destination`, outside Trash, and says whether it
+   * was restored or another sheet took over.
+   */
+  onRestoreTrash: (
+    item: Item,
+    destination: string,
+  ) => Promise<'restored' | 'sheet' | 'failed'>;
+  /**
+   * Resolves when a permanent deletion may start: once automatic Trash
+   * emptying, if it is running, has finished.
+   */
+  onBeforeRemoval?: () => Promise<void>;
   accessNow?: () => number;
 }): ReactNode {
   if (!workflow) return null;
@@ -1301,11 +1314,13 @@ export function WriteOverlay({
         setWorkflow={setWorkflow}
         onApplied={onApplied}
         onMutationError={onMutationError}
+        onBeforeRemoval={onBeforeRemoval}
         accessNow={accessNow}
       />
     );
   return (
     <DeleteSheet
+      onBeforeRemoval={onBeforeRemoval}
       snapshot={snapshot}
       accessNow={accessNow}
       workflow={workflow}
@@ -1447,6 +1462,7 @@ function DeleteSheet({
   onMutationError,
   onDeleteConflict,
   onDeleted,
+  onBeforeRemoval,
 }: {
   snapshot: AgentSnapshot;
   accessNow: () => number;
@@ -1457,13 +1473,23 @@ function DeleteSheet({
   onMutationError: MutationFailureHandler;
   onDeleteConflict: (item: Item) => Promise<void>;
   onDeleted?: (item: Item) => void;
+  onBeforeRemoval: () => Promise<void>;
 }): ReactNode {
   const [deleting, setDeleting] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const [failureMessage, setFailureMessage] = useState<string | null>(null);
   const [, recheckAccess] = useState(0);
   const accessDescriptionId = useId();
-  const problem = itemActionProblem(snapshot, workflow.item, true, accessNow());
+  const removalProblem = (): string | undefined =>
+    itemActionProblem(snapshot, workflow.item, true, accessNow()) ??
+    // A folder in Trash goes with everything in it, so each entry under it
+    // must be one this account could remove; the host refuses it otherwise.
+    trashRemovalProblem(
+      snapshot,
+      workflow.item,
+      (item) => !itemActionProblem(snapshot, item, true, accessNow()),
+    );
+  const problem = removalProblem();
   useSheetGuard(
     deleting
       ? { verdict: 'refuse', reason: 'Wait for the deletion to finish.' }
@@ -1472,7 +1498,7 @@ function DeleteSheet({
   );
   const confirm = () => {
     if (deleting || uncertain) return;
-    if (itemActionProblem(snapshot, workflow.item, true, accessNow())) {
+    if (removalProblem()) {
       recheckAccess((revision) => revision + 1);
       return;
     }
@@ -1480,6 +1506,8 @@ function DeleteSheet({
     setFailureMessage(null);
     void (async () => {
       try {
+        // Automatic emptying holds the host's mutation permit while it runs.
+        await onBeforeRemoval();
         await bridge.removeItem({
           direntId: workflow.item.direntId,
           storeId: workflow.item.store,

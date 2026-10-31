@@ -556,6 +556,10 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
           ...(item.kind === 'Secret'
             ? { shape: shapeOf(contents.get(itemKey(item)) ?? '') }
             : {}),
+          // The mock's account can read everything it lists.
+          ...(item.kind === 'Folder'
+            ? { unreadableEntries: item.unreadableEntries ?? 0 }
+            : {}),
         })),
       failures: [],
       blockedProfiles: [],

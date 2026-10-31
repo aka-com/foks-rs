@@ -290,7 +290,7 @@ test('an already-open Delete sheet disables its action when access is lost and r
           onDiscardConflict: () => {},
           onDeleteConflict: async () => {},
           onOpenExisting: async () => {},
-          onRestoreTrash: async () => {},
+          onRestoreTrash: async () => 'restored' as const,
         }),
       }),
     });

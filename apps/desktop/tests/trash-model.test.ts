@@ -13,9 +13,15 @@ import {
   trashEntries,
   trashEntryExpired,
   trashEntryLabel,
+  trashRemovalBlocked,
+  trashRemovalProblem,
   trashStamp,
   trashUnavailable,
 } from '../src/model';
+import {
+  rememberTrashEntriesSeen,
+  trashSeenKey,
+} from '../src/trash-auto-empty';
 import type { AgentSnapshot, Item } from '../src/model';
 
 const STAMP = '20231114T221320';
@@ -194,5 +200,129 @@ test('origin files, expiry and an unavailable team Trash are read conservatively
       'team:eng',
     ),
     false,
+  );
+});
+
+test('automatic emptying trusts neither a future stamp nor a stamp older than this device saw', () => {
+  const [entry] = trashEntries(
+    { ...FIXTURE, items: [item(`/.trash/owner/${STAMP}~%2Fa`)] },
+    'acct:personal',
+  );
+  const day = 24 * 60 * 60 * 1000;
+  // Stamped by a device whose clock runs ahead: never expired here.
+  assert.equal(trashEntryExpired(entry, AT - 1, 0), false);
+  // Seen here only a day ago, so the age counts from then, not the stamp.
+  assert.equal(
+    trashEntryExpired(entry, AT + 60 * day, 30 * day, AT + 59 * day),
+    false,
+  );
+  assert.equal(
+    trashEntryExpired(entry, AT + 60 * day, 30 * day, AT + 30 * day),
+    true,
+  );
+  // A stamp later than the first sighting counts from the stamp.
+  assert.equal(
+    trashEntryExpired(entry, AT + 29 * day, 30 * day, AT - day),
+    false,
+  );
+});
+
+test('the first sighting of each Trash entry is kept, and dropped once it leaves Trash', (t) => {
+  const store = new Map<string, string>();
+  const window = {
+    localStorage: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    },
+  };
+  Object.assign(globalThis, { window });
+  t.after(() => {
+    delete (globalThis as { window?: unknown }).window;
+  });
+  const a = trashSeenKey({
+    store: 's',
+    path: '/.trash/owner/a',
+    direntId: '1',
+  });
+  const b = trashSeenKey({
+    store: 's',
+    path: '/.trash/owner/b',
+    direntId: '2',
+  });
+  assert.deepEqual([...rememberTrashEntriesSeen([a], 1_000)], [[a, 1_000]]);
+  assert.deepEqual(
+    [...rememberTrashEntriesSeen([a, b], 5_000)],
+    [
+      [a, 1_000],
+      [b, 5_000],
+    ],
+  );
+  // a left Trash: its record goes, and a later entry at that path with the
+  // same dirent starts over.
+  rememberTrashEntriesSeen([b], 6_000);
+  assert.deepEqual(
+    [...rememberTrashEntriesSeen([a, b], 9_000)],
+    [
+      [a, 9_000],
+      [b, 5_000],
+    ],
+  );
+  // A clock set back never records a sighting later than now.
+  assert.equal(rememberTrashEntriesSeen([b], 4_000).get(b), 4_000);
+  // Unreadable storage counts every entry as first seen now.
+  store.set('trashAutoEmptySeen', '{');
+  assert.equal(rememberTrashEntriesSeen([a], 7_000).get(a), 7_000);
+});
+
+test('a folder in Trash can be removed only with everything under it', () => {
+  const folder = `/.trash/owner/${STAMP}~%2Fops`;
+  const items = [
+    { ...item(folder, 'Folder'), unreadableEntries: 0 },
+    item(`${folder}/notes`),
+    { ...item(`${folder}/root-key`), write: 'Owner' as const },
+    { ...item(`${folder}/sub`, 'Folder'), unreadableEntries: 0 },
+  ];
+  const snapshot: AgentSnapshot = { ...FIXTURE, items };
+  const [entry] = trashEntries(snapshot, 'acct:personal');
+  const all = () => true;
+  assert.equal(trashRemovalBlocked(snapshot, entry, all), 0);
+  assert.equal(trashRemovalProblem(snapshot, entry, all), undefined);
+  // An entry under it this account cannot change.
+  const notOwner = (candidate: Item) => !candidate.path.endsWith('/root-key');
+  assert.equal(trashRemovalBlocked(snapshot, entry, notOwner), 1);
+  assert.match(
+    trashRemovalProblem(snapshot, entry, notOwner) ?? '',
+    /holds 1 entry you cannot remove/,
+  );
+  // Entries the listing could not show, in the folder or below it.
+  const hiding: AgentSnapshot = {
+    ...snapshot,
+    items: items.map((candidate) =>
+      candidate.path.endsWith('/sub')
+        ? { ...candidate, unreadableEntries: 2 }
+        : candidate,
+    ),
+  };
+  assert.equal(trashRemovalBlocked(hiding, entry, all), 2);
+  // An agent that does not say leaves it unknown.
+  const unknown: AgentSnapshot = {
+    ...snapshot,
+    items: items.map((candidate) =>
+      candidate.path === folder
+        ? { ...candidate, unreadableEntries: undefined }
+        : candidate,
+    ),
+  };
+  assert.equal(trashRemovalBlocked(unknown, entry, all), null);
+  assert.match(trashRemovalProblem(unknown, entry, all) ?? '', /Refresh/);
+  // A file reaches only itself.
+  assert.equal(
+    trashRemovalBlocked(
+      snapshot,
+      item(`/.trash/owner/${STAMP}~%2Fa`),
+      () => false,
+    ),
+    0,
   );
 });
