@@ -84,7 +84,22 @@ impl Default for ChunkCapacityConfig {
     }
 }
 impl ChunkCapacityConfig {
+    /// Checks the table and returns the default database limits with its
+    /// values applied.
     pub fn database_config(&self) -> Result<foks_server_db::Config> {
+        self.database_config_from(foks_server_db::Config::default())
+    }
+
+    /// Checks the table and returns `database` with its values applied.
+    pub fn database_config_from(
+        &self,
+        database: foks_server_db::Config,
+    ) -> Result<foks_server_db::Config> {
+        self.validate()?;
+        Ok(self.apply(database))
+    }
+
+    pub(crate) fn validate(&self) -> Result<()> {
         if [
             self.maximum_bytes,
             self.maximum_objects,
@@ -96,12 +111,17 @@ impl ChunkCapacityConfig {
         {
             return Err(crate::Error::Config("invalid physical chunk capacity"));
         }
-        Ok(foks_server_db::Config {
+        Ok(())
+    }
+
+    /// Applies the table to `database` without checking it.
+    pub(crate) fn apply(&self, database: foks_server_db::Config) -> foks_server_db::Config {
+        foks_server_db::Config {
             maximum_chunk_physical_bytes: self.maximum_bytes,
             maximum_chunk_objects: self.maximum_objects,
             maximum_chunk_unresolved_attempts: self.maximum_unresolved_attempts,
             maximum_chunk_uncertain_bytes: self.maximum_uncertain_bytes,
-            ..Default::default()
-        })
+            ..database
+        }
     }
 }

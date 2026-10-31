@@ -12,15 +12,16 @@ const RPC_LISTENERS: u64 = 3;
 /// SQLite keeps the database file and its WAL open for each connection. The
 /// shared-memory index is counted per connection as an upper bound.
 const DESCRIPTORS_PER_DATABASE_CONNECTION: u64 = 3;
-/// SQLite connections outside the read pool: the writer, and the source and
+/// SQLite connections outside the read pool: the writer, the `/metrics` OIDC
+/// sample reader kept open when OIDC is configured, and the source and
 /// destination of one online backup.
-const OTHER_DATABASE_CONNECTIONS: u64 = 3;
+const OTHER_DATABASE_CONNECTIONS: u64 = 4;
 /// The management, administration and OIDC listeners, each admitting at most
 /// 32 concurrent connections.
 const HTTP_DESCRIPTORS: u64 = 3 * (1 + 32);
 /// Standard streams, lock and key files, runtime event descriptors, and
-/// short-lived descriptors such as backup copies, the database reads of
-/// `/metrics` scrapes and outbound OIDC provider requests.
+/// short-lived descriptors such as backup copies and outbound OIDC provider
+/// requests.
 const BASE_DESCRIPTORS: u64 = 128;
 
 /// An estimate of the descriptors the standalone server holds when every
@@ -92,7 +93,7 @@ mod tests {
         let limits = SessionLimits::default();
         assert_eq!(
             descriptor_budget(&limits),
-            3 * (256 + 32 + 1) + 3 * (32 + 3) + 3 * 33 + 128
+            3 * (256 + 32 + 1) + 3 * (32 + 4) + 3 * 33 + 128
         );
         assert!(descriptor_budget(&limits) > 1024);
         let smaller = SessionLimits {
@@ -103,7 +104,7 @@ mod tests {
         };
         assert_eq!(
             descriptor_budget(&smaller),
-            3 * (16 + 4 + 1) + 3 * (4 + 3) + 3 * 33 + 128
+            3 * (16 + 4 + 1) + 3 * (4 + 4) + 3 * 33 + 128
         );
     }
 

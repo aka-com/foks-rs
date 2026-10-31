@@ -24,7 +24,8 @@ pub struct ReadDatabase {
 
 /// Opens additional readers for one already validated database and configuration.
 ///
-/// Construction validates legacy capacity invariants once. Subsequent opens
+/// [`ReadDatabaseOpener::new`] validates legacy capacity invariants once;
+/// [`Database::read_opener`] reuses the writer's validation. Subsequent opens
 /// check file identity and schema, while the writer enforces capacity on every
 /// mutation. The database must not be modified by out-of-band SQL while this
 /// opener is in use; a different configuration requires a new opener.
@@ -238,6 +239,26 @@ impl Database {
         })
     }
 
+    /// Returns a reader opener for `path` and `config` without a KV capacity
+    /// scan, or `None` when this writer's open does not cover one. Every
+    /// writer constructor ran the scan against this database's configuration,
+    /// and the writer enforces the same limits on each mutation, so the scan
+    /// is redundant when `path` names this database's file and the KV limits
+    /// in `config` are at least this database's. On `None` the caller uses
+    /// [`ReadDatabaseOpener::new`], which runs the scan.
+    pub fn read_opener(&self, path: &Path, config: &Config) -> Result<Option<ReadDatabaseOpener>> {
+        let identity = DatabasePathIdentity::existing(path)?;
+        if identity != DatabasePathIdentity::existing(&self.path)?
+            || !crate::kv::kv_tree_capacity_covers(&self.config, config)
+        {
+            return Ok(None);
+        }
+        Ok(Some(ReadDatabaseOpener {
+            identity,
+            config: config.clone(),
+        }))
+    }
+
     pub fn open_reader(&self) -> Result<Connection> {
         let identity = DatabasePathIdentity::existing(&self.path)?;
         let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
@@ -275,6 +296,14 @@ impl Database {
 }
 
 impl ReadDatabase {
+    /// Opens a reader after checking the application ID, the schema version,
+    /// the schema contract and that every stored KV tree fits `config`. The KV
+    /// check reads every row of the KV head, node and dirent tables, so its
+    /// cost grows with the stored data. Offline tools and backup and restore
+    /// verification use this constructor; a running server opens its pooled
+    /// and metrics readers through [`ReadDatabaseOpener`], which runs the KV
+    /// check once, or not at all when [`Database::read_opener`] shows that the
+    /// writer's open already covered it.
     pub fn open(path: impl AsRef<Path>, config: Config) -> Result<Self> {
         let identity = DatabasePathIdentity::existing(path.as_ref())?;
         let database = Self::open_identity(&identity, config)?;
@@ -460,6 +489,13 @@ fn configure(connection: &Connection, config: &Config) -> Result<()> {
     {
         return Err(crate::Error::Invalid(
             "KV capacity exceeds the client synchronization limits",
+        ));
+    }
+    // Realtime mutations refuse a roster with more rows than the fanout
+    // bound, so a larger team could not create channels or send messages.
+    if config.maximum_team_members > crate::RealtimeLimits::FANOUT_MEMBERS {
+        return Err(crate::Error::Invalid(
+            "team member limit exceeds the realtime fanout limit",
         ));
     }
     let reuse_limit =

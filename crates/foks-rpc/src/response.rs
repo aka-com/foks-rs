@@ -67,7 +67,9 @@ pub enum RpcStatus {
 }
 
 impl RpcStatus {
-    fn code(&self) -> u64 {
+    /// Returns the v0.1.9 status code that this status places on the wire.
+    /// `OAuth2Auth` reports its own code, not the code of the wrapped status.
+    pub fn code(&self) -> u64 {
         match self {
             Self::OAuth2(_) => STATUS_OAUTH2_ERROR,
             Self::OAuth2Auth(_) => STATUS_OAUTH2_AUTH_ERROR,
