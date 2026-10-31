@@ -2931,6 +2931,10 @@ fn remote_status_response(id: u64, status: u64, reason: String) -> Option<Respon
             ErrorCode::OperationFailed,
             "The server refused permission for this action.",
         ),
+        foks_rpc::STATUS_AUTH_ERROR => (
+            ErrorCode::OperationFailed,
+            "The server does not accept this device's credential. The device may have been revoked.",
+        ),
         foks_rpc::STATUS_EXPIRED_ERROR => (
             ErrorCode::OperationFailed,
             "This request expired. Start it again.",
@@ -7316,6 +7320,11 @@ mod tests {
                 ErrorCode::QuotaExceeded,
                 "capacity limit",
             ),
+            (
+                foks_rpc::STATUS_AUTH_ERROR,
+                ErrorCode::OperationFailed,
+                "may have been revoked",
+            ),
         ] {
             let response = remote_status_response(8, status, format!("remote status {status}"))
                 .expect("known status maps");
@@ -7332,6 +7341,29 @@ mod tests {
             assert_eq!(fields.reason, Some(format!("remote status {status}")));
         }
         assert!(remote_status_response(8, 9999, "unknown".to_owned()).is_none());
+    }
+
+    /// A chat action, or the chat inbox poll, that the server refuses with
+    /// AUTH_ERROR reaches the generic status mapping: `chat::contextual_error`
+    /// classifies only PERMISSION_ERROR as a chat access denial, and a go-foks
+    /// host also answers its own storage faults with AUTH_ERROR.
+    #[test]
+    fn a_chat_action_refused_for_the_device_credential_reports_possible_revocation() {
+        let refused = || -> Box<dyn std::error::Error> {
+            Box::new(foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
+                code: foks_rpc::STATUS_AUTH_ERROR,
+                detail: foks_rpc::StatusDetail::default(),
+            }))
+        };
+        for error in [chat::contextual_error(refused()), refused()] {
+            let response = dispatch_error_response(8, error.as_ref());
+            let foks_agent_proto::ResponseResult::Error { code, message, .. } = response.result
+            else {
+                panic!("AUTH_ERROR returned success");
+            };
+            assert_eq!(code, ErrorCode::OperationFailed);
+            assert!(message.contains("may have been revoked"), "{message}");
+        }
     }
 
     #[test]
