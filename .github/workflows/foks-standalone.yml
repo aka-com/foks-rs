@@ -52,7 +52,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-15]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    timeout-minutes: 100
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -83,9 +83,10 @@ jobs:
         run: cargo test --locked -p foks-keystore --test native_credential_store -- --ignored
       - name: Test the Linux client graph and Secret Service integration
         if: runner.os == 'Linux'
-        # check.sh took 33-49 min of the whole job in observed runs; a hung
-        # native test fails the step instead of holding the runner.
-        timeout-minutes: 60
+        # With the native portability tests this step took 49 min on a warm
+        # cache; a hung native test fails the step instead of holding the
+        # runner.
+        timeout-minutes: 75
         shell: bash
         run: |
           dbus-run-session -- bash -euo pipefail -c '
