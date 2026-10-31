@@ -7,8 +7,9 @@ pub async fn read_frame_ingress<R: AsyncRead + Unpin>(
     maximum: usize,
     budget: std::time::Duration,
 ) -> foks_rpc::Result<(usize, crate::deadline::Deadline)> {
-    // Idle time is not request work. Once the first byte arrives, all remaining
-    // framing, dispatch and ordinary response work consume this same deadline.
+    // Idle time is not request work. Once the first byte arrives, the rest of
+    // the frame and its dispatch consume this deadline; the FOKS server gives
+    // the response write its own allowance.
     let marker = read_byte_async(reader).await?;
     let deadline = crate::deadline::Deadline::after(budget)
         .map_err(|error| foks_rpc::Error::Io(std::io::Error::other(error)))?;
