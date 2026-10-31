@@ -48,7 +48,10 @@ cargo test --offline --locked -p foks-server --features celld-proof \
     --lib --test restricted_list_allocation
 
 # The hosted metadata kernel runs as a wasm32 cdylib; build it as celld loads
-# it, without and with its qualification features.
+# it, without and with its qualification features. The target is added here,
+# not in rust-toolchain.toml, so that jobs that never build it do not
+# download it; the command does nothing when the target is installed.
+rustup target add wasm32-unknown-unknown
 cargo build --offline --locked --target wasm32-unknown-unknown -p foks-metadata-core
 cargo build --offline --locked --target wasm32-unknown-unknown -p foks-metadata-core \
     --features read-token-qualification,list-allocation-qualification
