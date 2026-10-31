@@ -8,6 +8,8 @@ pub struct KexMetricsSnapshot {
     pub delivered: u64,
     pub timed_out: u64,
     pub disconnected: u64,
+    /// Receives the client cancelled with a CANCEL control message.
+    pub cancelled: u64,
     pub shutdown: u64,
     pub failed: u64,
 }
@@ -17,6 +19,7 @@ pub(crate) enum Completion {
     Delivered,
     TimedOut,
     Disconnected,
+    Cancelled,
     Shutdown,
     Failed,
 }
@@ -86,6 +89,7 @@ impl Drop for Poll {
             Completion::Delivered => value.delivered += 1,
             Completion::TimedOut => value.timed_out += 1,
             Completion::Disconnected => value.disconnected += 1,
+            Completion::Cancelled => value.cancelled += 1,
             Completion::Shutdown => value.shutdown += 1,
             Completion::Failed => value.failed += 1,
         }
@@ -104,6 +108,7 @@ mod tests {
             Some(Completion::Delivered),
             Some(Completion::TimedOut),
             Some(Completion::Disconnected),
+            Some(Completion::Cancelled),
             Some(Completion::Shutdown),
             None,
         ] {
@@ -121,16 +126,17 @@ mod tests {
             assert_eq!(permits.available_permits(), 1);
         }
         let observed = metrics.snapshot().kex;
-        assert_eq!(observed.admitted, 5);
+        assert_eq!(observed.admitted, 6);
         assert_eq!(
             (
                 observed.delivered,
                 observed.timed_out,
                 observed.disconnected,
+                observed.cancelled,
                 observed.shutdown,
                 observed.failed
             ),
-            (1, 1, 1, 1, 1)
+            (1, 1, 1, 1, 1, 1)
         );
     }
 }

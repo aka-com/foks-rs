@@ -635,7 +635,12 @@ pub enum TestProfile {
     StorageShutdown,
     RateLimited,
     BackupAutomation,
+    /// Ends each connection after `FEW_REQUESTS_PER_CONNECTION` frames.
+    FewRequests,
 }
+
+/// Frame budget of one connection under `TestProfile::FewRequests`.
+pub const FEW_REQUESTS_PER_CONNECTION: usize = 3;
 
 /// Request execution timeout of `TestProfile::ShortRequestTimeout`.
 pub const SHORT_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
@@ -690,7 +695,8 @@ impl TestProfile {
             | Self::RealtimeSingleReader
             | Self::StorageShutdown
             | Self::RateLimited
-            | Self::BackupAutomation => foks_server_db::Config::default(),
+            | Self::BackupAutomation
+            | Self::FewRequests => foks_server_db::Config::default(),
         };
         let limits = foks_server::SessionLimits {
             maximum_read_connections: if matches!(self, Self::RealtimeSingleReader) {
@@ -743,6 +749,11 @@ impl TestProfile {
                 std::time::Duration::from_secs(2)
             } else {
                 foks_server::SessionLimits::default().request_timeout
+            },
+            maximum_requests: if matches!(self, Self::FewRequests) {
+                FEW_REQUESTS_PER_CONNECTION
+            } else {
+                foks_server::SessionLimits::default().maximum_requests
             },
             ..foks_server::SessionLimits::default()
         };

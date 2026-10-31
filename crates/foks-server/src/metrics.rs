@@ -39,10 +39,12 @@ pub enum AdmissionRejection {
     KexReceivePolls,
     /// The request's decoded working memory did not fit the shared budget.
     RequestMemory,
+    /// The connection already held its maximum pending long polls.
+    ConnectionLongPolls,
 }
 
 impl AdmissionRejection {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::ConnectionRate,
         Self::SourceConnections,
         Self::AdmissionQueue,
@@ -51,6 +53,7 @@ impl AdmissionRejection {
         Self::AccountRealtimePolls,
         Self::KexReceivePolls,
         Self::RequestMemory,
+        Self::ConnectionLongPolls,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -63,6 +66,7 @@ impl AdmissionRejection {
             Self::AccountRealtimePolls => "account_realtime_polls",
             Self::KexReceivePolls => "kex_receive_polls",
             Self::RequestMemory => "request_memory",
+            Self::ConnectionLongPolls => "connection_long_polls",
         }
     }
 }
