@@ -279,13 +279,13 @@ status 1012 at its sequence number, counted as
 connection goes on serving the peer's other calls. A long poll refused by the
 KEX receive budget is answered the same way, and so are a request refused
 because every handler permit is in use or its working memory cannot be
-admitted. A connection with a pending long poll is not idle. After 4,096
-frames (a compiled limit) a connection admits no new long poll: it answers
-one with status 1012, counted only in `foks_requests_total`, while it still
-serves ordinary calls and reads cancels and end of stream, and it ends once
-the long polls admitted before the limit have been answered.
+admitted. A connection with a pending long poll is not idle. As on a Go
+host, a connection has no limit on the number of frames it serves; it ends
+when the peer closes it, it stays idle past the idle timeout, a frame fails
+or the server stops, and long polls still pending then end without a
+response and release their permits.
 
-A session that ends in order (after that drain, on end of stream, an idle or
+A session that ends in order (on end of stream, an idle or
 frame-read timeout, or after a refusal that closes the connection, such as
 the per-source request rate) sends TLS close_notify and a TCP FIN and reads
 what the peer still sends for up to two seconds, so that its last response
@@ -529,8 +529,7 @@ sessions, drain accepted writer work, stop maintenance, and join all threads.
 One bounded writer actor owns every authoritative SQLite mutation. Network
 reads use read-only connections from bounded asynchronous sessions; the default
 limits are four async runtime workers, 256 active and 32 pending connections per
-listener, 64 request handlers shared across listeners, 4,096 requests per
-connection, 64 pending writes in the executable, a 15-second I/O timeout, a
+listener, 64 request handlers shared across listeners, 64 pending writes in the executable, a 15-second I/O timeout, a
 330-second idle timeout between requests, a 30-second request-execution
 timeout, and a 16 MiB frame ceiling. A timed-out
 handler closes its connection without claiming that a durable mutation was

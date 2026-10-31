@@ -440,47 +440,61 @@ fn calls_pipelined_behind_a_kex_receive_are_served_in_completion_order() {
     server.shutdown().unwrap();
 }
 
-/// A connection that has spent its frame budget still serves ordinary calls
-/// and answers the long polls it admitted, refuses new long polls at their
-/// sequence, and closes once no poll is pending.
+/// A connection has no frame budget, as on a Go host: past the 4,096 frames
+/// after which a connection used to stop admitting long polls, it still
+/// admits them, serves ordinary calls and answers the polls it holds.
 #[test]
-fn pending_polls_are_answered_after_the_frame_budget_is_spent() {
-    let environment = TestEnvironment::with_profile(TestProfile::FewRequests).unwrap();
+fn a_connection_keeps_admitting_long_polls_past_the_former_frame_budget() {
+    let environment = TestEnvironment::new().unwrap();
     let server = environment.start_server().unwrap();
     let probe = foks_proto::ProbeResponse::decode(&server.probe_response()).unwrap();
     let host = probe.hostchain[0].decode_change().unwrap().host;
     let (offer, waiting) = packet(0x80);
     let mut tls = connect(&server);
-    // The budget is three frames: a receive, then two ordinary calls.
     send(&mut tls, &receive_call(&waiting, 0));
     wait_metrics(&server, |m| m.active == 1);
-    // Ordinary calls are served before and after the budget is spent.
-    for sequence in 1..4 {
-        send(
-            &mut tls,
-            &foks_rpc::encode_get_current_merkle_root_request(&host, sequence).unwrap(),
-        );
-        foks_rpc::read_response(&mut tls, DEFAULT_MAX_FRAME_LENGTH, sequence).unwrap();
+    // A cancel for a sequence with no pending poll is read and ignored. Send
+    // more than 4,096 of them, paced below the per-source request rate.
+    let ignored = foks_rpc::encode_cancel_v2(
+        foks_rpc::KEX_PROTOCOL_ID,
+        foks_rpc::KEX_RECEIVE_METHOD_POSITION,
+        1_000_000,
+    )
+    .unwrap();
+    for _ in 0..5 {
+        for _ in 0..1_000 {
+            tls.write_all(&ignored).unwrap();
+        }
+        tls.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(1_100));
     }
-    // A new long poll beyond the budget is refused at its sequence while the
-    // first receive is still pending.
-    let (_, late) = packet(0x81);
-    send(&mut tls, &receive_call(&late, 4));
-    assert!(matches!(
-        foks_rpc::read_bare_response(&mut tls, DEFAULT_MAX_FRAME_LENGTH, 4),
-        Err(Error::RemoteStatus { code: 1012, .. })
-    ));
-    assert_eq!(server.metrics().kex.active, 1);
-    let mut sender = connect(&server);
     send(
-        &mut sender,
-        &foks_rpc::encode_kex_send_request(&offer).unwrap(),
+        &mut tls,
+        &foks_rpc::encode_get_current_merkle_root_request(&host, 1).unwrap(),
     );
-    foks_rpc::read_bare_void_response(&mut sender, DEFAULT_MAX_FRAME_LENGTH, 0).unwrap();
-    let response = foks_rpc::read_bare_response(&mut tls, DEFAULT_MAX_FRAME_LENGTH, 0).unwrap();
-    assert_eq!(KexWrapperMessage::decode(&response).unwrap(), offer.message);
-    assert_closed(&mut tls);
+    foks_rpc::read_response(&mut tls, DEFAULT_MAX_FRAME_LENGTH, 1).unwrap();
+    let (late_offer, late) = packet(0x81);
+    send(&mut tls, &receive_call(&late, 2));
+    wait_metrics(&server, |m| m.active == 2);
+    for (sent, sequence) in [(&offer, 0), (&late_offer, 2)] {
+        let mut sender = connect(&server);
+        send(
+            &mut sender,
+            &foks_rpc::encode_kex_send_request(sent).unwrap(),
+        );
+        foks_rpc::read_bare_void_response(&mut sender, DEFAULT_MAX_FRAME_LENGTH, 0).unwrap();
+        let response =
+            foks_rpc::read_bare_response(&mut tls, DEFAULT_MAX_FRAME_LENGTH, sequence).unwrap();
+        assert_eq!(KexWrapperMessage::decode(&response).unwrap(), sent.message);
+    }
+    // The connection is still open.
+    send(
+        &mut tls,
+        &foks_rpc::encode_get_current_merkle_root_request(&host, 3).unwrap(),
+    );
+    foks_rpc::read_response(&mut tls, DEFAULT_MAX_FRAME_LENGTH, 3).unwrap();
     let settled = wait_metrics(&server, |m| m.active == 0);
-    assert_eq!((settled.delivered, settled.disconnected), (1, 0));
+    assert_eq!((settled.delivered, settled.disconnected), (2, 0));
+    assert_eq!(server.metrics().kex.rejected, 0);
     server.shutdown().unwrap();
 }
