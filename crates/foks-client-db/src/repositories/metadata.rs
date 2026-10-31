@@ -39,8 +39,12 @@ impl HardStateStore {
     /// filesystem, so a read after a profile reset does not recreate the
     /// database with a new database id outside the profile lock. A file
     /// without the FOKS application id is rejected before anything is
-    /// written to it. A FOKS database is verified and migrated as
-    /// [`HardStateStore::open`] does.
+    /// written to it. Only these three cases are free of writes: an existing
+    /// FOKS database is configured (WAL), verified and, at an older schema
+    /// version, migrated as [`HardStateStore::open`] does. Each migration
+    /// step runs in its own IMMEDIATE transaction and rereads the version
+    /// inside it, so concurrent openers serialize on the writer lock and
+    /// migrate the database once.
     pub fn open_existing(path: &Path) -> Result<Self> {
         let missing = |error: &std::io::Error| error.kind() == ErrorKind::NotFound;
         match std::fs::symlink_metadata(path) {
