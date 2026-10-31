@@ -33,6 +33,16 @@ static FAILING: Mutex<BTreeMap<String, Failure>> = Mutex::new(BTreeMap::new());
 pub(super) const PASS_BUDGET: std::time::Duration = std::time::Duration::from_secs(1);
 /// The work one pass does once the checked session has been entered.
 const SLICE: std::time::Duration = std::time::Duration::from_millis(50);
+/// What the pass keeps after admission for the registry, credential and
+/// profile-session opens and the checked-session entry.
+const OPEN_MARGIN: std::time::Duration = std::time::Duration::from_millis(250);
+/// How long admission may wait. A pass that waited the whole PASS_BUDGET
+/// would reach the opens or the slice with its scope deadline spent and be
+/// recorded as a deadline failure; an admission that gives up first is a
+/// skipped pass, counted as skipped rather than as a failure.
+const ADMISSION_BUDGET: std::time::Duration = PASS_BUDGET
+    .saturating_sub(SLICE)
+    .saturating_sub(OPEN_MARGIN);
 /// A profile whose passes keep failing with the same error is logged at
 /// most this often.
 const ERROR_LOG_INTERVAL_MS: u64 = 10 * 60 * 1000;
@@ -344,21 +354,34 @@ fn run_profile(
     let cursor = profiles.entry(profile.to_owned()).or_default();
     credentials.try_with_checked_session(&session, |checked| {
         let master = credentials.master_key()?;
-        let deadline = std::time::Instant::now() + SLICE;
+        let deadline = slice_deadline()?;
         checked
             .maintain_adapter_state_until(cursor, &master, deadline)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
     })
 }
 
+/// The end of the maintenance slice: SLICE from now, but never past the
+/// pass's own scope deadline, so a slow open leaves a shorter slice rather
+/// than a slice that outlives the scope and fails the pass.
+fn slice_deadline() -> Result<std::time::Instant, Box<dyn std::error::Error>> {
+    let slice = match super::request_control::current() {
+        Ok(control) => SLICE.min(control.remaining()?),
+        // Only tests run a pass without a request scope.
+        Err(_) => SLICE,
+    };
+    Ok(std::time::Instant::now() + slice)
+}
+
 /// Local maintenance participates in the same FIFO as foreground requests.
-/// It waits at most the pass budget and never holds a partial profile set.
+/// It waits at most the admission budget and never holds a partial profile
+/// set.
 fn admit(state: &Path, profile: &str) -> Option<super::profile_work::Permit> {
     super::profile_work::coordinator()
         .acquire_blocking(
             state,
             super::profile_work::Scope::profile(profile),
-            PASS_BUDGET,
+            ADMISSION_BUDGET,
             &foks_client_app::CancellationToken::new(),
         )
         .ok()
@@ -373,6 +396,64 @@ mod tests {
 
     /// A foreground request that holds the profile for longer than the
     /// maintenance slice delays the pass instead of failing its admission.
+    /// Admission gives up with room left for the opens and the slice, so a
+    /// long foreground hold makes a skipped pass, not a deadline failure.
+    #[test]
+    fn admission_leaves_the_opens_and_the_slice_inside_the_pass_budget() {
+        assert!(ADMISSION_BUDGET + OPEN_MARGIN + SLICE <= PASS_BUDGET);
+        assert!(ADMISSION_BUDGET > SLICE * 4);
+        let state = tempfile::tempdir().unwrap();
+        let held = super::super::profile_work::coordinator()
+            .try_acquire(
+                state.path(),
+                super::super::profile_work::Scope::profile("p"),
+            )
+            .unwrap()
+            .unwrap();
+        let control = super::super::request_control::RequestControl::background(
+            PASS_BUDGET,
+            foks_client_app::CancellationToken::new(),
+        )
+        .unwrap();
+        let _scope = control.enter().unwrap();
+        let started = std::time::Instant::now();
+        assert!(admit(state.path(), "p").is_none());
+        let waited = started.elapsed();
+        assert!(waited >= ADMISSION_BUDGET, "{waited:?}");
+        assert!(waited < PASS_BUDGET - SLICE, "{waited:?}");
+        // The pass still has its slice once the opens are done.
+        let remaining = control.remaining().unwrap();
+        assert!(remaining > SLICE, "{remaining:?}");
+        drop(held);
+    }
+
+    /// The slice never ends after the pass's scope deadline.
+    #[test]
+    fn the_slice_ends_by_the_scope_deadline() {
+        let short = std::time::Duration::from_millis(20);
+        let control = super::super::request_control::RequestControl::background(
+            short,
+            foks_client_app::CancellationToken::new(),
+        )
+        .unwrap();
+        let _scope = control.enter().unwrap();
+        let before = std::time::Instant::now();
+        let deadline = slice_deadline().unwrap();
+        assert!(deadline <= before + short + std::time::Duration::from_millis(5));
+        assert!(deadline < before + SLICE);
+        drop(_scope);
+        let wide = super::super::request_control::RequestControl::background(
+            PASS_BUDGET,
+            foks_client_app::CancellationToken::new(),
+        )
+        .unwrap();
+        let _scope = wide.enter().unwrap();
+        let before = std::time::Instant::now();
+        let deadline = slice_deadline().unwrap();
+        assert!(deadline >= before + SLICE);
+        assert!(deadline <= std::time::Instant::now() + SLICE);
+    }
+
     #[test]
     fn admission_waits_past_the_slice_within_the_pass_budget() {
         let state = tempfile::tempdir().unwrap();
