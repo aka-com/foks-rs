@@ -656,6 +656,7 @@ mod tests {
                 read_role: KvRole::Member { visibility: 0 },
                 write_role: KvRole::Admin,
                 shape: Some(KvEntryShape::Login),
+                unreadable_entries: None,
             }],
             next_cursor: None,
         };
@@ -680,9 +681,31 @@ mod tests {
         assert_eq!(serde_json::to_value(&decoded).unwrap(), entry);
         let other = KvEntryMetadata {
             shape: Some(KvEntryShape::Other),
+            unreadable_entries: None,
             ..decoded
         };
         assert_eq!(serde_json::to_value(&other).unwrap()["shape"], "other");
+        // A shape a later agent adds is read as other rather than failing
+        // the whole catalog page.
+        let mut later = entry.clone();
+        later["shape"] = serde_json::json!("passkey");
+        assert_eq!(
+            serde_json::from_value::<KvEntryMetadata>(later)
+                .unwrap()
+                .shape,
+            Some(KvEntryShape::Other)
+        );
+        let folder = KvEntryMetadata {
+            node_type: "directory".to_owned(),
+            unreadable_entries: Some(3),
+            ..other
+        };
+        let encoded = serde_json::to_value(&folder).unwrap();
+        assert_eq!(encoded["unreadable_entries"], 3);
+        assert_eq!(
+            serde_json::from_value::<KvEntryMetadata>(encoded).unwrap(),
+            folder
+        );
     }
 
     #[test]

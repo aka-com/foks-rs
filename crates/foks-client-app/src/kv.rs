@@ -1629,6 +1629,12 @@ pub struct KvCatalogEntry {
     /// opened and discarded its plaintext. `None` for other node types.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shape: Option<KvEntryShape>,
+    /// For a directory, how many entries directly in it this account cannot
+    /// read. They are not listed, so a recursive removal of the directory
+    /// would reach entries the catalog does not show. `None` for other node
+    /// types.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unreadable_entries: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -2191,6 +2197,7 @@ fn flatten_catalog_tree(tree: &[KvDirectoryProjection]) -> Result<Vec<KvCatalogE
             let path = format!("{parent_path}/{name}");
             let node_id = KvNodeId(entry.node_id);
             let node_type = node_id.node_type()?;
+            let mut unreadable_entries = None;
             let read_role = match node_type {
                 KvNodeType::Directory => {
                     let child = tree
@@ -2199,6 +2206,8 @@ fn flatten_catalog_tree(tree: &[KvDirectoryProjection]) -> Result<Vec<KvCatalogE
                         .ok_or(Error::InvalidKvPath(
                             "KV projection omits a reachable directory",
                         ))?;
+                    let hidden = child.entries.iter().filter(|entry| !entry.readable).count();
+                    unreadable_entries = Some(u32::try_from(hidden).unwrap_or(u32::MAX));
                     foks_proto::KvDirectoryPair::decode(&child.directory_bytes)?
                         .active
                         .key
@@ -2224,6 +2233,7 @@ fn flatten_catalog_tree(tree: &[KvDirectoryProjection]) -> Result<Vec<KvCatalogE
                     KvSmallFileShape::Login => KvEntryShape::Login,
                     KvSmallFileShape::Other => KvEntryShape::Other,
                 }),
+                unreadable_entries,
             });
             if node_type == KvNodeType::Directory {
                 pending.push_back((node_id.object_id(), path));
@@ -2320,6 +2330,59 @@ mod tests {
         let mut malformed = tree.clone();
         malformed[0].entries[0].readable = true;
         assert!(flatten_catalog_tree(&malformed).is_err());
+    }
+
+    #[test]
+    fn a_directory_reports_how_many_of_its_entries_this_account_cannot_read() {
+        let directory = [9; 16];
+        let mut folder = projected_entry(b"docs");
+        folder.node_id = [[1u8].as_slice(), directory.as_slice()]
+            .concat()
+            .try_into()
+            .unwrap();
+        let pair = foks_proto::KvDirectoryPair::from_active(foks_proto::KvDirectory {
+            id: directory,
+            version: 1,
+            key: foks_proto::RoleAndGeneration {
+                role: foks_proto::Role::ADMIN,
+                generation: 1,
+            },
+            seed_ciphertext: Vec::new(),
+            write_role: foks_proto::Role::ADMIN,
+            status: foks_proto::KvDirectoryStatus::Active,
+        })
+        .unwrap();
+        let hidden = |name: &[u8]| {
+            let mut entry = projected_entry(name);
+            entry.readable = false;
+            entry
+        };
+        let projection =
+            |directory_id: [u8; 16], directory_bytes: Vec<u8>, entries| KvDirectoryProjection {
+                host_id: Vec::new(),
+                party_id: Vec::new(),
+                root_version: 1,
+                root_directory_id: [7; 16],
+                root_bytes: Vec::new(),
+                directory_id,
+                directory_version: 1,
+                directory_bytes,
+                entries,
+            };
+        let tree = [
+            projection([7; 16], Vec::new(), vec![folder]),
+            projection(
+                directory,
+                pair.encoded().to_vec(),
+                vec![hidden(b"payroll.csv"), hidden(b"keys")],
+            ),
+        ];
+        let report = KvCatalogReport::from_tree(&tree).unwrap();
+        assert_eq!(report.entries.len(), 1, "the hidden entries are not listed");
+        assert_eq!(report.entries[0].path, "/docs");
+        assert_eq!(report.entries[0].unreadable_entries, Some(2));
+        let encoded = serde_json::to_value(&report).unwrap();
+        assert_eq!(encoded["entries"][0]["unreadable_entries"], 2);
     }
 
     #[test]
