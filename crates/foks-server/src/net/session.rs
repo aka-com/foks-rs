@@ -288,7 +288,14 @@ pub(crate) async fn serve(
 ) -> Result<()> {
     // Small request/response TLS records must not wait for delayed TCP ACKs.
     stream.set_nodelay(true)?;
-    enable_keepalive(&stream)?;
+    // Keepalive is best effort: a connection that cannot enable it is still
+    // served, and the failure is reported once per process.
+    if let Err(error) = enable_keepalive(&stream) {
+        static REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            eprintln!("FOKS server warning: cannot enable TCP keepalive on a connection: {error}");
+        }
+    }
     let acceptor = tokio_rustls::TlsAcceptor::from(Arc::clone(tls));
     let handshake = tokio::select! {
         result = stop.changed() => {
@@ -318,13 +325,13 @@ pub(crate) async fn serve(
     };
 
     let mut frames = 0_usize;
-    loop {
+    let close = loop {
         // Once the connection's frame budget is spent, the session reads only
         // to see cancels and end of stream while it answers the long polls
         // still pending, and ends when none is left.
         let budget_spent = frames >= limits.maximum_requests;
         if budget_spent && responder.polls.is_empty() {
-            break;
+            break Close::Orderly;
         }
         // The request deadline starts at the first byte of the frame. Body
         // reading, handler execution and queued writes all consume it; idle
@@ -344,7 +351,7 @@ pub(crate) async fn serve(
             .await?
         {
             Waited::Done(read) => read,
-            Waited::Idle | Waited::Drained | Waited::Ended => break,
+            Waited::End(close) => break close,
         };
         frames = frames.saturating_add(1);
         let (length, deadline) = match read {
@@ -358,7 +365,7 @@ pub(crate) async fn serve(
                         | std::io::ErrorKind::WouldBlock
                 ) =>
             {
-                break;
+                break Close::Orderly;
             }
             Err(error) => return Err(error.into()),
         };
@@ -394,10 +401,10 @@ pub(crate) async fn serve(
             .await?
         {
             Waited::Done(read) => read,
-            Waited::Idle | Waited::Drained | Waited::Ended => break,
+            Waited::End(close) => break close,
         };
         let call = match read {
-            Err(_) => break,
+            Err(_) => break Close::Orderly,
             Ok(Ok(call)) => call,
             Ok(Err(foks_rpc::Error::Io(error)))
                 if matches!(
@@ -408,7 +415,7 @@ pub(crate) async fn serve(
                         | std::io::ErrorKind::WouldBlock
                 ) =>
             {
-                break;
+                break Close::Orderly;
             }
             Ok(Err(error)) => return Err(error.into()),
         };
@@ -434,9 +441,9 @@ pub(crate) async fn serve(
                     .request_rate_limited(crate::AdmissionRejection::RequestMemory);
                 let memory = service_data.memory.request(None);
                 responder
-                    .refuse(&memory, sequence, crate::metrics::UNROUTED, deadline)
+                    .refuse(&memory, sequence, crate::metrics::UNROUTED)
                     .await?;
-                return Ok(());
+                break Close::Orderly;
             }
             // go-snowpack-rpc cancels a call whose context ended, as go-foks
             // KEX does for the receive it no longer needs. A pending long
@@ -465,31 +472,9 @@ pub(crate) async fn serve(
             let sequence = call.sequence();
             drop(call);
             responder
-                .refuse(
-                    &request_memory,
-                    sequence,
-                    crate::metrics::UNROUTED,
-                    deadline,
-                )
+                .refuse(&request_memory, sequence, crate::metrics::UNROUTED)
                 .await?;
-            return Ok(());
-        }
-        if budget_spent {
-            // The frame budget is spent; only the pending polls are served.
-            service_data.metrics.request_started();
-            let _request_timer =
-                crate::ServerMetrics::request_timer(Arc::clone(&service_data.metrics));
-            let sequence = call.sequence();
-            drop(call);
-            responder
-                .refuse(
-                    &request_memory,
-                    sequence,
-                    crate::metrics::UNROUTED,
-                    deadline,
-                )
-                .await?;
-            continue;
+            break Close::Orderly;
         }
         service_data.metrics.request_started();
         let request_timer = crate::ServerMetrics::request_timer(Arc::clone(&service_data.metrics));
@@ -517,10 +502,10 @@ pub(crate) async fn serve(
             service_data
                 .metrics
                 .request_rate_limited(crate::AdmissionRejection::RequestMemory);
-            responder
-                .refuse(&request_memory, sequence, family, deadline)
-                .await?;
-            return Ok(());
+            // The frame was read in full, so the session can go on serving
+            // the peer's other calls, including its pending long polls.
+            responder.refuse(&request_memory, sequence, family).await?;
+            continue;
         }
         deadline.remaining()?;
         let long_poll = !proof
@@ -540,14 +525,19 @@ pub(crate) async fn serve(
                 // completes, in completion order.
                 // A refused poll is answered at its sequence and the session
                 // goes on: the frame was read in full, and the peer's other
-                // calls on this connection stay pending.
+                // calls on this connection stay pending. Once the frame
+                // budget is spent no new poll is admitted, so the connection
+                // ends when the polls admitted before it have been answered;
+                // ordinary calls are still served meanwhile.
+                if budget_spent {
+                    responder.refuse(&request_memory, sequence, family).await?;
+                    continue;
+                }
                 if responder.polls.len() >= MAXIMUM_PENDING_POLLS {
                     service_data
                         .metrics
                         .request_rate_limited(crate::AdmissionRejection::ConnectionLongPolls);
-                    responder
-                        .refuse(&request_memory, sequence, family, deadline)
-                        .await?;
+                    responder.refuse(&request_memory, sequence, family).await?;
                     continue;
                 }
                 let pending = match call.route.id {
@@ -560,9 +550,7 @@ pub(crate) async fn serve(
                         ) {
                             Ok(admitted) => admitted,
                             Err(request_memory) => {
-                                responder
-                                    .refuse(&request_memory, sequence, family, deadline)
-                                    .await?;
+                                responder.refuse(&request_memory, sequence, family).await?;
                                 continue;
                             }
                         };
@@ -737,7 +725,7 @@ pub(crate) async fn serve(
         );
         let execution = match responder.wait(execution, None, false, &mut stop).await? {
             Waited::Done(execution) => execution?,
-            Waited::Idle | Waited::Drained | Waited::Ended => break,
+            Waited::End(close) => break close,
         };
         let outcome = match execution {
             BoundedExecution::Completed(outcome) => outcome?,
@@ -749,10 +737,8 @@ pub(crate) async fn serve(
                     .metrics
                     .request_rate_limited(crate::AdmissionRejection::RequestHandlers);
                 let memory = service_data.memory.request(None);
-                responder
-                    .refuse(&memory, sequence, family, deadline)
-                    .await?;
-                return Ok(());
+                responder.refuse(&memory, sequence, family).await?;
+                continue;
             }
             BoundedExecution::TimedOut => {
                 // A durable mutation may still be reconciling in the bounded
@@ -762,15 +748,19 @@ pub(crate) async fn serve(
                     "request execution timed out",
                 )));
             }
-            BoundedExecution::Stopped => break,
+            BoundedExecution::Stopped => break Close::Stopped,
         };
         match responder
             .write_outcome(outcome, family, sequence, &mut stop)
             .await?
         {
             Flow::Continue => {}
-            Flow::End => return Ok(()),
+            Flow::End(close) => break close,
         }
+    };
+    match close {
+        Close::Orderly => responder.finish(reader, &mut stop).await,
+        Close::Abrupt | Close::Stopped => {}
     }
     Ok(())
 }
@@ -787,18 +777,30 @@ struct Responder<'a, W> {
 /// How [`Responder::wait`] ended.
 enum Waited<T> {
     Done(T),
-    /// No frame arrived within the idle allowance and no poll was pending.
-    Idle,
-    /// The last pending poll was answered while waiting `until_drained`.
-    Drained,
-    /// The server is stopping, or a poll's response could not be written.
-    Ended,
+    /// The session ends: no frame arrived within the idle allowance, the last
+    /// pending poll was answered while waiting `until_drained`, the server is
+    /// stopping, or a poll's response write ended the session.
+    End(Close),
 }
 
 /// Whether the session continues after a response.
 enum Flow {
     Continue,
-    End,
+    End(Close),
+}
+
+/// How a session ends.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Close {
+    /// In order, after its last response: [`Responder::finish`] sends
+    /// close_notify and drains the peer's input, so that a reset cannot
+    /// destroy that response.
+    Orderly,
+    /// Deliberately without a response or with a partial one, after an armed
+    /// fault or a memory failure that leaves an outcome ambiguous.
+    Abrupt,
+    /// The server is stopping.
+    Stopped,
 }
 
 impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
@@ -824,7 +826,7 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
                 result = stop.changed() => {
                     let _ = result;
                     self.polls.closing = crate::metrics::kex::Completion::Shutdown;
-                    return Ok(Waited::Ended);
+                    return Ok(Waited::End(Close::Stopped));
                 }
                 completed = self.polls.next_completed(), if polls_pending => {
                     let completed = completed?;
@@ -836,10 +838,10 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
                         .await?
                     {
                         Flow::Continue => {}
-                        Flow::End => return Ok(Waited::Ended),
+                        Flow::End(close) => return Ok(Waited::End(close)),
                     }
                     if until_drained && self.polls.is_empty() {
-                        return Ok(Waited::Drained);
+                        return Ok(Waited::End(Close::Orderly));
                     }
                     if self.polls.is_empty() {
                         idle_deadline = idle.and_then(idle_after);
@@ -847,26 +849,71 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
                 }
                 output = &mut operation => return Ok(Waited::Done(output)),
                 () = sleep_until_option(idle_deadline), if !polls_pending && idle_deadline.is_some() => {
-                    return Ok(Waited::Idle);
+                    return Ok(Waited::End(Close::Orderly));
                 }
             }
         }
     }
 
-    /// Answers `sequence` with `RateLimited` for a refused request.
+    /// Ends a session that is closing in order: sends TLS close_notify and a
+    /// TCP FIN, then reads and discards what the peer still sends until it
+    /// closes, for at most two seconds and 1 MiB. Closing a socket with
+    /// unread input resets the connection, which can destroy the last
+    /// response before the peer reads it; a pipelining peer may have sent
+    /// more frames after it.
+    async fn finish<R: AsyncRead + Unpin>(
+        mut self,
+        mut reader: R,
+        stop: &mut watch::Receiver<bool>,
+    ) {
+        use tokio::io::AsyncWriteExt as _;
+        // Long polls still pending end now, recorded as disconnected; they
+        // must not keep their permits through the linger.
+        self.polls = PendingPolls::default();
+        if *stop.borrow() {
+            return;
+        }
+        let allowance = self
+            .limits
+            .io_timeout
+            .min(std::time::Duration::from_secs(2));
+        let linger = tokio::time::timeout(allowance, async {
+            self.writer.shutdown().await?;
+            let mut discard = [0_u8; 4096];
+            let mut total = 0_usize;
+            while total < 1024 * 1024 {
+                let read = reader.read(&mut discard).await?;
+                if read == 0 {
+                    break;
+                }
+                total += read;
+            }
+            Ok::<(), std::io::Error>(())
+        });
+        // A server stop ends the linger at once.
+        tokio::select! {
+            _ = linger => {}
+            result = stop.changed() => {
+                let _ = result;
+            }
+        }
+    }
+
+    /// Answers `sequence` with `RateLimited` for a refused request, under
+    /// the fresh write allowance every response gets, so that a refusal is
+    /// written even when the request's own deadline has run out.
     async fn refuse(
         &mut self,
         memory: &Arc<super::memory::Request>,
         sequence: u64,
         family: &'static str,
-        deadline: crate::deadline::Deadline,
     ) -> Result<()> {
         let response =
             memory.sync(|| encode_status_response_at(&RpcStatus::RateLimited, sequence))?;
         write_response_until(
             &mut self.writer,
             &response,
-            deadline,
+            response_write_deadline(self.limits.io_timeout)?,
             self.limits.io_timeout,
         )
         .await?;
@@ -885,7 +932,7 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
         stop: &mut watch::Receiver<bool>,
     ) -> Result<Flow> {
         if outcome.disconnect_before_response {
-            return Ok(Flow::End);
+            return Ok(Flow::End(Close::Abrupt));
         }
         // An operation may already have committed before a working or output
         // allocation failed. Preserve that ambiguity: never translate the
@@ -894,22 +941,23 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
         if outcome._memory.failed() {
             let refusal = memory_failure_refusal(outcome.route, sequence, &self.data.memory)?;
             drop(outcome);
-            if let Some(response) = refusal {
-                self.data
-                    .metrics
-                    .request_rate_limited(crate::AdmissionRejection::RequestMemory);
-                write_response_until(
-                    &mut self.writer,
-                    &response,
-                    response_write_deadline(self.limits.io_timeout)?,
-                    self.limits.io_timeout,
-                )
-                .await?;
-                self.data
-                    .metrics
-                    .response_completed(family, STATUS_RATE_LIMIT_ERROR);
-            }
-            return Ok(Flow::End);
+            let Some(response) = refusal else {
+                return Ok(Flow::End(Close::Abrupt));
+            };
+            self.data
+                .metrics
+                .request_rate_limited(crate::AdmissionRejection::RequestMemory);
+            write_response_until(
+                &mut self.writer,
+                &response,
+                response_write_deadline(self.limits.io_timeout)?,
+                self.limits.io_timeout,
+            )
+            .await?;
+            self.data
+                .metrics
+                .response_completed(family, STATUS_RATE_LIMIT_ERROR);
+            return Ok(Flow::End(Close::Orderly));
         }
         let _memory = outcome._memory;
         let response_deadline = response_write_deadline(self.limits.io_timeout)?;
@@ -926,7 +974,7 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
                 crate::SessionFaultPoint::AfterDurableCommitBeforeResponse
             };
             if self.data.should_disconnect(point, protocol, method) {
-                return Ok(Flow::End);
+                return Ok(Flow::End(Close::Abrupt));
             }
             if self.data.should_disconnect(
                 crate::SessionFaultPoint::DuringResponseWrite,
@@ -941,7 +989,7 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
                     self.limits.io_timeout,
                 )
                 .await?;
-                return Ok(Flow::End);
+                return Ok(Flow::End(Close::Abrupt));
             }
         }
         let write = tokio::select! {
@@ -951,7 +999,7 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
                     kex.stopped();
                 }
                 self.polls.closing = crate::metrics::kex::Completion::Shutdown;
-                return Ok(Flow::End);
+                return Ok(Flow::End(Close::Stopped));
             }
             result = write_response_until(
                 &mut self.writer,
@@ -969,17 +1017,18 @@ impl<'a, W: tokio::io::AsyncWrite + Unpin> Responder<'a, W> {
     }
 }
 
-/// TCP keepalive on accepted RPC connections: probes after 15 s idle, every
-/// 15 s, nine times, as a Go `net.Listen` listener sets them. A peer that
-/// vanished without closing its connection is then detected within about
-/// two and a half minutes, so that a long poll it left pending, such as an
-/// hour-long KEX receive, does not keep its permits until it times out.
+/// TCP keepalive on accepted RPC connections, with the first probe after
+/// 15 s of silence as on a Go `net.Listen` listener. Where the platform lets
+/// socket2 set them, probes then follow every 15 s (Linux, the BSDs, macOS,
+/// Windows) and at most nine are sent (the same Unix platforms; not Windows,
+/// where TCP_KEEPCNT fails before Windows 10 1703); elsewhere the system's
+/// interval and count apply. On Linux a peer that vanished without closing
+/// its connection is detected within about two and a half minutes, so that a
+/// long poll it left pending, such as an hour-long KEX receive, does not keep
+/// its permits until it times out.
 fn enable_keepalive(stream: &tokio::net::TcpStream) -> std::io::Result<()> {
     let period = std::time::Duration::from_secs(15);
     let keepalive = socket2::TcpKeepalive::new().with_time(period);
-    // socket2 sets the probe interval and count only where the platform has
-    // them (not, for example, on OpenBSD, Haiku, Solaris or AIX); elsewhere
-    // the system defaults apply after the first probe.
     #[cfg(any(
         target_os = "android",
         target_os = "dragonfly",
@@ -994,7 +1043,21 @@ fn enable_keepalive(stream: &tokio::net::TcpStream) -> std::io::Result<()> {
         target_os = "watchos",
         target_os = "windows",
     ))]
-    let keepalive = keepalive.with_interval(period).with_retries(9);
+    let keepalive = keepalive.with_interval(period);
+    #[cfg(any(
+        target_os = "android",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "fuchsia",
+        target_os = "illumos",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "netbsd",
+        target_os = "tvos",
+        target_os = "watchos",
+    ))]
+    let keepalive = keepalive.with_retries(9);
     socket2::SockRef::from(stream).set_tcp_keepalive(&keepalive)
 }
 
@@ -1341,8 +1404,10 @@ fn memory_failure_refusal(
     })?))
 }
 
-/// Routes that read without changing server state, so that a request
-/// refused after its handler ran has no ambiguous outcome.
+/// Routes whose handlers make no client-visible mutation, so that a request
+/// refused after its handler ran has no ambiguous outcome. Authorization can
+/// still refresh SSO access state for any authenticated route; that write is
+/// the server's own bookkeeping, not an outcome the client must reconcile.
 fn read_only_route(id: RouteId) -> bool {
     matches!(
         id,
@@ -1372,7 +1437,6 @@ fn read_only_route(id: RouteId) -> bool {
             | RouteId::RealTimeRtListAllChannelsForTeam
             | RouteId::RealTimeRtGetThread
             | RouteId::RealTimeRtGetInboxVersion
-            | RouteId::RealTimeRtGetChangedThreads
             | RouteId::RealTimeRtGetThreadRecents
     )
 }
@@ -1843,6 +1907,8 @@ mod tests {
             RouteId::KexReceive,
             RouteId::RealTimeRtSend,
             RouteId::RealTimeRtPollInbox,
+            // Reconciles through the writer.
+            RouteId::RealTimeRtGetChangedThreads,
             RouteId::UserRevokeDevice,
         ] {
             assert!(!read_only_route(id), "{id:?}");
@@ -2075,7 +2141,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn frame_budget_is_not_renewed_for_body_execution_or_transmission() {
+    async fn frame_budget_is_not_renewed_for_body_read_or_execution() {
         let (mut peer, mut input) = tokio::io::duplex(16);
         peer.write_all(&[0xcd, 0x01, 0x00]).await.unwrap();
         let (length, deadline) =
@@ -2084,7 +2150,7 @@ mod tests {
                 .unwrap();
         assert_eq!(length, 256);
         // Keep the peer alive but withhold the body. Body time consumes the
-        // original frame budget, leaving no fresh allowance for dispatch/output.
+        // original frame budget, leaving none for dispatch.
         let body = tokio::time::timeout_at(
             phase_deadline(deadline, std::time::Duration::from_secs(15)).unwrap(),
             read_call_body_async(
@@ -2106,6 +2172,8 @@ mod tests {
             .unwrap(),
             BoundedExecution::TimedOut
         ));
+        // A write bounded by the spent frame budget fails, which is why
+        // responses are written under `response_write_deadline` instead.
         let mut output = Vec::new();
         assert!(write_response_until(
             &mut output,

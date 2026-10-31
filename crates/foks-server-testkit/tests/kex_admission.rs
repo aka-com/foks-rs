@@ -440,9 +440,9 @@ fn calls_pipelined_behind_a_kex_receive_are_served_in_completion_order() {
     server.shutdown().unwrap();
 }
 
-/// A connection that has spent its frame budget still answers the long polls
-/// it admitted, refuses further calls at their sequence, and closes once no
-/// poll is pending.
+/// A connection that has spent its frame budget still serves ordinary calls
+/// and answers the long polls it admitted, refuses new long polls at their
+/// sequence, and closes once no poll is pending.
 #[test]
 fn pending_polls_are_answered_after_the_frame_budget_is_spent() {
     let environment = TestEnvironment::with_profile(TestProfile::FewRequests).unwrap();
@@ -454,23 +454,23 @@ fn pending_polls_are_answered_after_the_frame_budget_is_spent() {
     // The budget is three frames: a receive, then two ordinary calls.
     send(&mut tls, &receive_call(&waiting, 0));
     wait_metrics(&server, |m| m.active == 1);
-    for sequence in 1..3 {
+    // Ordinary calls are served before and after the budget is spent.
+    for sequence in 1..4 {
         send(
             &mut tls,
             &foks_rpc::encode_get_current_merkle_root_request(&host, sequence).unwrap(),
         );
         foks_rpc::read_response(&mut tls, DEFAULT_MAX_FRAME_LENGTH, sequence).unwrap();
     }
-    // A call beyond the budget is refused at its sequence while the receive
-    // is still pending.
-    send(
-        &mut tls,
-        &foks_rpc::encode_get_current_merkle_root_request(&host, 3).unwrap(),
-    );
+    // A new long poll beyond the budget is refused at its sequence while the
+    // first receive is still pending.
+    let (_, late) = packet(0x81);
+    send(&mut tls, &receive_call(&late, 4));
     assert!(matches!(
-        foks_rpc::read_response(&mut tls, DEFAULT_MAX_FRAME_LENGTH, 3),
+        foks_rpc::read_bare_response(&mut tls, DEFAULT_MAX_FRAME_LENGTH, 4),
         Err(Error::RemoteStatus { code: 1012, .. })
     ));
+    assert_eq!(server.metrics().kex.active, 1);
     let mut sender = connect(&server);
     send(
         &mut sender,

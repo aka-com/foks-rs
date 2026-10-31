@@ -288,8 +288,10 @@ each realtime inbox poll or KEX receive (a Go client multiplexes them on one
 connection), and every client's idle connections stay open for up to the
 330 s idle timeout, a small number of devices can reach the limit. The same
 holds for the 256 active sessions per listener: both limits must cover the
-devices active within one idle timeout, counting a go-foks client's one
-connection per server type and the Rust client's pool of up to two idle
+devices active within one idle timeout, sized in connections per device per
+listener: a go-foks client keeps one connection per server type (probe,
+registration, user, Merkle query, KV, realtime), several of them on the
+authenticated listener, and the Rust client pools up to two idle
 connections per endpoint. The operator
 lists such a forwarder's address or prefix in `trusted_sources`, which
 exempts it as loopback is exempt, or raises or removes the limit for NAT
