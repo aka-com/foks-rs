@@ -194,6 +194,35 @@ class SyntheticGraphTests(unittest.TestCase):
         ]
         self.assertEqual(self.check(graph, policy), [])
 
+    def test_every_declared_name_of_an_excepted_edge_is_fenced(self):
+        root = self.root
+        write(root, "crates/foks-cli/src/main.rs", "use foks_client::Session;\n")
+        write(root, "crates/foks-cli/src/other.rs", "use client_core::Session;\n")
+        graph = self.graph(
+            {
+                "foks-cli": [
+                    dependency(root, "foks-client"),
+                    dependency(root, "foks-client", kind="dev", rename="client-core"),
+                ]
+            }
+        )
+        policy = copy.deepcopy(POLICY)
+        policy["exception"] = [
+            {
+                "package": "foks-cli",
+                "dependency": "foks-client",
+                "reason": "direct client",
+                "sites": ["crates/foks-cli/src/main.rs"],
+            }
+        ]
+        self.assertEqual(
+            self.check(graph, policy),
+            [
+                "crates/foks-cli/src/other.rs uses client_core, but no foks-cli -> "
+                "foks-client exception lists it as a site"
+            ],
+        )
+
     def test_stale_unnecessary_and_incomplete_exceptions_fail(self):
         policy = copy.deepcopy(POLICY)
         policy["exception"] = [

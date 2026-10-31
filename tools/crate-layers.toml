@@ -15,7 +15,12 @@
 # `//` and matches no site fails the check, so new uses of an exceptional edge
 # are reviewed here.
 # An exception for an edge that no longer exists, or that the layer rules
-# already allow, also fails the check and has to be removed.
+# already allow, also fails the check and has to be removed. Every name under
+# which the package declares the dependency (each `rename`, in any dependency
+# section) is fenced. The fence matches crate names in source text only: an
+# item that another crate re-exports from the dependency, or a macro that
+# expands to it, is not seen, so a re-export does not need a site and is not
+# caught by one.
 #
 # Book Appendix D describes the layers; chapter 20 describes the desktop host's
 # offline-maintenance exception.

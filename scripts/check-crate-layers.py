@@ -170,15 +170,19 @@ def check(policy, metadata, root):
         exceptions.setdefault(key, []).append(exception)
 
     production = {}
+    # Every name under which a package declares a dependency, from all of its
+    # declarations (normal, build, dev and target-specific). A second
+    # declaration with another `rename` must not let its uses escape the
+    # exception sites.
     identifiers = {}
     for package, dependency, kind, identifier, path in edges:
         if dependency is None:
             errors.append(f"{package} has a path dependency outside the workspace: {path}")
             continue
+        identifiers.setdefault((package, dependency), set()).add(identifier)
         if kind not in PRODUCTION_KINDS:
             continue
         production.setdefault(package, set()).add(dependency)
-        identifiers[(package, dependency)] = identifier
 
     for package in sorted(production):
         for dependency in sorted(production[package]):
@@ -198,24 +202,24 @@ def check(policy, metadata, root):
                 f"exception {package} -> {dependency} is unnecessary; the layer rules allow it"
             )
             continue
-        identifier = identifiers[(package, dependency)]
-        sources = [
-            relative(path, root)
-            for path in rust_sources(root / directories[package])
-            if names_crate(path, identifier)
-        ]
+        names = sorted(identifiers[(package, dependency)])
+        sources = {}
+        for path in rust_sources(root / directories[package]):
+            used = [name for name in names if names_crate(path, name)]
+            if used:
+                sources[relative(path, root)] = used
         patterns = [pattern for entry in entries for pattern in entry.get("sites", [])]
-        for source in sources:
+        for source, used in sorted(sources.items()):
             if not any(fnmatch.fnmatchcase(source, pattern) for pattern in patterns):
                 errors.append(
-                    f"{source} uses {identifier}, but no {package} -> {dependency} "
+                    f"{source} uses {', '.join(used)}, but no {package} -> {dependency} "
                     "exception lists it as a site"
                 )
         for pattern in patterns:
             if not any(fnmatch.fnmatchcase(source, pattern) for source in sources):
                 errors.append(
                     f"exception {package} -> {dependency} site {pattern} "
-                    f"matches no file that uses {identifier}"
+                    f"matches no file that uses {' or '.join(names)}"
                 )
 
     test_only = {
