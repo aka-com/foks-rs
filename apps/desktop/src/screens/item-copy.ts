@@ -34,10 +34,11 @@ const PASSWORD_COPIES: readonly CopyAction[] = [
 ];
 const VALUE_COPIES: readonly CopyAction[] = [copyOf('value')];
 // A Password known only by its `/logins/` path, from an agent that lists no
-// shape, may not hold `password:` lines, so it also offers its whole text.
+// shape, may not hold `password:` lines, so it also offers its whole text,
+// labelled so that it does not read as a password copy.
 const UNSHAPED_PASSWORD_COPIES: readonly CopyAction[] = [
   ...PASSWORD_COPIES,
-  ...VALUE_COPIES,
+  { field: 'value', label: 'Copy All Fields' },
 ];
 
 /**

@@ -1238,7 +1238,8 @@ export function DetailsPanel({
                     {kind === 'Password'
                       ? shownValue === null
                         ? 'Show Password'
-                        : 'Hide Password'
+                        : // Any of a login's rows may be shown by now.
+                          'Hide Values'
                       : shownValue === null
                         ? 'Show Value'
                         : 'Hide Value'}

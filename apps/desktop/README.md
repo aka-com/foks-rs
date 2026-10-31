@@ -449,7 +449,9 @@ only that row); Vault, Path, Version and Size; Read and Write access; Sharing.
 Editing a value puts Cancel and Save Changes in the bar (after the fields in
 the DOM, so Tab reaches them from the last field); Return in a field, ⌘Return
 and ⌘S save. A login edits one row per stored line, and a save rewrites only
-the lines that changed. After a save every row is masked again, and the
+the lines that changed. When the window loses focus, an open login edit, like
+any text edit, collapses to one masked Value row with Show until it is shown
+again; the draft is kept. After a save every row is masked again, and the
 editor's plaintext is cleared once the write succeeds. A store that cannot be read draws a
 lock notice with Check Status and leaves every action disabled with its reason.
 The list foot holds the drop hint and the store's Uploads… sheet; the item

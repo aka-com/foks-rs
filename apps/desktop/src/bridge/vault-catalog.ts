@@ -288,11 +288,14 @@ function decodeItem(value: unknown, at: string): ItemDto {
   };
 }
 
+/**
+ * A listed shape: `login`, or `other` for every other name, so a class a
+ * later agent adds reads as an ordinary small file rather than failing the
+ * whole catalog.
+ */
 function decodeShape(value: unknown, at: string): { shape?: ItemShape } {
   if (value === undefined) return {};
-  if (value !== 'login' && value !== 'other')
-    throw new Error(`${at} is not login or other`);
-  return { shape: value };
+  return { shape: string(value, at) === 'login' ? 'login' : 'other' };
 }
 
 function decodeFailure(value: unknown, at: string): CatalogFailureDto {
