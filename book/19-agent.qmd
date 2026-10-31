@@ -118,7 +118,17 @@ client operation onto a worker thread under a semaphore.
 | Chat poll timeout | 60 s |
 | Device pairing budget | 5 min, with 45 s reserved for completion |
 | Ownership re-check | every 5 s |
-| Retention pass | 1 s for profile admission and session opens, then a 50 ms work slice; every 250 ms while work remains, else every 60 s |
+| Retention pass | 1 s for profile admission (at most 700 ms) and session opens, then a 50 ms work slice; every 250 ms while work remains, else every 60 s |
+
+A profile is passed again after 250 ms when its pass made progress or
+reported more work. The first pass after the profile was woken or last
+rested is also followed by a second one after 250 ms even when it found
+nothing, so up to two idle passes run before the profile rests for 60 s
+(`Schedule::finish` in `crates/foks-agent/src/retention.rs`).
+A pass that cannot be admitted within 700 ms is counted as skipped and the
+profile rests; the remaining 300 ms of the pass budget is kept for the
+opens and the work slice, and the slice never ends after the pass's own
+deadline.
 
 `RetentionStatus` (`foks-rs retention status`) reports the retention
 counters, the number of profiles whose latest pass failed
