@@ -295,3 +295,59 @@ mod array33 {
             .map_err(|value: Vec<u8>| D::Error::invalid_length(value.len(), &"33 bytes"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    fn fixture() -> Value {
+        serde_json::from_str(include_str!("../tests/fixtures/pin-policy.json")).unwrap()
+    }
+
+    fn strings(value: &Value) -> impl Iterator<Item = &str> {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item.as_str().unwrap())
+    }
+
+    #[test]
+    fn pin_rule_matches_shared_frontend_fixture() {
+        let fixture = fixture();
+        for value in strings(&fixture["pin"]["accepted"]) {
+            assert!(Pin::new(value).is_ok(), "{value:?}");
+        }
+        for value in strings(&fixture["pin"]["rejected"]) {
+            assert!(
+                matches!(Pin::new(value), Err(crate::Error::Policy(_))),
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn retry_range_matches_shared_frontend_fixture() {
+        let fixture = fixture();
+        let min = u8::try_from(fixture["retries"]["min"].as_u64().unwrap()).unwrap();
+        let max = u8::try_from(fixture["retries"]["max"].as_u64().unwrap()).unwrap();
+        let retries =
+            |pin, puk| PinRetryConfiguration::new(Pin::new("12345678").unwrap(), pin, puk).is_ok();
+        assert!(retries(min, max) && retries(max, min));
+        assert!(!retries(min - 1, max) && !retries(min, max + 1));
+    }
+
+    #[test]
+    fn refusal_messages_match_shared_frontend_fixture() {
+        for refusal in fixture()["refusals"].as_array().unwrap() {
+            let error = match refusal["remaining"].as_u64() {
+                Some(remaining) => crate::Error::PinRejected {
+                    remaining: u8::try_from(remaining).unwrap(),
+                },
+                None => crate::Error::PinBlocked,
+            };
+            assert_eq!(error.to_string(), refusal["message"].as_str().unwrap());
+        }
+    }
+}
