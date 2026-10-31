@@ -12,9 +12,6 @@ import time
 import urllib.error
 import urllib.request
 
-import boto3
-from botocore.config import Config
-
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -51,6 +48,11 @@ def bounded_json(response):
 
 
 def main():
+    # Imported here so that the unit tests can load result_ok and the other
+    # pure helpers without boto3 installed.
+    import boto3
+    from botocore.config import Config
+
     parser = argparse.ArgumentParser()
     for name in ("celld", "moto", "esbuild", "output"):
         parser.add_argument("--" + name, type=pathlib.Path, required=True)
