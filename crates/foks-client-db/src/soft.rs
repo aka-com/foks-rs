@@ -91,6 +91,23 @@ pub struct KvProjectedEntry {
     pub content: Option<Vec<u8>>,
     pub symlink: Option<Vec<u8>>,
     pub large_file_size: Option<u64>,
+    /// Set by a traversal that opened this small file's plaintext; see
+    /// [`KvSmallFileShape`]. It is never stored, so entries read back from
+    /// the soft state database carry `None`.
+    pub small_file_shape: Option<KvSmallFileShape>,
+}
+
+/// What a small file's plaintext holds, as the desktop classifies it. A
+/// traversal computes this from plaintext it has already opened and then
+/// discards, so a front end can tell a login from other text without reading
+/// the file; no field value is retained.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KvSmallFileShape {
+    /// UTF-8 text whose lines are all `key: value` field lines, one with the
+    /// key `password`: the layout the desktop writes for a login.
+    Login,
+    /// Any other small file, text or binary.
+    Other,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1893,6 +1910,7 @@ fn load_directory(
                     .12
                     .map(|size| stored_unsigned("KV large file size", size))
                     .transpose()?,
+                small_file_shape: None,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -2212,6 +2230,7 @@ mod tests {
             content: Some(vec![id + 2]),
             symlink: None,
             large_file_size: None,
+            small_file_shape: None,
         }
     }
 
@@ -2511,6 +2530,7 @@ mod tests {
             content: None,
             symlink: None,
             large_file_size: Some(5),
+            small_file_shape: None,
         }];
         let mut stage = store
             .begin_large_file(&projected.host_id, &projected.party_id, node_id)
@@ -2614,6 +2634,7 @@ mod tests {
             content: None,
             symlink: None,
             large_file_size: None,
+            small_file_shape: None,
         }];
         store
             .project_reachable_metadata(&[projected.clone()])
@@ -2750,6 +2771,7 @@ mod tests {
             content: None,
             symlink: None,
             large_file_size: None,
+            small_file_shape: None,
         }];
         store
             .project_reachable_tree_with_large_files(&[root.clone(), child.clone()], &[])
