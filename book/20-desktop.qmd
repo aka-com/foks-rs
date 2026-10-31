@@ -228,6 +228,14 @@ and `persist` renames it into place, which POSIX guarantees is atomic. A
 crash at any earlier point leaves a temporary file, never a partial file
 under the chosen name.
 
+The Uploads button below the Files list calls `list_file_uploads`, which
+returns the durable uploads the agent holds for the selected store and its
+upload capacity; `resume_file_upload` and `cancel_file_upload` act on one
+upload handle. An upload whose publication the server definitely rejected
+is listed as `publication-rejected`, not `publishing`. Its content is
+complete, so Resume synchronizes the store, checks that the destination
+still matches the recorded intent and publishes again; Cancel releases it.
+
 | Bound | Value |
 |---|---|
 | Inline KV write threshold (above this, stream) | 128 KiB |
