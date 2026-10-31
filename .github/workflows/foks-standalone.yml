@@ -83,6 +83,9 @@ jobs:
         run: cargo test --locked -p foks-keystore --test native_credential_store -- --ignored
       - name: Test the Linux client graph and Secret Service integration
         if: runner.os == 'Linux'
+        # check.sh took 33-49 min of the whole job in observed runs; a hung
+        # native test fails the step instead of holding the runner.
+        timeout-minutes: 60
         shell: bash
         run: |
           dbus-run-session -- bash -euo pipefail -c '
@@ -96,8 +99,8 @@ jobs:
             # including the state export, import and relocation suite, are
             # ignored by default and run here; the registration benchmark is
             # the only ignored test in the crate that is not a native test.
-            # The CLI transcript test runs the foks-rs binary that check.sh
-            # built; name it rather than relying on the default path.
+            # The CLI transcript test runs foks-rs. Build it explicitly and
+            # pass its path, rather than relying on the default target path.
             cargo build --locked -p foks-cli --bin foks-rs
             export FOKS_PORTABILITY_CLI="$PWD/target/debug/foks-rs"
             cargo test --locked -p foks-client-app -- --ignored --test-threads=1 \
