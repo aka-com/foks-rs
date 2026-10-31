@@ -55,8 +55,11 @@ import {
   storeAvailability,
   storeOf,
   storeReadable,
+  TRASH_ROOT,
+  trashEntries,
 } from '../model';
-import type { Item, Store, AgentSnapshot } from '../model';
+import type { Item, Store, AgentSnapshot, TrashEntry } from '../model';
+import { TrashView, emptyTrashProblem } from './trash-view';
 import type { KindFilter, LocationStore, LocationState } from '../location';
 import { normalizeCommandError } from '../bridge';
 import type { Bridge, ItemField } from '../bridge';
@@ -109,7 +112,8 @@ interface RowProps {
   onReveal: (item: Item) => void;
   onDownload: (item: Item) => void;
   onCopyPath: (item: Item) => void;
-  onDelete: (item: Item) => void;
+  /** Moves the item to Trash, from where it can be restored. */
+  onTrash: (item: Item) => void;
   onMove?: (item: Item) => void;
   accessNow: () => number;
   /** Listbox option attributes from `useListbox`. */
@@ -127,7 +131,7 @@ function Row({
   onReveal,
   onDownload,
   onCopyPath,
-  onDelete,
+  onTrash,
   onMove,
   accessNow,
   option,
@@ -341,9 +345,9 @@ function Row({
               danger
               shortcut="⌘⌫"
               reason={writeProblem}
-              onClick={choose(() => onDelete(item))}
+              onClick={choose(() => onTrash(item))}
             >
-              Delete…
+              Move to Trash
             </MenuItem>
           </Menu>
         </ContextMenu>
@@ -570,6 +574,36 @@ function VaultDropZone({
   );
 }
 
+/** The Trash heading's Empty Trash…, off when nothing in it can be removed. */
+function EmptyTrashButton({
+  snapshot,
+  store,
+  accessNow,
+  onEmptyTrash,
+}: {
+  snapshot: AgentSnapshot;
+  store: Store;
+  accessNow: () => number;
+  onEmptyTrash: () => void;
+}): ReactNode {
+  const { count, problem } = emptyTrashProblem(snapshot, store, accessNow);
+  return (
+    <Button
+      size="sm"
+      danger
+      icon="trash"
+      disabled={!count || Boolean(problem)}
+      title={
+        problem ??
+        (count ? 'Delete everything in Trash permanently' : 'Trash is empty')
+      }
+      onClick={onEmptyTrash}
+    >
+      Empty Trash…
+    </Button>
+  );
+}
+
 /* --------------------------------------------------------------- screen -- */
 
 export interface ItemsScreenProps {
@@ -581,7 +615,14 @@ export interface ItemsScreenProps {
   onReveal: (item: Item) => void;
   onNew: (kind: NewKind, storeId: string, folder?: string) => void;
   onResume: (storeId: string) => Promise<void>;
-  onDelete: (item: Item) => void;
+  /** Moves an item, or a folder with its contents, to Trash. */
+  onTrash: (item: Item) => void;
+  /** Moves a Trash entry back to where it was. */
+  onRestore?: (entry: TrashEntry) => void;
+  /** Asks to remove a Trash entry permanently, after confirmation. */
+  onDeletePermanently?: (item: Item) => void;
+  /** Asks to remove every entry in a store's Trash permanently. */
+  onEmptyTrash?: (storeId: string) => void;
   onMove?: (item: Item) => void;
   onSettings: (storeId: string) => void;
   onTeamInfo?: (storeId: string, trigger?: HTMLElement) => void;
@@ -622,7 +663,10 @@ export function ItemsScreen({
   onReveal,
   onNew,
   onResume,
-  onDelete,
+  onTrash,
+  onRestore,
+  onDeletePermanently,
+  onEmptyTrash,
   onMove,
   onSettings,
   onTeamInfo,
@@ -656,6 +700,9 @@ export function ItemsScreen({
   const folderMenu = useFolderMenu(snapshot, {
     onNewFolder,
     onMove,
+    onTrash: (folder) => {
+      if (allowAction(folder, true)) onTrash(folder);
+    },
     onTeamInfo,
     onNavigate: (location) => locations.navigate(location),
     accessNow,
@@ -910,8 +957,10 @@ export function ItemsScreen({
       : store && storeReadable(snapshot, store.id)
         ? store.id
         : (defaultCreateStore(snapshot) ?? '');
+  // Trash is not a place to create items in: New saves at the store's root.
+  const trashSelected = Boolean(selectedStore) && selected.path === TRASH_ROOT;
   const createFolder =
-    selectedStore && selectedNode && selected.path !== '/'
+    selectedStore && selectedNode && selected.path !== '/' && !trashSelected
       ? selected.path
       : undefined;
   const currentStoreAvailable = (storeId: string): boolean => {
@@ -924,8 +973,9 @@ export function ItemsScreen({
   };
   // Dropped files are uploaded to the active store or selected folder.
   // Multi-store views disable drops because no target store is selected.
-  const dropStore =
-    location.kind === 'store'
+  const dropStore = trashSelected
+    ? undefined
+    : location.kind === 'store'
       ? store
       : !state.query
         ? selectedStore
@@ -1050,8 +1100,8 @@ export function ItemsScreen({
             }
           : undefined
       }
-      onDelete={(item) => {
-        if (allowAction(item, true)) onDelete(item);
+      onTrash={(item) => {
+        if (allowAction(item, true)) onTrash(item);
       }}
       accessNow={accessNow}
       option={listbox.optionProps(`${item.store}|${item.path}`)}
@@ -1118,11 +1168,28 @@ export function ItemsScreen({
       ? kindMeta
         ? kindMeta.plural
         : 'All Items'
-      : selected.path !== '/'
-        ? nameOf(selected.path)
-        : (selectedStore?.name ?? 'All Items');
+      : trashSelected
+        ? 'Trash'
+        : selected.path !== '/'
+          ? nameOf(selected.path)
+          : (selectedStore?.name ?? 'All Items');
+  const trashShown =
+    trashSelected && selectedStore
+      ? trashEntries(snapshot, selectedStore.id).filter(
+          (entry) =>
+            !state.query ||
+            [entry.name, entry.original ?? '']
+              .join('\n')
+              .toLowerCase()
+              .includes(state.query.toLowerCase()),
+        )
+      : [];
   const shownCount =
-    selected.store === ALL_ITEMS ? items.length : (selectedNode?.count ?? 0);
+    selected.store === ALL_ITEMS
+      ? items.length
+      : trashSelected
+        ? trashShown.length
+        : (selectedNode?.count ?? 0);
 
   /* ------------------------------------------------------- empty states -- */
 
@@ -1205,7 +1272,8 @@ export function ItemsScreen({
     </EmptyState>
   );
 
-  const listShown = flatMode ? items.length > 0 : !showEmptyFolder;
+  const listShown =
+    !trashSelected && (flatMode ? items.length > 0 : !showEmptyFolder);
   // List footer displaying the file drop hint and the store's Uploads… button.
   const dropHint =
     state.query || readOnly || !dropTarget || dropTarget.blocked
@@ -1267,7 +1335,21 @@ export function ItemsScreen({
     selected.store === ALL_ITEMS ? undefined : selected.store,
   );
   const listBody =
-    !items.length && itemReadiness !== 'ready' ? (
+    trashSelected && selectedStore ? (
+      <TrashView
+        snapshot={snapshot}
+        bridge={bridge}
+        store={selectedStore}
+        entries={trashShown}
+        accessNow={accessNow}
+        onRestore={(entry) => {
+          if (allowAction(entry.item, true)) onRestore?.(entry);
+        }}
+        onDeletePermanently={(entry) => {
+          if (allowAction(entry.item, true)) onDeletePermanently?.(entry.item);
+        }}
+      />
+    ) : !items.length && itemReadiness !== 'ready' ? (
       <CollectionStatus state={itemReadiness} label="items" />
     ) : flatMode ? (
       !items.length ? (
@@ -1428,6 +1510,14 @@ export function ItemsScreen({
         <Button size="sm" onClick={() => onSettings(selectedStore.id)}>
           Manage…
         </Button>
+      ) : null}
+      {trashSelected && onEmptyTrash ? (
+        <EmptyTrashButton
+          snapshot={snapshot}
+          store={selectedStore}
+          accessNow={accessNow}
+          onEmptyTrash={() => onEmptyTrash(selectedStore.id)}
+        />
       ) : null}
     </div>
   ) : null;

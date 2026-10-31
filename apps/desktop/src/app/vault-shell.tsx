@@ -45,6 +45,7 @@ import {
 import {
   applyLease,
   defaultCreateStore,
+  isTrashPath,
   settingsAlertSummary,
   storeOf,
   storeReadable,
@@ -113,10 +114,12 @@ import {
   screenBoundaryKey,
 } from './screen-error-boundary';
 import {
+  neighbourAfterDelete,
   ShellOverlays,
   useDroppedUpload,
   type ResumeDraft,
 } from './shell-overlays';
+import { useTrashActions } from './trash-actions';
 import { useShellRuntime } from './shell-runtime';
 import { ShellSearch } from './shell-search';
 import { itemActionProblem } from '../screens/store-access';
@@ -360,6 +363,23 @@ export function VaultShell({
     mutationError,
     setWorkflow,
   });
+  const neighbourOfTrashed = useCallback(
+    (item: { store: string; path: string }) =>
+      neighbourAfterDelete(locations, item),
+    [locations],
+  );
+  const trash = useTrashActions({
+    bridge,
+    shown,
+    refresh,
+    refreshSnapshot,
+    mutationError,
+    toasts,
+    locations,
+    setWorkflow,
+    accessNow,
+    neighbourOf: neighbourOfTrashed,
+  });
   const { prompt, settlePrompt, swipeIndicator } = useShellNavigation({
     locations,
     state,
@@ -555,7 +575,10 @@ export function VaultShell({
         kind: 'new',
         itemKind,
         storeId: newStore.id,
-        ...(newSelection && newSelection.path !== '/'
+        // Nothing is created in Trash; New saves at the vault's top level.
+        ...(newSelection &&
+        newSelection.path !== '/' &&
+        !isTrashPath(newSelection.path)
           ? { initialFolder: newSelection.path }
           : {}),
       });
@@ -599,7 +622,9 @@ export function VaultShell({
       kind: 'new-folder',
       storeId: newStore.id,
       initialFolder:
-        newSelection && newSelection.store !== ALL_ITEMS
+        newSelection &&
+        newSelection.store !== ALL_ITEMS &&
+        !isTrashPath(newSelection.path)
           ? newSelection.path
           : '/',
     });
@@ -649,10 +674,10 @@ export function VaultShell({
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [chrome.blocked, locations, requestNewItem, toggleSidebar]);
-  // ⌘⌫ opens the delete confirmation alert for the selected item when no text
-  // field, menu, or dialog is active and focus is in the Files list or details
-  // panel. If the account cannot delete the item, show a warning toast with
-  // the reason instead of opening the alert.
+  // ⌘⌫ moves the selected item to Trash when no text field, menu, or dialog
+  // is active and focus is in the Files list or details panel. The move can
+  // be undone, so it asks for no confirmation. If the account cannot delete
+  // the item, show a warning toast with the reason instead.
   const selectedItem =
     filesHere && state.selection
       ? shown.items.find(
@@ -667,8 +692,8 @@ export function VaultShell({
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Backspace' || !commandKey(event) || event.altKey)
         return;
-      // Ignore events already handled by the delete alert's own ⌘⌫ listener,
-      // which may have closed the alert and advanced the selection.
+      // Ignore events already handled by a permanent-delete alert's own ⌘⌫
+      // listener, which may have closed the alert and advanced the selection.
       if (event.defaultPrevented) return;
       const target = event.target;
       if (
@@ -690,11 +715,11 @@ export function VaultShell({
         toasts.show(problem, { tone: 'warning' });
         return;
       }
-      setWorkflow({ kind: 'delete', item: selectedItem });
+      trash.moveToTrash(selectedItem);
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [accessNow, chrome.blocked, selectedItem, setWorkflow, shown, toasts]);
+  }, [accessNow, chrome.blocked, selectedItem, shown, toasts, trash]);
   useEffect(() => {
     if (!bridge.native) return;
     let disposed = false;
@@ -960,6 +985,7 @@ export function VaultShell({
                         initialFolder,
                       }),
                     onMove: (item) => setWorkflow({ kind: 'move', item }),
+                    onTrash: trash.moveToTrash,
                     // Offer Team Info only while the Files list is active, since
                     // it renders in the details column beside the list.
                     ...(filesHere
@@ -1038,6 +1064,7 @@ export function VaultShell({
                         uploadDroppedFile={uploadDroppedFile}
                         accessNow={accessNow}
                         accessGenerations={accessGenerations}
+                        trash={trash}
                         onTeamInfo={(storeId, trigger) => {
                           locations.setDetails(false);
                           setTeamInfo({ storeId, trigger });
@@ -1104,7 +1131,7 @@ export function VaultShell({
                 locations.openFiles(`${storeId}|${path}`, 'All')
               }
               onOpenServer={openServer}
-              onDelete={(item) => setWorkflow({ kind: 'delete', item })}
+              onTrash={trash.moveToTrash}
               onConflict={(item, draft, operation) =>
                 setWorkflow({ kind: 'conflict', item, draft, operation })
               }
@@ -1151,6 +1178,7 @@ export function VaultShell({
         commandError={commandError}
         mutationError={mutationError}
         refreshSnapshot={refreshSnapshot}
+        restoreTrash={trash.restoreTo}
         setResumeDraft={setResumeDraft}
         setConcealSignal={setConcealSignal}
         setLatest={setLatest}

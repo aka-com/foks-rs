@@ -7,6 +7,7 @@ import {
   catalog,
   catalogFolders,
   displayPathComponent,
+  isTrashPath,
   kindOf,
   nameOf,
   readersOf,
@@ -208,6 +209,11 @@ export function filesFolderCrumb(
   const store = storeOf(snapshot, selected.store);
   if (!store) return { labels: [], back: null };
   const storePage = location.kind === 'store';
+  if (isTrashPath(selected.path))
+    return {
+      labels: [store.name, 'Trash'],
+      back: folderKey(storePage, store.id, '/'),
+    };
   const root = folderTree(
     catalog(snapshot).filter((item) => item.store === store.id),
     catalogFolders(snapshot).filter((item) => item.store === store.id),

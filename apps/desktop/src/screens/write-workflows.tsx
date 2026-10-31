@@ -31,6 +31,7 @@ import {
   defaultCreateStore,
   leaseLapsed,
   loginField,
+  parseTrashName,
   loginFieldOf,
   loginLines,
   nameOf,
@@ -63,6 +64,12 @@ import type { MutationFailureHandler } from '../mutation-recovery';
 import { useToast } from '/kit/toasts';
 import { BigTile, itemTile, newItemTile } from './item-tile';
 import { itemActionProblem } from './store-access';
+import {
+  EmptyTrashSheet,
+  PERMANENT_DELETE_COPY,
+  RestoreConflictSheet,
+  TRASH_UNAVAILABLE_COPY,
+} from './trash-sheets';
 
 export type NewKind = Exclude<ItemKind, 'Folder'>;
 
@@ -139,7 +146,14 @@ export type WriteWorkflow =
       draft?: NewDraft;
     }
   | { kind: 'move'; item: Item }
-  | { kind: 'delete'; item: Item }
+  /**
+   * Permanently removes an entry in Trash, or with `outsideTrash` an item in
+   * a team whose Trash this account cannot set up.
+   */
+  | { kind: 'delete'; item: Item; outsideTrash?: boolean }
+  /** Restoring a Trash entry found another item at `destination`. */
+  | { kind: 'restore-conflict'; item: Item; destination: string }
+  | { kind: 'empty-trash'; store: StoreRef }
   | {
       kind: 'conflict';
       item: Item;
@@ -1166,6 +1180,7 @@ export function WriteOverlay({
   onDeleteConflict,
   onDeleted,
   onOpenExisting,
+  onRestoreTrash,
   accessNow = () => Date.now() / 1000,
 }: {
   snapshot: AgentSnapshot;
@@ -1198,6 +1213,8 @@ export function WriteOverlay({
   onOpenExisting: (
     workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'exists' }>,
   ) => Promise<void>;
+  /** Moves a Trash entry to `destination`, outside Trash. */
+  onRestoreTrash: (item: Item, destination: string) => Promise<void>;
   accessNow?: () => number;
 }): ReactNode {
   if (!workflow) return null;
@@ -1264,6 +1281,27 @@ export function WriteOverlay({
         onRefreshConflict={onRefreshConflict}
         onDiscardConflict={onDiscardConflict}
         onError={onError}
+      />
+    );
+  if (workflow.kind === 'restore-conflict')
+    return (
+      <RestoreConflictSheet
+        snapshot={snapshot}
+        workflow={workflow}
+        setWorkflow={setWorkflow}
+        onRestoreTrash={onRestoreTrash}
+      />
+    );
+  if (workflow.kind === 'empty-trash')
+    return (
+      <EmptyTrashSheet
+        snapshot={snapshot}
+        bridge={bridge}
+        workflow={workflow}
+        setWorkflow={setWorkflow}
+        onApplied={onApplied}
+        onMutationError={onMutationError}
+        accessNow={accessNow}
       />
     );
   return (
@@ -1388,8 +1426,16 @@ function ConflictSheet({
   );
 }
 
+/** What an entry in Trash is called: its original name where recorded. */
+function trashLabel(item: Item): string {
+  const parsed = parseTrashName(nameOf(item.path));
+  return parsed?.kind === 'path' ? nameOf(parsed.original) : nameOf(item.path);
+}
+
 /**
- * Confirmation dialog for deleting an item.
+ * Confirmation dialog for permanently deleting an entry in Trash, or an item
+ * in a team whose Trash this account cannot set up. Moving an item to Trash
+ * needs no confirmation; this one cannot be undone.
  */
 function DeleteSheet({
   snapshot,
@@ -1439,13 +1485,14 @@ function DeleteSheet({
           storeId: workflow.item.store,
           path: workflow.item.path,
           version: workflow.item.version,
+          ...(workflow.outsideTrash ? { outsideTrash: true } : {}),
         });
         onDeleted?.(workflow.item);
         setWorkflow(null);
         // Keep refresh failure separate from the acknowledged deletion.
         try {
           await onApplied(
-            `Deleted ${nameOf(workflow.item.path)}`,
+            `Deleted ${trashLabel(workflow.item)} permanently`,
             storeOf(snapshot, workflow.item.store)?.server,
           );
         } catch (failure) {
@@ -1471,11 +1518,18 @@ function DeleteSheet({
   return (
     <AlertDialog
       destructive
-      title={`Delete “${nameOf(workflow.item.path)}”?`}
+      title={`Delete “${trashLabel(workflow.item)}” Permanently?`}
       // `removeItem` passes the currently displayed item version so a concurrent
       // edit elsewhere triggers a version conflict instead of being overwritten.
-      message="This item will be deleted if it has not been modified by someone else. Earlier versions will no longer be accessible."
-      confirmLabel={deleting ? 'Deleting…' : 'Delete'}
+      message={[
+        workflow.outsideTrash ? TRASH_UNAVAILABLE_COPY : '',
+        workflow.item.kind === 'Folder'
+          ? `This folder and everything in it will be deleted. ${PERMANENT_DELETE_COPY}`
+          : PERMANENT_DELETE_COPY,
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      confirmLabel={deleting ? 'Deleting…' : 'Delete Permanently'}
       busy={deleting}
       confirmDisabled={uncertain || Boolean(problem)}
       confirmTitle={problem}

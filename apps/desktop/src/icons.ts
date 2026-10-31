@@ -51,6 +51,7 @@ import ShieldCheck from 'lucide/dist/esm/icons/shield-check.mjs';
 import Terminal from 'lucide/dist/esm/icons/terminal.mjs';
 import Trash from 'lucide/dist/esm/icons/trash.mjs';
 import TriangleAlert from 'lucide/dist/esm/icons/triangle-alert.mjs';
+import Undo2 from 'lucide/dist/esm/icons/undo-2.mjs';
 import Upload from 'lucide/dist/esm/icons/upload.mjs';
 import User from 'lucide/dist/esm/icons/user.mjs';
 import UserPlus from 'lucide/dist/esm/icons/user-plus.mjs';
@@ -118,6 +119,7 @@ export const FOKS_ICONS = {
   userPlus: UserPlus,
   warning: TriangleAlert,
   securityKey: SecurityKey,
+  restore: Undo2,
 } as const satisfies Record<FoksIconName, IconNode>;
 
 export type { FoksIconName } from './icon-name';

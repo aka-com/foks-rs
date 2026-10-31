@@ -173,6 +173,33 @@ export type MoveItemRequest = ItemRequest & {
   direntId: string;
 };
 export type RemoveItemRequest = ItemRequest & { direntId: string };
+export type RestoreTrashRequest = RemoveItemRequest & { destination: string };
+export type PermanentRemoveRequest = RemoveItemRequest & {
+  /**
+   * Removes an item outside Trash. The host allows it only for a file in a
+   * team that has no `/.trash`, which members other than owners cannot
+   * create.
+   */
+  outsideTrash?: boolean;
+};
+
+/** One Trash entry, bound to the dirent and version the catalog listed. */
+export interface TrashEntrySelection {
+  path: string;
+  version: number;
+  direntId: string;
+}
+
+export interface EmptyTrashRequest {
+  storeId: StoreRef;
+  entries: TrashEntrySelection[];
+}
+
+export interface TrashMutationResponse {
+  applied: boolean;
+  /** Where the entry is now: its Trash path, or the restored path. */
+  path: string;
+}
 
 export interface ImportDroppedFileRequest extends CreateRoleRequest {
   storeId: StoreRef;
@@ -405,6 +432,14 @@ export function decodeClipboardCopy(value: unknown): ClipboardCopyResponse {
 export function decodeDownload(value: unknown): DownloadResponse {
   const item = record(value, 'download_file response');
   return { saved: bool(item.saved, 'download_file.saved') };
+}
+
+export function decodeTrashMutation(value: unknown): TrashMutationResponse {
+  const item = record(value, 'trash mutation response');
+  return {
+    applied: bool(item.applied, 'trash mutation response.applied'),
+    path: string(item.path, 'trash mutation response.path'),
+  };
 }
 
 export function decodeMutation(value: unknown): MutationResponse {

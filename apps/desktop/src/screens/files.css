@@ -826,3 +826,47 @@
   grid-column: 2;
   margin-left: 0;
 }
+
+/* ---------------------------------------------------------- Trash -- */
+/* One store's Trash in the list column: notices, then one row per entry with
+   Restore and Delete Permanently always shown at the trailing edge. */
+.folder-body .trash-view > .notice {
+  margin: 8px 14px 0;
+}
+.folder-body .trash-rows {
+  padding-top: 4px;
+}
+.folder-body .row.trash-row:hover {
+  background: transparent;
+}
+.folder-body .row.trash-row .trash-acts {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Empty Trash's list of what it deletes and what stays. */
+.trash-empty-list {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+  max-height: 200px;
+  overflow: auto;
+}
+.trash-empty-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.trash-empty-list small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.trash-empty-list li.kept > span {
+  color: var(--muted);
+}

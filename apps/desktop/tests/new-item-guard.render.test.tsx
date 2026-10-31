@@ -540,12 +540,21 @@ test('ambiguous move keeps the draft visible and cannot be submitted twice', asy
   assert.equal(calls, 1);
 });
 
-test('Command-Backspace asks to delete the selected item, and Return keeps it', async () => {
+test('Command-Backspace moves the selected item to Trash without asking', async () => {
   const removed: unknown[] = [];
+  const trashed: unknown[] = [];
+  let finish!: () => void;
   const { rendered, store } = await mount({
     removeItem: async (next) => {
       removed.push(next);
       return { applied: true };
+    },
+    trashItem: async (next) => {
+      trashed.push(next);
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      return { applied: true, path: '/.trash/owner/x' };
     },
   });
   const { FIXTURE } = (await vite.ssrLoadModule(
@@ -561,62 +570,29 @@ test('Command-Backspace asks to delete the selected item, and Return keeps it', 
   // ⌘⌫ inside a text input is ignored by the item deletion shortcut.
   const search = document.querySelector<HTMLInputElement>('.topbar input')!;
   ui.fireEvent.keyDown(search, { key: 'Backspace', metaKey: true });
-  assert.equal(rendered.queryByRole('alertdialog'), null);
+  assert.deepEqual(trashed, []);
   ui.fireEvent.keyDown(document.body, { key: 'Backspace', metaKey: true });
-  const dialog = await rendered.findByRole('alertdialog');
-  // Cancel is the default button: pressing Return closes the alert without deleting.
-  assert.equal(
-    document.activeElement,
-    ui.within(dialog).getByRole('button', { name: 'Cancel' }),
-  );
-  ui.fireEvent.keyDown(dialog, { key: 'Enter' });
+  // The move uses the selected version and dirent, and asks nothing: it can
+  // be undone from the toast.
   await ui.waitFor(() =>
-    assert.equal(rendered.queryByRole('alertdialog'), null),
+    assert.deepEqual(trashed, [
+      {
+        storeId: item.store,
+        path: item.path,
+        version: item.version,
+        direntId: item.direntId,
+      },
+    ]),
+  );
+  assert.equal(rendered.queryByRole('alertdialog'), null);
+  await ui.act(async () => finish());
+  const name = item.path.slice(item.path.lastIndexOf('/') + 1);
+  await ui.waitFor(() =>
+    assert.ok(
+      (document.querySelector('.toasts')?.textContent ?? '').includes(
+        `Moved ${name} to Trash`,
+      ),
+    ),
   );
   assert.deepEqual(removed, []);
-});
-
-test('file deletion uses its selected version and blocks Escape while pending', async () => {
-  let request: unknown;
-  let finish!: () => void;
-  const { rendered, store } = await mount({
-    removeItem: async (next) => {
-      request = next;
-      await new Promise<void>((resolve) => {
-        finish = resolve;
-      });
-      return { applied: true };
-    },
-  });
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const item = FIXTURE.items.find(
-    (item) => item.store === 'acct:personal' && item.kind === 'File',
-  )!;
-  assert.ok(item);
-  await ui.act(async () => {
-    store.select({ store: item.store, path: item.path });
-  });
-  await itemMenuAction('Delete…');
-  const dialog = await rendered.findByRole('alertdialog');
-  assert.match(
-    dialog.textContent ?? '',
-    /deleted if it has not been modified by someone else/,
-  );
-  ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Delete' }));
-  await ui.waitFor(() =>
-    assert.deepEqual(request, {
-      storeId: item.store,
-      path: item.path,
-      version: item.version,
-      direntId: item.direntId,
-    }),
-  );
-  ui.fireEvent.keyDown(dialog, { key: 'Escape' });
-  assert.ok(rendered.getByRole('alertdialog'));
-  await ui.act(async () => finish());
-  await ui.waitFor(() =>
-    assert.equal(rendered.queryByRole('alertdialog'), null),
-  );
 });

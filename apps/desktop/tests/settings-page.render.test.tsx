@@ -592,7 +592,18 @@ test('Preferences holds desktop alert preferences and the accent color', async (
     [...main.querySelectorAll(':scope > .sec')].map(
       (label) => label.textContent,
     ),
-    ['Appearance', 'Desktop alerts', 'Onboarding tips'],
+    ['Appearance', 'Desktop alerts', 'Trash', 'Onboarding tips'],
+  );
+  // Automatic Trash emptying is off until this device opts in.
+  const autoEmpty = rendered.getByRole('group', {
+    name: 'Empty Trash automatically',
+  });
+  assert.equal(
+    ui
+      .within(autoEmpty)
+      .getByRole('button', { name: 'Never' })
+      .getAttribute('aria-pressed'),
+    'true',
   );
   assert.equal(rendered.queryByRole('button', { name: 'Passphrase…' }), null);
   assert.ok(

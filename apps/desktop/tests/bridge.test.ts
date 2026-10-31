@@ -9,6 +9,7 @@ import {
   decodeCopy,
   decodeDownload,
   decodeMutation,
+  decodeTrashMutation,
   decodeCheckedProfile,
   decodePendingOperations,
   decodeRecoveryPhrase,
@@ -80,7 +81,7 @@ test('mock mutations reject a recreated source with the same path and version', 
     version: original.version,
     direntId: original.direntId,
   };
-  await bridge.removeItem(request);
+  await bridge.trashItem(request);
   await bridge.createTextItem({
     value: 'test',
     storeId: original.store,
@@ -94,6 +95,7 @@ test('mock mutations reject a recreated source with the same path and version', 
   await assert.rejects(
     bridge.moveItem({ ...request, destination: '/aba-moved' }),
   );
+  await assert.rejects(bridge.trashItem(request));
   await assert.rejects(bridge.removeItem(request));
   assert.ok(
     (await bridge.listCatalog()).items.some(
@@ -322,6 +324,86 @@ test('copyItemField sends the exact version and the field to the host', async ()
         },
       ],
     ]);
+  } finally {
+    if (previousWindow === undefined)
+      delete (globalThis as { window?: Window }).window;
+    else
+      Object.defineProperty(globalThis, 'window', {
+        value: previousWindow,
+        configurable: true,
+      });
+  }
+});
+
+test('Trash commands send the bound selection and decode the new path', async () => {
+  const previousWindow = globalThis.window;
+  const calls: [string, unknown][] = [];
+  Object.defineProperty(globalThis, 'window', {
+    value: {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: unknown) => {
+          calls.push([command, args]);
+          return command === 'remove_item' || command === 'empty_trash'
+            ? { applied: true }
+            : { applied: true, path: `/moved/${command}` };
+        },
+      },
+    },
+    configurable: true,
+  });
+  const selection = {
+    storeId: 'opaque-store-ref',
+    path: '/logins/github.com',
+    version: 4,
+    direntId: '07'.repeat(16),
+  };
+  try {
+    assert.deepEqual(await tauriBridge.trashItem(selection), {
+      applied: true,
+      path: '/moved/trash_item',
+    });
+    assert.deepEqual(
+      await tauriBridge.restoreTrashItem({
+        ...selection,
+        destination: '/logins/github.com (restored)',
+      }),
+      { applied: true, path: '/moved/restore_trash_item' },
+    );
+    assert.deepEqual(await tauriBridge.removeItem(selection), {
+      applied: true,
+    });
+    assert.deepEqual(
+      await tauriBridge.removeItem({ ...selection, outsideTrash: true }),
+      { applied: true },
+    );
+    const { storeId, ...entry } = selection;
+    assert.deepEqual(
+      await tauriBridge.emptyTrash({
+        storeId,
+        entries: [entry, { ...entry, path: '/.trash/owner/b', version: 2 }],
+      }),
+      { applied: true },
+    );
+    assert.deepEqual(calls, [
+      ['trash_item', selection],
+      [
+        'restore_trash_item',
+        { ...selection, destination: '/logins/github.com (restored)' },
+      ],
+      ['remove_item', { ...selection, outsideTrash: false }],
+      ['remove_item', { ...selection, outsideTrash: true }],
+      [
+        'empty_trash',
+        {
+          storeId,
+          entries: [entry, { ...entry, path: '/.trash/owner/b', version: 2 }],
+        },
+      ],
+    ]);
+    assert.throws(
+      () => decodeTrashMutation({ applied: true }),
+      /trash mutation response\.path/,
+    );
   } finally {
     if (previousWindow === undefined)
       delete (globalThis as { window?: Window }).window;
@@ -3402,5 +3484,47 @@ test('mock catalogs retain empty folder identities through a rename', async () =
       direntId: renamed.direntId,
     }),
     (error: unknown) => normalizeCommandError(error).code === 'invalid-request',
+  );
+});
+
+test('the mock refuses a second selection in a store it wrote to until the catalog is read again', async () => {
+  const bridge = mockBridge(FIXTURE);
+  const listed = (await bridge.listCatalog()).items.filter(
+    (item) =>
+      item.store === 'acct:personal' &&
+      ['/logins/github.com', '/documents/passport-scan.pdf'].includes(
+        item.path,
+      ),
+  );
+  assert.equal(listed.length, 2);
+  const [first, second] = listed.map((item) => ({
+    storeId: item.store,
+    path: item.path,
+    version: item.version,
+    direntId: item.direntId,
+  }));
+  const { path } = await bridge.trashItem(first);
+  // The host discards the store's catalog items after a write, as here.
+  await assert.rejects(
+    bridge.trashItem(second),
+    (error: unknown) => normalizeCommandError(error).code === 'conflict',
+  );
+  await bridge.listCatalog();
+  const { path: other } = await bridge.trashItem(second);
+  const entries = (await bridge.listCatalog()).items.filter((item) =>
+    [path, other].includes(item.path),
+  );
+  await bridge.emptyTrash({
+    storeId: 'acct:personal',
+    entries: entries.map(({ path, version, direntId }) => ({
+      path,
+      version,
+      direntId,
+    })),
+  });
+  assert.ok(
+    !(await bridge.listCatalog()).items.some((item) =>
+      [path, other].includes(item.path),
+    ),
   );
 });

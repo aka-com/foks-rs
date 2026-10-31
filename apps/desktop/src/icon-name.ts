@@ -50,4 +50,5 @@ export type FoksIconName =
   | 'panelLeft'
   | 'userPlus'
   | 'warning'
-  | 'securityKey';
+  | 'securityKey'
+  | 'restore';

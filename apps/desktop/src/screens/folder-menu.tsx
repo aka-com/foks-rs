@@ -4,8 +4,7 @@
  *
  * Any element with `data-folder-store` and `data-folder-path` opens the menu on
  * right-click, ContextMenu, or Shift-F10, offering New Folder, Rename or Move…,
- * Delete Folder (disabled as unsupported), and team info and membership actions
- * for team stores. Opening the menu preserves the current selection, and
+ * Move Folder to Trash, and team info and membership actions for team stores. Opening the menu preserves the current selection, and
  * closing it restores focus to the trigger row.
  */
 
@@ -14,7 +13,12 @@ import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import { anyDialogOpen, ContextMenu, Menu } from '/kit/overlay-primitives';
 import { useOptionalToast } from '/kit/toasts';
 import { MenuItem } from '../components';
-import { storeAvailability, storeDescription, storeOf } from '../model';
+import {
+  isTrashPath,
+  storeAvailability,
+  storeDescription,
+  storeOf,
+} from '../model';
 import type { AgentSnapshot, Item, Store } from '../model';
 import type { Location } from '../location';
 import { manageReason } from './group-model';
@@ -24,6 +28,8 @@ import { writeBlockReason } from './write-workflows';
 export interface FolderMenuActions {
   onNewFolder?: (storeId: string, path: string) => void;
   onMove?: (item: Item) => void;
+  /** Moves a folder with everything in it to its store's Trash. */
+  onTrash?: (item: Item) => void;
   onTeamInfo?: (storeId: string, trigger?: HTMLElement) => void;
   onNavigate: (location: Location) => void;
   accessNow?: () => number;
@@ -52,6 +58,7 @@ export function useFolderMenu(
   {
     onNewFolder,
     onMove,
+    onTrash,
     onTeamInfo,
     onNavigate,
     accessNow = () => Date.now() / 1000,
@@ -72,6 +79,8 @@ export function useFolderMenu(
       return false;
     const row = target.closest<HTMLElement>('[data-folder-store]');
     if (!row?.dataset.folderStore || !row.dataset.folderPath) return false;
+    // Trash is not a folder to create in, move or delete.
+    if (isTrashPath(row.dataset.folderPath)) return false;
     const trigger = row.matches('[role="button"], button')
       ? row
       : (row.querySelector<HTMLElement>('.fselect') ?? row);
@@ -175,13 +184,21 @@ export function useFolderMenu(
             Rename or Move…
           </MenuItem>
         ) : null}
-        {open.path !== '/' ? (
+        {open.path !== '/' && onTrash ? (
           <MenuItem
             icon="trash"
             danger
-            reason="Deleting folders is not supported by the desktop agent."
+            reason={
+              folder
+                ? itemActionProblem(snapshot, folder, true, accessNow())
+                : 'Refresh this vault to load the folder before moving it to Trash.'
+            }
+            onClick={() => {
+              close();
+              if (folder && allowMove(folder)) onTrash(folder);
+            }}
           >
-            Delete Folder
+            Move Folder to Trash
           </MenuItem>
         ) : null}
         {store?.kind === 'team' ? (
