@@ -10,6 +10,9 @@ use super::{
 /// Application errors that a v1 server may place on the v0.1.9 wire.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RpcStatus {
+    /// The authenticated listener could not bind the peer's client
+    /// certificate to an active credential (go-foks `AUTH_ERROR`).
+    AuthError,
     OAuth2(String),
     OAuth2Auth(Box<RpcStatus>),
     Timeout,
@@ -33,7 +36,10 @@ pub enum RpcStatus {
     MerkleVerify(String),
     KvNoEnt,
     KvRace(String),
-    KvPermission { operation: u64, resource: u64 },
+    KvPermission {
+        operation: u64,
+        resource: u64,
+    },
     KeyNotFound(String),
     KexBadSecret,
     NameInUse,
@@ -71,6 +77,7 @@ impl RpcStatus {
     /// `OAuth2Auth` reports its own code, not the code of the wrapped status.
     pub fn code(&self) -> u64 {
         match self {
+            Self::AuthError => STATUS_AUTH_ERROR,
             Self::OAuth2(_) => STATUS_OAUTH2_ERROR,
             Self::OAuth2Auth(_) => STATUS_OAUTH2_AUTH_ERROR,
             Self::Timeout => STATUS_TIMEOUT_ERROR,
