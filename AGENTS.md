@@ -31,6 +31,11 @@ A parallel run can intermittently fail the first-run receipt-lock release
 assertion; rerun that test in isolation and the native suite serially before
 attributing the failure to a code change.
 
+`tools/foks-server/check.sh` builds `foks-metadata-core` for
+`wasm32-unknown-unknown`. `rust-toolchain.toml` lists that target, but a
+1.95.0 toolchain installed before it did may lack it; add it with
+`rustup target add wasm32-unknown-unknown`.
+
 If CLI integration readiness checks report an IPC protocol version mismatch
 while Cargo reports the standalone agent as fresh, force a relink with
 `cargo rustc --locked -j 2 -p foks-agent --bin foks-agent -- -C metadata=agent-readiness-recheck`

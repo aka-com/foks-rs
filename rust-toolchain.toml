@@ -2,3 +2,5 @@
 channel = "1.95.0"
 profile = "minimal"
 components = ["clippy", "rustfmt"]
+# tools/foks-server/check.sh builds the hosted metadata kernel for wasm32.
+targets = ["wasm32-unknown-unknown"]
