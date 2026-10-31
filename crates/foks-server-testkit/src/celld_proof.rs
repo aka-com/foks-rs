@@ -571,6 +571,9 @@ impl Schema {
         self.validate_snapshot(before)?;
         self.validate_snapshot(after)?;
         let mut changes = Vec::new();
+        // Whether an UNHASHED_COUNTERS column moved. The state hash leaves it
+        // out, so it alone cannot make before_hash and after_hash differ.
+        let mut unhashed_counter_advanced = false;
         for (table, (old, new)) in self
             .tables
             .iter()
@@ -619,6 +622,12 @@ impl Schema {
                         "proof namespace identity changed"
                     }));
                 }
+                if UNHASHED_COUNTERS
+                    .iter()
+                    .any(|(name, _)| table.name == *name)
+                {
+                    unhashed_counter_advanced = true;
+                }
                 continue;
             }
             if !BASE_TABLES.contains(&table.name.as_str()) {
@@ -662,6 +671,16 @@ impl Schema {
                     new: new.get(key).cloned(),
                 });
             }
+        }
+        // A read-dependency trigger fired, so the native operation wrote
+        // something, but no base row in the snapshot changed: it wrote only
+        // tables outside the proof (kv_directories, kv_roots, ...). Its
+        // before_hash and after_hash are equal, so the bridge would release
+        // the output without asking the authority for a receipt. Refuse it
+        // instead. kv_locks has no read-dependency trigger, so a delta that
+        // changes only kv_locks has changes and passes this check.
+        if unhashed_counter_advanced && changes.is_empty() {
+            return Err(invalid("proof revision advanced without a base change"));
         }
         changes.sort_by_key(|c| {
             BASE_TABLES
@@ -743,10 +762,15 @@ mod tests {
                 .execute(&format!("UPDATE kv_namespaces SET {name}={name}+1"), [])
                 .unwrap();
             let forged = schema.snapshot(&connection).unwrap();
-            let delta = schema.delta(&after, &forged).unwrap();
-            assert!(delta.changes.is_empty(), "{name} cannot be a base write");
+            // A counter is not a base write: with no base change the
+            // revision its update advanced is refused.
+            assert!(
+                schema.delta(&after, &forged).is_err(),
+                "{name} cannot be a base write"
+            );
             assert_ne!(
-                delta.before_hash, delta.after_hash,
+                schema.state_digest(&after).unwrap(),
+                schema.state_digest(&forged).unwrap(),
                 "{name} remains in full hash"
             );
             connection
@@ -776,11 +800,14 @@ mod tests {
             )
             .unwrap();
         let after = schema.snapshot(&connection).unwrap();
-        let delta = schema.delta(&before, &after).unwrap();
-        assert!(delta.changes.is_empty());
         // The revision counts trigger firings, so the state hash leaves it out.
-        assert_eq!(delta.before_hash, delta.after_hash);
+        assert_eq!(
+            schema.state_digest(&before).unwrap(),
+            schema.state_digest(&after).unwrap()
+        );
         assert_ne!(digest(&before).unwrap(), digest(&after).unwrap());
+        // With no base change the advance proves nothing, so it is refused.
+        assert!(schema.delta(&before, &after).is_err());
         connection
             .execute(
                 "UPDATE metadata_read_dependency SET incarnation=?",
@@ -790,6 +817,42 @@ mod tests {
         assert!(schema
             .delta(&after, &schema.snapshot(&connection).unwrap())
             .is_err());
+    }
+
+    #[test]
+    fn a_revision_advance_without_a_row_change_is_refused_rather_than_released() {
+        let (_directory, connection, schema) = fixture();
+        connection
+            .execute_batch(
+                "INSERT INTO kv_directories VALUES(zeroblob(33),zeroblob(16),1,3,0,1,0,X'01');
+                 INSERT INTO kv_roots VALUES(zeroblob(33),1,zeroblob(16),1,X'01');",
+            )
+            .unwrap();
+        let before = schema.snapshot(&connection).unwrap();
+        // A native write that leaves every snapshot row as it was (here an
+        // update that sets root_version to its own value) still fires the
+        // kv_roots read-dependency trigger. The namespace accounting follows
+        // only uid and exact_root, so nothing else moves.
+        connection
+            .execute("UPDATE kv_roots SET root_version=root_version", [])
+            .unwrap();
+        let after = schema.snapshot(&connection).unwrap();
+        assert_ne!(
+            read_dependency_revision(&before, &schema),
+            read_dependency_revision(&after, &schema),
+            "a read-dependency trigger fired"
+        );
+        // No other row changed, so the state hashes are equal and an
+        // accepted delta would skip the authority entirely.
+        assert_eq!(
+            schema.state_digest(&before).unwrap(),
+            schema.state_digest(&after).unwrap()
+        );
+        let error = schema.delta(&before, &after).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "proof revision advanced without a base change"
+        );
     }
 
     /// Applies `delta` to a materialized `before` as the authority in
@@ -1054,12 +1117,17 @@ mod tests {
             .execute("UPDATE kv_dirent_current SET creation_time=2", [])
             .unwrap();
         let tampered = schema.snapshot(&connection).unwrap();
-        let derived_only = schema.delta(&after, &tampered).unwrap();
-        assert!(derived_only.changes.is_empty());
-        // The Worker must reject this after-hash mismatch: no base mutations
-        // could reproduce it. Its actual SQL replay is tested in authority.cases.mjs
-        // (run through authority.test.mjs) and in an_authority_style_replay_reaches_the_native_after_hash.
-        assert_ne!(derived_only.before_hash, derived_only.after_hash);
+        // No base mutation could reproduce a derived-only change. The update
+        // advanced the read-dependency revision with no base change, so the
+        // delta is refused natively; the Worker would also reject the
+        // after-hash mismatch. Its SQL replay is tested in authority.cases.mjs
+        // (run through authority.test.mjs) and in
+        // an_authority_style_replay_reaches_the_native_after_hash.
+        assert!(schema.delta(&after, &tampered).is_err());
+        assert_ne!(
+            schema.state_digest(&after).unwrap(),
+            schema.state_digest(&tampered).unwrap()
+        );
     }
 
     #[test]

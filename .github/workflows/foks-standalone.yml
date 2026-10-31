@@ -13,6 +13,8 @@ on:
       - "scripts/check-crate-layers.py"
       - "scripts/test_check_crate_layers.py"
       - "tools/crate-layers.toml"
+      - "tools/foks-celld-proof/**"
+      - "apps/desktop/src-tauri/Cargo.toml"
       - "tools/foks-client/**"
       - "tools/foks-protocol-sync/**"
       - "tools/foks-server/**"
@@ -181,6 +183,22 @@ jobs:
         run: go test -C tools/foks-v019-oracle ./...
       - name: Test the isolated server graph
         run: tools/foks-server/check.sh
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version-file: .node-version
+      # The proof authority (tools/foks-celld-proof/authority.mjs) must reach
+      # the same state hash as the native delta. check.sh has just built the
+      # wasm32 kernel with its qualification features, which the decoder
+      # cases load; the vectors come from the native celld_proof module.
+      - name: Check the celld proof authority against native vectors
+        run: |
+          vectors="$RUNNER_TEMP/celld-proof-vectors"
+          cargo run --offline --locked -p foks-server-testkit --features celld-proof \
+            --example celld-proof-vectors -- "$vectors"
+          cd tools/foks-celld-proof
+          FOKS_PROOF_VECTORS="$vectors/vectors.json" \
+            FOKS_PROOF_NODE_DECODER_WASM="$GITHUB_WORKSPACE/target/wasm32-unknown-unknown/debug/foks_metadata_core.wasm" \
+            node --test
       - name: Verify the Rust client against Go v0.1.9
         run: tools/foks-v019-oracle/run-live-compat.sh
       - name: Verify OIDC software and hardware clients against Go v0.1.9

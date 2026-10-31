@@ -29,4 +29,6 @@ authority and node-decoder cases as skipped unless `FOKS_PROOF_VECTORS` and
 `FOKS_PROOF_NODE_DECODER_WASM` are set. Generate the vectors with `cargo run
 -p foks-server-testkit --features celld-proof --example celld-proof-vectors
 -- DIR` and set `FOKS_PROOF_VECTORS=DIR/vectors.json`; the decoder is the
-`wasm32-unknown-unknown` build of `foks-metadata-core`.
+`wasm32-unknown-unknown` build of `foks-metadata-core`. The nightly `server full` job
+of the standalone workflow generates the vectors and runs these cases against
+the kernel that `tools/foks-server/check.sh` builds.
