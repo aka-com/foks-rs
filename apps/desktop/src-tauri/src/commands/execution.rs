@@ -175,30 +175,39 @@ pub(super) async fn apply_kv_mutation_with_transport(
     let mut mutation = PendingKvMutation(Some(mutation));
     let transport = foks_desktop::bind_transport_deadline(transport, state.deadline()?.clone())
         .map_err(AgentError::from_desktop)?;
-    match kv_mutation_store(mutation.0.as_ref().expect("owned KV mutation")) {
-        Some(store) => state.invalidate_catalog_items(&store),
+    let store = kv_mutation_store(mutation.0.as_ref().expect("owned KV mutation"));
+    run_kv_writes(state, store.as_ref(), move || {
+        execute_kv_mutation(transport.as_ref(), mutation.take(), kind)
+    })
+    .await
+    .map(|()| MutationDto { applied: true })
+}
+
+/// Runs KV writes into `store` on an admitted native worker under the
+/// command's deadline. The store's catalog items are discarded first, since
+/// the writes change them whatever their outcome, and an ambiguous failure
+/// requires a refresh before the next mutation. `writes` must use a
+/// transport bound to the same deadline.
+pub(super) async fn run_kv_writes<T: Send + 'static>(
+    state: &AppState,
+    store: Option<&CatalogStoreRef>,
+    writes: impl FnOnce() -> Result<T, AgentError> + Send + 'static,
+) -> Result<T, AgentError> {
+    match store {
+        Some(store) => state.invalidate_catalog_items(store),
         // Not a KV write, so which items it changed is unknown. Retire the
         // whole catalog rather than leave any of it stale.
         None => state.invalidate_catalog(),
     }
-    let result = super::deadline::run(
-        state.deadline()?,
-        true,
-        move || execute_kv_mutation(transport.as_ref(), mutation.take(), kind),
-        |_| {},
-    )
-    .await;
-    match result {
-        Ok(()) => Ok(MutationDto { applied: true }),
-        Err(error) => {
-            if error.ambiguous {
-                state
-                    .mutation_requires_refresh
-                    .store(true, Ordering::Release);
-            }
-            Err(error)
+    let result = super::deadline::run(state.deadline()?, true, writes, |_| {}).await;
+    if let Err(error) = &result {
+        if error.ambiguous {
+            state
+                .mutation_requires_refresh
+                .store(true, Ordering::Release);
         }
     }
+    result
 }
 
 pub(super) async fn apply_operation(

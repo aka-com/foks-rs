@@ -58,7 +58,9 @@ fn command_class(name: &str) -> Result<Option<DeadlineClass>, AgentError> {
         | "retry_agent_connection"
         | "sso_request"
         | "take_agent_connection_loss" => None,
-        "import_dropped_file" | "replace_dropped_file" | "resume_file_upload" => {
+        // Empty Trash removes every named entry, and a folder's whole
+        // subtree, under one mutation.
+        "empty_trash" | "import_dropped_file" | "replace_dropped_file" | "resume_file_upload" => {
             Some(DeadlineClass::Bulk)
         }
         // A catalog read walks every store of every profile it covers, one
@@ -148,6 +150,7 @@ fn command_class(name: &str) -> Result<Option<DeadlineClass>, AgentError> {
         | "resume_owner_recovery"
         | "resume_yubi_account"
         | "resume_yubi_management_key"
+        | "restore_trash_item"
         | "revoke_owner_backup"
         | "revoke_yubi_device"
         | "rotate_yubi_management_key"
@@ -157,6 +160,7 @@ fn command_class(name: &str) -> Result<Option<DeadlineClass>, AgentError> {
         | "set_server_label"
         | "set_yubi_passphrase"
         | "sync_yubi_account"
+        | "trash_item"
         | "unblock_yubi_pin"
         | "verify_account_passphrase"
         | "verify_yubi_passphrase"
@@ -260,8 +264,14 @@ mod tests {
     }
 
     #[test]
-    fn vault_item_commands_take_the_ordinary_budget() {
-        for name in ["copy_item_field", "copy_item_value"] {
+    fn vault_item_and_trash_commands_have_deadline_classes() {
+        for name in [
+            "copy_item_field",
+            "copy_item_value",
+            "trash_item",
+            "restore_trash_item",
+            "remove_item",
+        ] {
             let admitted = CommandState::admitted(&state(), name).unwrap();
             let remaining = admitted
                 .deadline()
@@ -270,5 +280,14 @@ mod tests {
                 .saturating_duration_since(std::time::Instant::now());
             assert!(remaining <= std::time::Duration::from_secs(15), "{name}");
         }
+        let empty = CommandState::admitted(&state(), "empty_trash").unwrap();
+        assert!(
+            empty
+                .deadline()
+                .unwrap()
+                .instant()
+                .saturating_duration_since(std::time::Instant::now())
+                > std::time::Duration::from_secs(290)
+        );
     }
 }
