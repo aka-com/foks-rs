@@ -45,3 +45,7 @@ cargo test --offline --locked "${parallel_test_args[@]}"
 # Native credential state in the application tests must be accessed serially.
 cargo test --offline --locked -p foks-client-app -- --test-threads=1
 cargo clippy --offline --locked "${package_args[@]}" --all-targets -- -D warnings
+# The client crates enable foks-local-deadline's clock feature, so the run
+# above lints only that configuration. Lint the crate alone without it, as
+# foks-agent-proto uses it.
+cargo clippy --offline --locked -p foks-local-deadline --all-targets -- -D warnings
