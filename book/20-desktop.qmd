@@ -209,6 +209,13 @@ budget, while the agent still caps each of those requests at 15 s. A slow
 profile's 30 s catalog job can therefore hold one of the two slots of the
 renderer's reconciliation scheduler (`src/scheduling/reconciliation.ts`)
 for up to that 300 s budget, leaving one slot for the other jobs. The
+renderer runs the walk in a lane of its own in the profile-work queue
+(`src/scheduling/profile-work.ts`), apart from the lane where changes queue:
+a mutation retires and cancels a running walk in the host
+(`begin_mutation`), and the agent admits each of the walk's requests on its
+own, so a Save waits at most for the one request in progress, not for the
+walk. Queued work in a lane fails with `profile-busy` only once the lane has
+admitted nothing for 315 s, the longest class budget plus slack. The
 catalog repair that a mutation runs when its profile's catalog is missing
 or retired shares the mutation's own Ordinary budget, so on a slow server
 with many stores that mutation can end with `deadline-exceeded` before it

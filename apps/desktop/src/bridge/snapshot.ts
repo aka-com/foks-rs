@@ -309,6 +309,8 @@ export async function loadProfileSnapshot(
     () => bridge.listProfileCatalog(profile),
     background,
     'profile-catalog',
+    // A walk is Bulk; changes in the default lane must not queue behind it.
+    'catalog',
   );
   if (!isCurrent()) throw new CatalogReadRetiredError();
   if (

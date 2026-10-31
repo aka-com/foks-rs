@@ -1336,6 +1336,15 @@ cascades use a conservative state-root barrier. External process locks remain
 authoritative, and lock acquisition is retried only before a callback starts.
 Long chat polls release profile admission while waiting for remote events.
 
+In the renderer, `scheduleProfileWork` (`src/scheduling/profile-work.ts`)
+serializes a profile's requests in three lanes that are admitted
+independently: chat, catalog walks (`list_profile_catalog`, a Bulk command of
+up to 300 s) and everything else, where changes queue. A mutation retires and
+cancels a running walk in the host, so a Save does not wait for one. Queued
+work fails with `profile-busy` once its lane has admitted nothing for the
+longest class budget plus 15 s (315 s); the wait restarts whenever the lane
+admits the work ahead.
+
 Opt-in frontend query and catalog diagnostics report aggregate outcomes and
 latencies without profile names, item paths, input values or response contents.
 The existing profile-work observer reports queue and execution durations. Agent
