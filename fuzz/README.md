@@ -31,6 +31,15 @@ into production. Regenerate the small structured seeds after protocol changes:
 cargo run --locked --manifest-path fuzz/Cargo.toml --example seed_corpus
 ```
 
+`fuzz/Cargo.lock` must be refreshed whenever a crate the targets use gains a
+dependency, including a workspace path dependency. The standalone `server fast`
+job resolves it with `--locked` on every push and fails while it is stale.
+Refresh it without upgrading other packages:
+
+```sh
+cargo metadata --offline --format-version 1 --manifest-path fuzz/Cargo.toml >/dev/null
+```
+
 Pull requests run short campaigns and scheduled jobs run longer campaigns.
 Reproduce a failure with `cargo +nightly fuzz run TARGET ARTIFACT`; minimize with
 `cargo +nightly fuzz tmin TARGET ARTIFACT`. Turn minimized failures into ordinary

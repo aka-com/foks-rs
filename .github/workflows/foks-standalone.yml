@@ -7,6 +7,8 @@ on:
       - "Cargo.toml"
       - "rust-toolchain.toml"
       - "crates/foks-*/**"
+      - "fuzz/Cargo.toml"
+      - "fuzz/Cargo.lock"
       - "packaging/**"
       - "tools/foks-client/**"
       - "tools/foks-protocol-sync/**"
@@ -115,6 +117,12 @@ jobs:
           cache-dependency-path: tools/foks-v019-oracle/go.sum
       - name: Fetch the locked dependency graph
         run: cargo fetch --locked
+      # The fuzz crate is its own workspace with its own lockfile, and the
+      # fuzz workflow runs only on pull requests and weekly. A path dependency
+      # added to a crate the fuzz targets use leaves fuzz/Cargo.lock stale;
+      # this resolves the fuzz graph without updating the lockfile.
+      - name: Check that the fuzz lockfile matches the workspace crates
+        run: cargo metadata --locked --format-version 1 --manifest-path fuzz/Cargo.toml >/dev/null
       - name: Install Linux server dependencies
         run: sudo apt-get update && sudo apt-get install -y libpcsclite-dev
       - name: Fetch the pinned Go protocol module
