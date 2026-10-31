@@ -116,9 +116,9 @@ five minutes, or a restart more than 24 hours beyond the last trusted floor, blo
 new admission and pruning with `clock-untrusted`. Retained status and recovery still
 work. First use establishes the anchor. File uploads keep a separate receipt clock
 with the same rules, repaired with `--domain upload`. Only a file write that needs
-a resumable upload identity consults the upload clock: a small file written inline
-without an explicit upload handle is not refused when it is untrusted. Local clock
-repair requires two commands:
+a resumable upload identity consults the upload clock: a file of at most 2,040
+bytes, written inline without an explicit upload handle, is not refused when it
+is untrusted. Local clock repair requires two commands:
 
 ```sh
 foks-rs --state-dir /absolute/client/state retention reanchor \
