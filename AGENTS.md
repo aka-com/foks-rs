@@ -31,6 +31,13 @@ A parallel run can intermittently fail the first-run receipt-lock release
 assertion; rerun that test in isolation and the native suite serially before
 attributing the failure to a code change.
 
+Tests that need the native credential backend (a macOS Keychain or Linux
+Secret Service) are `#[ignore]`d; run them with `-- --ignored` as
+crates/foks-client-app/README.md describes. In a container without a
+desktop session, `scripts/test-native-portability.py` starts a disposable
+D-Bus session and GNOME Keyring (`gnome-keyring` and `dbus-run-session`
+must be installed) and runs the portability suite in it.
+
 `tools/foks-server/check.sh` builds `foks-metadata-core` for
 `wasm32-unknown-unknown`. `rust-toolchain.toml` lists that target, but a
 1.95.0 toolchain installed before it did may lack it; add it with
