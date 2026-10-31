@@ -96,7 +96,11 @@ async function mount(accessNow?: () => number) {
         folder: state.folder,
         onOpen: (folder: string) => locations.openFiles(folder, 'All'),
         onNavigate: (location) => locations.navigate(location),
-        folderActions: { onNewFolder, onTeamInfo },
+        folderActions: {
+          onNewFolder,
+          onTeamInfo,
+          onTrash: (item: Item) => deletions.push(item),
+        },
         accessNow,
       }),
       createElement(ItemsScreen, {
@@ -106,7 +110,7 @@ async function mount(accessNow?: () => number) {
         locations,
         accessNow,
         onReveal: (item: Item) => reveals.push(item),
-        onDelete: (item: Item) => deletions.push(item),
+        onTrash: (item: Item) => deletions.push(item),
         onNew: () => {},
         onResume: async () => {},
         onSettings: () => {},
@@ -214,7 +218,9 @@ test('details and deletion target the context item, not the current selection', 
   const mounted = await mount();
   ui.fireEvent.click(row('github.com'));
   ui.fireEvent.contextMenu(row('passport-scan.pdf'));
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Delete…' }));
+  ui.fireEvent.click(
+    ui.screen.getByRole('menuitem', { name: 'Move to Trash' }),
+  );
   assert.equal(mounted.deletions[0]?.path, '/documents/passport-scan.pdf');
   assert.equal(
     mounted.locations.getSnapshot().selection?.path,
@@ -242,7 +248,7 @@ test('an open menu rechecks changed write permission and modal blocking dismisse
     ),
   };
   mounted.update(snapshot);
-  const deletion = ui.screen.getByRole('menuitem', { name: 'Delete…' });
+  const deletion = ui.screen.getByRole('menuitem', { name: 'Move to Trash' });
   assert.equal(deletion.getAttribute('aria-disabled'), 'true');
   assert.ok(deletion.getAttribute('aria-describedby'));
   ui.fireEvent.click(deletion);
@@ -331,7 +337,7 @@ test('vault and team roots expose scoped folder creation and team info without s
   }
 });
 
-test('tree and content folders target their own path and explain unsupported deletion', async () => {
+test('tree and content folders target their own path and offer Move Folder to Trash', async () => {
   const mounted = await mount();
   // Folders show once their store is open in the tree.
   ui.fireEvent.click(
@@ -343,12 +349,16 @@ test('tree and content folders target their own path and explain unsupported del
     '.side-tree [data-folder-store="acct:personal"][data-folder-path="/logins"] .fselect',
   )!;
   ui.fireEvent.contextMenu(folder);
-  const deletion = ui.screen.getByRole('menuitem', { name: 'Delete Folder' });
+  // The fixture lists no entry for /logins itself, only items under it, so
+  // the folder cannot be selected for a move until the catalog lists it.
+  const deletion = ui.screen.getByRole('menuitem', {
+    name: 'Move Folder to Trash',
+  });
   assert.equal(deletion.getAttribute('aria-disabled'), 'true');
   assert.match(
     document.getElementById(deletion.getAttribute('aria-describedby')!)!
       .textContent,
-    /not supported by the desktop agent/,
+    /Refresh this vault to load the folder before moving it to Trash/,
   );
   ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'New Folder…' }));
   assert.deepEqual(mounted.folders, [
@@ -416,7 +426,7 @@ test('grid folder menus preserve their scope for right click and Shift+F10', asy
     open();
     assert.equal(
       ui.screen
-        .getByRole('menuitem', { name: 'Delete Folder' })
+        .getByRole('menuitem', { name: 'Move Folder to Trash' })
         .getAttribute('aria-disabled'),
       'true',
     );

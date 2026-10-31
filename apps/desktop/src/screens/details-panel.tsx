@@ -258,7 +258,8 @@ export interface DetailsPanelProps {
   revealRequest?: string | null;
   onRevealHandled?: () => void;
   onClose: () => void;
-  onDelete: (item: Item) => void;
+  /** Moves the item to Trash, from where it can be restored. */
+  onTrash: (item: Item) => void;
   onMove?: (item: Item) => void;
   /** Opens a folder in the item's store from the location bar (`path` "/" is the root). */
   onOpenFolder?: (storeId: string, path: string) => void;
@@ -297,7 +298,7 @@ export function DetailsPanel({
   revealRequest = null,
   onRevealHandled,
   onClose,
-  onDelete,
+  onTrash,
   onMove,
   onOpenFolder,
   onOpenServer,
@@ -1279,10 +1280,10 @@ export function DetailsPanel({
                 shortcut="⌘⌫"
                 reason={writeProblem}
                 onClick={() => {
-                  if (requireAccess(true)) onDelete(item);
+                  if (requireAccess(true)) onTrash(item);
                 }}
               >
-                Delete…
+                Move to Trash
               </MenuItem>
             </>
           )}

@@ -14,5 +14,6 @@ export * from './lease';
 export * from './accounts';
 export * from './order';
 export * from './store-hues';
+export * from './trash';
 
 export * from './readiness';

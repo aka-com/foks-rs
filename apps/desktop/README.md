@@ -210,7 +210,26 @@ its folder when the current view does not list it; a new item and a new
 folder land the same way (`Landing` from the write sheets). Deleting and recreating the same path cannot redirect a stale selection to the
 replacement, even when its numeric version is the same.
 
-Folder deletion is not supported in the desktop.
+Delete moves an item, or a folder with everything in it, to Trash: Move to
+Trash in the row menu, the details panel's More menu and a folder's menu, and
+⌘⌫ on the selected item, call `trash_item`, which moves it into
+`/.trash/<role-tag>/` in the same vault with one `MoveKv` (one role folder
+per read role, since dirent names are sealed under their directory's key).
+Nothing is destroyed, so none of these asks for confirmation; the toast
+offers Undo for eight seconds and ⌘Z does the same while it shows. A vault
+with entries in Trash lists a Trash row after its folders in the sidebar.
+The Trash view lists entries newest first with where each was and when it
+was deleted, and offers Restore (`restore_trash_item`; an occupied original
+path opens a sheet that restores the entry as `<name> (restored)` beside the
+item there, never replacing it), Delete Permanently and Empty Trash…. Both
+permanent actions keep a confirmation, which says the deletion is for
+everyone and that earlier encrypted versions may remain on the server;
+`remove_item` and `empty_trash` refuse anything outside `/.trash`, except a
+file in a team whose Trash a non-owner cannot set up yet, which the
+confirmation then deletes permanently. Settings › Preferences › Trash can
+empty Trash automatically after 30 or 90 days on this device, off by
+default. Trash is not part of the folders, All Items or search, and Go FOKS
+clients list `.trash` as an ordinary folder. See book/20 for the layout.
 
 **Unsupported operations:** Link editing is not supported directly; links must be
 deleted and recreated. Invitation revocation, expiry and requester withdrawal
@@ -279,7 +298,8 @@ the Rust command tests pin serialization so a drift fails on one side or the
 other.
 
 Phase 3 adds `create_text_item`, `create_link`, `edit_text_item`,
-`remove_item`, dropped/native-picker file import and exact-version file
+`trash_item`, `restore_trash_item`, `remove_item` and `empty_trash` (Trash,
+above), dropped/native-picker file import and exact-version file
 replacement, `resume_group_creation` and `abandon_group_creation`, the local
 forgetting of a group whose creation can no longer be finished. Rust-originated
 drop events contain
@@ -420,7 +440,7 @@ The details column's first bar is the item's location — the store mark and
 name, then each folder, each one opening that folder — and the More menu
 (Show or Hide Value, or Password for a login; Copy Password and Copy User Name
 for a login, Copy Value for a text document; Download, Copy Path, Rename or
-Move…, Delete… ⌘⌫). Under it the hero (kind tile, name, kind and server, then
+Move…, Move to Trash ⌘⌫). Under it the hero (kind tile, name, kind and server, then
 Edit, or Download and Replace… for a file) and property rows in groups divided
 by hairlines: the value rows with Show/Hide and Copy at the trailing edge (a
 login has User name, Password and Website rows, each masked until shown and
@@ -500,8 +520,8 @@ divider is.
 
 Window key equivalents: ⌘F focuses and selects the list bar's search field,
 ⌘K opens the palette, ⌘N and ⇧⌘N open New Password and New Document from any
-place (outside Files they open All Items first), ⌘⌫ deletes the selected
-item, ⌃⌘S toggles the sidebar, ⌘[ and ⌘] go back and forward, and Control-Tab
+place (outside Files they open All Items first), ⌘⌫ moves the selected
+item to Trash and ⌘Z undoes that while its toast shows, ⌃⌘S toggles the sidebar, ⌘[ and ⌘] go back and forward, and Control-Tab
 walks the places. On a Mac a Command shortcut answers Command alone, so
 Control keeps its text-editing meaning (⌃K, ⌃N); off a Mac Control stands in
 for Command, ⌃⌘S is Ctrl+Alt+S, Ctrl+, opens Settings, and every shortcut hint
@@ -509,8 +529,8 @@ is drawn in that platform's notation (`kit/keys.ts`). The native menu bar
 (`install_macos_menu`) carries the same commands: File ▸ New Password, New
 Document, New Folder…; Edit ▸ Find (⌘F), Search… (⌘K); View ▸ Toggle Sidebar
 (⌃⌘S). Their accelerators take the key before the page sees it, so they reach
-the page as `Bridge.onMenuCommand` and run the page's own command. Delete…
-has no menu-bar item: a native ⌘⌫ would take delete-to-line-start from text
+the page as `Bridge.onMenuCommand` and run the page's own command. Move to
+Trash has no menu-bar item: a native ⌘⌫ would take delete-to-line-start from text
 fields. Menus and listboxes type-select. Return in a sheet presses its
 enabled default button (the footer's last primary button) unless a text
 area, select, button or open popup has the focus; a radio is a choice, not an
@@ -549,8 +569,8 @@ body, then its footer; a sheet that replaces another (Add a Device ›
 Continue) returns to the first sheet's opener when it closes. The lock card
 takes the focus, and Unlock returns it to the control that had it. It does
 not move the focus before anything has been focused, nor after a click on
-blank space that leaves a usable control behind. A delete selects and focuses
-the next row; Escape in the details returns to the item's row, Escape in the
+blank space that leaves a usable control behind. A move to Trash selects and
+focuses the next row; Escape in the details returns to the item's row, Escape in the
 inline editor is its Cancel and returns to Edit; Show and Hide are one control;
 the sidebar toggles share a focus key; a popup closed by a click elsewhere
 returns the focus to its trigger; opening an item from the palette opens its
@@ -1197,13 +1217,17 @@ The unit and render-test layers live in `tests/`:
   shell's grid, read off the CSS since jsdom computes no layout.
 - `shell-keyboard.render.test.tsx` and `focus-keeper.test.ts` — the sidebar's
   source-list keys and tree, ⌘F and the sidebar toggle, Return in sheets, the
-  palette landing on a row, the focus after a delete, the window Escape's
+  palette landing on a row, the focus after a move to Trash, the window Escape's
   scope, and the focus keeper's rules; `sheet-focus.render.test.tsx` — radio
   groups, field errors and the opener of a replaced sheet.
 - `sync-status.render.test.tsx` — the sidebar's status line: one button, and
   the Refresh status popover it opens on hover. The popover is portaled, so the
   pointer leaves the button's wrapper on the way into it; the test holds that
   the crossing does not close it and that leaving both does.
+- `vault-trash.render.test.tsx` and `trash-model.test.ts` — Move to Trash
+  with its Undo and ⌘Z, the sidebar's Trash row, Restore and the
+  restore-conflict copy, Delete Permanently's confirmation, Empty Trash, and
+  the Trash entry names the host writes.
 - `app-root.render.test.tsx` — jsdom plus Vite `ssrLoadModule`, the same boot
   as `ui/tests/app-root.render.test.tsx`: the app mounts itself into `#root`
   from `src/main.tsx`, exactly as it does in the browser.

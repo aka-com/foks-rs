@@ -17,6 +17,7 @@ import { TeamsScreen } from '../screens/teams-screen';
 import type { WriteWorkflow } from '../screens/write-workflows';
 import type { TopbarProps } from '../shell/topbar';
 import type { CommandErrorHandler } from './catalog-runtime';
+import type { TrashActions } from './trash-actions';
 
 export function ScreenRouter({
   shown,
@@ -43,8 +44,10 @@ export function ScreenRouter({
   accessGenerations,
   onTeamInfo,
   renderBar,
+  trash,
 }: {
   onTeamInfo: (storeId: string, trigger?: HTMLElement) => void;
+  trash: TrashActions;
   /**
    * Renders the panel's primary topbar. Chat renders this bar over its channel
    * column and passes the column's add control.
@@ -117,7 +120,10 @@ export function ScreenRouter({
         setWorkflow({ kind: 'new-folder', storeId, initialFolder })
       }
       onMove={(item) => setWorkflow({ kind: 'move', item })}
-      onDelete={(item) => setWorkflow({ kind: 'delete', item })}
+      onTrash={trash.moveToTrash}
+      onRestore={trash.restore}
+      onDeletePermanently={(item) => setWorkflow({ kind: 'delete', item })}
+      onEmptyTrash={(store) => setWorkflow({ kind: 'empty-trash', store })}
       onSettings={(storeId) =>
         locations.navigate({
           kind: 'group-settings',

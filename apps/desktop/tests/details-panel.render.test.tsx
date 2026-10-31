@@ -63,7 +63,7 @@ async function setup(
     bridge: readItem ? { ...bridge, readItem } : bridge,
     selection: { store: subject.store, path: subject.path },
     onClose: () => {},
-    onDelete: () => {},
+    onTrash: () => {},
     onConflict: () => {},
     onApplied: async () => {},
     onCommandError: () => {},
@@ -290,6 +290,7 @@ test('an already-open Delete sheet disables its action when access is lost and r
           onDiscardConflict: () => {},
           onDeleteConflict: async () => {},
           onOpenExisting: async () => {},
+          onRestoreTrash: async () => {},
         }),
       }),
     });
@@ -304,7 +305,7 @@ test('an already-open Delete sheet disables its action when access is lost and r
   };
   rendered.rerender(draw());
   const remove = rendered.getByRole('button', {
-    name: 'Delete',
+    name: 'Delete Permanently',
   }) as HTMLButtonElement;
   assert.equal(remove.disabled, true);
   assert.match(remove.title, /unavailable|could not be loaded/i);
@@ -318,8 +319,11 @@ test('an already-open Delete sheet disables its action when access is lost and r
   snapshot = p.props.snapshot;
   rendered.rerender(draw());
   assert.equal(
-    (rendered.getByRole('button', { name: 'Delete' }) as HTMLButtonElement)
-      .disabled,
+    (
+      rendered.getByRole('button', {
+        name: 'Delete Permanently',
+      }) as HTMLButtonElement
+    ).disabled,
     false,
   );
   snapshot = {
@@ -330,8 +334,11 @@ test('an already-open Delete sheet disables its action when access is lost and r
   };
   rendered.rerender(draw());
   assert.equal(
-    (rendered.getByRole('button', { name: 'Delete' }) as HTMLButtonElement)
-      .disabled,
+    (
+      rendered.getByRole('button', {
+        name: 'Delete Permanently',
+      }) as HTMLButtonElement
+    ).disabled,
     true,
   );
   assert.match(

@@ -19,7 +19,15 @@ import { storeReadable } from './model/lease';
 import { parseRole, roleRank, visibilityOf } from './model/roles';
 import { loginField, shapeOf } from './model/login';
 import { itemKey } from './model/types';
-import type { RoleWire, Store, AgentSnapshot } from './model/types';
+import type { Item, RoleWire, Store, AgentSnapshot } from './model/types';
+import {
+  ORIGIN_SUFFIX,
+  TRASH_ROOT,
+  encodeOriginalPath,
+  isTrashPath,
+  parseTrashName,
+  trashStamp,
+} from './model/trash';
 import {
   decodeFirstRunCheckpoint,
   FIRST_RUN_CHECKPOINT_KEY,
@@ -398,6 +406,103 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       existing.username = username;
     } else accounts.push({ store: id, alias, username, server: profile });
   };
+  // The host discards a store's catalog items when it writes to the store,
+  // so a selection in that store fails until the catalog is read again.
+  const unread = new Set<string>();
+  const selectBound = (
+    storeId: string,
+    path: string,
+    version: number,
+    direntId: string,
+  ): Item => {
+    if (unread.has(storeId))
+      throw failure(
+        'conflict',
+        'This item changed or was removed. Refresh the vault before modifying it.',
+      );
+    const item = items.find(
+      (candidate) => candidate.store === storeId && candidate.path === path,
+    );
+    if (!item || item.version !== version || item.direntId !== direntId)
+      throw failure('conflict', `${path} changed first.`);
+    return item;
+  };
+  const findItem = (storeId: string, path: string): Item | undefined =>
+    items.find(
+      (candidate) => candidate.store === storeId && candidate.path === path,
+    );
+  /** The more restrictive of two read roles, as the host orders them. */
+  const stricter = (first: RoleWire, second: RoleWire): RoleWire => {
+    const a = parseRole(first);
+    const b = parseRole(second);
+    if (!a || !b) return a ? second : first;
+    const rank = roleRank(b) - roleRank(a);
+    if (rank !== 0) return rank > 0 ? second : first;
+    return a.kind === 'member' && visibilityOf(b) > visibilityOf(a)
+      ? second
+      : first;
+  };
+  /** The original path in a hashed entry's name, as the host hashes it. */
+  const originHash = async (path: string): Promise<string> => {
+    const digest = await crypto.subtle.digest(
+      'SHA-256',
+      new TextEncoder().encode(path),
+    );
+    return [...new Uint8Array(digest).slice(0, 16)]
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('');
+  };
+  /** Removes an item and, for a folder, everything in it. */
+  const removeTree = (storeId: string, item: Item): void => {
+    const removed = (candidate: Item): boolean =>
+      candidate.store === storeId &&
+      (candidate === item || candidate.path.startsWith(`${item.path}/`));
+    for (const candidate of items.filter(removed))
+      contents.delete(`${storeId}|${candidate.path}`);
+    items = items.filter((candidate) => !removed(candidate));
+  };
+  /** The `.origin` file beside a hashed Trash entry. */
+  const originOf = (storeId: string, entry: Item): Item | undefined =>
+    parseTrashName(entry.path.slice(entry.path.lastIndexOf('/') + 1))?.kind ===
+    'hashed'
+      ? findItem(storeId, `${entry.path}${ORIGIN_SUFFIX}`)
+      : undefined;
+  /** Moves an item, and a folder's contents with it, as MoveKv does. */
+  const relocate = (storeId: string, item: Item, destination: string) => {
+    const path = item.path;
+    if (destination.startsWith(`${path}/`))
+      throw failure('conflict', 'A folder cannot contain itself.');
+    for (const candidate of items.filter(
+      (candidate) =>
+        candidate.store === storeId &&
+        (candidate.path === path || candidate.path.startsWith(`${path}/`)),
+    )) {
+      const oldPath = candidate.path;
+      candidate.path = destination + oldPath.slice(path.length);
+      if (candidate === item) {
+        candidate.version = 1;
+        candidate.direntId = crypto.randomUUID().replaceAll('-', '');
+      }
+      const content = contents.get(`${storeId}|${oldPath}`);
+      contents.delete(`${storeId}|${oldPath}`);
+      if (content !== undefined)
+        contents.set(`${storeId}|${candidate.path}`, content);
+    }
+  };
+  const ensureFolder = (storeId: string, path: string, read: RoleWire) => {
+    if (items.some((item) => item.store === storeId && item.path === path))
+      return;
+    items.push({
+      direntId: crypto.randomUUID().replaceAll('-', ''),
+      store: storeId,
+      path,
+      kind: 'Folder',
+      size: 0,
+      version: 1,
+      read,
+      write: read,
+    });
+  };
   const assertFree = (storeId: string, path: string): void => {
     if (items.some((item) => item.store === storeId && item.path === path)) {
       throw failure('already-exists', `${path} already exists.`);
@@ -533,6 +638,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
     }),
     listCatalog: () => {
       restoreFirstRunAccount();
+      unread.clear();
       return Promise.resolve(catalogResponse());
     },
     listProfileCatalog: async (profile) => {
@@ -540,6 +646,8 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       const server = servers.find((server) => server.profileName === profile);
       if (!server)
         throw failure('profile-not-found', 'The profile was not found.');
+      for (const store of stores)
+        if (store.server === profile) unread.delete(store.id);
       const response = catalogResponse();
       const scopedStores = response.stores.filter(
         (store) => store.server === profile,
@@ -718,45 +826,141 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       return { applied: true };
     },
     moveItem: async ({ storeId, path, version, destination, direntId }) => {
-      const item = items.find(
-        (candidate) => candidate.store === storeId && candidate.path === path,
-      );
-      if (!item || item.version !== version || item.direntId !== direntId)
-        throw failure('conflict', `${path} changed first.`);
+      const item = selectBound(storeId, path, version, direntId);
       assertFree(storeId, destination);
-      if (destination.startsWith(`${path}/`))
-        throw failure('conflict', 'A folder cannot contain itself.');
-      for (const candidate of items.filter(
-        (candidate) =>
-          candidate.store === storeId &&
-          (candidate.path === path || candidate.path.startsWith(`${path}/`)),
-      )) {
-        const oldPath = candidate.path;
-        candidate.path = destination + oldPath.slice(path.length);
-        if (candidate === item) {
-          candidate.version = 1;
-          candidate.direntId = crypto.randomUUID().replaceAll('-', '');
-        }
-        const content = contents.get(`${storeId}|${oldPath}`);
-        contents.delete(`${storeId}|${oldPath}`);
-        if (content !== undefined)
-          contents.set(`${storeId}|${candidate.path}`, content);
-      }
+      relocate(storeId, item, destination);
+      unread.add(storeId);
       return { applied: true };
     },
-    removeItem: async ({ storeId, path, version, direntId }) => {
-      const item = items.find(
-        (candidate) => candidate.store === storeId && candidate.path === path,
+    trashItem: async ({ storeId, path, version, direntId }) => {
+      const item = selectBound(storeId, path, version, direntId);
+      if (isTrashPath(path))
+        throw failure('invalid-request', 'This item is already in Trash.');
+      // Filed by the most restrictive read role on the path, as the host does.
+      let read = item.read;
+      for (
+        let cut = path.indexOf('/', 1);
+        cut > 0;
+        cut = path.indexOf('/', cut + 1)
+      ) {
+        const ancestor = findItem(storeId, path.slice(0, cut));
+        if (ancestor?.kind === 'Folder') read = stricter(read, ancestor.read);
+      }
+      const role = parseRole(read);
+      const tag =
+        role?.kind === 'member'
+          ? `member-${visibilityOf(role)}`
+          : (role?.kind ?? 'owner');
+      const folder = `${TRASH_ROOT}/${tag}`;
+      const team =
+        stores.find((store) => store.id === storeId)?.kind === 'team';
+      ensureFolder(
+        storeId,
+        TRASH_ROOT,
+        team ? 'Member · visibility -16384' : 'Owner',
       );
-      if (!item || item.version !== version || item.direntId !== direntId)
-        throw failure('conflict', `${path} changed first.`);
-      if (item.kind === 'Folder')
+      ensureFolder(storeId, folder, read);
+      const stamp = trashStamp(new Date());
+      let name = `${stamp}~${encodeOriginalPath(path)}`;
+      const hashed = new TextEncoder().encode(name).length > 255;
+      if (hashed) name = `${stamp}~#${await originHash(path)}`;
+      const destination = `${folder}/${name}`;
+      if (findItem(storeId, destination))
+        throw failure(
+          'trash-name-taken',
+          'An entry with the same name is already in Trash. Try again in a second.',
+        );
+      if (hashed) {
+        const origin = `${destination}${ORIGIN_SUFFIX}`;
+        items.push({
+          direntId: crypto.randomUUID().replaceAll('-', ''),
+          store: storeId,
+          path: origin,
+          kind: 'Secret',
+          size: path.length,
+          version: 1,
+          read,
+          write: item.write,
+        });
+        contents.set(`${storeId}|${origin}`, path);
+      }
+      relocate(storeId, item, destination);
+      unread.add(storeId);
+      return { applied: true, path: destination };
+    },
+    restoreTrashItem: async ({
+      storeId,
+      path,
+      version,
+      direntId,
+      destination,
+    }) => {
+      const item = selectBound(storeId, path, version, direntId);
+      if (!isTrashPath(path) || isTrashPath(destination))
         throw failure(
           'invalid-request',
-          'Folder removal is not currently supported.',
+          'Only entries in Trash can be restored, to a place outside Trash.',
         );
-      items = items.filter((candidate) => candidate !== item);
-      contents.delete(`${storeId}|${path}`);
+      assertFree(storeId, destination);
+      const origin = originOf(storeId, item);
+      relocate(storeId, item, destination);
+      if (origin) removeTree(storeId, origin);
+      unread.add(storeId);
+      return { applied: true, path: destination };
+    },
+    removeItem: async ({ storeId, path, version, direntId, outsideTrash }) => {
+      const item = selectBound(storeId, path, version, direntId);
+      if (outsideTrash) {
+        const team =
+          stores.find((store) => store.id === storeId)?.kind === 'team';
+        if (
+          !team ||
+          isTrashPath(path) ||
+          findItem(storeId, TRASH_ROOT) ||
+          item.kind === 'Folder'
+        )
+          throw failure(
+            'invalid-request',
+            'Move this item to Trash; only items in Trash can be deleted permanently.',
+          );
+      } else if (!path.startsWith(`${TRASH_ROOT}/`))
+        throw failure(
+          'invalid-request',
+          'Only items in Trash can be deleted permanently. Move this item to Trash first.',
+        );
+      const origin = originOf(storeId, item);
+      removeTree(storeId, item);
+      if (origin) removeTree(storeId, origin);
+      unread.add(storeId);
+      return { applied: true };
+    },
+    emptyTrash: async ({ storeId, entries }) => {
+      if (!entries.length)
+        throw failure('invalid-request', 'Choose at least one entry in Trash.');
+      const selected = entries.map((entry) =>
+        selectBound(storeId, entry.path, entry.version, entry.direntId),
+      );
+      if (selected.some((item) => !item.path.startsWith(`${TRASH_ROOT}/`)))
+        throw failure(
+          'invalid-request',
+          'Only items in Trash can be deleted permanently. Move this item to Trash first.',
+        );
+      for (const item of selected) {
+        const origin = originOf(storeId, item);
+        removeTree(storeId, item);
+        if (origin) removeTree(storeId, origin);
+      }
+      // `.origin` files left without their entry go too.
+      for (const item of items.filter(
+        (candidate) =>
+          candidate.store === storeId &&
+          parseTrashName(
+            candidate.path.slice(candidate.path.lastIndexOf('/') + 1),
+          )?.kind === 'origin' &&
+          !findItem(storeId, candidate.path.slice(0, -ORIGIN_SUFFIX.length)),
+      ))
+        removeTree(storeId, item);
+      unread.add(storeId);
       return { applied: true };
     },
     listFileUploads: async () => ({

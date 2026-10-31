@@ -180,8 +180,8 @@ test('opening an item from the palette opens its folder with the row selected an
   );
 });
 
-test('after a delete the next row is selected and holds the focus', async () => {
-  // The mock bridge removes the item, so the refresh drops its row.
+test('after a move to Trash the next row is selected and holds the focus', async () => {
+  // The mock bridge moves the item to Trash, so the refresh drops its row.
   const { store, view } = await mount();
   const keys = [
     ...document.querySelectorAll<HTMLElement>('.lpane [data-row-key]'),
@@ -196,13 +196,9 @@ test('after a delete the next row is selected and holds the focus', async () => 
       path: first.slice(split + 1),
     });
   });
+  // ⌘⌫ moves the item to Trash at once; no dialog holds the selection.
   key(document.body, { key: 'Backspace', metaKey: true });
-  const dialog = await view.findByRole('alertdialog');
-  await ui.act(async () => {
-    ui.within(dialog).getByRole('button', { name: 'Delete' }).click();
-    await Promise.resolve();
-  });
-  await ui.waitFor(() => assert.equal(view.queryByRole('alertdialog'), null));
+  assert.equal(view.queryByRole('alertdialog'), null);
   await ui.waitFor(() => {
     const selection = store.getSnapshot().selection;
     assert.equal(`${selection?.store}|${selection?.path}`, second);

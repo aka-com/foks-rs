@@ -19,6 +19,7 @@ import {
   nameOf,
   storeOf,
   type AgentSnapshot,
+  type Item,
 } from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { NavigationPrompt } from '../navigation-guard';
@@ -112,6 +113,7 @@ export function ShellOverlays({
   commandError,
   mutationError,
   refreshSnapshot,
+  restoreTrash,
   setResumeDraft,
   setConcealSignal,
   setLatest,
@@ -131,6 +133,8 @@ export function ShellOverlays({
   commandError: CommandErrorHandler;
   mutationError: MutationFailureHandler;
   refreshSnapshot: (force?: boolean) => Promise<AgentSnapshot>;
+  /** Moves a Trash entry to `destination`; the restore-conflict sheet's step. */
+  restoreTrash: (item: Item, destination: string) => Promise<void>;
   setResumeDraft: Dispatch<SetStateAction<ResumeDraft | null>>;
   setConcealSignal: Dispatch<SetStateAction<number>>;
   setLatest: Dispatch<SetStateAction<AgentSnapshot>>;
@@ -206,6 +210,7 @@ export function ShellOverlays({
         onLanded={land}
         onError={commandError}
         onMutationError={mutationError}
+        onRestoreTrash={restoreTrash}
         onRefreshConflict={async (item, draft, operation) => {
           const next = await refreshSnapshot();
           const current = next.items.find(
@@ -321,7 +326,7 @@ export function ShellOverlays({
  * catalog refresh removes the deleted row, and returns the next `Selection`
  * if the deleted item was selected.
  */
-function neighbourAfterDelete(
+export function neighbourAfterDelete(
   locations: LocationStore,
   item: { store: string; path: string },
 ): Selection | null {
