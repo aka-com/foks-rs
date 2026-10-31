@@ -1,6 +1,7 @@
 //! accept() failure policy shared by the server's TCP listeners.
 
-use std::time::Duration;
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use crate::ServerMetrics;
 
@@ -68,9 +69,54 @@ impl AcceptErrorKind {
     }
 }
 
+/// Shortest interval between two stderr lines for one kind of accept()
+/// failure.
+const ACCEPT_ERROR_LOG_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Per-kind state of the rate-limited accept() failure lines, shared by every
+/// listener of the process.
+struct AcceptErrorLog {
+    kinds: [KindLog; AcceptErrorKind::ALL.len()],
+}
+
+#[derive(Clone, Copy)]
+struct KindLog {
+    logged_at: Option<Instant>,
+    unlogged: u64,
+}
+
+impl AcceptErrorLog {
+    const fn new() -> Self {
+        Self {
+            kinds: [KindLog {
+                logged_at: None,
+                unlogged: 0,
+            }; AcceptErrorKind::ALL.len()],
+        }
+    }
+
+    /// Counts one failure of `kind` and returns the number the next stderr
+    /// line reports, or `None` while the interval since that kind's last line
+    /// runs.
+    fn record(&mut self, kind: AcceptErrorKind, now: Instant) -> Option<u64> {
+        let log = &mut self.kinds[kind as usize];
+        log.unlogged = log.unlogged.saturating_add(1);
+        if log
+            .logged_at
+            .is_some_and(|at| now.saturating_duration_since(at) < ACCEPT_ERROR_LOG_INTERVAL)
+        {
+            return None;
+        }
+        log.logged_at = Some(now);
+        Some(std::mem::take(&mut log.unlogged))
+    }
+}
+
+static ACCEPT_ERRORS: Mutex<AcceptErrorLog> = Mutex::new(AcceptErrorLog::new());
+
 /// Handles a failed accept(). Returns the error when it invalidates the
-/// listening socket; otherwise counts it and waits until the listener should
-/// accept again.
+/// listening socket; otherwise counts it, writes at most one stderr line per
+/// kind per minute, and waits until the listener should accept again.
 pub(crate) async fn retry_accept(
     error: std::io::Error,
     metrics: &ServerMetrics,
@@ -79,6 +125,20 @@ pub(crate) async fn retry_accept(
         return Err(error);
     };
     metrics.accept_failed(kind);
+    let report = ACCEPT_ERRORS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .record(kind, Instant::now());
+    if let Some(count) = report {
+        // The OS error code identifies an unclassified failure; it carries no
+        // peer or path data.
+        eprintln!(
+            "FOKS server warning: accept() failed: kind={}, errno={}, count_since_last_line={count}; \
+             the listener keeps retrying",
+            kind.label(),
+            error.raw_os_error().unwrap_or(0),
+        );
+    }
     let delay = kind.retry_delay();
     if !delay.is_zero() {
         tokio::time::sleep(delay).await;
@@ -170,6 +230,36 @@ mod tests {
         assert_eq!(
             transient_accept_error(&std::io::Error::other("not an OS error")),
             None
+        );
+    }
+
+    #[test]
+    fn accept_failures_are_reported_at_most_once_a_minute_per_kind() {
+        let mut log = AcceptErrorLog::new();
+        let start = Instant::now();
+        assert_eq!(
+            log.record(AcceptErrorKind::ProcessDescriptors, start),
+            Some(1)
+        );
+        for _ in 0..3 {
+            assert_eq!(log.record(AcceptErrorKind::ProcessDescriptors, start), None);
+        }
+        // Another kind has its own interval.
+        assert_eq!(log.record(AcceptErrorKind::Other, start), Some(1));
+        assert_eq!(
+            log.record(
+                AcceptErrorKind::ProcessDescriptors,
+                start + ACCEPT_ERROR_LOG_INTERVAL - Duration::from_millis(1)
+            ),
+            None
+        );
+        // The next line reports every failure since the previous one.
+        assert_eq!(
+            log.record(
+                AcceptErrorKind::ProcessDescriptors,
+                start + ACCEPT_ERROR_LOG_INTERVAL
+            ),
+            Some(5)
         );
     }
 
