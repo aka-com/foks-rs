@@ -1,7 +1,8 @@
 #![no_main]
 use foks_agent_proto as frame;
 use foks_agent_proto::{
-    DeadlineEnvelope, KvUploadFrame, KvUploadPayload, Operation, Request, PROTOCOL_VERSION,
+    DeadlineEnvelope, HelloRequest, KvUploadFrame, KvUploadPayload, Operation, Peer, Request,
+    PROTOCOL_VERSION,
 };
 use libfuzzer_sys::fuzz_target;
 use std::sync::OnceLock;
@@ -42,6 +43,19 @@ fn inspect(bytes: &[u8]) {
             Err(error) => assert!(matches!(error, frame::Error::TooLarge)),
         }
     }
+    // The agent tries every frame decode_request rejects as a Hello, of any
+    // version, so this parser sees unauthenticated input too.
+    if let Ok(Some(hello)) = frame::decode_hello(bytes) {
+        match frame::encode(&hello) {
+            Ok(canonical) => assert_eq!(frame::decode_hello(&canonical).unwrap(), Some(hello)),
+            Err(error) => assert!(matches!(error, frame::Error::TooLarge)),
+        }
+    }
+    // Client-side decoders of the frozen refusal envelope and Hello reply.
+    let _ = frame::decode_response(bytes);
+    if let Ok(response) = frame::decode_hello_response(bytes) {
+        let _ = response.reply.require_compatible();
+    }
 }
 
 fuzz_target!(|input: &[u8]| {
@@ -78,4 +92,13 @@ fuzz_target!(|input: &[u8]| {
         frame::decode_request(&frame::encode(&wrong_version).unwrap()),
         Err(frame::Error::Version)
     ));
+    // A Hello is recognized whatever version it carries, and never decodes as
+    // a versioned request.
+    let mut hello = HelloRequest::new(wrong_version.id, Peer::new("foks-fuzz", "0"));
+    hello.version = u32::from_le_bytes(std::array::from_fn(|index| {
+        input.get(index).copied().unwrap_or(0)
+    }));
+    let encoded = frame::encode(&hello).unwrap();
+    assert!(frame::decode_request(&encoded).is_err());
+    assert_eq!(frame::decode_hello(&encoded).unwrap(), Some(hello));
 });

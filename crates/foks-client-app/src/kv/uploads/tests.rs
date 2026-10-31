@@ -719,6 +719,7 @@ fn injected_upload_clock_survives_core_completion_and_maintenance_without_reanch
         .as_secs();
     let clock = Arc::new(Clock(Mutex::new(foks_client_db::AdapterTimeSample {
         process_id: [91; 16],
+        boot_id: None,
         wall_seconds: wall,
         monotonic_seconds: 0,
     })));
@@ -754,6 +755,7 @@ fn injected_upload_clock_survives_core_completion_and_maintenance_without_reanch
             );
             *clock.0.lock().unwrap() = foks_client_db::AdapterTimeSample {
                 process_id: [91; 16],
+                boot_id: None,
                 wall_seconds: wall + 3600,
                 monotonic_seconds: 1,
             };
@@ -803,6 +805,7 @@ fn implicit_inline_put_takes_no_receipt_row_and_ignores_the_receipt_clock() {
         .as_secs();
     let clock = Arc::new(Clock(Mutex::new(foks_client_db::AdapterTimeSample {
         process_id: [92; 16],
+        boot_id: None,
         wall_seconds: wall,
         monotonic_seconds: 0,
     })));
@@ -845,6 +848,7 @@ fn implicit_inline_put_takes_no_receipt_row_and_ignores_the_receipt_clock() {
             // A wall clock stepped by an hour is outside the admission skew.
             *clock.0.lock().unwrap() = foks_client_db::AdapterTimeSample {
                 process_id: [92; 16],
+                boot_id: None,
                 wall_seconds: wall + 3600,
                 monotonic_seconds: 1,
             };

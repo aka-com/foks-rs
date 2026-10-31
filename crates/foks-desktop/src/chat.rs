@@ -29,8 +29,17 @@ fn valid_channel(channel: &ChatChannel) -> bool {
 fn valid_content(content: &ChatContent, maximum: usize) -> bool {
     match content {
         ChatContent::Text { text } => text.expose().len() <= maximum,
-        ChatContent::Unsupported | ChatContent::Oversized => true,
+        ChatContent::Unsupported | ChatContent::Oversized | ChatContent::Unverifiable => true,
     }
+}
+/// A Go v0.1.9 host checks message IDs only for uniqueness, so it can store one
+/// author's all-zero message ID, and foks-client gives that row an unverifiable
+/// verdict; no other row has one.
+fn valid_message_id(message: &ChatMessage) -> bool {
+    valid_chat_id(&message.id)
+        || (message.content == ChatContent::Unverifiable
+            && message.id.len() == 32
+            && message.id.bytes().all(|b| b == b'0'))
 }
 fn valid_preview(preview: &ChatPreview) -> bool {
     preview
@@ -187,7 +196,7 @@ pub fn validate_chat_reply(
                     .iter()
                     .all(|n| chat_sequence(n).is_some_and(|n| n > 0))
                 && messages.iter().all(|m| {
-                    valid_chat_id(&m.id)
+                    valid_message_id(m)
                         && ids.insert(&m.id)
                         && sequences.insert(&m.sequence)
                         && chat_sequence(&m.sequence).is_some_and(|n| {

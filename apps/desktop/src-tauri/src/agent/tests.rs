@@ -55,7 +55,7 @@ impl MaintenanceProcess for FakeMaintenanceProcess {
     }
 }
 
-fn read_socket_request(stream: &mut std::os::unix::net::UnixStream) -> foks_agent_proto::Request {
+fn read_socket_frame(stream: &mut std::os::unix::net::UnixStream) -> Vec<u8> {
     use std::io::Read as _;
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
@@ -65,5 +65,32 @@ fn read_socket_request(stream: &mut std::os::unix::net::UnixStream) -> foks_agen
     let mut frame = vec![0; 4 + u32::from_be_bytes(prefix) as usize];
     frame[..4].copy_from_slice(&prefix);
     stream.read_exact(&mut frame[4..]).unwrap();
-    foks_agent_proto::decode_request(&frame).unwrap()
+    frame
+}
+
+fn read_socket_request(stream: &mut std::os::unix::net::UnixStream) -> foks_agent_proto::Request {
+    foks_agent_proto::decode_request(&read_socket_frame(stream)).unwrap()
+}
+
+/// Answers the Hello on the listener's next connection as an agent of this
+/// build that offers incremental history.
+fn answer_socket_hello(listener: &std::os::unix::net::UnixListener) {
+    use std::io::Write as _;
+    let (mut stream, _) = listener.accept().unwrap();
+    let hello = foks_agent_proto::decode_hello(&read_socket_frame(&mut stream))
+        .unwrap()
+        .expect("a hello");
+    let reply = foks_agent_proto::HelloReply::new(
+        foks_agent_proto::Peer::new("foks-agent", "test"),
+        &[foks_agent_proto::hello::capability::HISTORY_AFTER],
+    );
+    stream
+        .write_all(
+            &foks_agent_proto::encode(&Response::success(
+                hello.id,
+                serde_json::to_value(reply).unwrap(),
+            ))
+            .unwrap(),
+        )
+        .unwrap();
 }

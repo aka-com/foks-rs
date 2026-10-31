@@ -39,6 +39,7 @@ import { AdminPanel } from '../components/admin-panel';
 import { BotPanel } from '../components/bot-panel';
 import { RenamePanel } from '../components/rename-panel';
 import { RenameBanner, RenameUnlockSheet } from '../components/rename-banner';
+import { AssistantClockBand } from '../components/assistant-clock-band';
 import { useRenameStatus } from '../rename-status';
 import type { RenameStatus } from '../rename-status';
 import type { RenameAction } from '../rename-contract';
@@ -592,6 +593,7 @@ export function AccountSection({
           ) : selected ? (
             <>
               <AccountPanel
+                bridge={bridge}
                 freshness={freshness}
                 onRetry={retryMetadata}
                 snapshot={snapshot}
@@ -793,6 +795,7 @@ export function AccountSection({
 
 /** The chosen account: who it is, and the facts and workflows that act on it. */
 function AccountPanel({
+  bridge,
   snapshot,
   store,
   lists,
@@ -807,6 +810,7 @@ function AccountPanel({
   freshness,
   onRetry,
 }: {
+  bridge: Bridge;
   snapshot: AgentSnapshot;
   store: AccountStore;
   /** Pending rename state. */
@@ -870,6 +874,12 @@ function AccountPanel({
         account={store.account}
         onUnlock={onRenameUnlock}
         onComplete={onRenameComplete}
+      />
+      <AssistantClockBand
+        bridge={bridge}
+        snapshot={snapshot}
+        profile={store.server}
+        account={store.account}
       />
       <SectionLabel className="settings-heading">Account</SectionLabel>
       <Inset

@@ -1,3 +1,7 @@
+use foks_agent_proto::{
+    data::{AdapterClockRepairAction, ReceiptClockDomain},
+    Operation, ResponseResult,
+};
 use foks_client_app::{ProfileRegistry, ProfileSession};
 use std::path::Path;
 
@@ -5,6 +9,17 @@ use std::path::Path;
 pub enum RetentionCommand {
     /// Read redacted resident maintenance counters.
     Status,
+    /// Report whether the account's receipt clock admits new handles: MCP
+    /// writes for the adapter clock, file uploads for the upload clock.
+    ClockStatus {
+        #[arg(long)]
+        profile: String,
+        /// Receipt clock to report. Upload and adapter clocks are independent.
+        #[arg(long, value_enum, default_value = "adapter")]
+        domain: ReceiptDomain,
+        #[arg(long)]
+        account_alias: String,
+    },
     /// Drain local completed-upload cleanup without contacting a server.
     Maintain {
         #[arg(long)]
@@ -15,7 +30,8 @@ pub enum RetentionCommand {
         #[arg(long, default_value_t = 256, value_parser = clap::value_parser!(u32).range(1..=1024))]
         max_turns: u32,
     },
-    /// Preview or explicitly re-anchor local receipt time without pruning or writing remotely.
+    /// Preview or explicitly re-anchor a local receipt clock at this
+    /// computer's current time, without pruning or writing remotely.
     Reanchor {
         #[arg(long)]
         profile: String,
@@ -24,10 +40,15 @@ pub enum RetentionCommand {
         domain: ReceiptDomain,
         #[arg(long)]
         account_alias: String,
+        /// The time to confirm. The agent refuses a preview more than five
+        /// minutes from its own clock and a confirmation more than one minute
+        /// from it. Defaults to now for a preview.
         #[arg(long)]
-        unix_seconds: u64,
-        /// Exact digest printed by the preview for these time values.
-        #[arg(long)]
+        unix_seconds: Option<u64>,
+        /// Exact digest printed by the preview, with the preview's
+        /// `proposed_wall` as `--unix-seconds`. Confirm within one minute of
+        /// the preview; after that, preview again.
+        #[arg(long, requires = "unix_seconds")]
         confirm_digest: Option<String>,
     },
 }
@@ -38,57 +59,82 @@ pub enum ReceiptDomain {
     Upload,
 }
 
-pub fn run(state: &Path, command: RetentionCommand) -> Result<(), Box<dyn std::error::Error>> {
-    if let RetentionCommand::Maintain {
-        profile,
-        max_seconds,
-        max_turns,
-    } = command
-    {
-        return maintain(state, &profile, max_seconds, max_turns);
+impl From<ReceiptDomain> for ReceiptClockDomain {
+    fn from(domain: ReceiptDomain) -> Self {
+        match domain {
+            ReceiptDomain::Adapter => Self::Adapter,
+            ReceiptDomain::Upload => Self::Upload,
+        }
     }
-    let RetentionCommand::Reanchor {
-        profile,
-        domain,
-        account_alias,
-        unix_seconds,
-        confirm_digest,
-    } = command
-    else {
-        let reply = super::deadline::agent_client(state)?
-            .call(foks_agent_proto::Operation::RetentionStatus)?;
-        return match reply.result {
-            foks_agent_proto::ResponseResult::Success { value } => {
-                super::deadline::print_agent_value(value)?;
-                Ok(())
+}
+
+/// Clock status and repair run in the resident agent, which samples the same
+/// process clock that later admits writes and uploads. `maintain` drains
+/// local cleanup in this process under the profile lock, as the agent's
+/// resident maintenance does, and reports contention as incomplete.
+pub fn run(state: &Path, command: RetentionCommand) -> Result<(), Box<dyn std::error::Error>> {
+    let operation = match command {
+        RetentionCommand::Status => Operation::RetentionStatus,
+        RetentionCommand::Maintain {
+            profile,
+            max_seconds,
+            max_turns,
+        } => return maintain(state, &profile, max_seconds, max_turns),
+        RetentionCommand::ClockStatus {
+            profile,
+            domain,
+            account_alias,
+        } => {
+            super::mcp::ensure_agent(state)?;
+            Operation::AdapterClockStatus {
+                profile,
+                account_alias,
+                domain: domain.into(),
             }
-            foks_agent_proto::ResponseResult::Error { code, message, .. } => {
-                Err(format!("{code:?}: {message}").into())
+        }
+        RetentionCommand::Reanchor {
+            profile,
+            domain,
+            account_alias,
+            unix_seconds,
+            confirm_digest,
+        } => {
+            let unix_seconds = match unix_seconds {
+                Some(seconds) => seconds,
+                None => std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_secs(),
+            };
+            super::mcp::ensure_agent(state)?;
+            Operation::RepairAdapterClock {
+                profile,
+                account_alias,
+                domain: domain.into(),
+                action: match confirm_digest {
+                    Some(confirmation_digest) => AdapterClockRepairAction::Confirm {
+                        unix_seconds,
+                        confirmation_digest,
+                    },
+                    None => AdapterClockRepairAction::Preview { unix_seconds },
+                },
             }
-        };
+        }
     };
-    let registry = ProfileRegistry::open(state)?;
-    let session = ProfileSession::open(&registry, &profile)?;
-    // Output follows checkpoint publication, including error paths.
-    let result =
-        super::with_vault(state, &session, |checked, vault, _| {
-            Ok(match (domain, confirm_digest) {
-                (ReceiptDomain::Adapter, Some(ref digest)) => serde_json::to_value(
-                    checked.reanchor_adapter_clock(&account_alias, unix_seconds, digest, vault)?,
-                )?,
-                (ReceiptDomain::Adapter, None) => serde_json::to_value(
-                    checked.adapter_clock_preview(&account_alias, unix_seconds, vault)?,
-                )?,
-                (ReceiptDomain::Upload, Some(ref digest)) => serde_json::to_value(
-                    checked.reanchor_upload_clock(&account_alias, unix_seconds, digest, vault)?,
-                )?,
-                (ReceiptDomain::Upload, None) => serde_json::to_value(
-                    checked.upload_clock_preview(&account_alias, unix_seconds, vault)?,
-                )?,
-            })
+    // `retention status` reads a running agent's counters without starting
+    // one, so a version refusal is diagnosed here as `ensure_agent` would.
+    let reply = super::deadline::agent_client(state)?
+        .call(operation)
+        .map_err(|error| -> Box<dyn std::error::Error> {
+            if error.is_version_mismatch() {
+                super::mcp::incompatible_agent_message(&error).into()
+            } else {
+                error.into()
+            }
         })?;
-    super::deadline::print_agent_value(result)?;
-    Ok(())
+    match reply.result {
+        ResponseResult::Success { value } => super::deadline::print_agent_value(value),
+        ResponseResult::Error { code, message, .. } => Err(format!("{code:?}: {message}").into()),
+    }
 }
 
 fn maintain(
@@ -170,6 +216,54 @@ pub(super) fn preflight(state: &Path, session: &ProfileSession) {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    /// An agent left running by an older build refuses the status request's
+    /// version; the CLI names both versions and the remedy instead of a bare
+    /// protocol error.
+    #[cfg(unix)]
+    #[test]
+    fn status_from_an_older_agent_is_diagnosed_as_incompatible() {
+        use std::io::{Read as _, Write as _};
+        use std::os::unix::fs::PermissionsExt as _;
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("foks-rs.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut prefix = [0u8; 4];
+            stream.read_exact(&mut prefix).unwrap();
+            let mut frame = vec![0; 4 + u32::from_be_bytes(prefix) as usize];
+            frame[..4].copy_from_slice(&prefix);
+            stream.read_exact(&mut frame[4..]).unwrap();
+            let refusal = serde_json::json!({
+                "version": 34,
+                "id": foks_agent_proto::request_id(&frame),
+                "status": "error",
+                "code": "version-mismatch",
+                "message": "unsupported protocol version",
+            });
+            stream
+                .write_all(&foks_agent_proto::encode(&refusal).unwrap())
+                .unwrap();
+        });
+        let _scope =
+            super::super::deadline::CommandScope::enter(std::time::Duration::from_secs(15))
+                .unwrap();
+        let error = run(directory.path(), RetentionCommand::Status)
+            .unwrap_err()
+            .to_string();
+        server.join().unwrap();
+        assert_eq!(
+            error,
+            format!(
+                "the running foks-agent is incompatible: agent protocol version 34 does not \
+                 match client protocol version {}; stop it (quit the FOKS app or end the \
+                 foks-agent process) and retry",
+                foks_agent_proto::PROTOCOL_VERSION
+            )
+        );
+    }
     #[test]
     fn maintenance_cli_has_explicit_bounded_policy() {
         let parse = |extra: &[&str]| {

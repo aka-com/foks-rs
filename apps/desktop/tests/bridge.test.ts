@@ -3543,3 +3543,32 @@ test('the mock refuses a second selection in a store it wrote to until the catal
     ),
   );
 });
+
+test('adapter clock status decodes only its own three fields', async () => {
+  const { decodeAdapterClock } = await import('../src/adapter-clock-contract');
+  for (const status of [
+    { admission: 'paused', localTime: 1_700_000_000, resumesAt: null },
+    { admission: 'behind', localTime: 1_700_000_000, resumesAt: 1_700_086_400 },
+  ])
+    assert.deepEqual(decodeAdapterClock(status), status);
+  for (const value of [
+    null,
+    [],
+    { admission: 'open', localTime: 1, resumesAt: null },
+    { admission: 'paused', localTime: -1, resumesAt: null },
+    { admission: 'paused', localTime: 1.5, resumesAt: null },
+    { admission: 'paused', resumesAt: null },
+    { admission: 'paused', localTime: 1 },
+    { admission: 'paused', localTime: 1, resumesAt: 2 },
+    { admission: 'behind', localTime: 1, resumesAt: null },
+    { admission: 'behind', localTime: 1, resumesAt: -2 },
+    { admission: 'paused', localTime: 1, resumesAt: null, digest: 'ab' },
+  ])
+    assert.throws(() => decodeAdapterClock(value), JSON.stringify(value));
+  const bridge = mockBridge(FIXTURE);
+  assert.equal(
+    (await bridge.adapterClock('personal', 'personal', false)).admission,
+    'trusted',
+  );
+  await assert.rejects(() => bridge.adapterClock('personal', 'missing', true));
+});

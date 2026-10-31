@@ -14,13 +14,19 @@ pub mod bot;
 pub mod chat;
 pub mod data;
 mod frame;
+pub mod hello;
 pub mod invitations;
 mod message;
 pub mod sso;
 
 pub use frame::{
-    decode_request, decode_response, decode_upload_frame, encode, request_id, Error, Result,
-    FRAME_ENVELOPE_RESERVE_BYTES, MAXIMUM_KV_PAYLOAD_BYTES, MAXIMUM_MESSAGE_BYTES,
+    decode_hello, decode_hello_response, decode_request, decode_response, decode_upload_frame,
+    encode, request_id, Error, HelloResponse, Result, FRAME_ENVELOPE_RESERVE_BYTES,
+    MAXIMUM_KV_PAYLOAD_BYTES, MAXIMUM_MESSAGE_BYTES,
+};
+pub use hello::{
+    HelloReply, HelloRequest, Peer, ProtocolRange, MAXIMUM_HELLO_CAPABILITIES,
+    MAXIMUM_HELLO_FIELD_BYTES, SUPPORTED_PROTOCOL_VERSIONS,
 };
 pub use message::{
     AccountStoreRef, AccountSummary, AgentStatus, BackupEnrollmentSummary, CompatibilityFailure,
@@ -47,7 +53,7 @@ mod tests {
 
     #[test]
     fn selected_reads_require_identity_and_reject_pre_identity_ipc() {
-        assert_eq!(PROTOCOL_VERSION, 37);
+        const { assert!(PROTOCOL_VERSION >= 35) };
         for operation in [
             Operation::ReadKv {
                 store: KvStoreRef::Account(AccountStoreRef {
@@ -767,7 +773,7 @@ mod tests {
 
     #[test]
     fn reconcile_is_a_local_v29_mutation_with_no_initial_trust_inputs() {
-        assert_eq!(PROTOCOL_VERSION, 37);
+        const { assert!(PROTOCOL_VERSION >= 29) };
         let operation = Operation::ReconcileProfile {
             profile: "saved".into(),
         };
@@ -784,7 +790,7 @@ mod tests {
 
     #[test]
     fn submit_message_is_a_local_v29_mutation() {
-        assert_eq!(PROTOCOL_VERSION, 37);
+        const { assert!(PROTOCOL_VERSION >= 29) };
         let request = test_request(
             20,
             Operation::Chat {
@@ -1379,9 +1385,80 @@ mod tests {
             }
         }
     }
+    /// The floor asserts above keep older tests valid across versions; this
+    /// one fails on any bump, so a version change is always deliberate and
+    /// reaches the pins in fixtures, fuzz seeds and documentation.
+    #[test]
+    fn protocol_version_is_pinned() {
+        assert_eq!(PROTOCOL_VERSION, 38);
+        assert_eq!(SUPPORTED_PROTOCOL_VERSIONS, ProtocolRange::exactly(38));
+    }
+
+    #[test]
+    fn receipt_clock_repair_is_a_v38_mutation_and_status_is_not() {
+        const { assert!(PROTOCOL_VERSION >= 38) };
+        let status = Operation::AdapterClockStatus {
+            profile: "local".into(),
+            account_alias: "owner".into(),
+            domain: data::ReceiptClockDomain::Adapter,
+        };
+        assert!(!status.is_mutation());
+        assert_eq!(
+            serde_json::to_value(&status).unwrap(),
+            serde_json::json!({
+                "operation": "adapter-clock-status",
+                "profile": "local",
+                "account_alias": "owner",
+                "domain": "adapter",
+            })
+        );
+        let repair = Operation::RepairAdapterClock {
+            profile: "local".into(),
+            account_alias: "owner".into(),
+            domain: data::ReceiptClockDomain::Upload,
+            action: data::AdapterClockRepairAction::Confirm {
+                unix_seconds: 1_700_000_000,
+                confirmation_digest: "ab".repeat(32),
+            },
+        };
+        assert!(repair.is_mutation());
+        assert!(!Operation::RepairAdapterClock {
+            profile: "local".into(),
+            account_alias: "owner".into(),
+            domain: data::ReceiptClockDomain::Adapter,
+            action: data::AdapterClockRepairAction::Preview {
+                unix_seconds: 1_700_000_000,
+            },
+        }
+        .is_mutation());
+        let encoded = serde_json::to_value(&repair).unwrap();
+        assert_eq!(encoded["operation"], "repair-adapter-clock");
+        assert_eq!(encoded["domain"], "upload");
+        let mut missing = encoded.clone();
+        missing.as_object_mut().unwrap().remove("domain");
+        assert!(serde_json::from_value::<Operation>(missing).is_err());
+        assert_eq!(encoded["action"]["step"], "confirm");
+        let request = test_request(21, repair);
+        assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
+        assert!(serde_json::from_value::<data::AdapterClockRepairAction>(
+            serde_json::json!({"step": "preview", "unix_seconds": 1, "extra": 1})
+        )
+        .is_err());
+        let status: data::AdapterClockStatus = serde_json::from_value(serde_json::json!({
+            "host_id": "01",
+            "user_id": "02",
+            "admission": "behind",
+            "local_time": 1_700_000_000u64,
+            "validated_time_floor": 1_699_990_000u64,
+            "reject_issued_before": 1_700_003_600u64,
+        }))
+        .unwrap();
+        assert_eq!(status.admission, data::AdapterClockAdmission::Behind);
+    }
+
     #[test]
     fn deadline_is_mandatory_only_after_bounded_version_dispatch() {
-        let old = serde_json::json!({"version":36,"id":7,"operation":{"operation":"ping"}});
+        let old = serde_json::json!({"version":PROTOCOL_VERSION - 1,"id":7,"operation":{"operation":"ping"}});
         assert!(matches!(
             decode_request(&encode(&old).unwrap()),
             Err(Error::Version)

@@ -796,6 +796,7 @@ mod tests {
             wall_seconds: 100,
             monotonic_seconds: 100,
             process_id: [1; 16],
+            boot_id: None,
         };
         let expiry = 101 + foks_client_db::UPLOAD_TERMINAL_RETENTION_SECONDS;
         f.run(|s, _, _| {

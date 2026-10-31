@@ -54,10 +54,22 @@ int main(int argc, char **argv) {
             !read_all(client, request, ntohl(length))) { close(client); continue; }
         request[ntohl(length)] = '\0';
         char *id = strstr(request, "\"id\":");
-        char response[256];
-        int count = snprintf(response, sizeof response,
-            "{\"version\":%d,\"id\":%llu,\"status\":\"success\",\"value\":{\"state\":\"ready\"}}",
-            version, id ? strtoull(id + 5, NULL, 10) : 0);
+        unsigned long long request_id = id ? strtoull(id + 5, NULL, 10) : 0;
+        char response[512];
+        int count;
+        /* A Hello is answered whatever its version, naming this agent's. */
+        if (strstr(request, "\"operation\":\"hello\"")) {
+            count = snprintf(response, sizeof response,
+                "{\"version\":%d,\"id\":%llu,\"status\":\"success\",\"value\":"
+                "{\"protocol\":%d,\"supported\":{\"minimum\":%d,\"maximum\":%d},"
+                "\"agent\":{\"kind\":\"foks-agent\",\"version\":\"0\"},"
+                "\"capabilities\":[]}}",
+                version, request_id, version, version, version);
+        } else {
+            count = snprintf(response, sizeof response,
+                "{\"version\":%d,\"id\":%llu,\"status\":\"success\",\"value\":{\"state\":\"ready\"}}",
+                version, request_id);
+        }
         length = htonl(count);
         write(client, &length, 4);
         write(client, response, count);

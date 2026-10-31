@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
+use crate::hello::{HelloReply, HelloRequest, ProtocolRange};
 use crate::{KvUploadFrame, Request, Response, PROTOCOL_VERSION};
 
 pub const MAXIMUM_MESSAGE_BYTES: usize = 1024 * 1024;
@@ -35,17 +36,108 @@ pub enum Error {
     TooLarge,
     #[error("agent frame length does not match its payload")]
     Length,
+    /// A frame carries a version other than this build's, and is not the
+    /// agent's version-mismatch refusal.
     #[error("agent protocol version is unsupported")]
     Version,
+    /// The agent refused a request of another version. The agent did not
+    /// decode the request's operation, so nothing ran.
+    #[error(
+        "agent protocol version {agent}{} does not match client protocol version {}",
+        accepted_suffix(*.agent, .supported),
+        PROTOCOL_VERSION
+    )]
+    VersionMismatch {
+        agent: u32,
+        /// The versions the agent accepts; absent from an agent that
+        /// predates the handshake.
+        supported: Option<ProtocolRange>,
+    },
+    #[error("agent handshake is invalid: {0}")]
+    HelloInvalid(&'static str),
+    /// The agent answered a Hello with an error other than a version
+    /// mismatch. The code is the wire name, which this build may not know.
+    #[error("agent refused the handshake: {code}: {message}")]
+    HelloRefused { code: String, message: String },
     #[error("agent JSON is invalid: {0}")]
     Json(#[from] serde_json::Error),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+fn accepted_suffix(agent: u32, supported: &Option<ProtocolRange>) -> String {
+    match supported {
+        Some(range) if *range != ProtocolRange::exactly(agent) => {
+            format!(" (accepted: {range})")
+        }
+        _ => String::new(),
+    }
+}
+
 #[derive(Deserialize)]
 struct VersionEnvelope {
     version: u32,
+}
+
+/// The frozen keys of a response envelope, read whatever the frame's
+/// version. See [`crate::hello`].
+#[derive(Deserialize)]
+struct FrozenEnvelope<V> {
+    version: u32,
+    #[serde(default)]
+    id: Option<u64>,
+    status: FrozenStatus,
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    fields: Option<FrozenFields>,
+    value: Option<V>,
+}
+
+#[derive(Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+enum FrozenStatus {
+    Success,
+    Error,
+}
+
+#[derive(Deserialize)]
+struct FrozenFields {
+    #[serde(default)]
+    minimum_protocol: Option<u32>,
+    #[serde(default)]
+    maximum_protocol: Option<u32>,
+}
+
+impl FrozenFields {
+    fn supported(&self) -> Option<ProtocolRange> {
+        let range = ProtocolRange {
+            minimum: self.minimum_protocol?,
+            maximum: self.maximum_protocol?,
+        };
+        (range.minimum <= range.maximum).then_some(range)
+    }
+}
+
+const VERSION_MISMATCH_CODE: &str = "version-mismatch";
+
+impl<V> FrozenEnvelope<V> {
+    fn version_mismatch(&self) -> Option<Error> {
+        (self.status == FrozenStatus::Error && self.code.as_deref() == Some(VERSION_MISMATCH_CODE))
+            .then(|| Error::VersionMismatch {
+                agent: self.version,
+                supported: self.fields.as_ref().and_then(FrozenFields::supported),
+            })
+    }
+}
+
+/// The agent's answer to a Hello as the client decoded it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HelloResponse {
+    pub id: Option<u64>,
+    pub reply: HelloReply,
 }
 
 pub fn encode<T: Serialize>(message: &T) -> Result<Zeroizing<Vec<u8>>> {
@@ -74,10 +166,66 @@ pub fn request_id(frame: &[u8]) -> Option<u64> {
     value.get("id")?.as_u64()
 }
 
+/// Decodes a response of this build's version. A response of another
+/// version is the agent's frozen version-mismatch refusal, reported as
+/// [`Error::VersionMismatch`], or anything else, reported as
+/// [`Error::Version`].
 pub fn decode_response(frame: &[u8]) -> Result<Response> {
-    validate_version(frame)?;
+    validate_version(frame).map_err(|error| match error {
+        Error::Version => match decode::<FrozenEnvelope<serde::de::IgnoredAny>>(frame) {
+            Ok(frozen) => frozen.version_mismatch().unwrap_or(Error::Version),
+            Err(_) => Error::Version,
+        },
+        other => other,
+    })?;
     let response: Response = decode(frame)?;
     Ok(response)
+}
+
+/// Recognizes a Hello whatever its version. Returns `None` for any frame
+/// whose operation is not `hello`, so the caller reports that frame's own
+/// decoding error.
+pub fn decode_hello(frame: &[u8]) -> Result<Option<HelloRequest>> {
+    #[derive(Deserialize)]
+    struct Probe {
+        operation: ProbeOperation,
+    }
+    #[derive(Deserialize)]
+    struct ProbeOperation {
+        operation: String,
+    }
+    match decode::<Probe>(frame) {
+        Ok(probe) if probe.operation.operation == "hello" => {}
+        _ => return Ok(None),
+    }
+    let hello: HelloRequest = decode(frame)?;
+    hello.validate()?;
+    Ok(Some(hello))
+}
+
+/// Decodes the agent's answer to a Hello whatever its version. A
+/// version-mismatch refusal, which an agent that predates the handshake
+/// sends, is [`Error::VersionMismatch`]; the caller still checks the reply
+/// with [`HelloReply::require_compatible`].
+pub fn decode_hello_response(frame: &[u8]) -> Result<HelloResponse> {
+    let envelope: FrozenEnvelope<HelloReply> = decode(frame)?;
+    if let Some(mismatch) = envelope.version_mismatch() {
+        return Err(mismatch);
+    }
+    match (envelope.status, envelope.value) {
+        (FrozenStatus::Success, Some(reply)) => {
+            reply.validate()?;
+            Ok(HelloResponse {
+                id: envelope.id,
+                reply,
+            })
+        }
+        (FrozenStatus::Success, None) => Err(Error::HelloInvalid("reply has no value")),
+        (FrozenStatus::Error, _) => Err(Error::HelloRefused {
+            code: envelope.code.unwrap_or_default(),
+            message: envelope.message.unwrap_or_default(),
+        }),
+    }
 }
 
 pub fn decode_upload_frame(frame: &[u8]) -> Result<KvUploadFrame> {

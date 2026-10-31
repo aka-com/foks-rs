@@ -10,9 +10,22 @@ use foks_rpc::{RealtimeRequest, RealtimeResponse};
 use std::collections::{BTreeMap, BTreeSet};
 use zeroize::Zeroizing;
 
+/// The verdict on one history row. Only `Text` is authenticated; the other
+/// verdicts describe a row whose sender, metadata and predecessor pointer are
+/// the server's unauthenticated claims.
 pub enum ChatContent {
     Text(Zeroizing<String>),
     Unsupported(RtMessageType),
+    /// Any channel writer can submit ciphertext the server cannot check, and
+    /// a Go v0.1.9 host checks an author's message ID only for host-wide
+    /// uniqueness and stores the predecessor pointer unchecked, so a row this
+    /// client cannot open is a per-message verdict rather than a page failure:
+    /// decryption failure, non-UTF-8 text, another key role, an unavailable
+    /// key generation, a non-user sender, further attribution, invalid author
+    /// metadata, or a pointer that contradicts an anchored predecessor.
+    Unverifiable {
+        reason: &'static str,
+    },
 }
 pub struct ChatMessage {
     pub message: RtMessage,
@@ -23,6 +36,23 @@ pub struct ChatHistory {
     pub messages: Vec<ChatMessage>,
     /// Missing predecessors are incomplete evidence, never a successful check.
     pub missing_predecessors: Vec<u64>,
+}
+/// The verdict on authenticated text whose predecessor pointer contradicts a
+/// predecessor mapping this client has anchored.
+///
+/// A Go v0.1.9 host stores the author's predecessor pointer without checking
+/// it against its own (sequence, ID) mapping, so any channel writer can seal
+/// a text message whose pointer names the wrong ID. When the predecessor's
+/// mapping is anchored (authenticated text already in the ledger, or
+/// authenticated in the same page and recorded with it), the contradiction
+/// is the author's, and the row gets this verdict. When it is not anchored,
+/// the server could have substituted the predecessor row, so
+/// [`ChatSession::verify_page`] still fails the page: that contradiction is
+/// the signal of a server rewriting history.
+fn predecessor_contradiction() -> ChatContent {
+    ChatContent::Unverifiable {
+        reason: "predecessor pointer contradicts an anchored message",
+    }
 }
 pub(super) fn anchor(m: &RtMessage) -> Result<ChatAnchor> {
     Ok(ChatAnchor {
@@ -178,7 +208,6 @@ impl ChatSession<'_> {
         let mut known = BTreeMap::new();
         let mut ids = BTreeSet::new();
         let mut seqs = BTreeSet::new();
-        let mut anchors = Vec::new();
         let mut observed = Vec::new();
         let mut messages = Vec::new();
         for m in rows {
@@ -187,39 +216,53 @@ impl ChatSession<'_> {
             }
             observed.push(anchor(&m)?);
             let content = self.open_message(md, &m)?;
-            if matches!(content, ChatContent::Text(_)) {
-                known.insert(m.sequence, m.metadata.id.0);
-                anchors.push(anchor(&m)?);
-            }
+            // A predecessor check tests the server's (sequence, ID) mapping
+            // against an authenticated successor's pointer, so every row's
+            // mapping can settle it, whatever that row's own verdict.
+            known.insert(m.sequence, m.metadata.id.0);
             messages.push(ChatMessage {
                 message: m,
                 content,
             });
         }
+        // Checked oldest first, so a predecessor's own verdict is final before
+        // its successors rely on it.
+        let mut order: Vec<usize> = (0..messages.len()).collect();
+        order.sort_by_key(|&index| messages[index].message.sequence);
         let mut need = BTreeSet::new();
-        for row in &messages {
-            let m = &row.message;
-            if !matches!(row.content, ChatContent::Text(_)) || m.metadata.previous_sequence == 0 {
+        for index in order {
+            let m = &messages[index].message;
+            if !matches!(messages[index].content, ChatContent::Text(_))
+                || m.metadata.previous_sequence == 0
+            {
                 continue;
             }
             let prev = m.metadata.previous_sequence;
-            let id = known
-                .get(&prev)
-                .copied()
-                .or(hard.chat_anchor(&scope, prev)?.map(|a| a.id));
-            if let Some(id) = id {
-                if id != m.metadata.previous_id.0 {
-                    return Err(Error::ChatChannelIntegrity("predecessor ID mismatch"));
-                }
-            } else {
+            let stored = hard.chat_anchor(&scope, prev)?.map(|a| a.id);
+            let Some(id) = known.get(&prev).copied().or(stored) else {
                 need.insert(prev);
+                continue;
+            };
+            if id == m.metadata.previous_id.0 {
+                continue;
             }
+            // The predecessor's mapping is anchored: already in the ledger, or
+            // authenticated text in this page that the ledger records with it.
+            let anchored = stored == Some(id)
+                || messages.iter().any(|row| {
+                    row.message.sequence == prev && matches!(row.content, ChatContent::Text(_))
+                });
+            if !anchored {
+                return Err(Error::ChatChannelIntegrity("predecessor ID mismatch"));
+            }
+            messages[index].content = predecessor_contradiction();
         }
         let requested: Vec<_> = need
             .iter()
             .copied()
             .take(ChatLimits::PREDECESSORS)
             .collect();
+        let mut predecessor_anchors = Vec::new();
         if !requested.is_empty() {
             let RealtimeResponse::Thread(page) =
                 rpc.request(&RealtimeRequest::GetThread(RtGetThreadArgument {
@@ -250,20 +293,32 @@ impl ChatSession<'_> {
                     encoded_bytes += size;
                 }
                 observed.push(anchor(&m)?);
-                if matches!(self.open_message(md, &m)?, ChatContent::Text(_)) {
-                    for row in &messages {
-                        if matches!(row.content, ChatContent::Text(_))
-                            && row.message.metadata.previous_sequence == m.sequence
-                            && row.message.metadata.previous_id != m.metadata.id
-                        {
+                let authenticated = matches!(self.open_message(md, &m)?, ChatContent::Text(_));
+                for row in &mut messages {
+                    if matches!(row.content, ChatContent::Text(_))
+                        && row.message.metadata.previous_sequence == m.sequence
+                        && row.message.metadata.previous_id != m.metadata.id
+                    {
+                        if !authenticated {
                             return Err(Error::ChatChannelIntegrity("predecessor contradiction"));
                         }
+                        row.content = predecessor_contradiction();
                     }
-                    need.remove(&m.sequence);
-                    anchors.push(anchor(&m)?);
+                }
+                need.remove(&m.sequence);
+                if authenticated {
+                    predecessor_anchors.push(anchor(&m)?);
                 }
             }
         }
+        // Only authenticated text whose pointer agrees with the mapping
+        // becomes an anchor.
+        let mut anchors = messages
+            .iter()
+            .filter(|row| matches!(row.content, ChatContent::Text(_)))
+            .map(|row| anchor(&row.message))
+            .collect::<Result<Vec<_>>>()?;
+        anchors.extend(predecessor_anchors);
         hard.chat_accept_page(&scope, &observed, &anchors)
             .map_err(|error| match error {
                 foks_client_db::Error::ChatConflict(_) => {
@@ -277,45 +332,58 @@ impl ChatSession<'_> {
             missing_predecessors: need.into_iter().collect(),
         })
     }
+    /// Errors are reserved for facts the server itself assigns; everything a
+    /// channel writer chooses yields a per-message verdict. The predecessor
+    /// pointer is checked against the page in [`Self::verify_page`].
     fn open_message(&self, md: &RtChannelMetadata, m: &RtMessage) -> Result<ChatContent> {
-        if m.sequence == 0
-            || m.sequence > i64::MAX as u64
-            || m.metadata.id.0 == [0; 16]
-            || m.metadata.previous_sequence >= m.sequence
-            || (m.metadata.previous_sequence == 0) != (m.metadata.previous_id.0 == [0; 16])
-        {
-            return Err(Error::ChatChannelIntegrity(
-                "invalid message sequence metadata",
-            ));
+        let unverifiable = |reason| Ok(ChatContent::Unverifiable { reason });
+        if m.sequence == 0 || m.sequence > i64::MAX as u64 {
+            return Err(Error::ChatChannelIntegrity("invalid message sequence"));
         }
         let sender = m
             .sender
             .as_ref()
             .ok_or(Error::ChatChannelIntegrity("message sender missing"))?;
+        // The ID and predecessor pointer are author-chosen. A Go v0.1.9 host
+        // refuses only an ID already used anywhere on the host, so it stores
+        // one all-zero ID and any predecessor pointer.
+        if m.metadata.id.0 == [0; 16]
+            || m.metadata.previous_sequence >= m.sequence
+            || (m.metadata.previous_sequence == 0) != (m.metadata.previous_id.0 == [0; 16])
+        {
+            return unverifiable("invalid message metadata");
+        }
         if sender.entity().entity_type() != ENTITY_USER {
-            return Err(Error::ChatUnsupported("unsupported message sender"));
+            return unverifiable("unsupported message sender");
         }
         if m.metadata.kind != RtMessageType::Basic {
             return Ok(ChatContent::Unsupported(m.metadata.kind));
         }
         if m.metadata.further_user_attribution.is_some() {
-            return Err(Error::ChatUnsupported("unsupported message attribution"));
+            return unverifiable("unsupported message attribution");
         }
         let RtMessageWrapper::Encrypted(b) = &m.wrapper else {
-            return Err(Error::ChatChannelIntegrity("unencrypted chat message"));
+            return unverifiable("unencrypted chat message");
         };
         if b.key.role != md.roles.read {
-            return Err(Error::ChatChannelIntegrity("message read role mismatch"));
+            return unverifiable("message read role mismatch");
         }
-        let bytes = self
-            .keys(b.key)?
-            .open_basic_message(
-                &self.noncer(md.id, m.metadata.clone(), sender.entity().clone()),
-                &b.ciphertext,
-            )
-            .map_err(|_| Error::ChatChannelIntegrity("message authentication failed"))?;
-        let text = std::str::from_utf8(&bytes)
-            .map_err(|_| Error::ChatChannelIntegrity("Basic text is not UTF-8"))?;
-        Ok(ChatContent::Text(Zeroizing::new(text.to_owned())))
+        let keys = match self.keys(b.key) {
+            Ok(keys) => keys,
+            Err(Error::ChatKeyUnavailable(_)) => {
+                return unverifiable("message key generation unavailable")
+            }
+            Err(error) => return Err(error),
+        };
+        let Ok(bytes) = keys.open_basic_message(
+            &self.noncer(md.id, m.metadata.clone(), sender.entity().clone()),
+            &b.ciphertext,
+        ) else {
+            return unverifiable("message authentication failed");
+        };
+        match std::str::from_utf8(&bytes) {
+            Ok(text) => Ok(ChatContent::Text(Zeroizing::new(text.to_owned()))),
+            Err(_) => unverifiable("Basic text is not UTF-8"),
+        }
     }
 }

@@ -261,7 +261,7 @@ mod tests {
             let server = std::thread::spawn(move || {
                 let until = std::time::Instant::now() + Duration::from_secs(5);
                 let mut calls = 0;
-                for stage in 0..if lose_offer { 2 } else { 3 } {
+                for stage in 0..if lose_offer { 3 } else { 4 } {
                     let (mut stream, _) = loop {
                         match listener.accept() {
                             Ok(connection) => break connection,
@@ -275,13 +275,39 @@ mod tests {
                             Err(e) => panic!("bot accept failed: {e}"),
                         }
                     };
+                    if stage == 0 {
+                        // ensure_agent starts with the version-independent Hello.
+                        stream.set_nonblocking(false).unwrap();
+                        let mut prefix = [0; 4];
+                        stream.read_exact(&mut prefix).unwrap();
+                        let mut frame = vec![0; 4 + u32::from_be_bytes(prefix) as usize];
+                        frame[..4].copy_from_slice(&prefix);
+                        stream.read_exact(&mut frame[4..]).unwrap();
+                        let hello = foks_agent_proto::decode_hello(&frame).unwrap().unwrap();
+                        let reply = foks_agent_proto::HelloReply::new(
+                            foks_agent_proto::Peer::new("foks-agent", "test"),
+                            &[],
+                        );
+                        stream
+                            .write_all(
+                                &foks_agent_proto::encode(&foks_agent_proto::Response::success(
+                                    hello.id,
+                                    serde_json::to_value(reply).unwrap(),
+                                ))
+                                .unwrap(),
+                            )
+                            .unwrap();
+                        continue;
+                    }
                     let req = request(&mut stream);
                     assert_eq!(req.deadline.domain(), original.envelope().domain());
                     assert!(req.deadline.expires_ns() <= original.envelope().expires_ns());
                     let value = match (stage, req.operation) {
-                        (0, Operation::Ping) => serde_json::json!({}),
+                        (1, Operation::AgentStatus) => {
+                            serde_json::to_value(foks_agent_proto::AgentStatus::ready()).unwrap()
+                        }
                         (
-                            1,
+                            2,
                             Operation::BotAccount {
                                 profile,
                                 account_alias,
@@ -303,7 +329,7 @@ mod tests {
                             serde_json::json!({"token":"a".repeat(37),"report":{}})
                         }
                         (
-                            2,
+                            3,
                             Operation::BotAccount {
                                 profile,
                                 account_alias,

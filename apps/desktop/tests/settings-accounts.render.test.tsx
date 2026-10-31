@@ -1404,3 +1404,116 @@ test('Account waits for its team count while the team inventory is incomplete', 
   assert.ok(rendered.getByText('Loading teams…'));
   assert.equal(rendered.queryByText('0 teams'), null);
 });
+
+test('a paused adapter clock shows its band until the computer’s time is confirmed', async () => {
+  const calls: [string, string, boolean][] = [];
+  let admission: 'paused' | 'trusted' = 'paused';
+  const { rendered } = await renderPeople(
+    await fixture(),
+    'acct:personal',
+    undefined,
+    {
+      decorate: (bridge) => ({
+        ...bridge,
+        adapterClock: async (profile, account, confirm) => {
+          calls.push([profile, account, confirm]);
+          if (confirm) admission = 'trusted';
+          return { admission, localTime: 1_700_000_000, resumesAt: null };
+        },
+      }),
+    },
+  );
+  await ui.act(async () => {
+    await Promise.resolve();
+  });
+  const band = rendered.getByRole('group', {
+    name: 'Assistant writes paused: confirm this computer’s time.',
+  });
+  assert.match(
+    band.textContent ?? '',
+    /MCP assistants cannot write to this account/,
+  );
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Confirm Time' }));
+    await Promise.resolve();
+  });
+  assert.deepEqual(calls, [
+    ['personal', 'personal', false],
+    ['personal', 'personal', true],
+  ]);
+  assert.equal(
+    rendered.queryByRole('group', {
+      name: 'Assistant writes paused: confirm this computer’s time.',
+    }),
+    null,
+  );
+});
+
+test('a clock behind its watermark names when writes resume and offers no confirmation', async () => {
+  const calls: boolean[] = [];
+  const resumesAt = 1_700_086_400;
+  const { rendered } = await renderPeople(
+    await fixture(),
+    'acct:personal',
+    undefined,
+    {
+      decorate: (bridge) => ({
+        ...bridge,
+        adapterClock: async (_profile, _account, confirm) => {
+          calls.push(confirm);
+          return {
+            admission: 'behind' as const,
+            localTime: 1_700_000_000,
+            resumesAt,
+          };
+        },
+      }),
+    },
+  );
+  await ui.act(async () => {
+    await Promise.resolve();
+  });
+  const resumes = new Date(resumesAt * 1_000).toLocaleString();
+  const band = rendered.getByRole('group', {
+    name: `Assistant writes paused until ${resumes}.`,
+  });
+  assert.match(
+    band.textContent ?? '',
+    /confirming the time does not change this/,
+  );
+  assert.equal(rendered.queryByRole('button', { name: 'Confirm Time' }), null);
+  assert.deepEqual(calls, [false]);
+});
+
+test('a trusted or unreadable adapter clock draws no band', async () => {
+  for (const adapterClock of [
+    async () => ({
+      admission: 'trusted' as const,
+      localTime: 1,
+      resumesAt: null,
+    }),
+    async () => ({
+      admission: 'unanchored' as const,
+      localTime: 1,
+      resumesAt: null,
+    }),
+    async () => {
+      throw new Error('agent unavailable');
+    },
+  ]) {
+    const { rendered } = await renderPeople(
+      await fixture(),
+      'acct:personal',
+      undefined,
+      { decorate: (bridge) => ({ ...bridge, adapterClock }) },
+    );
+    await ui.act(async () => {
+      await Promise.resolve();
+    });
+    assert.equal(
+      rendered.queryByRole('button', { name: 'Confirm Time' }),
+      null,
+    );
+    ui.cleanup();
+  }
+});

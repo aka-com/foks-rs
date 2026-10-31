@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 37;
+pub const PROTOCOL_VERSION: u32 = 38;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -519,19 +519,13 @@ pub enum AgentStatus {
         /// omitted when empty for wire compatibility with older agents.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         timers: Vec<TimerStatus>,
-        /// History accepts an exclusive `after` cursor. Older agents reject unknown fields.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        history_after: Option<bool>,
     },
 }
 
 impl AgentStatus {
     /// Constructs ready status without background-loop timings.
     pub fn ready() -> Self {
-        Self::Ready {
-            timers: Vec::new(),
-            history_after: None,
-        }
+        Self::Ready { timers: Vec::new() }
     }
 
     pub fn is_ready(&self) -> bool {
@@ -618,6 +612,8 @@ impl Operation {
             Self::DataWriteStatus { .. } => DeadlineClass::Ordinary,
             Self::PendingDataWrites { .. } => DeadlineClass::Ordinary,
             Self::BindDataAccount { .. } => DeadlineClass::Ordinary,
+            Self::AdapterClockStatus { .. } => DeadlineClass::Ordinary,
+            Self::RepairAdapterClock { .. } => DeadlineClass::Ordinary,
             Self::ReadData { .. } => DeadlineClass::Ordinary,
             Self::Chat { action, .. } => action.deadline_class(),
             Self::Ping => DeadlineClass::Ordinary,
@@ -777,6 +773,20 @@ pub enum Operation {
     BindDataAccount {
         profile: String,
         account_alias: String,
+    },
+    /// Whether the account's receipt clock in `domain` admits new handles.
+    AdapterClockStatus {
+        profile: String,
+        account_alias: String,
+        domain: crate::data::ReceiptClockDomain,
+    },
+    /// Re-anchors the account's receipt clock in `domain` at a confirmed wall
+    /// time. The MCP adapter never sends this; the CLI and the desktop do.
+    RepairAdapterClock {
+        profile: String,
+        account_alias: String,
+        domain: crate::data::ReceiptClockDomain,
+        action: crate::data::AdapterClockRepairAction,
     },
     ReadData {
         scope: crate::data::DataScope,
@@ -1337,6 +1347,8 @@ impl Operation {
             Self::DataWriteStatus { .. } => "DataWriteStatus",
             Self::PendingDataWrites { .. } => "PendingDataWrites",
             Self::BindDataAccount { .. } => "BindDataAccount",
+            Self::AdapterClockStatus { .. } => "AdapterClockStatus",
+            Self::RepairAdapterClock { .. } => "RepairAdapterClock",
             Self::ReadData { .. } => "ReadData",
             Self::Chat { action, .. } => action.operation_name(),
             Self::Ping => "Ping",
@@ -1488,6 +1500,12 @@ impl Operation {
         if let Self::Chat { action, .. } = self {
             return action.is_mutation();
         }
+        if let Self::RepairAdapterClock { action, .. } = self {
+            return matches!(
+                action,
+                crate::data::AdapterClockRepairAction::Confirm { .. }
+            );
+        }
         !matches!(
             self,
             Self::Ping
@@ -1495,6 +1513,7 @@ impl Operation {
                 | Self::RetentionStatus
                 | Self::DiscoverGoProfiles
                 | Self::BindDataAccount { .. }
+                | Self::AdapterClockStatus { .. }
                 | Self::ReadData { .. }
                 | Self::DataWriteStatus { .. }
                 | Self::PendingDataWrites { .. }
@@ -1618,6 +1637,15 @@ impl std::fmt::Debug for Operation {
                 .field("token", &"<redacted>")
                 .finish(),
             Self::BindDataAccount { .. } => formatter.write_str("BindDataAccount"),
+            Self::AdapterClockStatus { domain, .. } => formatter
+                .debug_struct("AdapterClockStatus")
+                .field("domain", domain)
+                .finish_non_exhaustive(),
+            Self::RepairAdapterClock { domain, action, .. } => formatter
+                .debug_struct("RepairAdapterClock")
+                .field("domain", domain)
+                .field("action", action)
+                .finish_non_exhaustive(),
             Self::ReadData { .. } => formatter.write_str("ReadData"),
             Self::PrepareDataWrite { .. } => formatter.write_str("PrepareDataWrite"),
             Self::ExecuteDataWrite { .. } => formatter.write_str("ExecuteDataWrite"),
@@ -2606,6 +2634,22 @@ impl Response {
         Self::error_with_fields(None, code, message, ErrorFields::default())
     }
 
+    /// The agent's frozen refusal of a frame of another version, naming the
+    /// versions it accepts. See [`crate::hello`].
+    pub fn version_mismatch(id: Option<u64>) -> Self {
+        let supported = crate::SUPPORTED_PROTOCOL_VERSIONS;
+        Self::error_with_fields(
+            id,
+            ErrorCode::VersionMismatch,
+            "unsupported protocol version",
+            ErrorFields {
+                minimum_protocol: Some(supported.minimum),
+                maximum_protocol: Some(supported.maximum),
+                ..ErrorFields::default()
+            },
+        )
+    }
+
     pub fn error_with_fields(
         id: Option<u64>,
         code: ErrorCode,
@@ -2744,6 +2788,12 @@ pub struct ErrorFields {
     pub found_schema: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supported_schema: Option<u32>,
+    /// The agent protocol versions the agent accepts, set on
+    /// `version-mismatch`. These two keys are frozen; see [`crate::hello`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_protocol: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_protocol: Option<u32>,
 }
 
 impl ErrorFields {
@@ -2754,6 +2804,8 @@ impl ErrorFields {
             && self.reason.is_none()
             && self.found_schema.is_none()
             && self.supported_schema.is_none()
+            && self.minimum_protocol.is_none()
+            && self.maximum_protocol.is_none()
     }
 
     fn bounded(mut self) -> Self {
@@ -2896,7 +2948,6 @@ mod tests {
         assert!(AgentStatus::ready().is_ready());
         assert!(AgentStatus::ready().timers().is_empty());
         let reported = AgentStatus::Ready {
-            history_after: None,
             timers: vec![TimerStatus {
                 name: "scheduler".to_owned(),
                 started_at_ms: Some(1_700_000_000_000),

@@ -2,7 +2,7 @@ import type { ChatMessage } from '../chat-contract';
 import type { ConversationEvent } from './conversation-events';
 import { CHAT_HISTORY_BYTES, CHAT_HISTORY_ROWS } from '../chat-limits';
 import { channelIntegrity } from './errors';
-import { reconcileOperations, observeMessages } from './operations';
+import { delivered, reconcileOperations, observeMessages } from './operations';
 import type { TrackedOperation } from './operations';
 
 export interface HistoryWindow {
@@ -48,7 +48,7 @@ export function conversationResult(
     if (state.history)
       operations = observeMessages(
         operations,
-        new Set(state.history.messages.map((m) => m.id)),
+        delivered(state.history.messages),
       );
     return { ...state, operations };
   }
@@ -69,7 +69,7 @@ export function conversationResult(
   );
   for (const message of incoming) {
     const old = rows.get(message.id);
-    if (old && !sameMessage(old, message))
+    if (old && !sameMessage(old, message) && !opened(old, message))
       throw channelIntegrity('The message changed while refreshing.');
     rows.set(message.id, message);
   }
@@ -112,6 +112,24 @@ export function conversationResult(
             : previous.before,
     },
   };
+}
+
+/**
+ * A row is unverifiable when, among other causes, the reader's team view
+ * lacks its key generation, and a later read with that generation opens it.
+ * The server's mapping and claims are unchanged; foks-client's anchor ledger
+ * still detects a substituted row.
+ */
+function opened(a: ChatMessage, b: ChatMessage): boolean {
+  return (
+    a.content.kind === 'unverifiable' &&
+    b.content.kind !== 'unverifiable' &&
+    a.id === b.id &&
+    a.sequence === b.sequence &&
+    a.sender === b.sender &&
+    a.send_time === b.send_time &&
+    a.insert_time === b.insert_time
+  );
 }
 
 function sameMessage(a: ChatMessage, b: ChatMessage): boolean {

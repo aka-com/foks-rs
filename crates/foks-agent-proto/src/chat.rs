@@ -311,9 +311,14 @@ pub struct ChatChannel {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ChatContent {
-    Text { text: SecretString },
+    Text {
+        text: SecretString,
+    },
     Unsupported,
     Oversized,
+    /// A row the client could not decrypt or authenticate; its sender and
+    /// times are unauthenticated server claims.
+    Unverifiable,
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

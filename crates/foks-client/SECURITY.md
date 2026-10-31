@@ -439,13 +439,24 @@ and key material remain bound to their host and source role throughout approval
 and recovery.
 
 Basic chat is restricted to named teams. Message keys and channel context are
-bound before encryption, history verifies sequence/ID anchors, pending sends use
-the protected mutation ledger, and corrupt channel content quarantines only that
-channel while shared identity or inbox failures stop the shared owner. The Go
-inbox API can return an all-filtered page without a progress cursor; after the
-bounded larger-page retry, the client retains an incomplete cursor rather than
-claiming exact unread state. Ad-hoc-team chat and extended chat actions are not
-implemented.
+bound before encryption, history verifies sequence/ID anchors, and pending sends
+use the protected mutation ledger. Because the server cannot inspect ciphertext,
+any channel writer can submit a message that does not decrypt; such a row, like
+one with a non-user sender, further attribution, invalid author metadata, an
+unavailable key generation or a predecessor pointer that contradicts an anchored
+predecessor, is reported as an unverifiable message rather than failing its
+page, and sends chain past it. Because unverifiable rows never become anchors,
+a malicious server can now present a row this client has not yet anchored as a
+message that could not be decrypted or verified, where before this change the
+same substitution failed the channel; rows already anchored stay protected by
+the anchor ledger. A pointer that contradicts a predecessor that is not anchored
+still fails the page, since it cannot be told apart from a substituted
+predecessor. Contradictions in the server's own
+sequence/ID mapping quarantine only that channel, while shared identity or inbox
+failures stop the shared owner. The Go inbox API can return an all-filtered page
+without a progress cursor; after the bounded larger-page retry, the client
+retains an incomplete cursor rather than claiming exact unread state.
+Ad-hoc-team chat and extended chat actions are not implemented.
 
 Username changes retain signed name history and bind durable attempts to an
 immutable UID and request. Resident bot credentials are imported into bounded

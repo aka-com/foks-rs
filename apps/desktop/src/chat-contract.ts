@@ -113,20 +113,26 @@ export interface ChatChannel {
   write_role: string;
 }
 export interface ChatMessage {
+  /**
+   * The message ID, except for an unverifiable row whose author chose the
+   * all-zero ID: that row is keyed `zero:<sequence>`, which is never a wire ID.
+   */
   id: string;
   sequence: string;
   sender: string | null;
   send_time: string;
   insert_time: string;
   content:
-    { kind: 'text'; text: string } | { kind: 'unsupported' | 'oversized' };
+    | { kind: 'text'; text: string }
+    | { kind: 'unsupported' | 'oversized' | 'unverifiable' };
 }
 export interface ChatPreview {
   sender: string | null;
   send_time: string;
   insert_time: string;
   content:
-    { kind: 'text'; text: string } | { kind: 'unsupported' | 'oversized' };
+    | { kind: 'text'; text: string }
+    | { kind: 'unsupported' | 'oversized' | 'unverifiable' };
 }
 export interface ChatConversation {
   channel: ChatChannel;
@@ -217,6 +223,7 @@ function bool(v: unknown): boolean {
   if (typeof v !== 'boolean') return fail();
   return v;
 }
+const ZERO_MESSAGE_ID = '0'.repeat(32);
 export function chatId(v: unknown): string {
   const s = text(v, 32);
   if (!/^[0-9a-f]{32}$/.test(s) || /^0+$/.test(s)) return fail();
@@ -269,7 +276,9 @@ function content(value: unknown, maximum: number): ChatMessage['content'] {
   object(c, c.kind === 'text' ? ['kind', 'text'] : ['kind']);
   return c.kind === 'text'
     ? { kind: 'text', text: text(c.text, maximum) }
-    : c.kind === 'unsupported' || c.kind === 'oversized'
+    : c.kind === 'unsupported' ||
+        c.kind === 'oversized' ||
+        c.kind === 'unverifiable'
       ? { kind: c.kind }
       : fail();
 }
@@ -449,13 +458,20 @@ export function decodeChatReply(
         (after !== undefined && BigInt(seq) <= BigInt(after))
       )
         return fail();
+      const body = content(m.content, CHAT_TEXT_BYTES);
       return {
-        id: chatId(m.id),
+        // A Go v0.1.9 host checks an author's ID only for uniqueness across
+        // the host, so it can hold one all-zero ID, which the agent reports as
+        // unverifiable; no other row has one.
+        id:
+          body.kind === 'unverifiable' && m.id === ZERO_MESSAGE_ID
+            ? ZERO_MESSAGE_ID
+            : chatId(m.id),
         sequence: seq,
         sender: m.sender === null ? null : entity(m.sender, '01'),
         send_time: sequence(m.send_time),
         insert_time: sequence(m.insert_time),
-        content: content(m.content, CHAT_TEXT_BYTES),
+        content: body,
       };
     });
     if (
@@ -483,7 +499,13 @@ export function decodeChatReply(
       kind: 'history',
       ...(after === undefined ? {} : { gap: r.gap as boolean }),
       channel,
-      messages,
+      // The desktop keys rows by ID. The rekey is defensive: a Go v0.1.9 host
+      // holds at most one zero-ID row (IDs are unique across the host) and
+      // the Rust server refuses zero IDs, but a server that returned the
+      // same zero ID at two sequences would otherwise give two rows one key.
+      messages: messages.map((m) =>
+        m.id === ZERO_MESSAGE_ID ? { ...m, id: `zero:${m.sequence}` } : m,
+      ),
       before,
       missing_predecessors: array(
         r.missing_predecessors,
