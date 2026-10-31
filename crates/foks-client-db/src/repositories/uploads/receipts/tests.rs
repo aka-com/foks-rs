@@ -19,6 +19,7 @@ fn binding() -> UploadIntentBinding {
 fn time(wall: u64) -> UploadTimeSample {
     UploadTimeSample {
         process_id: [4; 16],
+        boot_id: None,
         wall_seconds: wall,
         monotonic_seconds: wall,
     }

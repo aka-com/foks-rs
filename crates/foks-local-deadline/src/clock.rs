@@ -37,14 +37,16 @@ fn nanos(clock: nix::time::ClockId) -> Result<Decimal> {
         .ok_or(Error::Range)
 }
 
-#[cfg(target_os = "linux")]
-const TIME_NAMESPACE: &str = "/proc/thread-self/ns/time";
-#[cfg(target_os = "linux")]
-const NAMESPACES: &str = "/proc/thread-self/ns";
+/// The kernel's identifier for the current boot, as 16 bytes. This is the
+/// one boot identity reader for the client: the deadline clock domain and the
+/// suspend-inclusive receipt clock (`foks_client`) both use it.
+pub fn boot_id() -> Result<[u8; 16]> {
+    platform_boot().map(|boot| boot.bytes())
+}
 
 #[cfg(target_os = "linux")]
-fn linux_domain() -> Result<Domain> {
-    use std::{io::Read, os::unix::fs::MetadataExt};
+fn platform_boot() -> Result<crate::BootId> {
+    use std::io::Read;
     const BOOT_ID: &str = "/proc/sys/kernel/random/boot_id";
     let unavailable = |e: std::io::Error| Error::Unavailable(format!("cannot read {BOOT_ID}: {e}"));
     let f = std::fs::File::open(BOOT_ID).map_err(unavailable)?;
@@ -54,8 +56,33 @@ fn linux_domain() -> Result<Domain> {
         return Err(Error::Range);
     }
     let text = std::str::from_utf8(&bytes[..36]).map_err(|_| Error::Range)?;
-    let boot = crate::BootId::parse(text)?;
-    linux_domain_with(boot, |path| {
+    crate::BootId::parse(text)
+}
+#[cfg(target_os = "macos")]
+fn platform_boot() -> Result<crate::BootId> {
+    use sysctl::Sysctl;
+    let text = sysctl::Ctl::new("kern.bootsessionuuid")
+        .and_then(|c| c.value_string())
+        .map_err(|e| Error::Unavailable(e.to_string()))?;
+    if text.len() != 36 {
+        return Err(Error::Range);
+    }
+    crate::BootId::parse(&text.to_ascii_lowercase())
+}
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn platform_boot() -> Result<crate::BootId> {
+    Err(Error::Unavailable("this OS has no boot identifier".into()))
+}
+
+#[cfg(target_os = "linux")]
+const TIME_NAMESPACE: &str = "/proc/thread-self/ns/time";
+#[cfg(target_os = "linux")]
+const NAMESPACES: &str = "/proc/thread-self/ns";
+
+#[cfg(target_os = "linux")]
+fn linux_domain() -> Result<Domain> {
+    use std::os::unix::fs::MetadataExt;
+    linux_domain_with(platform_boot()?, |path| {
         std::fs::metadata(path).map(|metadata| (metadata.dev(), metadata.ino()))
     })
 }
@@ -103,15 +130,9 @@ fn platform_sample() -> Result<ClockSample> {
 }
 #[cfg(target_os = "macos")]
 fn platform_sample() -> Result<ClockSample> {
-    use sysctl::Sysctl;
-    let text = sysctl::Ctl::new("kern.bootsessionuuid")
-        .and_then(|c| c.value_string())
-        .map_err(|e| Error::Unavailable(e.to_string()))?;
-    if text.len() != 36 {
-        return Err(Error::Range);
-    }
-    let boot = crate::BootId::parse(&text.to_ascii_lowercase())?;
-    let domain = Domain(crate::DomainValue::Darwin { boot });
+    let domain = Domain(crate::DomainValue::Darwin {
+        boot: platform_boot()?,
+    });
     let nanos = nanos(nix::time::ClockId::from_raw(libc::CLOCK_UPTIME_RAW))?;
     Ok(ClockSample { domain, nanos })
 }

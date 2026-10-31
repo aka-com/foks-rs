@@ -332,6 +332,7 @@ mod tests {
             crate::migration_tests::Predecessor {
                 version: 38,
                 admission_floor: true,
+                boot_id: false,
             },
         );
         tx.commit().unwrap();

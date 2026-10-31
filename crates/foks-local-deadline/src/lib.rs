@@ -64,6 +64,23 @@ impl BootId {
         }
         Ok(Self(s.to_owned()))
     }
+    /// The 16 bytes the parsed hyphenated form encodes.
+    #[cfg_attr(not(feature = "clock"), allow(dead_code))]
+    fn bytes(&self) -> [u8; 16] {
+        let digits: Vec<u8> = self.0.bytes().filter(|b| *b != b'-').collect();
+        let mut id = [0; 16];
+        for (byte, pair) in id.iter_mut().zip(digits.chunks_exact(2)) {
+            let nibble = |b: u8| {
+                if b.is_ascii_digit() {
+                    b - b'0'
+                } else {
+                    b - b'a' + 10
+                }
+            };
+            *byte = (nibble(pair[0]) << 4) | nibble(pair[1]);
+        }
+        id
+    }
 }
 impl<'de> Deserialize<'de> for BootId {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
@@ -133,7 +150,7 @@ impl DeadlineEnvelope {
 #[cfg(feature = "clock")]
 mod clock;
 #[cfg(feature = "clock")]
-pub use clock::{sample, ClockSample, Deadline};
+pub use clock::{boot_id, sample, ClockSample, Deadline};
 
 #[cfg(test)]
 mod tests;

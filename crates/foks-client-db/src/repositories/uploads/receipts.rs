@@ -168,13 +168,13 @@ fn lookup(
     }))
 }
 fn read_clock(c: &Connection, host: &[u8], uid: &[u8]) -> Result<Option<UploadClockState>> {
-    Ok(c.query_row("SELECT process_id,anchor_wall,anchor_monotonic,validated_time_floor,reject_issued_before FROM kv_upload_clocks WHERE host_id=?1 AND user_id=?2",params![host,uid],|r|Ok(UploadClockState{process_id:r.get(0)?,anchor_wall:u64_column(r,1)?,anchor_monotonic:u64_column(r,2)?,validated_time_floor:u64_column(r,3)?,reject_issued_before:u64_column(r,4)?})).optional()?)
+    Ok(c.query_row("SELECT process_id,anchor_wall,anchor_monotonic,validated_time_floor,reject_issued_before,boot_id FROM kv_upload_clocks WHERE host_id=?1 AND user_id=?2",params![host,uid],|r|Ok(UploadClockState{process_id:r.get(0)?,boot_id:r.get(5)?,anchor_wall:u64_column(r,1)?,anchor_monotonic:u64_column(r,2)?,validated_time_floor:u64_column(r,3)?,reject_issued_before:u64_column(r,4)?})).optional()?)
 }
 fn write_clock(c: &Connection, host: &[u8], uid: &[u8], clock: &UploadClockState) -> Result<()> {
     if read_clock(c, host, uid)?.as_ref() == Some(clock) {
         return Ok(());
     }
-    c.execute("INSERT INTO kv_upload_clocks VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(host_id,user_id) DO UPDATE SET process_id=excluded.process_id,anchor_wall=excluded.anchor_wall,anchor_monotonic=excluded.anchor_monotonic,validated_time_floor=excluded.validated_time_floor,reject_issued_before=excluded.reject_issued_before",params![host,uid,clock.process_id,sqlite_integer("upload time",clock.anchor_wall)?,sqlite_integer("upload time",clock.anchor_monotonic)?,sqlite_integer("upload time",clock.validated_time_floor)?,sqlite_integer("upload time",clock.reject_issued_before)?])?;
+    c.execute("INSERT INTO kv_upload_clocks VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(host_id,user_id) DO UPDATE SET process_id=excluded.process_id,anchor_wall=excluded.anchor_wall,anchor_monotonic=excluded.anchor_monotonic,validated_time_floor=excluded.validated_time_floor,reject_issued_before=excluded.reject_issued_before,boot_id=excluded.boot_id",params![host,uid,clock.process_id,sqlite_integer("upload time",clock.anchor_wall)?,sqlite_integer("upload time",clock.anchor_monotonic)?,sqlite_integer("upload time",clock.validated_time_floor)?,sqlite_integer("upload time",clock.reject_issued_before)?,clock.boot_id])?;
     Ok(())
 }
 fn validate_clock(
@@ -385,6 +385,22 @@ impl HardStateStore {
     pub fn upload_clock(&self, host: &[u8], uid: &[u8]) -> Result<Option<UploadClockState>> {
         read_clock(&self.connection, host, uid)
     }
+    /// The clock state upload issuance would hold at `sample`, without
+    /// writing, or `None` when issuance would refuse the sample as untrusted.
+    /// An account with no anchor validates: its first issuance anchors it.
+    pub fn validated_upload_clock(
+        &self,
+        host: &[u8],
+        uid: &[u8],
+        sample: UploadTimeSample,
+    ) -> Result<Option<UploadClockState>> {
+        let old = read_clock(&self.connection, host, uid)?;
+        match receipt_clock::validate(old.as_ref(), sample) {
+            Ok(state) => Ok(Some(state)),
+            Err(Error::AdapterClockUntrusted) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
     pub fn preview_upload_clock_reanchor(
         &self,
         host: &[u8],
@@ -400,7 +416,7 @@ impl HardStateStore {
         uid: &[u8],
         expected: &UploadClockState,
         sample: UploadTimeSample,
-    ) -> Result<()> {
+    ) -> Result<UploadClockState> {
         let tx = self.write_transaction()?;
         let old = read_clock(&tx, host, uid)?;
         if old.as_ref() != Some(expected) {
@@ -410,7 +426,7 @@ impl HardStateStore {
             .map_err(|_| Error::UploadClockUntrusted)?;
         write_clock(&tx, host, uid, &next)?;
         tx.commit()?;
-        Ok(())
+        Ok(next)
     }
     pub fn upload_summaries_page(
         &self,

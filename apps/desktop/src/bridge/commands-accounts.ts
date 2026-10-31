@@ -1,3 +1,4 @@
+import { decodeAdapterClock } from '../adapter-clock-contract';
 import { decodeBotReply } from '../bot-contract';
 import { decodeRenameProgress } from '../rename-contract';
 import { decodeSsoProgress } from '../sso-contract';
@@ -38,6 +39,7 @@ export const accountCommands: Pick<
   | 'botAccount'
   | 'setLocalAccountAlias'
   | 'renameAccount'
+  | 'adapterClock'
   | 'sso'
   | 'openSsoBrowser'
 > = {
@@ -152,6 +154,12 @@ export const accountCommands: Pick<
       'rename_account_request',
       { profile, accountAlias, action },
       decodeRenameProgress,
+    ),
+  adapterClock: (profile, accountAlias, confirm) =>
+    (confirm ? checkedMutation : checked)(
+      'adapter_clock_request',
+      { profile, accountAlias, confirm },
+      decodeAdapterClock,
     ),
   sso: (profile, accountAlias, action) =>
     (['account-status', 'status', 'poll'].includes(action.action)

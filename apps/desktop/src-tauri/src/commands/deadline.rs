@@ -82,6 +82,7 @@ fn command_class(name: &str) -> Result<Option<DeadlineClass>, AgentError> {
         | "start_device_pairing" => Some(DeadlineClass::Pairing),
         "abandon_group_creation"
         | "account_passphrase_status"
+        | "adapter_clock_request"
         | "add_federated_team_member"
         | "add_group_member"
         | "agent_status"

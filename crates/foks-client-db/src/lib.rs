@@ -50,7 +50,8 @@ use thiserror::Error;
 pub use foks_proto::SubmissionHandle;
 pub use repositories::adapter::{
     adapter_handle_hash, AdapterClockState, AdapterLedgerState, AdapterSubmission,
-    AdapterTimeSample, MAX_NEW_SUBMISSION_AGE_SECONDS, TERMINAL_RETENTION_SECONDS,
+    AdapterTimeSample, ADAPTER_CLOCK_SKEW_SECONDS, MAX_NEW_SUBMISSION_AGE_SECONDS,
+    TERMINAL_RETENTION_SECONDS,
 };
 use schema::{APPLICATION_ID, INITIAL as SCHEMA, VERSION as SCHEMA_VERSION};
 
@@ -838,6 +839,7 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
         transaction.execute_batch(SCHEMA)?;
         transaction.execute_batch(repositories::uploads::SCHEMA)?;
         repositories::uploads::migrate42(&transaction)?;
+        add_clock_boot_ids(&transaction)?;
         transaction.execute(
             "INSERT INTO hard_state_metadata
                  (singleton, database_id, hard_state_revision, write_token)
@@ -856,6 +858,11 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
     // would refuse to open a field database whose schema differs from
     // INITIAL in a way the store does not depend on, which today fails only
     // at snapshot inspection.
+    //
+    // Each step migrates one version in its own IMMEDIATE transaction and
+    // rereads user_version inside it, since another opener may have migrated
+    // while this connection waited for the writer; the ladder then continues
+    // from the version found.
     if version == 38 {
         merkle_checkpoint::migrate(connection)?;
         return initialize_or_verify(connection);
@@ -901,6 +908,19 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
         tx.commit()?;
         return initialize_or_verify(connection);
     }
+    // Version 43 adds boot_id to both receipt clock tables. Adding a nullable
+    // column changes no stored value, so the step keeps hard_state_revision
+    // and write_token, and the keyring rollback checkpoint still matches.
+    if version == 42 {
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if current == 42 {
+            add_clock_boot_ids(&tx)?;
+            tx.pragma_update(None, "user_version", 43)?;
+        }
+        tx.commit()?;
+        return initialize_or_verify(connection);
+    }
     if version != SCHEMA_VERSION {
         return Err(Error::UnsupportedSchema {
             found: version,
@@ -926,6 +946,29 @@ fn rename_adapter_admission_floor(transaction: &Transaction<'_>) -> Result<()> {
             "ALTER TABLE kv_adapter_clocks
              RENAME COLUMN admission_floor TO validated_time_floor;",
         )?;
+    }
+    Ok(())
+}
+
+/// Version 43 records the boot identity of each receipt clock anchor, in
+/// kv_adapter_clocks and kv_upload_clocks. Existing rows keep NULL, so their
+/// next restart applies the restart-gap rule once. A new database runs the
+/// same ALTER TABLE for kv_upload_clocks after its version 42 DDL, and
+/// `INITIAL` carries kv_adapter_clocks.boot_id where SQLite inserts it, so
+/// migrated and new databases store the same schema text.
+fn add_clock_boot_ids(transaction: &Transaction<'_>) -> Result<()> {
+    for table in ["kv_adapter_clocks", "kv_upload_clocks"] {
+        let has_boot_id: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name='boot_id')",
+            [table],
+            |row| row.get(0),
+        )?;
+        if !has_boot_id {
+            transaction.execute_batch(&format!(
+                "ALTER TABLE {table}
+                 ADD COLUMN boot_id BLOB CHECK(boot_id IS NULL OR length(boot_id)=16);"
+            ))?;
+        }
     }
     Ok(())
 }
