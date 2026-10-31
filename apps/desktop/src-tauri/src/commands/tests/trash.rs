@@ -2,7 +2,8 @@ use crate::commands::execution::MutationKind;
 use crate::commands::trash::{
     decode_original_path, empty_trash_plan, encode_original_path, execute_trash_plan, in_trash,
     parse_trash_name, path_read_role, removal_plan, removal_without_trash_plan, restore_plan,
-    role_tag, trash_entry_name, trash_plan, utc_stamp, TrashName, TrashStep, TRASH_UNAVAILABLE,
+    role_tag, stamp_seconds, trash_entry_name, trash_plan, utc_stamp, RemovalAccess, TrashName,
+    TrashStep, ORIGIN_ORPHAN_GRACE_SECONDS, TRASH_FOLDER_PROTECTED, TRASH_UNAVAILABLE,
 };
 use foks_agent_proto::{KvPrecondition, KvRole, KvStoreRef, Operation};
 use foks_desktop::{CatalogItem, CatalogStoreRef};
@@ -54,9 +55,17 @@ fn entry(
             read_role,
             write_role,
             shape: None,
+            unreadable_entries: (node_type == "directory").then_some(0),
         },
     }
 }
+
+/// An owner of the store with a complete catalog: removal is limited only by
+/// what Trash holds.
+const OWNER: RemovalAccess = RemovalAccess {
+    role: Some(KvRole::Owner),
+    complete: true,
+};
 
 fn secret(store: &CatalogStoreRef, path: &str, id: u8) -> CatalogItem {
     entry(store, path, "small-file", KvRole::Owner, KvRole::Owner, id)
@@ -425,7 +434,7 @@ fn restoring_or_deleting_a_hashed_entry_removes_its_origin_file() {
         operations(&plan.steps),
         vec![moved(&trashed, &path), removed(&origin, false)]
     );
-    let plan = removal_plan(&items, &trashed).unwrap();
+    let plan = removal_plan(&items, &trashed, OWNER).unwrap();
     assert_eq!(
         operations(&plan.steps),
         vec![removed(&trashed, false), removed(&origin, false)]
@@ -437,23 +446,23 @@ fn permanent_removal_is_limited_to_trash_and_recursive_for_folders() {
     let store = account();
     let item = secret(&store, "/logins/github.com", 1);
     assert_eq!(
-        removal_plan(std::slice::from_ref(&item), &item)
+        removal_plan(std::slice::from_ref(&item), &item, OWNER)
             .unwrap_err()
             .code,
         "invalid-request"
     );
     let root = folder(&store, "/.trash", KvRole::Owner, 2);
-    assert!(removal_plan(std::slice::from_ref(&root), &root).is_err());
+    assert!(removal_plan(std::slice::from_ref(&root), &root, OWNER).is_err());
     let trashed = folder(
         &store,
         &format!("/.trash/owner/{STAMP}~%2Ftax-2024"),
         KvRole::Owner,
         3,
     );
-    let plan = removal_plan(std::slice::from_ref(&trashed), &trashed).unwrap();
+    let plan = removal_plan(std::slice::from_ref(&trashed), &trashed, OWNER).unwrap();
     assert_eq!(operations(&plan.steps), vec![removed(&trashed, true)]);
     let file = secret(&store, &format!("/.trash/owner/{STAMP}~%2Fa"), 4);
-    let plan = removal_plan(std::slice::from_ref(&file), &file).unwrap();
+    let plan = removal_plan(std::slice::from_ref(&file), &file, OWNER).unwrap();
     assert_eq!(operations(&plan.steps), vec![removed(&file, false)]);
 }
 
@@ -497,13 +506,20 @@ fn plans_stop_at_the_first_failed_write_and_name_the_step() {
     let store = account();
     let item = secret(&store, "/a", 1);
     let plan = trash_plan(std::slice::from_ref(&item), &item, NOW).unwrap();
-    let transport = ScriptedTransport::failing_at(2);
+    let transport = ScriptedTransport::failing_with(2, foks_agent_proto::ErrorCode::QuotaExceeded);
     let error = execute_trash_plan(&transport, plan.steps).unwrap_err();
-    assert_eq!(error.code, "already-exists");
+    assert_eq!(error.code, "quota-exceeded");
     assert!(error
         .message
         .starts_with("The Trash folder for this item's read access could not be created."));
     assert_eq!(transport.calls.lock().unwrap().len(), 2);
+
+    // A role folder another desktop created after the catalog read has the
+    // read role its name states, so the move goes ahead.
+    let plan = trash_plan(std::slice::from_ref(&item), &item, NOW).unwrap();
+    let transport = ScriptedTransport::failing_at(2);
+    assert!(!execute_trash_plan(&transport, plan.steps).unwrap());
+    assert_eq!(transport.calls.lock().unwrap().len(), 3);
 
     let plan = trash_plan(std::slice::from_ref(&item), &item, NOW).unwrap();
     let transport = ScriptedTransport::failing_at(3);
@@ -653,14 +669,13 @@ fn a_team_member_who_cannot_create_trash_is_told_so_by_code() {
     assert!(error
         .message
         .starts_with("Trash could not be created at the top level of this vault."));
-    // A transient failure, a concurrent creation, and any definite failure
-    // that is not a role refusal keep their own code and recovery.
+    // A transient failure and any definite failure that is not a role
+    // refusal keep their own code and recovery.
     for (code, slug) in [
         (
             foks_agent_proto::ErrorCode::ServerUnavailable,
             "server-unavailable",
         ),
-        (foks_agent_proto::ErrorCode::Conflict, "already-exists"),
         (foks_agent_proto::ErrorCode::QuotaExceeded, "quota-exceeded"),
         (
             foks_agent_proto::ErrorCode::CredentialsRequired,
@@ -677,6 +692,14 @@ fn a_team_member_who_cannot_create_trash_is_told_so_by_code() {
     ] {
         assert_eq!(refused(code).code, slug);
     }
+
+    // `/.trash` created by another member after the catalog read serves
+    // as well, so the plan goes on to the move.
+    let plan = trash_plan(std::slice::from_ref(&item), &item, NOW).unwrap();
+    let steps = plan.steps.len();
+    let transport = ScriptedTransport::failing_with(1, foks_agent_proto::ErrorCode::Conflict);
+    execute_trash_plan(&transport, plan.steps).unwrap();
+    assert_eq!(transport.calls.lock().unwrap().len(), steps);
 
     // In an account, the owner always can, so the code is never replaced.
     let own = secret(&account(), "/a", 1);
@@ -751,7 +774,8 @@ fn emptying_trash_plans_every_entry_from_one_catalog_read() {
         orphan.clone(),
     ];
     let entries = vec![hashed.clone(), tax.clone(), file.clone()];
-    let plan = empty_trash_plan(&items, &entries, true).unwrap();
+    let plan =
+        empty_trash_plan(&items, &entries, OWNER, NOW + ORIGIN_ORPHAN_GRACE_SECONDS).unwrap();
     assert_eq!(
         operations(&plan.steps),
         vec![
@@ -771,12 +795,39 @@ fn emptying_trash_plans_every_entry_from_one_catalog_read() {
     );
 
     // An incomplete catalog may be missing an `.origin` file's entry, so no
-    // `.origin` file is taken for an orphan.
-    let plan = empty_trash_plan(&items, &entries, false).unwrap();
-    assert_eq!(plan.steps.len(), 4);
+    // `.origin` file is taken for an orphan, nor may it remove a folder,
+    // whose entries it may not all list.
+    let partial = RemovalAccess {
+        complete: false,
+        ..OWNER
+    };
+    assert_eq!(
+        empty_trash_plan(&items, &entries, partial, NOW + ORIGIN_ORPHAN_GRACE_SECONDS)
+            .unwrap_err()
+            .code,
+        "catalog-required"
+    );
+    let plan = empty_trash_plan(
+        &items,
+        &[hashed.clone(), file.clone()],
+        partial,
+        NOW + ORIGIN_ORPHAN_GRACE_SECONDS,
+    )
+    .unwrap();
+    assert_eq!(plan.steps.len(), 3);
     // Every entry must be in Trash.
     let outside = secret(&store, "/a", 6);
-    assert!(empty_trash_plan(&items, &[file, outside], true).is_err());
+    assert!(empty_trash_plan(&items, &[file, outside], OWNER, NOW).is_err());
+    // An `.origin` file newer than the grace period may belong to a move into
+    // Trash whose second write has not landed, so it stays.
+    let plan = empty_trash_plan(
+        &items,
+        &entries,
+        OWNER,
+        NOW + ORIGIN_ORPHAN_GRACE_SECONDS - 1,
+    )
+    .unwrap();
+    assert_eq!(plan.steps.len(), 4);
 }
 
 #[test]
@@ -791,8 +842,170 @@ fn a_failed_origin_cleanup_leaves_the_command_applied() {
     let transport = ScriptedTransport::failing_at(2);
     assert!(!execute_trash_plan(&transport, plan.steps).unwrap());
 
-    let plan = removal_plan(&items, &trashed).unwrap();
+    let plan = removal_plan(&items, &trashed, OWNER).unwrap();
     let transport =
         ScriptedTransport::failing_with(2, foks_agent_proto::ErrorCode::DeadlineExceeded);
     assert!(execute_trash_plan(&transport, plan.steps).unwrap());
+}
+
+#[test]
+fn stamps_read_back_as_the_seconds_they_were_written_from() {
+    for seconds in [0, NOW, 951_782_400, 4_102_444_799] {
+        assert_eq!(stamp_seconds(&utc_stamp(seconds)), Some(seconds));
+    }
+    assert_eq!(stamp_seconds(STAMP), Some(NOW));
+    for bad in [
+        "20231314T000000",
+        "20231114X221320",
+        "2023111T221320",
+        "20231114T246000",
+    ] {
+        assert_eq!(stamp_seconds(bad), None, "{bad}");
+    }
+}
+
+#[test]
+fn a_folder_is_removed_permanently_only_when_every_entry_under_it_can_be() {
+    let store = team();
+    let member = KvRole::Member { visibility: 0 };
+    let trashed = format!("/.trash/member-0/{STAMP}~%2Fshared");
+    let folder_entry = entry(&store, &trashed, "directory", member, member, 1);
+    let open = entry(
+        &store,
+        &format!("{trashed}/notes"),
+        "small-file",
+        member,
+        member,
+        2,
+    );
+    let admin_only = entry(
+        &store,
+        &format!("{trashed}/payroll.csv"),
+        "small-file",
+        member,
+        KvRole::Admin,
+        3,
+    );
+    let as_role = |role| RemovalAccess {
+        role: Some(role),
+        complete: true,
+    };
+    let items = vec![folder_entry.clone(), open.clone()];
+    assert!(removal_plan(&items, &folder_entry, as_role(member)).is_ok());
+
+    // An entry that needs a higher write role than this member holds.
+    let items = vec![folder_entry.clone(), open.clone(), admin_only.clone()];
+    let refused = removal_plan(&items, &folder_entry, as_role(member)).unwrap_err();
+    assert_eq!(refused.code, TRASH_FOLDER_PROTECTED);
+    assert!(refused
+        .message
+        .contains("holds 1 entry this account cannot remove"));
+    assert!(!refused.retryable);
+    assert!(removal_plan(&items, &folder_entry, as_role(KvRole::Admin)).is_ok());
+    // Empty Trash refuses the whole batch rather than reach that entry.
+    assert_eq!(
+        empty_trash_plan(
+            &items,
+            std::slice::from_ref(&folder_entry),
+            as_role(member),
+            NOW
+        )
+        .unwrap_err()
+        .code,
+        TRASH_FOLDER_PROTECTED
+    );
+
+    // Entries the listing could not show count too, even for an owner.
+    let mut hiding = folder_entry.clone();
+    hiding.metadata.unreadable_entries = Some(2);
+    let refused = removal_plan(
+        &[hiding.clone(), open.clone()],
+        &hiding,
+        as_role(KvRole::Owner),
+    )
+    .unwrap_err();
+    assert_eq!(refused.code, TRASH_FOLDER_PROTECTED);
+    assert!(refused.message.contains("holds 2 entries"));
+    // So do those of a subfolder.
+    let mut sub = entry(
+        &store,
+        &format!("{trashed}/old"),
+        "directory",
+        member,
+        member,
+        4,
+    );
+    sub.metadata.unreadable_entries = Some(1);
+    assert_eq!(
+        removal_plan(
+            &[folder_entry.clone(), sub],
+            &folder_entry,
+            as_role(KvRole::Owner)
+        )
+        .unwrap_err()
+        .code,
+        TRASH_FOLDER_PROTECTED
+    );
+    // An agent that does not report unreadable entries leaves them unknown.
+    let mut unknown = folder_entry.clone();
+    unknown.metadata.unreadable_entries = None;
+    assert_eq!(
+        removal_plan(
+            std::slice::from_ref(&unknown),
+            &unknown,
+            as_role(KvRole::Owner)
+        )
+        .unwrap_err()
+        .code,
+        "catalog-required"
+    );
+
+    // Every entry must have been listed, and this account's role known.
+    let partial = RemovalAccess {
+        role: Some(KvRole::Owner),
+        complete: false,
+    };
+    assert_eq!(
+        removal_plan(std::slice::from_ref(&folder_entry), &folder_entry, partial)
+            .unwrap_err()
+            .code,
+        "catalog-required"
+    );
+    let unknown_role = RemovalAccess {
+        role: None,
+        complete: true,
+    };
+    assert_eq!(
+        removal_plan(
+            std::slice::from_ref(&folder_entry),
+            &folder_entry,
+            unknown_role
+        )
+        .unwrap_err()
+        .code,
+        "roster-required"
+    );
+    // A file in Trash needs neither: the server checks its own write role.
+    let file = entry(
+        &store,
+        &format!("/.trash/member-0/{STAMP}~%2Fa"),
+        "small-file",
+        member,
+        member,
+        5,
+    );
+    assert!(removal_plan(std::slice::from_ref(&file), &file, unknown_role).is_ok());
+}
+
+#[test]
+fn write_roles_admit_by_rank_and_member_visibility() {
+    use crate::commands::trash::role_admits;
+    let member = |visibility| KvRole::Member { visibility };
+    assert!(role_admits(KvRole::Owner, KvRole::Owner));
+    assert!(role_admits(KvRole::Admin, member(5)));
+    assert!(!role_admits(KvRole::Admin, KvRole::Owner));
+    assert!(role_admits(member(2), member(1)));
+    assert!(role_admits(member(-16384), member(-16384)));
+    assert!(!role_admits(member(0), member(1)));
+    assert!(!role_admits(member(i16::MAX), KvRole::Admin));
 }
