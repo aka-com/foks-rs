@@ -145,6 +145,20 @@ impl crate::CheckedProfileSession<'_> {
         proposed: u64,
         vault: &mut crate::AccountVault<'_>,
     ) -> Result<AdapterClockPreview> {
+        Ok(self
+            .receipt_clock_preview_state(domain, alias, proposed, vault)?
+            .0)
+    }
+
+    /// The preview and the stored clock state its digest covers, which a
+    /// repair passes as the expected state of its compare-and-swap.
+    fn receipt_clock_preview_state(
+        &self,
+        domain: ReceiptClockDomain,
+        alias: &str,
+        proposed: u64,
+        vault: &mut crate::AccountVault<'_>,
+    ) -> Result<(AdapterClockPreview, foks_client_db::AdapterClockState)> {
         let (host_id, user_id) = self.data_identity(alias, vault)?;
         let host = crate::entity_id_from_hex(&host_id)?;
         let user = crate::entity_id_from_hex(&user_id)?;
@@ -171,7 +185,7 @@ impl crate::CheckedProfileSession<'_> {
         ] {
             binding.extend_from_slice(&value.to_be_bytes());
         }
-        Ok(AdapterClockPreview {
+        let preview = AdapterClockPreview {
             host_id,
             user_id,
             anchor_wall: state.anchor_wall,
@@ -182,7 +196,8 @@ impl crate::CheckedProfileSession<'_> {
                 preview_domain_tag(domain),
                 &binding,
             )),
-        })
+        };
+        Ok((preview, state))
     }
 
     /// [`Self::reanchor_receipt_clock`] for the adapter clock.
@@ -217,15 +232,15 @@ impl crate::CheckedProfileSession<'_> {
         confirmation: &str,
         vault: &mut crate::AccountVault<'_>,
     ) -> Result<AdapterClockRepair> {
-        let preview = self.receipt_clock_preview(domain, alias, proposed, vault)?;
+        let (preview, old) = self.receipt_clock_preview_state(domain, alias, proposed, vault)?;
         if confirmation != preview.confirmation_digest {
             return Err(identity_conflict(domain));
         }
         let host = crate::entity_id_from_hex(&preview.host_id)?;
         let user = crate::entity_id_from_hex(&preview.user_id)?;
         let mut hard = foks_client_db::HardStateStore::open(&self.paths.hard_database)?;
-        let old = read_clock(&hard, domain, host.as_bytes(), user.as_bytes())?
-            .ok_or_else(|| identity_conflict(domain))?;
+        // The expected state is the one the confirmed digest covers, so a
+        // change after the digest was checked fails the compare-and-swap.
         let sample = self.adapter_clock.sample()?;
         if proposed.abs_diff(sample.wall_seconds) > ADAPTER_CLOCK_CONFIRM_SKEW_SECONDS {
             return Err(Error::AdapterClockConfirmationStale);
@@ -415,6 +430,96 @@ mod tests {
                 ..SystemAdapterClock.sample()?
             })
         }
+    }
+
+    /// Re-anchors the stored clock the first time it is sampled, as another
+    /// writer would between the confirmation's digest check and its write.
+    struct RacingClock {
+        path: std::path::PathBuf,
+        host: Vec<u8>,
+        user: Vec<u8>,
+        raced: std::sync::atomic::AtomicBool,
+    }
+    impl AdapterClock for RacingClock {
+        fn sample(&self) -> Result<AdapterTimeSample> {
+            let sample = SystemAdapterClock.sample()?;
+            if !self.raced.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                let mut hard = foks_client_db::HardStateStore::open(&self.path)?;
+                let old = hard.adapter_clock(&self.host, &self.user)?.unwrap();
+                hard.reanchor_adapter_clock(
+                    &self.host,
+                    &self.user,
+                    &old,
+                    AdapterTimeSample {
+                        process_id: [0x77; 16],
+                        ..sample
+                    },
+                )?;
+            }
+            Ok(sample)
+        }
+    }
+
+    #[test]
+    fn repair_writes_only_over_the_state_its_digest_covers() {
+        let f = crate::test_support::AccountFixture::start();
+        f.run(|s, v, m| {
+            s.create_account(
+                "owner",
+                "clockrace",
+                "device",
+                "owner@example.test",
+                "",
+                None,
+                v,
+                m,
+            )?;
+            Ok(())
+        });
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let (path, host, user) = f.run(|s, v, _| {
+            let (host, user) = s.data_identity("owner", v)?;
+            let (host, user) = (entity_id_from_hex(&host)?, entity_id_from_hex(&user)?);
+            let mut hard = foks_client_db::HardStateStore::open(&s.paths.hard_database)?;
+            hard.check_adapter_admission(
+                host.as_bytes(),
+                user.as_bytes(),
+                SubmissionHandle::new(now, [8; 16]),
+                s.adapter_clock.sample()?,
+            )?;
+            Ok((
+                s.paths.hard_database.clone(),
+                host.as_bytes().to_vec(),
+                user.as_bytes().to_vec(),
+            ))
+        });
+        let preview = f.run(|s, v, _| s.adapter_clock_preview("owner", now, v));
+        let racing = std::sync::Arc::new(RacingClock {
+            path,
+            host,
+            user,
+            raced: std::sync::atomic::AtomicBool::new(false),
+        });
+        let refused = f.run_with_clock(racing.clone(), |s, v, _| {
+            Ok(s.reanchor_adapter_clock("owner", now, &preview.confirmation_digest, v))
+        });
+        assert!(racing.raced.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(
+            matches!(
+                refused,
+                Err(Error::ClientDatabase(
+                    foks_client_db::Error::AdapterIdentityConflict
+                ))
+            ),
+            "{refused:?}"
+        );
+        // The other writer's state stands, and the stale digest no longer
+        // confirms anything.
+        let current = f.run(|s, v, _| s.adapter_clock_preview("owner", now, v));
+        assert_ne!(current.confirmation_digest, preview.confirmation_digest);
     }
 
     #[test]
