@@ -37,7 +37,15 @@ cargo test --offline --locked "${package_args[@]}"
 # need a Worker-backed lab stay ignored.
 qualification_args=(-p foks-server -p foks-server-testkit --features foks-server-testkit/list-allocation-qualification)
 cargo clippy --offline --locked "${qualification_args[@]}" --all-targets -- -D warnings
-cargo test --offline --locked "${qualification_args[@]}"
+# The test run above already covers every target the features leave alone, so
+# only the lib tests and the feature-gated test files run again here. A new
+# test file gated on celld-proof or list-allocation-qualification must be
+# added to these lists, or it never runs.
+cargo test --offline --locked -p foks-server-testkit --features list-allocation-qualification \
+    --lib --test celld_proof --test list_allocation --test native_list_oracle \
+    --test personal_authority --test personal_list_domain
+cargo test --offline --locked -p foks-server --features celld-proof \
+    --lib --test restricted_list_allocation
 
 # The hosted metadata kernel runs as a wasm32 cdylib; build it as celld loads
 # it, without and with its qualification features.

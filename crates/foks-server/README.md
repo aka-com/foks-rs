@@ -613,9 +613,13 @@ and no listener route uses it:
   `list_allocation` tests and enables `celld-proof` and
   `foks-metadata-core/list-allocation-qualification`.
 
-`tools/foks-server/check.sh` lints and tests both crates with
-`--features foks-server-testkit/list-allocation-qualification`. The tests that
-need lab resources stay `#[ignore]`d there: the deployed proof Worker and
+`tools/foks-server/check.sh` lints both crates with
+`--features foks-server-testkit/list-allocation-qualification` and, with the
+features on, runs their lib tests and the feature-gated test files (the other
+test targets already ran without features). A new feature-gated test file must
+be added to that list. The nightly `server full` job also checks
+`tools/foks-celld-proof/authority.mjs` against freshly generated native
+vectors. The tests that need lab resources stay `#[ignore]`d: the deployed proof Worker and
 controller fault-marker cases in `celld_proof`, the pinned Go oracle gate in
 `personal_authority`, and the issued-certificate Wasm qualification in
 `list_allocation`.
