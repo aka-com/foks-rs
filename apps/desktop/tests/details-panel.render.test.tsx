@@ -49,9 +49,10 @@ async function setup(
   const { FIXTURE } = (await vite.ssrLoadModule(
     '/src/fixture.ts',
   )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
+  const { mockBridge, mockCopies } = (await vite.ssrLoadModule(
     '/src/mock-bridge.ts',
   )) as typeof import('../src/mock-bridge');
+  mockCopies.length = 0;
   const subject = FIXTURE.items.find(
     selectItem ?? ((item) => item.path === '/env/prod/DATABASE_URL'),
   )!;
@@ -85,7 +86,7 @@ async function setup(
         ? createElement(NavigationGuardProvider, { store, children: panel() })
         : panel(),
     );
-  return { props, draw, subject, bridge };
+  return { props, draw, subject, bridge, mockCopies };
 }
 
 for (const kind of ['Secret', 'File'] as const) {
@@ -623,7 +624,7 @@ test('a login edits in structured fields and serializes through the existing dra
   };
   const r = ui.render(p.draw());
 
-  assert.ok(r.getByText('••••••••••••'));
+  assert.equal(r.getAllByText('••••••••••••').length, 3);
   ui.fireEvent.click(r.getByRole('button', { name: 'Edit' }));
   const password = await r.findByLabelText('Password');
   const username = r.getByLabelText('User name');
@@ -1069,52 +1070,25 @@ test('the inline editor puts Cancel and Save Changes after its fields in the Tab
   );
 });
 
-test('after a save the panel draws the saved fields, masked, for the new version only', async () => {
+test('after a save the login rows stay masked and keep no saved text', async () => {
   const p = await setup(
     undefined,
     (item) => item.path === '/logins/github.com',
   );
   p.bridge.editTextItem = async () => ({ applied: true });
   const rendered = ui.render(p.draw());
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
-  const username = await rendered.findByLabelText('User name');
-  ui.fireEvent.change(username, { target: { value: 'satoshi-next' } });
-  ui.fireEvent.change(rendered.getByLabelText('Password'), {
-    target: { value: 'correct horse' },
-  });
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Save Changes' }));
+  await editLogin(rendered);
   await rendered.findByRole('button', { name: 'Edit' });
-  // Simulate a snapshot refresh advancing the item version without `value`
-  // metadata (matching native catalog entries).
-  const next = {
-    ...p.subject,
-    version: p.subject.version + 1,
-    value: undefined,
-  };
-  p.props.snapshot = {
-    ...p.props.snapshot,
-    items: p.props.snapshot.items.map((item) =>
-      item === p.subject ? next : item,
-    ),
-  };
-  rendered.rerender(p.draw());
-  await ui.waitFor(() => assert.ok(rendered.getByText('satoshi-next')));
-  assert.ok(rendered.getByText('••••••••••••'));
+  nextVersion(p, rendered);
+  await rendered.findByRole('button', { name: 'Show Password' });
+  // No row shows a value until it is read again, so nothing typed into the
+  // editor stays on screen after the save.
+  assert.equal(rendered.getAllByText('••••••••••••').length, 3);
+  assert.equal(document.body.textContent?.includes('satoshi-next'), false);
   assert.equal(document.body.textContent?.includes('correct horse'), false);
-  // Advancing to a subsequent version clears the locally cached saved fields.
-  p.props.snapshot = {
-    ...p.props.snapshot,
-    items: p.props.snapshot.items.map((item) =>
-      item === next ? { ...next, version: next.version + 1 } : item,
-    ),
-  };
-  rendered.rerender(p.draw());
-  await ui.waitFor(() =>
-    assert.equal(rendered.queryByText('satoshi-next'), null),
-  );
 });
 
-/* ---------------- post-save field preview lifetime (I2-02) ---------------- */
+/* ------------------------------------------- one login field at a time -- */
 
 type Setup = Awaited<ReturnType<typeof setup>>;
 type Rendered = ReturnType<typeof ui.render>;
@@ -1131,14 +1105,9 @@ async function editLogin(rendered: Rendered): Promise<void> {
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Save Changes' }));
 }
 
-/** Simulates the post-save catalog refresh by incrementing the item version
- * with `value: undefined`. */
+/** Simulates the post-save catalog refresh by incrementing the item version. */
 function nextVersion(p: Setup, rendered: Rendered) {
-  const next = {
-    ...p.subject,
-    version: p.subject.version + 1,
-    value: undefined,
-  };
+  const next = { ...p.subject, version: p.subject.version + 1 };
   p.props.snapshot = {
     ...p.props.snapshot,
     items: p.props.snapshot.items.map((item) =>
@@ -1151,65 +1120,167 @@ function nextVersion(p: Setup, rendered: Rendered) {
   return next;
 }
 
-async function savedLogin(): Promise<{ p: Setup; rendered: Rendered }> {
+const GITHUB_TEXT =
+  'username: satoshi\npassword: hx7-Qm2!vTe9-pale-orbit\nurl: https://github.com/login';
+
+test('a login row copies only its own field, never the whole entry', async () => {
   const p = await setup(
-    async (request) => ({
-      store: request.storeId,
-      path: request.path,
-      version: request.version,
-      value:
-        'username: satoshi-next\npassword: correct horse\nurl: https://github.com/login',
-    }),
+    undefined,
     (item) => item.path === '/logins/github.com',
   );
-  p.bridge.editTextItem = async () => ({ applied: true });
   const rendered = ui.render(p.draw());
-  await editLogin(rendered);
-  await rendered.findByRole('button', { name: 'Edit' });
-  nextVersion(p, rendered);
-  await ui.waitFor(() => assert.ok(rendered.getByText('satoshi-next')));
-  return { p, rendered };
-}
-
-const savedGone = (rendered: Rendered) =>
-  ui.waitFor(() => assert.ok(rendered.queryByText('satoshi-next') === null));
-
-test('Hide drops the saved fields with the shown value', async () => {
-  const { rendered } = await savedLogin();
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Show' }));
-  await rendered.findByText('correct horse');
-  ui.fireEvent.click(rendered.getByRole('button', { name: 'Hide' }));
-  assert.ok(rendered.queryByText('correct horse') === null);
-  await savedGone(rendered);
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Copy Password' }));
+  await ui.waitFor(() => assert.equal(p.mockCopies.length, 1));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Copy User name' }));
+  await ui.waitFor(() => assert.equal(p.mockCopies.length, 2));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Copy Website' }));
+  await ui.waitFor(() => assert.equal(p.mockCopies.length, 3));
+  assert.deepEqual(
+    p.mockCopies.map(({ field, text }) => [field, text]),
+    [
+      ['password', 'hx7-Qm2!vTe9-pale-orbit'],
+      ['username', 'satoshi'],
+      ['url', 'https://github.com/login'],
+    ],
+  );
+  assert.ok(p.mockCopies.every(({ text }) => text !== GITHUB_TEXT));
+  // The toast names the field and when the host clears the clipboard.
+  await ui.waitFor(() =>
+    assert.match(
+      document.body.textContent ?? '',
+      /Password copied · clears in 30 s/,
+    ),
+  );
 });
 
-test('a selection change drops the saved fields; coming back does not restore them', async () => {
-  const { p, rendered } = await savedLogin();
-  const other = p.props.snapshot.items.find(
-    (item) => item.path === '/env/prod/DATABASE_URL',
-  )!;
-  p.props.selection = { store: other.store, path: other.path };
-  rendered.rerender(p.draw());
-  await savedGone(rendered);
-  p.props.selection = { store: p.subject.store, path: p.subject.path };
-  rendered.rerender(p.draw());
-  await rendered.findByRole('button', { name: 'Show' });
-  assert.ok(rendered.queryByText('satoshi-next') === null);
+test('the More menu offers each login copy and no whole-value copy', async () => {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+  );
+  const rendered = ui.render(p.draw());
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'More actions' }));
+  const labels = (await ui.screen.findAllByRole('menuitem')).map(
+    (entry) => entry.textContent,
+  );
+  assert.ok(labels.includes('Copy Password'));
+  assert.ok(labels.includes('Copy User Name'));
+  assert.equal(labels.includes('Copy Value'), false);
+  ui.fireEvent.click(
+    ui.screen.getByRole('menuitem', { name: 'Copy User Name' }),
+  );
+  await ui.waitFor(() =>
+    assert.deepEqual(
+      p.mockCopies.map(({ field, text }) => [field, text]),
+      [['username', 'satoshi']],
+    ),
+  );
 });
 
-test('window blur drops the saved fields; focus does not restore them', async () => {
-  const { rendered } = await savedLogin();
+test('a Password known only by its path also offers its whole value', async () => {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+  );
+  p.props.snapshot = {
+    ...p.props.snapshot,
+    items: p.props.snapshot.items.map((item) =>
+      item === p.subject ? { ...item, shape: undefined } : item,
+    ),
+  };
+  const rendered = ui.render(p.draw());
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'More actions' }));
+  ui.fireEvent.click(
+    await ui.screen.findByRole('menuitem', { name: 'Copy Value' }),
+  );
+  await ui.waitFor(() =>
+    assert.deepEqual(
+      p.mockCopies.map(({ field, text }) => [field, text]),
+      [['value', GITHUB_TEXT]],
+    ),
+  );
+});
+
+test('showing one login row reads once and reveals only that row', async () => {
+  let reads = 0;
+  const p = await setup(
+    async (request) => {
+      reads++;
+      return {
+        store: request.storeId,
+        path: request.path,
+        version: request.version,
+        value: GITHUB_TEXT,
+      };
+    },
+    (item) => item.path === '/logins/github.com',
+  );
+  const rendered = ui.render(p.draw());
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Show User name' }));
+  await rendered.findByText('satoshi');
+  assert.equal(rendered.getAllByText('••••••••••••').length, 2);
+  assert.equal(
+    document.body.textContent?.includes('hx7-Qm2!vTe9-pale-orbit'),
+    false,
+  );
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Show Password' }));
+  await rendered.findByText('hx7-Qm2!vTe9-pale-orbit');
+  assert.equal(reads, 1);
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Hide Password' }));
+  assert.equal(rendered.queryByText('hx7-Qm2!vTe9-pale-orbit'), null);
+  assert.ok(rendered.getByText('satoshi'));
+  // Hiding the last shown row drops the read text.
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Hide User name' }));
+  assert.equal(rendered.queryByText('satoshi'), null);
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Show Website' }));
+  await rendered.findByText('https://github.com/login');
+  assert.equal(reads, 2);
+});
+
+test('window blur and the conceal signal remask shown login rows', async () => {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+  );
+  const rendered = ui.render(p.draw());
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Show Password' }));
+  await rendered.findByText('hx7-Qm2!vTe9-pale-orbit');
   ui.fireEvent(window, new Event('blur'));
-  await savedGone(rendered);
+  await ui.waitFor(() =>
+    assert.equal(rendered.queryByText('hx7-Qm2!vTe9-pale-orbit'), null),
+  );
   ui.fireEvent(window, new Event('focus'));
-  assert.ok(rendered.queryByText('satoshi-next') === null);
-});
-
-test('the conceal signal drops the saved fields', async () => {
-  const { p, rendered } = await savedLogin();
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Show Password' }));
+  await rendered.findByText('hx7-Qm2!vTe9-pale-orbit');
   p.props.concealSignal = 1;
   rendered.rerender(p.draw());
-  await savedGone(rendered);
+  await ui.waitFor(() =>
+    assert.equal(rendered.queryByText('hx7-Qm2!vTe9-pale-orbit'), null),
+  );
+});
+
+test('a field the login lacks is a warning, not a copy', async () => {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/fastmail.com',
+  );
+  const rendered = ui.render(p.draw());
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Copy Website' }));
+  await ui.waitFor(() =>
+    assert.match(document.body.textContent ?? '', /This item has no website\./),
+  );
+  assert.equal(p.mockCopies.length, 0);
+  // Once read, the absent row says so and its Copy is disabled.
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Show Website' }));
+  await rendered.findByText('Not set');
+  assert.equal(
+    (
+      rendered.getByRole('button', {
+        name: 'Copy Website',
+      }) as HTMLButtonElement
+    ).disabled,
+    true,
+  );
 });
 
 test('a save that completes after the window was concealed leaves no fields', async () => {
@@ -1229,7 +1300,7 @@ test('a save that completes after the window was concealed leaves no fields', as
   await rendered.findByRole('button', { name: 'Edit' });
   nextVersion(p, rendered);
   ui.fireEvent(window, new Event('focus'));
-  await rendered.findByRole('button', { name: 'Show' });
+  await rendered.findByRole('button', { name: 'Show Password' });
   assert.ok(rendered.queryByText('satoshi-next') === null);
   assert.equal(document.body.textContent?.includes('correct horse'), false);
 });
@@ -1255,6 +1326,6 @@ test('a save that completes after the selection moved leaves no fields to come b
   nextVersion(p, rendered);
   p.props.selection = { store: p.subject.store, path: p.subject.path };
   rendered.rerender(p.draw());
-  await rendered.findByRole('button', { name: 'Show' });
+  await rendered.findByRole('button', { name: 'Show Password' });
   assert.ok(rendered.queryByText('satoshi-next') === null);
 });

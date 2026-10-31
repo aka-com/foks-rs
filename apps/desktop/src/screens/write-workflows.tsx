@@ -30,6 +30,9 @@ import {
   canCreateInStore,
   defaultCreateStore,
   leaseLapsed,
+  loginField,
+  loginFieldOf,
+  loginLines,
   nameOf,
   partiesOf,
   partyName,
@@ -45,6 +48,7 @@ import {
 import type {
   Item,
   ItemKind,
+  LoginFieldName,
   RoleWire,
   Store,
   StoreRef,
@@ -57,7 +61,6 @@ import { NavigationPrompt, useSheetGuard } from '../navigation-guard';
 import { useFileDrop } from '../file-drop';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { useToast } from '/kit/toasts';
-import { editableValue } from './edit-value';
 import { BigTile, itemTile, newItemTile } from './item-tile';
 import { itemActionProblem } from './store-access';
 
@@ -187,23 +190,38 @@ export function droppedFileDraft(path: string, sourcePath: string): NewDraft {
 }
 
 /**
+ * Whether the New password sheet holds all of this text: every line that is
+ * not empty names a different one of its three fields.
+ */
+function fitsPasswordSheet(text: string): boolean {
+  const named = new Set<LoginFieldName>();
+  return loginLines(text).every(({ key, raw }) => {
+    if (key === null && (raw === '' || raw === '\r')) return true;
+    const field = loginFieldOf(key);
+    if (field === null || named.has(field)) return false;
+    named.add(field);
+    return true;
+  });
+}
+
+/**
  * The new-item sheet an edit resumes in when the item it was editing has been
  * deleted elsewhere: there is no newer version to review, so the edit is
  * offered as a new item at the same path, for the user to save or discard.
+ * A login resumes in the Password sheet only when that sheet's fields hold
+ * the whole draft; otherwise it resumes as a Document with the draft as its
+ * value, so no line is dropped.
  */
 export function conflictDraftWorkflow(
   item: Item,
   draft: string,
 ): WriteWorkflow {
   const itemKind: NewKind =
-    kindOf(item) === 'Password' ? 'Password' : 'Document';
-  const fields = new Map<string, string>();
-  if (itemKind === 'Password')
-    for (const line of draft.split('\n')) {
-      const at = line.indexOf(':');
-      if (at > 0)
-        fields.set(line.slice(0, at).trim(), line.slice(at + 1).trim());
-    }
+    kindOf(item) === 'Password' && fitsPasswordSheet(draft)
+      ? 'Password'
+      : 'Document';
+  const field = (name: LoginFieldName): string =>
+    itemKind === 'Password' ? (loginField(draft, name) ?? '') : '';
   return {
     kind: 'new',
     itemKind,
@@ -211,9 +229,9 @@ export function conflictDraftWorkflow(
     draft: {
       path: item.path,
       site: itemKind === 'Password' ? nameOf(item.path) : '',
-      username: fields.get('username') ?? fields.get('user') ?? '',
-      password: fields.get('password') ?? '',
-      website: fields.get('url') ?? fields.get('website') ?? '',
+      username: field('username'),
+      password: field('password'),
+      website: field('url'),
       value: itemKind === 'Password' ? '' : draft,
       resourceName: '',
       sourcePath: null,
@@ -251,10 +269,7 @@ export function initialWriteWorkflow(
       return {
         kind: 'conflict',
         item,
-        draft: editableValue(
-          item,
-          snapshot.plaintext[itemKey(item)] ?? item.value ?? '',
-        ),
+        draft: snapshot.plaintext[itemKey(item)] ?? '',
       };
   }
   return null;
