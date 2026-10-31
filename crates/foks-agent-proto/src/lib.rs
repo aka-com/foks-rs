@@ -1385,6 +1385,15 @@ mod tests {
             }
         }
     }
+    /// The floor asserts above keep older tests valid across versions; this
+    /// one fails on any bump, so a version change is always deliberate and
+    /// reaches the pins in fixtures, fuzz seeds and documentation.
+    #[test]
+    fn protocol_version_is_pinned() {
+        assert_eq!(PROTOCOL_VERSION, 38);
+        assert_eq!(SUPPORTED_PROTOCOL_VERSIONS, ProtocolRange::exactly(38));
+    }
+
     #[test]
     fn receipt_clock_repair_is_a_v38_mutation_and_status_is_not() {
         const { assert!(PROTOCOL_VERSION >= 38) };

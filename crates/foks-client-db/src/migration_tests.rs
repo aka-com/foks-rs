@@ -195,6 +195,13 @@ fn merkle_head(connection: &Connection) -> (i64, Vec<u8>) {
         .unwrap()
 }
 
+/// Fails on any schema bump, so a new version is always deliberate and
+/// reaches this file's predecessor list and the documentation.
+#[test]
+fn hard_state_schema_version_is_pinned() {
+    assert_eq!(SCHEMA_VERSION, 43);
+}
+
 #[test]
 fn frozen_merkle_heads_definition_matches_initial() {
     let start = SCHEMA.find("CREATE TABLE merkle_heads (").unwrap();
