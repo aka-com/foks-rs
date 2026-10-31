@@ -1363,6 +1363,68 @@ mod tests {
         }
     }
     #[test]
+    fn receipt_clock_repair_is_a_v38_mutation_and_status_is_not() {
+        const { assert!(PROTOCOL_VERSION >= 38) };
+        let status = Operation::AdapterClockStatus {
+            profile: "local".into(),
+            account_alias: "owner".into(),
+            domain: data::ReceiptClockDomain::Adapter,
+        };
+        assert!(!status.is_mutation());
+        assert_eq!(
+            serde_json::to_value(&status).unwrap(),
+            serde_json::json!({
+                "operation": "adapter-clock-status",
+                "profile": "local",
+                "account_alias": "owner",
+                "domain": "adapter",
+            })
+        );
+        let repair = Operation::RepairAdapterClock {
+            profile: "local".into(),
+            account_alias: "owner".into(),
+            domain: data::ReceiptClockDomain::Upload,
+            action: data::AdapterClockRepairAction::Confirm {
+                unix_seconds: 1_700_000_000,
+                confirmation_digest: "ab".repeat(32),
+            },
+        };
+        assert!(repair.is_mutation());
+        assert!(!Operation::RepairAdapterClock {
+            profile: "local".into(),
+            account_alias: "owner".into(),
+            domain: data::ReceiptClockDomain::Adapter,
+            action: data::AdapterClockRepairAction::Preview {
+                unix_seconds: 1_700_000_000,
+            },
+        }
+        .is_mutation());
+        let encoded = serde_json::to_value(&repair).unwrap();
+        assert_eq!(encoded["operation"], "repair-adapter-clock");
+        assert_eq!(encoded["domain"], "upload");
+        let mut missing = encoded.clone();
+        missing.as_object_mut().unwrap().remove("domain");
+        assert!(serde_json::from_value::<Operation>(missing).is_err());
+        assert_eq!(encoded["action"]["step"], "confirm");
+        let request = test_request(21, repair);
+        assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
+        assert!(serde_json::from_value::<data::AdapterClockRepairAction>(
+            serde_json::json!({"step": "preview", "unix_seconds": 1, "extra": 1})
+        )
+        .is_err());
+        let status: data::AdapterClockStatus = serde_json::from_value(serde_json::json!({
+            "host_id": "01",
+            "user_id": "02",
+            "admission": "behind",
+            "local_time": 1_700_000_000u64,
+            "validated_time_floor": 1_699_990_000u64,
+            "reject_issued_before": 1_700_003_600u64,
+        }))
+        .unwrap();
+        assert_eq!(status.admission, data::AdapterClockAdmission::Behind);
+    }
+
+    #[test]
     fn deadline_is_mandatory_only_after_bounded_version_dispatch() {
         let old = serde_json::json!({"version":PROTOCOL_VERSION - 1,"id":7,"operation":{"operation":"ping"}});
         assert!(matches!(

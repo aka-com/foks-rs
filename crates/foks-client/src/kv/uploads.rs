@@ -44,26 +44,13 @@ pub fn claim_file_upload(
     Ok(ClaimedFileUpload { id })
 }
 
+/// Samples the shared receipt clock for the upload domain.
 pub fn upload_time_sample() -> Result<UploadTimeSample> {
-    use std::{
-        sync::OnceLock,
-        time::{Instant, SystemTime, UNIX_EPOCH},
-    };
-    static PROCESS: OnceLock<([u8; 16], Instant)> = OnceLock::new();
-    let (id, started) = if let Some(value) = PROCESS.get() {
-        value
-    } else {
-        let candidate = (crate::random_bytes()?, Instant::now());
-        let _ = PROCESS.set(candidate);
-        PROCESS.get().expect("upload clock initialized")
-    };
-    Ok(UploadTimeSample {
-        process_id: *id,
-        wall_seconds: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| invalid("upload clock precedes epoch"))?
-            .as_secs(),
-        monotonic_seconds: started.elapsed().as_secs(),
+    crate::receipt_time_sample().map_err(|error| match error {
+        crate::ReceiptClockError::Randomness => Error::Crypto(foks_crypto::Error::Entropy),
+        crate::ReceiptClockError::Untrusted => {
+            Error::Database(foks_client_db::Error::UploadClockUntrusted)
+        }
     })
 }
 

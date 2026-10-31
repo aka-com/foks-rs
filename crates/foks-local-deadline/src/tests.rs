@@ -97,3 +97,25 @@ fn linux_namespace_identity_has_exact_string_integers() {
         }
     }
 }
+#[test]
+fn boot_ids_convert_the_hyphenated_form_to_bytes() {
+    let boot = BootId::parse("0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0").unwrap();
+    assert_eq!(
+        boot.bytes(),
+        [
+            0x0f, 0x1e, 0x2d, 0x3c, 0x4b, 0x5a, 0x69, 0x78, 0x87, 0x96, 0xa5, 0xb4, 0xc3, 0xd2,
+            0xe1, 0xf0
+        ]
+    );
+    for text in [
+        "",
+        "0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0",
+        "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+        "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f",
+        "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1fg",
+        "+f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+        "0f1e2d3c-4b5a-6978-8796a-5b4c3d2e1f0",
+    ] {
+        assert!(BootId::parse(text).is_err(), "{text}");
+    }
+}

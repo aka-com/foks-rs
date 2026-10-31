@@ -1853,6 +1853,7 @@ dependencies = [
  "foks-yubi",
  "getrandom 0.4.3",
  "libc",
+ "nix",
  "rcgen",
  "rusqlite",
  "rustls",

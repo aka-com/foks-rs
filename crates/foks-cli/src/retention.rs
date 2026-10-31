@@ -1,3 +1,7 @@
+use foks_agent_proto::{
+    data::{AdapterClockRepairAction, ReceiptClockDomain},
+    Operation, ResponseResult,
+};
 use foks_client_app::{ProfileRegistry, ProfileSession};
 use std::path::Path;
 
@@ -5,6 +9,17 @@ use std::path::Path;
 pub enum RetentionCommand {
     /// Read redacted resident maintenance counters.
     Status,
+    /// Report whether the account's receipt clock admits new handles: MCP
+    /// writes for the adapter clock, file uploads for the upload clock.
+    ClockStatus {
+        #[arg(long)]
+        profile: String,
+        /// Receipt clock to report. Upload and adapter clocks are independent.
+        #[arg(long, value_enum, default_value = "adapter")]
+        domain: ReceiptDomain,
+        #[arg(long)]
+        account_alias: String,
+    },
     /// Drain local completed-upload cleanup without contacting a server.
     Maintain {
         #[arg(long)]
@@ -15,7 +30,8 @@ pub enum RetentionCommand {
         #[arg(long, default_value_t = 256, value_parser = clap::value_parser!(u32).range(1..=1024))]
         max_turns: u32,
     },
-    /// Preview or explicitly re-anchor local receipt time without pruning or writing remotely.
+    /// Preview or explicitly re-anchor a local receipt clock at this
+    /// computer's current time, without pruning or writing remotely.
     Reanchor {
         #[arg(long)]
         profile: String,
@@ -24,10 +40,15 @@ pub enum RetentionCommand {
         domain: ReceiptDomain,
         #[arg(long)]
         account_alias: String,
+        /// The time to confirm. The agent refuses a preview more than five
+        /// minutes from its own clock and a confirmation more than one minute
+        /// from it. Defaults to now for a preview.
         #[arg(long)]
-        unix_seconds: u64,
-        /// Exact digest printed by the preview for these time values.
-        #[arg(long)]
+        unix_seconds: Option<u64>,
+        /// Exact digest printed by the preview, with the preview's
+        /// `proposed_wall` as `--unix-seconds`. Confirm within one minute of
+        /// the preview; after that, preview again.
+        #[arg(long, requires = "unix_seconds")]
         confirm_digest: Option<String>,
     },
 }
@@ -38,57 +59,72 @@ pub enum ReceiptDomain {
     Upload,
 }
 
-pub fn run(state: &Path, command: RetentionCommand) -> Result<(), Box<dyn std::error::Error>> {
-    if let RetentionCommand::Maintain {
-        profile,
-        max_seconds,
-        max_turns,
-    } = command
-    {
-        return maintain(state, &profile, max_seconds, max_turns);
+impl From<ReceiptDomain> for ReceiptClockDomain {
+    fn from(domain: ReceiptDomain) -> Self {
+        match domain {
+            ReceiptDomain::Adapter => Self::Adapter,
+            ReceiptDomain::Upload => Self::Upload,
+        }
     }
-    let RetentionCommand::Reanchor {
-        profile,
-        domain,
-        account_alias,
-        unix_seconds,
-        confirm_digest,
-    } = command
-    else {
-        let reply = super::deadline::agent_client(state)?
-            .call(foks_agent_proto::Operation::RetentionStatus)?;
-        return match reply.result {
-            foks_agent_proto::ResponseResult::Success { value } => {
-                super::deadline::print_agent_value(value)?;
-                Ok(())
+}
+
+/// Clock status and repair run in the resident agent, which samples the same
+/// process clock that later admits writes and uploads. `maintain` drains
+/// local cleanup in this process under the profile lock, as the agent's
+/// resident maintenance does, and reports contention as incomplete.
+pub fn run(state: &Path, command: RetentionCommand) -> Result<(), Box<dyn std::error::Error>> {
+    let operation = match command {
+        RetentionCommand::Status => Operation::RetentionStatus,
+        RetentionCommand::Maintain {
+            profile,
+            max_seconds,
+            max_turns,
+        } => return maintain(state, &profile, max_seconds, max_turns),
+        RetentionCommand::ClockStatus {
+            profile,
+            domain,
+            account_alias,
+        } => {
+            super::mcp::ensure_agent(state)?;
+            Operation::AdapterClockStatus {
+                profile,
+                account_alias,
+                domain: domain.into(),
             }
-            foks_agent_proto::ResponseResult::Error { code, message, .. } => {
-                Err(format!("{code:?}: {message}").into())
+        }
+        RetentionCommand::Reanchor {
+            profile,
+            domain,
+            account_alias,
+            unix_seconds,
+            confirm_digest,
+        } => {
+            let unix_seconds = match unix_seconds {
+                Some(seconds) => seconds,
+                None => std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_secs(),
+            };
+            super::mcp::ensure_agent(state)?;
+            Operation::RepairAdapterClock {
+                profile,
+                account_alias,
+                domain: domain.into(),
+                action: match confirm_digest {
+                    Some(confirmation_digest) => AdapterClockRepairAction::Confirm {
+                        unix_seconds,
+                        confirmation_digest,
+                    },
+                    None => AdapterClockRepairAction::Preview { unix_seconds },
+                },
             }
-        };
+        }
     };
-    let registry = ProfileRegistry::open(state)?;
-    let session = ProfileSession::open(&registry, &profile)?;
-    // Output follows checkpoint publication, including error paths.
-    let result =
-        super::with_vault(state, &session, |checked, vault, _| {
-            Ok(match (domain, confirm_digest) {
-                (ReceiptDomain::Adapter, Some(ref digest)) => serde_json::to_value(
-                    checked.reanchor_adapter_clock(&account_alias, unix_seconds, digest, vault)?,
-                )?,
-                (ReceiptDomain::Adapter, None) => serde_json::to_value(
-                    checked.adapter_clock_preview(&account_alias, unix_seconds, vault)?,
-                )?,
-                (ReceiptDomain::Upload, Some(ref digest)) => serde_json::to_value(
-                    checked.reanchor_upload_clock(&account_alias, unix_seconds, digest, vault)?,
-                )?,
-                (ReceiptDomain::Upload, None) => serde_json::to_value(
-                    checked.upload_clock_preview(&account_alias, unix_seconds, vault)?,
-                )?,
-            })
-        })?;
-    super::deadline::print_agent_value(result)?;
-    Ok(())
+    let reply = super::deadline::agent_client(state)?.call(operation)?;
+    match reply.result {
+        ResponseResult::Success { value } => super::deadline::print_agent_value(value),
+        ResponseResult::Error { code, message, .. } => Err(format!("{code:?}: {message}").into()),
+    }
 }
 
 fn maintain(

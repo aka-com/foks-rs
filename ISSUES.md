@@ -226,6 +226,21 @@ Required resolution:
   address uniqueness and age, with or without a schema step.
 - Give operators a way to read and delete the stored addresses.
 
+## Desktop repair of the upload receipt clock
+
+**Priority: low.** The desktop app's account settings repair only the adapter
+receipt clock (`ReceiptClockDomain::Adapter` in
+`apps/desktop/src-tauri/src/commands/account_conveniences.rs`). When the upload
+receipt clock is untrusted, large file writes that need a resumable upload
+identity are refused, and the only repair is
+`foks-rs retention reanchor --domain upload`; the agent's error names that
+command.
+
+Required resolution:
+
+- Offer the upload-clock status and the preview-then-confirm repair in the
+  desktop app, as for the adapter clock.
+
 ## Restricted-list qualification listener ends on any accept error
 
 **Priority: low.** The native personal-list qualification listener

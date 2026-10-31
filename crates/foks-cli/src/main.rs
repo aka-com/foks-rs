@@ -777,9 +777,9 @@ fn command_budget(command: &Command) -> std::time::Duration {
             retention::RetentionCommand::Maintain { max_seconds, .. } => {
                 (*max_seconds).clamp(1, 60)
             }
-            retention::RetentionCommand::Status | retention::RetentionCommand::Reanchor { .. } => {
-                15
-            }
+            retention::RetentionCommand::Status
+            | retention::RetentionCommand::ClockStatus { .. }
+            | retention::RetentionCommand::Reanchor { .. } => 15,
         },
         Command::Mcp(_)
         | Command::Sso(_)

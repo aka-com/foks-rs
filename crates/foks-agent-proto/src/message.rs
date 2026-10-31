@@ -594,6 +594,8 @@ impl Operation {
             Self::DataWriteStatus { .. } => DeadlineClass::Ordinary,
             Self::PendingDataWrites { .. } => DeadlineClass::Ordinary,
             Self::BindDataAccount { .. } => DeadlineClass::Ordinary,
+            Self::AdapterClockStatus { .. } => DeadlineClass::Ordinary,
+            Self::RepairAdapterClock { .. } => DeadlineClass::Ordinary,
             Self::ReadData { .. } => DeadlineClass::Ordinary,
             Self::Chat { action, .. } => action.deadline_class(),
             Self::Ping => DeadlineClass::Ordinary,
@@ -753,6 +755,20 @@ pub enum Operation {
     BindDataAccount {
         profile: String,
         account_alias: String,
+    },
+    /// Whether the account's receipt clock in `domain` admits new handles.
+    AdapterClockStatus {
+        profile: String,
+        account_alias: String,
+        domain: crate::data::ReceiptClockDomain,
+    },
+    /// Re-anchors the account's receipt clock in `domain` at a confirmed wall
+    /// time. The MCP adapter never sends this; the CLI and the desktop do.
+    RepairAdapterClock {
+        profile: String,
+        account_alias: String,
+        domain: crate::data::ReceiptClockDomain,
+        action: crate::data::AdapterClockRepairAction,
     },
     ReadData {
         scope: crate::data::DataScope,
@@ -1313,6 +1329,8 @@ impl Operation {
             Self::DataWriteStatus { .. } => "DataWriteStatus",
             Self::PendingDataWrites { .. } => "PendingDataWrites",
             Self::BindDataAccount { .. } => "BindDataAccount",
+            Self::AdapterClockStatus { .. } => "AdapterClockStatus",
+            Self::RepairAdapterClock { .. } => "RepairAdapterClock",
             Self::ReadData { .. } => "ReadData",
             Self::Chat { action, .. } => action.operation_name(),
             Self::Ping => "Ping",
@@ -1464,6 +1482,12 @@ impl Operation {
         if let Self::Chat { action, .. } = self {
             return action.is_mutation();
         }
+        if let Self::RepairAdapterClock { action, .. } = self {
+            return matches!(
+                action,
+                crate::data::AdapterClockRepairAction::Confirm { .. }
+            );
+        }
         !matches!(
             self,
             Self::Ping
@@ -1471,6 +1495,7 @@ impl Operation {
                 | Self::RetentionStatus
                 | Self::DiscoverGoProfiles
                 | Self::BindDataAccount { .. }
+                | Self::AdapterClockStatus { .. }
                 | Self::ReadData { .. }
                 | Self::DataWriteStatus { .. }
                 | Self::PendingDataWrites { .. }
@@ -1594,6 +1619,15 @@ impl std::fmt::Debug for Operation {
                 .field("token", &"<redacted>")
                 .finish(),
             Self::BindDataAccount { .. } => formatter.write_str("BindDataAccount"),
+            Self::AdapterClockStatus { domain, .. } => formatter
+                .debug_struct("AdapterClockStatus")
+                .field("domain", domain)
+                .finish_non_exhaustive(),
+            Self::RepairAdapterClock { domain, action, .. } => formatter
+                .debug_struct("RepairAdapterClock")
+                .field("domain", domain)
+                .field("action", action)
+                .finish_non_exhaustive(),
             Self::ReadData { .. } => formatter.write_str("ReadData"),
             Self::PrepareDataWrite { .. } => formatter.write_str("PrepareDataWrite"),
             Self::ExecuteDataWrite { .. } => formatter.write_str("ExecuteDataWrite"),

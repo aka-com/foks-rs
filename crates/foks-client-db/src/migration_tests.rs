@@ -20,24 +20,29 @@ const MERKLE_HEADS_V38: &str = r#"CREATE TABLE merkle_heads (
     FOREIGN KEY (host_id, epoch) REFERENCES merkle_roots(host_id, epoch)
 ) STRICT, WITHOUT ROWID;"#;
 
+const CLOCK_BOOT_ID: [u8; 16] = [5; 16];
+
 /// A schema version this build migrates. `admission_floor` keeps the name
 /// kv_adapter_clocks.validated_time_floor had before version 40 (versions 38
-/// and 39 only); the migration accepts either name.
+/// and 39 only), and `boot_id` keeps the column version 43 added to the clock
+/// tables the predecessor has; the migration accepts each combination.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Predecessor {
     pub(crate) version: u32,
     pub(crate) admission_floor: bool,
+    pub(crate) boot_id: bool,
 }
 
 impl Predecessor {
     fn all() -> impl Iterator<Item = Self> {
-        [38, 39, 40, 41].into_iter().flat_map(|version| {
-            [false, true]
+        [38, 39, 40, 41, 42].into_iter().flat_map(|version| {
+            [(false, false), (false, true), (true, false), (true, true)]
                 .into_iter()
-                .filter(move |admission_floor| !admission_floor || version < 40)
-                .map(move |admission_floor| Self {
+                .filter(move |(admission_floor, _)| !admission_floor || version < 40)
+                .map(move |(admission_floor, boot_id)| Self {
                     version,
                     admission_floor,
+                    boot_id,
                 })
         })
     }
@@ -58,6 +63,10 @@ pub(crate) fn rebuild_predecessor(transaction: &Transaction<'_>, predecessor: Pr
                  DROP TABLE kv_upload_receipt_limits;",
             )
             .unwrap();
+    } else if !predecessor.boot_id {
+        transaction
+            .execute_batch("ALTER TABLE kv_upload_clocks DROP COLUMN boot_id;")
+            .unwrap();
     }
     if predecessor.version < 41 {
         // Version 41 added the resumable upload tables, and a trigger on
@@ -67,6 +76,11 @@ pub(crate) fn rebuild_predecessor(transaction: &Transaction<'_>, predecessor: Pr
                 "DROP TRIGGER kv_upload_parent_live; DROP TABLE kv_upload_chunks;
                  DROP TABLE kv_uploads; DROP TABLE kv_upload_limits;",
             )
+            .unwrap();
+    }
+    if !predecessor.boot_id {
+        transaction
+            .execute_batch("ALTER TABLE kv_adapter_clocks DROP COLUMN boot_id;")
             .unwrap();
     }
     if predecessor.admission_floor {
@@ -99,8 +113,9 @@ pub(crate) fn rebuild_predecessor(transaction: &Transaction<'_>, predecessor: Pr
 }
 
 /// A predecessor database holding a verified host, its Merkle head, one
-/// adapter clock row and, for version 41, one prepared upload, with the
-/// Merkle head a current database stores for the same host. Version 38 had
+/// adapter clock row, from version 42 one upload clock row and, for version
+/// 41, one prepared upload, with the Merkle head a current database stores
+/// for the same host. Version 38 had
 /// no `LocalCheckpoint` evidence, so its head holds the same signed root as
 /// legacy `SignedBootstrap` evidence.
 fn predecessor_store(path: &Path, predecessor: Predecessor) -> (HardStateStore, (i64, Vec<u8>)) {
@@ -125,9 +140,27 @@ fn predecessor_store(path: &Path, predecessor: Predecessor) -> (HardStateStore, 
         .execute(
             "INSERT INTO kv_adapter_clocks
                  (host_id, user_id, process_id, anchor_wall, anchor_monotonic,
-                  validated_time_floor, reject_issued_before)
-             SELECT host_id, ?1, ?2, 200000, 1000, 199000, 198000 FROM hosts",
-            params![[1u8; 33].as_slice(), [2u8; 16].as_slice()],
+                  validated_time_floor, reject_issued_before, boot_id)
+             SELECT host_id, ?1, ?2, 200000, 1000, 199000, 198000, ?3 FROM hosts",
+            params![
+                [1u8; 33].as_slice(),
+                [2u8; 16].as_slice(),
+                CLOCK_BOOT_ID.as_slice()
+            ],
+        )
+        .unwrap();
+    store
+        .connection
+        .execute(
+            "INSERT INTO kv_upload_clocks
+                 (host_id, user_id, process_id, anchor_wall, anchor_monotonic,
+                  validated_time_floor, reject_issued_before, boot_id)
+             VALUES (?1, ?1, ?2, 200000, 1000, 199000, 198000, ?3)",
+            params![
+                [1u8; 33].as_slice(),
+                [3u8; 16].as_slice(),
+                CLOCK_BOOT_ID.as_slice()
+            ],
         )
         .unwrap();
     let transaction = store.write_transaction().unwrap();
@@ -181,9 +214,12 @@ fn every_supported_predecessor_migrates_to_the_initial_schema() {
         let before = old.metadata().unwrap();
         let head = merkle_head(&old.connection);
         assert_eq!(head.0 == 1, predecessor.version == 38, "{predecessor:?}");
-        assert_ne!(
-            inspection::schema(&old.connection).unwrap(),
-            reference,
+        // A version 42 database with boot_id differs from the current schema
+        // in user_version alone.
+        let schema_differs = predecessor.version < 42 || !predecessor.boot_id;
+        assert_eq!(
+            inspection::schema(&old.connection).unwrap() != reference,
+            schema_differs,
             "{predecessor:?}"
         );
         drop(old);
@@ -206,25 +242,40 @@ fn every_supported_predecessor_migrates_to_the_initial_schema() {
             current_head,
             "{predecessor:?}"
         );
-        // The version 38 step rewrites Merkle evidence and the version 42
-        // step registers legacy uploads; each records a write. Every
-        // predecessor passes through the version 42 step.
-        assert!(after.revision > before.revision, "{predecessor:?}");
-        assert_ne!(after.write_token, before.write_token, "{predecessor:?}");
-        let floor: i64 = migrated
+        if predecessor.version < 42 {
+            // The version 38 step rewrites Merkle evidence and the version 42
+            // step registers legacy uploads; each records a write.
+            assert!(after.revision > before.revision, "{predecessor:?}");
+            assert_ne!(after.write_token, before.write_token, "{predecessor:?}");
+        } else {
+            // The version 43 step only adds columns, which leaves the
+            // rollback checkpoint valid.
+            assert_eq!(after, before, "{predecessor:?}");
+        }
+        let clock: (i64, Option<Vec<u8>>) = migrated
             .connection
             .query_row(
-                "SELECT validated_time_floor FROM kv_adapter_clocks",
+                "SELECT validated_time_floor, boot_id FROM kv_adapter_clocks",
                 [],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert_eq!(floor, 199_000, "{predecessor:?}");
-        let upload_clocks: i64 = migrated
+        let boot_id = predecessor.boot_id.then(|| CLOCK_BOOT_ID.to_vec());
+        assert_eq!(clock, (199_000, boot_id.clone()), "{predecessor:?}");
+        let upload_clocks: Vec<(i64, Option<Vec<u8>>)> = migrated
             .connection
-            .query_row("SELECT count(*) FROM kv_upload_clocks", [], |r| r.get(0))
+            .prepare("SELECT validated_time_floor, boot_id FROM kv_upload_clocks")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
             .unwrap();
-        assert_eq!(upload_clocks, 0, "{predecessor:?}");
+        let expected = if predecessor.version < 42 {
+            Vec::new()
+        } else {
+            vec![(199_000, boot_id)]
+        };
+        assert_eq!(upload_clocks, expected, "{predecessor:?}");
         let handles: Vec<(Vec<u8>, i64)> = migrated
             .connection
             .prepare("SELECT operation_id, handle_version FROM kv_upload_handles")

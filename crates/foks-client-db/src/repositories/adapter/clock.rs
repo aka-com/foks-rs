@@ -3,10 +3,9 @@ use rusqlite::{params, Connection, OptionalExtension};
 use super::{read_time, sql_time};
 use crate::{Error, Result};
 
-use crate::repositories::receipt_clock::SKEW_SECONDS;
 pub(super) use crate::repositories::receipt_clock::{reanchor, validate};
 pub use crate::repositories::receipt_clock::{
-    AdapterClockState, AdapterTimeSample, MAX_NEW_SUBMISSION_AGE_SECONDS,
+    AdapterClockState, AdapterTimeSample, MAX_NEW_SUBMISSION_AGE_SECONDS, SKEW_SECONDS,
     TERMINAL_RETENTION_SECONDS,
 };
 
@@ -17,12 +16,13 @@ pub(super) fn read(
 ) -> Result<Option<AdapterClockState>> {
     Ok(connection
         .query_row(
-            "SELECT process_id,anchor_wall,anchor_monotonic,validated_time_floor,reject_issued_before
+            "SELECT process_id,anchor_wall,anchor_monotonic,validated_time_floor,reject_issued_before,boot_id
          FROM kv_adapter_clocks WHERE host_id=?1 AND user_id=?2",
             params![host, user],
             |row| {
                 Ok(AdapterClockState {
                     process_id: row.get(0)?,
+                    boot_id: row.get(5)?,
                     anchor_wall: read_time(row, 1)?,
                     anchor_monotonic: read_time(row, 2)?,
                     validated_time_floor: read_time(row, 3)?,
@@ -43,12 +43,13 @@ pub(super) fn write(
         return Ok(());
     }
     connection.execute(
-        "INSERT INTO kv_adapter_clocks VALUES (?1,?2,?3,?4,?5,?6,?7)
+        "INSERT INTO kv_adapter_clocks VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
          ON CONFLICT(host_id,user_id) DO UPDATE SET process_id=excluded.process_id,
          anchor_wall=excluded.anchor_wall,anchor_monotonic=excluded.anchor_monotonic,
-         validated_time_floor=excluded.validated_time_floor,reject_issued_before=excluded.reject_issued_before",
+         validated_time_floor=excluded.validated_time_floor,reject_issued_before=excluded.reject_issued_before,
+         boot_id=excluded.boot_id",
         params![host,user,state.process_id,sql_time(state.anchor_wall)?,sql_time(state.anchor_monotonic)?,
-            sql_time(state.validated_time_floor)?,sql_time(state.reject_issued_before)?],
+            sql_time(state.validated_time_floor)?,sql_time(state.reject_issued_before)?,state.boot_id],
     )?;
     Ok(())
 }
