@@ -170,3 +170,40 @@ fn an_idle_connection_outlives_the_io_timeout_until_the_idle_timeout() {
     }
     server.shutdown().unwrap();
 }
+
+/// The wait for a connection's first frame is bounded by the I/O timeout,
+/// not the idle timeout: a peer that completes the TLS handshake and sends
+/// nothing does not hold its connection slots for the idle timeout.
+#[test]
+fn a_connection_without_a_first_frame_closes_after_the_io_timeout() {
+    let environment = TestEnvironment::with_profile(TestProfile::TightIo).unwrap();
+    let server = environment.start_server().unwrap();
+    let mut tls = connect_without_client_certificate(
+        server.addresses().public_services,
+        server.service_roots(),
+    );
+    tls.sock
+        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .unwrap();
+    while tls.conn.is_handshaking() {
+        tls.conn.complete_io(&mut tls.sock).unwrap();
+    }
+    let started = std::time::Instant::now();
+    let mut byte = [0];
+    match tls.read(&mut byte) {
+        Ok(0) => {}
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
+            ) => {}
+        other => panic!("expected the silent connection to be closed: {other:?}"),
+    }
+    // TightIo has a 500 ms I/O timeout and a 2 s idle timeout.
+    assert!(
+        started.elapsed() < foks_server_testkit::TIGHT_IO_IDLE_TIMEOUT,
+        "closed after {:?}",
+        started.elapsed()
+    );
+    server.shutdown().unwrap();
+}
