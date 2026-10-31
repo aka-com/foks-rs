@@ -98,10 +98,8 @@ mod tests {
     use super::*;
     use crate::checkpoint::CheckpointStore as _;
     #[test]
+    #[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
     fn native_gate_survives_forward_database_flag_changes_and_all_factories_deny_use() {
-        if std::env::var_os("FOKS_TEST_NATIVE_PORTABILITY").is_none() {
-            return;
-        }
         let mut fixture = crate::test_support::AccountFixture::start_native();
         let mut profile = fixture.registry.profile("local").unwrap().clone();
         profile.name = "second".into();
