@@ -8,6 +8,15 @@ export const MAX_BYTES = 8 * 1024 * 1024;
 const MAX_ROWS = 10000;
 const MAX_RECEIPTS = 10000;
 const BASE = ["kv_nodes", "kv_dirents", "kv_dirent_heads", "kv_locks"];
+// Trigger-owned counters that count trigger firings rather than describe the
+// resulting rows. A replay that writes a row in two statements (kv_nodes
+// below) fires more triggers than the native write did, so these values are
+// left out of the state hash; apply checks that the revision advanced.
+// No proof covers their values, so an output routed through the proof must
+// not include them (the read-dependency revision is a read token's read
+// coordinate). Must match UNHASHED_COUNTERS in foks-server-testkit's
+// celld_proof.rs, which a Rust test compares with this line.
+const UNHASHED_COUNTERS = [["metadata_read_dependency","revision"]];
 const fail = () => { throw new Error("proof request rejected"); };
 const canonical = value => {
   if (Array.isArray(value)) return value.map(canonical);
@@ -124,6 +133,15 @@ export class Authority {
     }
     this.schema = schema;
     this.schemaHash = hash(schema);
+    // A listed table without its counter column is refused, as the native
+    // side refuses it; a schema without the table has nothing to leave out.
+    this.unhashed = new Map(UNHASHED_COUNTERS.flatMap(([table,column]) => {
+      const found = schema.tables.find(t=>t.name===table);
+      if (!found) return [];
+      const index = found.columns.findIndex(c=>c.name===column);
+      if (index < 0) fail();
+      return [[table,index]];
+    }));
     this.tables = new Map(schema.tables.map(t => [t.name,t]));
     // This must happen outside transactionSync: SQLite ignores a foreign_keys
     // change in an active transaction. Verify instead of assuming the default.
@@ -133,6 +151,20 @@ export class Authority {
     this.sql("CREATE TABLE IF NOT EXISTS proof_receipts (attempt TEXT PRIMARY KEY, epoch INTEGER NOT NULL, owner TEXT NOT NULL, request_hash TEXT NOT NULL, revision INTEGER NOT NULL, state_hash TEXT NOT NULL, output_hash TEXT NOT NULL) STRICT");
   }
   sql(query,...bindings) { return [...this.storage.sql.exec(query,...bindings)]; }
+  /** The hash of `snapshot` without the trigger-firing counters. */
+  stateHash(snapshot) {
+    return hash({...snapshot,tables:snapshot.tables.map(table => {
+      const index = this.unhashed.get(table.name);
+      return index === undefined ? table : {...table,rows:table.rows.map(row=>row.map((value,i)=>i===index ? {kind:"null"} : value))};
+    })});
+  }
+  /** The trigger-firing counters, as integers, in table order. */
+  counters() {
+    return [...this.unhashed.keys()].map(table => {
+      const column = identifier(this.tables.get(table).columns[this.unhashed.get(table)].name);
+      return this.sql(`SELECT CAST(${column} AS TEXT) AS value FROM ${identifier(table)}`).map(row=>BigInt(integer(row.value)));
+    });
+  }
   meta() {
     const rows = this.sql("SELECT schema_hash,init_hash,host_id,CAST(epoch AS TEXT) AS epoch,owner,CAST(revision AS TEXT) AS revision FROM proof_meta WHERE singleton=1");
     if (rows.length !== 1 || rows[0].schema_hash !== this.schemaHash) fail();
@@ -261,7 +293,8 @@ export class Authority {
       const meta = this.owner(request);
       const receipt = this.receipt(request.attempt);
       if (receipt) { if (receipt.request_hash !== requestHash) fail(); return receipt; }
-      if (meta.revision !== request.revision || hash(this.snapshot()) !== request.delta.before_hash) fail();
+      if (meta.revision !== request.revision || this.stateHash(this.snapshot()) !== request.delta.before_hash) fail();
+      const countersBefore = this.counters();
       if (this.sql("SELECT count(*) AS n FROM proof_receipts")[0].n >= MAX_RECEIPTS) fail();
       let previous = -1;
       const keys = new Set();
@@ -329,7 +362,13 @@ export class Authority {
           if (this.sql("SELECT changes() AS n")[0].n !== 1) fail();
         }
       }
-      if (this.sql("PRAGMA foreign_key_check").length || hash(this.snapshot()) !== request.delta.after_hash) fail();
+      if (this.sql("PRAGMA foreign_key_check").length || this.stateHash(this.snapshot()) !== request.delta.after_hash) fail();
+      // A counter never moves back, and a write to a base table other than
+      // kv_locks (which has no read-dependency trigger) advances it.
+      const advances = request.delta.changes.some(change => change.table !== "kv_locks");
+      const countersAfter = this.counters();
+      if (countersAfter.some((rows,t) => rows.length !== countersBefore[t].length ||
+          rows.some((value,i) => advances ? value <= countersBefore[t][i] : value < countersBefore[t][i]))) fail();
       const revision = (BigInt(meta.revision)+1n).toString(); integer(revision);
       this.sql("UPDATE proof_meta SET revision=CAST(? AS INTEGER) WHERE singleton=1",revision);
       this.sql("INSERT INTO proof_receipts VALUES(?,CAST(? AS INTEGER),?,?,CAST(? AS INTEGER),?,?)",request.attempt,meta.epoch,meta.owner,requestHash,revision,request.delta.after_hash,request.output_hash);
@@ -341,7 +380,7 @@ export class Authority {
     integer(request.revision); fingerprint(request.state_hash);
     return this.storage.transactionSync(() => {
       const meta = this.owner(request);
-      if (meta.revision !== request.revision || hash(this.snapshot()) !== request.state_hash) fail();
+      if (meta.revision !== request.revision || this.stateHash(this.snapshot()) !== request.state_hash) fail();
       return {epoch:meta.epoch,revision:meta.revision,state_hash:request.state_hash};
     });
   }

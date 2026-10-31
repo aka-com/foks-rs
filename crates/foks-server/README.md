@@ -947,12 +947,21 @@ tools/foks-server/test-small-team.sh
 tools/foks-server/test-small-team-repeat.sh 5
 ```
 
-The gate rejects any FOKS package defined outside
-`crates/foks-*` or `apps/desktop/src-tauri`, and any local path dependency that reaches
-outside those directories — under the default feature set and under
-`--all-features`, so a dependency hidden behind an optional feature is caught
-too. It inspects the Cargo graph rather than changed file paths to verify that
-FOKS packages retain a standalone dependency graph.
+The gate first runs `scripts/check-crate-layers.py` (Python 3.11 or newer),
+which reads the declared dependencies from `cargo metadata` (optional and
+target-specific ones included) and checks them against
+`tools/crate-layers.toml`. It rejects a workspace package defined outside
+`crates/foks-*` or `apps/desktop/src-tauri`, a path dependency that is not a
+workspace package, a server crate that depends on a client, device, agent or
+front-end crate, any other edge the layer rules do not allow and no listed
+exception covers, and a production dependency, direct or transitive, on
+`foks-server-testkit`.
+It also builds `foks-metadata-core` for `wasm32-unknown-unknown`, the
+artifact celld loads, with and without its `read-token-qualification` and
+`list-allocation-qualification` features. The script installs the target with
+`rustup target add wasm32-unknown-unknown`, which does nothing when the target
+is already present; `rust-toolchain.toml` does not list it, so other jobs do
+not download it.
 The optional official-Go frame audit is
 `tools/foks-v019-oracle/run-live-team-compat.sh`; it needs a Go 1.25-compatible
 toolchain and may populate Go compiler/module caches, but does not use a state
@@ -963,6 +972,31 @@ baseline or policy update. The scheduled
 `tools/foks-server/diff-upstream-protocol.sh` audit compares the pinned artifact
 with upstream's immutable current commit, publishes semantic JSON/Markdown
 drift reports, and never edits the baseline or a lockfile.
+
+### Qualification features
+
+Two opt-in features carry the celld qualification code; no default build
+and no listener route uses it:
+
+- `foks-server/celld-proof` (enabled through `foks-server-testkit/celld-proof`)
+  compiles the `hosted_personal` helpers, `net::session::proof` and the
+  testkit's `celld_proof` module, together with the integration tests
+  `native_list_oracle`, `personal_authority`, `personal_list_domain`,
+  `celld_proof` and foks-server's `restricted_list_allocation`.
+- `foks-server-testkit/list-allocation-qualification` adds the
+  `list_allocation` tests and enables `celld-proof` and
+  `foks-metadata-core/list-allocation-qualification`.
+
+`tools/foks-server/check.sh` lints both crates with
+`--features foks-server-testkit/list-allocation-qualification` and, with the
+features on, runs their lib tests and the feature-gated test files (the other
+test targets already ran without features). A new feature-gated test file must
+be added to that list. The nightly `server full` job also checks
+`tools/foks-celld-proof/authority.mjs` against freshly generated native
+vectors. The tests that need lab resources stay `#[ignore]`d: the deployed proof Worker and
+controller fault-marker cases in `celld_proof`, the pinned Go oracle gate in
+`personal_authority`, and the issued-certificate Wasm qualification in
+`list_allocation`.
 
 The standalone direct client, local agent, and desktop backend have a separate
 dependency-boundary and test gate:

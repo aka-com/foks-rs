@@ -4,14 +4,11 @@ set -euo pipefail
 repository_root=$(git rev-parse --show-toplevel)
 cd "$repository_root"
 
-if ! command -v jq >/dev/null 2>&1; then
-    echo "jq is required for the isolated Cargo dependency check" >&2
-    exit 1
-fi
-
 packages=(
     foks-go-interop
+    foks-hosted-transport
     foks-merkle-store
+    foks-metadata-core
     foks-protocol-metadata
     foks-server-db
     foks-server
@@ -23,63 +20,38 @@ for package in "${packages[@]}"; do
     package_args+=("-p" "$package")
 done
 
-metadata=$(mktemp)
-boundary_paths=$(mktemp)
-trap 'rm -f "$metadata" "$boundary_paths"' EXIT HUP INT TERM
-
-cargo metadata --offline --locked --no-deps --format-version 1 >"$metadata"
-
-# The standalone boundary is a property of the Cargo graph, not of a branch's
-# changed files. This repository builds two products out of one workspace, so
-# a branch that carries FOKS work can legitimately carry other workspace code;
-# a whole-branch changed-path allowlist rejected that without saying
-# anything about whether FOKS still stands alone. What has to hold is that
-# every FOKS package is *defined* inside FOKS-owned directories and reaches
-# only FOKS-owned directories for its local sources.
-#
-# `crates/foks-*` holds the libraries and binaries; `apps/desktop/src-tauri` holds the
-# desktop shell package (`foks-desktop-app`). Nothing else may define or be
-# reached by a FOKS package.
-jq -r --arg root "$repository_root/" '
-    .packages[]
-    | select(.name | startswith("foks-"))
-    | . as $package
-    | [
-        "\($package.name)\tmanifest\t\($package.manifest_path | ltrimstr($root))",
-        (
-            $package.dependencies[]
-            | select(.path != null)
-            | "\($package.name)\t\(.name)\t\(.path | ltrimstr($root))"
-        )
-      ]
-    | .[]
-' "$metadata" >"$boundary_paths"
-
-tab=$(printf '\t')
-while IFS="$tab" read -r package relation path; do
-    case "$path" in
-        crates/foks-*/Cargo.toml|apps/desktop/src-tauri/Cargo.toml|crates/foks-*) ;;
-        *)
-            if [ "$relation" = manifest ]; then
-                echo "$package is defined outside the standalone FOKS boundary: $path" >&2
-            else
-                echo "$package depends on $relation outside the standalone FOKS boundary: $path" >&2
-            fi
-            exit 1
-            ;;
-    esac
-done <"$boundary_paths"
-
-# Keep the production dependency guard repository-wide as well.
-while IFS= read -r package; do
-    if [ "$package" != "foks-server-testkit" ] \
-        && cargo tree --offline --locked --edges normal --prefix none -p "$package" \
-            | sed 's/ .*//' | grep '^foks-server-testkit$' >/dev/null; then
-        echo "$package has a production dependency on foks-server-testkit" >&2
-        exit 1
-    fi
-done < <(jq -r '.packages[].name | select(startswith("foks-"))' "$metadata")
+# Workspace package placement, path dependencies, crate layering and the
+# foks-server-testkit production-dependency guard (tools/crate-layers.toml).
+python3 scripts/check-crate-layers.py
 
 cargo fmt "${package_args[@]}" -- --check
 cargo clippy --offline --locked "${package_args[@]}" --all-targets -- -D warnings
 cargo test --offline --locked "${package_args[@]}"
+
+# The celld qualification features compile code and integration tests that
+# the default features leave out (foks-server's hosted_personal and
+# net/session/proof modules, the testkit's celld_proof module, and the
+# native_list_oracle, personal_authority, personal_list_domain,
+# list_allocation and restricted_list_allocation tests).
+# list-allocation-qualification enables celld-proof as well. The tests that
+# need a Worker-backed lab stay ignored.
+qualification_args=(-p foks-server -p foks-server-testkit --features foks-server-testkit/list-allocation-qualification)
+cargo clippy --offline --locked "${qualification_args[@]}" --all-targets -- -D warnings
+# The test run above already covers every target the features leave alone, so
+# only the lib tests and the feature-gated test files run again here. A new
+# test file gated on celld-proof or list-allocation-qualification must be
+# added to these lists, or it never runs.
+cargo test --offline --locked -p foks-server-testkit --features list-allocation-qualification \
+    --lib --test celld_proof --test list_allocation --test native_list_oracle \
+    --test personal_authority --test personal_list_domain
+cargo test --offline --locked -p foks-server --features celld-proof \
+    --lib --test restricted_list_allocation
+
+# The hosted metadata kernel runs as a wasm32 cdylib; build it as celld loads
+# it, without and with its qualification features. The target is added here,
+# not in rust-toolchain.toml, so that jobs that never build it do not
+# download it; the command does nothing when the target is installed.
+rustup target add wasm32-unknown-unknown
+cargo build --offline --locked --target wasm32-unknown-unknown -p foks-metadata-core
+cargo build --offline --locked --target wasm32-unknown-unknown -p foks-metadata-core \
+    --features read-token-qualification,list-allocation-qualification

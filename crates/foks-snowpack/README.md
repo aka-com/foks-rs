@@ -24,3 +24,10 @@ are responsible for applying UTF-8 and known-tag constraints.
 Tests include exhaustive marker/boundary cases, checked-in byte fixtures from
 the official Go implementation, and QuickCheck properties for round trips,
 canonical uniqueness, truncation, trailing bytes, depth, and arbitrary input.
+
+The fuzz crate seeds its corpora from the fixtures under
+`tests/fixtures/foks-v0.1.9`, and `fuzz/tests/corpus_seeds.rs` pins how many
+`.snowp` fixtures and Go call arguments it finds. After adding, removing or
+renaming a fixture, regenerate the seeds with `cargo run --locked
+--manifest-path fuzz/Cargo.toml --example seed_corpus`, commit the corpus
+changes, and update those counts.

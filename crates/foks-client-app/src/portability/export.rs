@@ -137,14 +137,9 @@ mod tests {
     use super::*;
     use foks_keystore::state_archive::ArchiveReader;
     use zeroize::Zeroizing;
-    fn enabled() -> bool {
-        std::env::var_os("FOKS_TEST_NATIVE_PORTABILITY").is_some()
-    }
     #[test]
+    #[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
     fn complete_native_account_export_preserves_source_and_authenticates_inventory() {
-        if !enabled() {
-            return;
-        }
         let fixture = crate::test_support::AccountFixture::start_native();
         fixture
             .run(|s, v, k| s.create_account("work", "stateexport", "laptop", "", "", None, v, k));
@@ -213,10 +208,8 @@ mod tests {
             .is_err());
     }
     #[test]
+    #[ignore = "requires an unlocked macOS Keychain or Linux Secret Service session"]
     fn export_detects_changed_inputs_and_never_overwrites_outputs() {
-        if !enabled() {
-            return;
-        }
         let fixture = crate::test_support::AccountFixture::start_native().stop_client();
         let output = fixture
             .environment

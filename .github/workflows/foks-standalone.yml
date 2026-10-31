@@ -7,7 +7,14 @@ on:
       - "Cargo.toml"
       - "rust-toolchain.toml"
       - "crates/foks-*/**"
+      - "fuzz/Cargo.toml"
+      - "fuzz/Cargo.lock"
       - "packaging/**"
+      - "scripts/check-crate-layers.py"
+      - "scripts/test_check_crate_layers.py"
+      - "tools/crate-layers.toml"
+      - "tools/foks-celld-proof/**"
+      - "apps/desktop/src-tauri/Cargo.toml"
       - "tools/foks-client/**"
       - "tools/foks-protocol-sync/**"
       - "tools/foks-server/**"
@@ -65,7 +72,9 @@ jobs:
       - name: Install Linux client dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring libpcsclite-dev
-      - name: Test the isolated AKA-free client graph
+      - name: Test the crate-layer checker
+        run: python3 -m unittest discover -s scripts -p 'test_check_crate_layers.py'
+      - name: Test the client graph
         if: runner.os != 'Linux'
         run: tools/foks-client/check.sh
       - name: Test macOS Keychain integration
@@ -74,6 +83,9 @@ jobs:
         run: cargo test --locked -p foks-keystore --test native_credential_store -- --ignored
       - name: Test the Linux client graph and Secret Service integration
         if: runner.os == 'Linux'
+        # check.sh took 33-49 min of the whole job in observed runs; a hung
+        # native test fails the step instead of holding the runner.
+        timeout-minutes: 60
         shell: bash
         run: |
           dbus-run-session -- bash -euo pipefail -c '
@@ -83,9 +95,14 @@ jobs:
             printf "%s" "foks-ci-keyring" | gnome-keyring-daemon --unlock --components=secrets
             tools/foks-client/check.sh
             cargo test --locked -p foks-keystore --test native_credential_store -- --ignored
-            # Application tests that need the native credential backend are
+            # Application tests that need the native credential backend,
+            # including the state export, import and relocation suite, are
             # ignored by default and run here; the registration benchmark is
             # the only ignored test in the crate that is not a native test.
+            # The CLI transcript test runs foks-rs. Build it explicitly and
+            # pass its path, rather than relying on the default target path.
+            cargo build --locked -p foks-cli --bin foks-rs
+            export FOKS_PORTABILITY_CLI="$PWD/target/debug/foks-rs"
             cargo test --locked -p foks-client-app -- --ignored --test-threads=1 \
               --skip default_refresh_registration_benchmark
           '
@@ -115,6 +132,20 @@ jobs:
           cache-dependency-path: tools/foks-v019-oracle/go.sum
       - name: Fetch the locked dependency graph
         run: cargo fetch --locked
+      # The fuzz crate is its own workspace with its own lockfile, and the
+      # fuzz workflow runs only on pull requests and weekly. A path dependency
+      # added to a crate the fuzz targets use leaves fuzz/Cargo.lock stale,
+      # and an API change in those crates breaks the targets. Fetch the fuzz
+      # graph first so the checks below do not depend on the index; both
+      # then fail if the lockfile would have to change.
+      - name: Fetch the locked fuzz dependency graph
+        run: cargo fetch --locked --manifest-path fuzz/Cargo.toml
+      - name: Check that the fuzz lockfile matches the workspace crates
+        run: cargo metadata --offline --locked --format-version 1 --manifest-path fuzz/Cargo.toml >/dev/null
+      # libfuzzer-sys builds on the repository's stable toolchain; only the
+      # coverage-instrumented campaign needs nightly and cargo-fuzz.
+      - name: Check that the fuzz targets, tests and seed generator compile
+        run: cargo check --offline --locked --manifest-path fuzz/Cargo.toml --target-dir target --bins --tests --examples
       - name: Install Linux server dependencies
         run: sudo apt-get update && sudo apt-get install -y libpcsclite-dev
       - name: Fetch the pinned Go protocol module
@@ -163,6 +194,22 @@ jobs:
         run: go test -C tools/foks-v019-oracle ./...
       - name: Test the isolated server graph
         run: tools/foks-server/check.sh
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version-file: .node-version
+      # The proof authority (tools/foks-celld-proof/authority.mjs) must reach
+      # the same state hash as the native delta. check.sh has just built the
+      # wasm32 kernel with its qualification features, which the decoder
+      # cases load; the vectors come from the native celld_proof module.
+      - name: Check the celld proof authority against native vectors
+        run: |
+          vectors="$RUNNER_TEMP/celld-proof-vectors"
+          cargo run --offline --locked -p foks-server-testkit --features celld-proof \
+            --example celld-proof-vectors -- "$vectors"
+          cd tools/foks-celld-proof
+          FOKS_PROOF_VECTORS="$vectors/vectors.json" \
+            FOKS_PROOF_NODE_DECODER_WASM="$GITHUB_WORKSPACE/target/wasm32-unknown-unknown/debug/foks_metadata_core.wasm" \
+            node --test
       - name: Verify the Rust client against Go v0.1.9
         run: tools/foks-v019-oracle/run-live-compat.sh
       - name: Verify OIDC software and hardware clients against Go v0.1.9
@@ -175,6 +222,8 @@ jobs:
         run: tools/foks-v019-oracle/run-go-client-compat.sh
       - name: Test release client/server lifecycle
         run: tools/foks-server/test-client-server.sh
+      - name: Test crash recovery and stale-backup rejection against the release server
+        run: tools/foks-server/test-recovery.sh
       - name: Test small-team, restart, capacity, and backup behavior
         run: tools/foks-server/test-small-team.sh
       - name: Verify host-key rotation with pinned Go v0.1.9
