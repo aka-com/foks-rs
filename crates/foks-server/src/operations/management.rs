@@ -3,13 +3,16 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::sync::{watch, Semaphore};
 use tokio::task::JoinSet;
 
-use crate::{Error, Result, ServerMetrics, WriterHandle};
+use crate::fatal::{CoreThread, FatalSignal};
+use crate::{Error, ReadDatabaseConfig, Result, ServerMetrics, WriterHandle};
+
+mod sso_sample;
 
 const MAXIMUM_REQUEST_BYTES: usize = 8 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
@@ -25,19 +28,23 @@ pub(crate) struct ManagementServer {
 struct ManagementState {
     ready: Arc<AtomicBool>,
     service_live: Arc<AtomicBool>,
+    fatal: FatalSignal,
     writer: WriterHandle,
     readiness_in_flight: Arc<AtomicBool>,
     database_path: PathBuf,
     metrics: Arc<ServerMetrics>,
+    sso: sso_sample::SsoSampler,
 }
 
 impl ManagementServer {
     pub(crate) fn start(
         address: SocketAddr,
         writer: WriterHandle,
-        database_path: PathBuf,
+        database: ReadDatabaseConfig,
+        oidc_configured: bool,
         metrics: Arc<ServerMetrics>,
         service_live: Arc<AtomicBool>,
+        fatal: FatalSignal,
     ) -> Result<Self> {
         Self::validate_address(address)?;
         let listener = TcpListener::bind(address)?;
@@ -46,21 +53,37 @@ impl ManagementServer {
         let ready = Arc::new(AtomicBool::new(false));
         let thread_ready = Arc::clone(&ready);
         let (stop, receiver) = watch::channel(false);
+        let database_path = database.path.clone();
+        // The sampler's opener reuses the writer's KV capacity scan, so a
+        // reopen after a failed sample checks only identity and schema.
+        let sso = sso_sample::SsoSampler::new(
+            oidc_configured
+                .then(|| crate::read_pool::opener(&database, Some(&writer)))
+                .transpose()?,
+        );
         let runtime = tokio::runtime::Builder::new_current_thread()
             .thread_name("foks-server-management")
             .enable_all()
             .build()
             .map_err(Error::Io)?;
         let thread = thread::spawn(move || {
+            let exit = fatal.exit_guard(CoreThread::Management);
+            let stop_seen = receiver.clone();
             let result = runtime.block_on(run(
                 listener,
-                thread_ready,
-                service_live,
-                writer,
-                database_path,
-                metrics,
+                ManagementState {
+                    ready: thread_ready,
+                    service_live,
+                    fatal: fatal.clone(),
+                    writer,
+                    readiness_in_flight: Arc::new(AtomicBool::new(false)),
+                    database_path,
+                    metrics,
+                    sso,
+                },
                 receiver,
             ));
+            exit.end(*stop_seen.borrow());
             runtime.shutdown_timeout(IO_TIMEOUT);
             result
         });
@@ -115,23 +138,12 @@ impl Drop for ManagementServer {
 
 async fn run(
     listener: TcpListener,
-    ready: Arc<AtomicBool>,
-    service_live: Arc<AtomicBool>,
-    writer: WriterHandle,
-    database_path: PathBuf,
-    metrics: Arc<ServerMetrics>,
+    state: ManagementState,
     mut stop: watch::Receiver<bool>,
 ) -> Result<()> {
     let listener = tokio::net::TcpListener::from_std(listener)?;
     let permits = Arc::new(Semaphore::new(MAXIMUM_CONNECTIONS));
-    let state = Arc::new(ManagementState {
-        ready,
-        service_live,
-        writer,
-        readiness_in_flight: Arc::new(AtomicBool::new(false)),
-        database_path,
-        metrics,
-    });
+    let state = Arc::new(state);
     let mut connections = JoinSet::new();
     loop {
         while let Some(joined) = connections.try_join_next() {
@@ -144,7 +156,13 @@ async fn run(
                 }
             }
             accepted = listener.accept() => {
-                let (stream, _) = accepted?;
+                let stream = match accepted {
+                    Ok((stream, _)) => stream,
+                    Err(error) => {
+                        crate::net::retry_accept(error, &state.metrics).await?;
+                        continue;
+                    }
+                };
                 let Ok(permit) = Arc::clone(&permits).try_acquire_owned() else {
                     continue;
                 };
@@ -188,11 +206,12 @@ async fn handle(
         .next()
         .unwrap_or_default();
     let response = match first_line.strip_suffix(b"\r") {
-        Some(b"GET /healthz HTTP/1.1") => response(200, "text/plain", "ok\n".to_owned()),
+        Some(b"GET /healthz HTTP/1.1") => health(&state.fatal),
         Some(b"GET /readyz HTTP/1.1") => {
             if readiness(
                 Arc::clone(&state.ready),
                 Arc::clone(&state.service_live),
+                state.fatal.clone(),
                 state.writer.clone(),
                 Arc::clone(&state.readiness_in_flight),
             )
@@ -203,11 +222,19 @@ async fn handle(
                 response(503, "text/plain", "not ready\n".to_owned())
             }
         }
-        Some(b"GET /metrics HTTP/1.1") => response(
-            200,
-            "text/plain; version=0.0.4",
-            prometheus(&state.metrics, &state.writer, &state.database_path),
-        ),
+        Some(b"GET /metrics HTTP/1.1") => {
+            let sso = state.sso.sample(&state.metrics, Instant::now()).await;
+            response(
+                200,
+                "text/plain; version=0.0.4",
+                prometheus(
+                    &state.metrics,
+                    &state.writer,
+                    &state.database_path,
+                    sso.as_ref(),
+                ),
+            )
+        }
         Some(line) if !line.starts_with(b"GET ") => {
             response(405, "text/plain", "method not allowed\n".to_owned())
         }
@@ -220,13 +247,31 @@ async fn handle(
     .await;
 }
 
+/// Liveness: fails once any core thread has exited unexpectedly, because the
+/// process then lacks a service it cannot restart in place. The `foks-server`
+/// binary exits in that state; this covers supervisors that probe first.
+fn health(fatal: &FatalSignal) -> Vec<u8> {
+    match fatal.exited() {
+        None => response(200, "text/plain", "ok\n".to_owned()),
+        Some(thread) => response(
+            503,
+            "text/plain",
+            format!("{} thread exited\n", thread.label()),
+        ),
+    }
+}
+
 async fn readiness(
     ready: Arc<AtomicBool>,
     service_live: Arc<AtomicBool>,
+    fatal: FatalSignal,
     writer: WriterHandle,
     in_flight: Arc<AtomicBool>,
 ) -> bool {
-    if !ready.load(Ordering::Acquire) || !service_live.load(Ordering::Acquire) {
+    if !ready.load(Ordering::Acquire)
+        || !service_live.load(Ordering::Acquire)
+        || fatal.exited().is_some()
+    {
         return false;
     }
     if in_flight
@@ -235,7 +280,7 @@ async fn readiness(
     {
         return false;
     }
-    let guard = ReadinessFlight(in_flight);
+    let guard = InFlight(in_flight);
     matches!(
         tokio::time::timeout(
             Duration::from_secs(1),
@@ -249,9 +294,9 @@ async fn readiness(
     )
 }
 
-struct ReadinessFlight(Arc<AtomicBool>);
+struct InFlight(Arc<AtomicBool>);
 
-impl Drop for ReadinessFlight {
+impl Drop for InFlight {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
     }
@@ -272,7 +317,12 @@ fn response(status: u16, content_type: &str, body: String) -> Vec<u8> {
     .into_bytes()
 }
 
-fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Path) -> String {
+fn prometheus(
+    metrics: &ServerMetrics,
+    writer: &WriterHandle,
+    database_path: &Path,
+    sso: Option<&foks_server_db::SsoRolloutStatus>,
+) -> String {
     let (database_bytes, wal_bytes) = match storage_bytes(database_path) {
         Ok(storage) => storage,
         Err(()) => {
@@ -280,6 +330,7 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
             (0, 0)
         }
     };
+    let outcomes = metrics.request_outcomes();
     let metrics = metrics.snapshot();
     let writer = writer.metrics();
     let mut output = format!(
@@ -312,6 +363,8 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
             "foks_writer_accepted_total {}\n",
             "# TYPE foks_writer_rejected_total counter\n",
             "foks_writer_rejected_total {}\n",
+            "# TYPE foks_writer_expired_total counter\n",
+            "foks_writer_expired_total {}\n",
             "# TYPE foks_writer_pending gauge\n",
             "foks_writer_pending {}\n",
             "# TYPE foks_writer_queue_wait_seconds summary\n",
@@ -379,6 +432,7 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
         seconds(metrics.handler_duration_microseconds_max),
         writer.accepted,
         writer.rejected,
+        writer.expired,
         writer.pending,
         writer.queue_wait_observations,
         seconds(writer.queue_wait_microseconds_total),
@@ -425,83 +479,139 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
                 "foks_admin_reclaimed_records_total",
                 metrics.admin_reclaimed_records,
             ),
+            (
+                "foks_oidc_sample_failures_total",
+                metrics.oidc_sample_failures,
+            ),
+            (
+                "foks_reader_pool_exhausted_total",
+                metrics.reader_pool_exhausted,
+            ),
         ] {
             let _ = writeln!(output, "# TYPE {name} counter\n{name} {value}");
         }
+        let _ = writeln!(
+            output,
+            "# TYPE foks_reader_pool_open gauge\nfoks_reader_pool_open {}",
+            metrics.reader_pool_open
+        );
+        let _ = writeln!(output, "# TYPE foks_accept_errors_total counter");
+        for kind in crate::AcceptErrorKind::ALL {
+            let _ = writeln!(
+                output,
+                "foks_accept_errors_total{{kind=\"{}\"}} {}",
+                kind.label(),
+                metrics.accept_errors[kind as usize]
+            );
+        }
+        let _ = writeln!(output, "# TYPE foks_admission_rejected_total counter");
+        for reason in crate::AdmissionRejection::ALL {
+            let _ = writeln!(
+                output,
+                "foks_admission_rejected_total{{reason=\"{}\"}} {}",
+                reason.label(),
+                metrics.admission_rejections[reason as usize]
+            );
+        }
     }
+    request_prometheus(
+        &mut output,
+        &outcomes,
+        &crate::diagnostics::operational::request_failures(),
+    );
     expiry_prometheus(&mut output, &metrics.expiry);
     checkpoint_prometheus(&mut output, &metrics.checkpoint);
     realtime_prometheus(&mut output, &metrics.realtime);
-    {
-        use std::fmt::Write as _;
-        let kex = metrics.kex;
+    kex_prometheus(&mut output, &metrics.kex);
+    sso_prometheus(&mut output, sso);
+    output
+}
+
+fn kex_prometheus(output: &mut String, kex: &crate::KexMetricsSnapshot) {
+    use std::fmt::Write as _;
+    let _ = writeln!(
+        output,
+        "# TYPE foks_kex_active_polls gauge\nfoks_kex_active_polls {}",
+        kex.active
+    );
+    for (name, value) in [("admitted", kex.admitted), ("rejected", kex.rejected)] {
         let _ = writeln!(
             output,
-            "# TYPE foks_kex_active_polls gauge\nfoks_kex_active_polls {}",
-            kex.active
+            "# TYPE foks_kex_{name}_total counter\nfoks_kex_{name}_total {value}"
         );
-        for (name, value) in [("admitted", kex.admitted), ("rejected", kex.rejected)] {
-            let _ = writeln!(
-                output,
-                "# TYPE foks_kex_{name}_total counter\nfoks_kex_{name}_total {value}"
-            );
-        }
-        let _ = writeln!(output, "# TYPE foks_kex_completed_total counter");
-        for (reason, value) in [
-            ("delivered", kex.delivered),
-            ("timeout", kex.timed_out),
-            ("disconnected", kex.disconnected),
-            ("shutdown", kex.shutdown),
-            ("failed", kex.failed),
-        ] {
-            let _ = writeln!(
-                output,
-                "foks_kex_completed_total{{reason=\"{reason}\"}} {value}"
-            );
-        }
     }
-    // Independent read snapshot; metrics never enqueue a policy mutation.
-    let sample = (|| -> crate::Result<Option<foks_server_db::SsoRolloutStatus>> {
-        let db = foks_server_db::ReadDatabase::open(database_path, Default::default())?;
-        let Some(host) = db.host_bootstrap()? else {
-            return Ok(None);
-        };
-        let host = host
-            .host_id
-            .as_slice()
-            .try_into()
-            .map_err(|_| crate::Error::Config("invalid host ID"))?;
-        let snapshot = db.snapshot()?;
-        Ok(snapshot.sso_rollout_status(host)?)
-    })();
-    if let Ok(Some(s)) = sample {
-        use std::fmt::Write as _;
-        for (name, value) in [
-            ("foks_oidc_rollout_mode", s.policy.mode as u64 + 1),
-            (
-                "foks_oidc_provider_blocked",
-                u64::from(s.policy.blocked_reason.is_some()),
-            ),
-            (
-                "foks_oidc_authorization_epoch",
-                s.policy.authorization_epoch,
-            ),
-            ("foks_oidc_cohort_accounts", s.cohort),
-            ("foks_oidc_cohort_linked", s.linked),
-            ("foks_oidc_cohort_unlinked", s.unlinked),
-            (
-                "foks_oidc_cohort_locked_out",
-                if s.policy.mode == foks_server_db::SsoRolloutMode::Enforced {
-                    s.unlinked
-                } else {
-                    0
-                },
-            ),
-        ] {
-            let _ = writeln!(output, "# TYPE {name} gauge\n{name} {value}");
-        }
+    let _ = writeln!(output, "# TYPE foks_kex_completed_total counter");
+    for (reason, value) in [
+        ("delivered", kex.delivered),
+        ("timeout", kex.timed_out),
+        ("disconnected", kex.disconnected),
+        ("cancelled", kex.cancelled),
+        ("shutdown", kex.shutdown),
+        ("failed", kex.failed),
+    ] {
+        let _ = writeln!(
+            output,
+            "foks_kex_completed_total{{reason=\"{reason}\"}} {value}"
+        );
     }
-    output
+}
+
+/// Writes written responses by route family and wire status code, and the
+/// server faults that handlers reported as a transaction retry by handler site
+/// and reason code. Every label value is a fixed name from the server.
+fn request_prometheus(
+    output: &mut String,
+    outcomes: &[(&'static str, u64, u64)],
+    failures: &[(&'static str, &'static str, u64)],
+) {
+    use std::fmt::Write as _;
+    let _ = writeln!(output, "# TYPE foks_requests_total counter");
+    for (family, status, count) in outcomes {
+        let _ = writeln!(
+            output,
+            "foks_requests_total{{family=\"{family}\",status=\"{status}\"}} {count}"
+        );
+    }
+    let _ = writeln!(output, "# TYPE foks_request_internal_errors_total counter");
+    for (site, reason, count) in failures {
+        let _ = writeln!(
+            output,
+            "foks_request_internal_errors_total{{site=\"{site}\",reason=\"{reason}\"}} {count}"
+        );
+    }
+}
+
+/// Writes the OIDC rollout gauges. They are omitted when OIDC is not
+/// configured, the host has no rollout policy, or no sample is available.
+fn sso_prometheus(output: &mut String, sso: Option<&foks_server_db::SsoRolloutStatus>) {
+    use std::fmt::Write as _;
+    let Some(s) = sso else {
+        return;
+    };
+    for (name, value) in [
+        ("foks_oidc_rollout_mode", s.policy.mode as u64 + 1),
+        (
+            "foks_oidc_provider_blocked",
+            u64::from(s.policy.blocked_reason.is_some()),
+        ),
+        (
+            "foks_oidc_authorization_epoch",
+            s.policy.authorization_epoch,
+        ),
+        ("foks_oidc_cohort_accounts", s.cohort),
+        ("foks_oidc_cohort_linked", s.linked),
+        ("foks_oidc_cohort_unlinked", s.unlinked),
+        (
+            "foks_oidc_cohort_locked_out",
+            if s.policy.mode == foks_server_db::SsoRolloutMode::Enforced {
+                s.unlinked
+            } else {
+                0
+            },
+        ),
+    ] {
+        let _ = writeln!(output, "# TYPE {name} gauge\n{name} {value}");
+    }
 }
 
 fn expiry_prometheus(output: &mut String, expiry: &crate::ExpiryMetricsSnapshot) {
@@ -646,6 +756,62 @@ mod tests {
     }
 
     #[test]
+    fn request_outcomes_and_internal_errors_have_fixed_labels() {
+        let mut text = String::new();
+        request_prometheus(
+            &mut text,
+            &[("KvStore", 0, 3), ("unrouted", 1012, 1)],
+            &[("kv_write", "busy", 2)],
+        );
+        assert_eq!(
+            text,
+            concat!(
+                "# TYPE foks_requests_total counter\n",
+                "foks_requests_total{family=\"KvStore\",status=\"0\"} 3\n",
+                "foks_requests_total{family=\"unrouted\",status=\"1012\"} 1\n",
+                "# TYPE foks_request_internal_errors_total counter\n",
+                "foks_request_internal_errors_total{site=\"kv_write\",reason=\"busy\"} 2\n",
+            )
+        );
+    }
+
+    #[test]
+    fn sso_gauges_are_written_only_for_a_sample() {
+        let mut text = String::new();
+        sso_prometheus(&mut text, None);
+        assert!(text.is_empty());
+
+        let status = foks_server_db::SsoRolloutStatus {
+            policy: foks_server_db::SsoPolicy {
+                host: [1; 33],
+                rollout_id: [2; 16],
+                config_hash: [3; 32],
+                issuer: "https://issuer.example".to_owned(),
+                mode: foks_server_db::SsoRolloutMode::Enforced,
+                blocked_reason: None,
+                revision: 4,
+                authorization_epoch: 5,
+            },
+            cohort: 9,
+            linked: 7,
+            unlinked: 2,
+        };
+        sso_prometheus(&mut text, Some(&status));
+        assert_eq!(
+            text,
+            concat!(
+                "# TYPE foks_oidc_rollout_mode gauge\nfoks_oidc_rollout_mode 2\n",
+                "# TYPE foks_oidc_provider_blocked gauge\nfoks_oidc_provider_blocked 0\n",
+                "# TYPE foks_oidc_authorization_epoch gauge\nfoks_oidc_authorization_epoch 5\n",
+                "# TYPE foks_oidc_cohort_accounts gauge\nfoks_oidc_cohort_accounts 9\n",
+                "# TYPE foks_oidc_cohort_linked gauge\nfoks_oidc_cohort_linked 7\n",
+                "# TYPE foks_oidc_cohort_unlinked gauge\nfoks_oidc_cohort_unlinked 2\n",
+                "# TYPE foks_oidc_cohort_locked_out gauge\nfoks_oidc_cohort_locked_out 2\n",
+            )
+        );
+    }
+
+    #[test]
     fn management_listener_accepts_only_loopback_addresses() {
         for address in ["127.0.0.1:0", "[::1]:0"] {
             ManagementServer::validate_address(address.parse().unwrap()).unwrap();
@@ -661,6 +827,18 @@ mod tests {
     }
 
     #[test]
+    fn health_fails_after_a_core_thread_exit() {
+        let fatal = FatalSignal::default();
+        let healthy = String::from_utf8(health(&fatal)).unwrap();
+        assert!(healthy.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(healthy.ends_with("\r\n\r\nok\n"));
+        fatal.notify(CoreThread::Writer);
+        let failed = String::from_utf8(health(&fatal)).unwrap();
+        assert!(failed.starts_with("HTTP/1.1 503 Service Unavailable\r\n"));
+        assert!(failed.ends_with("\r\n\r\nwriter thread exited\n"));
+    }
+
+    #[test]
     fn readiness_requires_storage_and_service_liveness() {
         let temporary = tempfile::tempdir().unwrap();
         let database_path = temporary.path().join("readiness.sqlite");
@@ -669,6 +847,7 @@ mod tests {
             crate::Writer::start(database_path, foks_server_db::Config::default(), 1).unwrap();
         let ready = Arc::new(AtomicBool::new(true));
         let service_live = Arc::new(AtomicBool::new(false));
+        let fatal = FatalSignal::default();
         let in_flight = Arc::new(AtomicBool::new(false));
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -678,6 +857,7 @@ mod tests {
         assert!(!runtime.block_on(readiness(
             Arc::clone(&ready),
             Arc::clone(&service_live),
+            fatal.clone(),
             writer.handle(),
             Arc::clone(&in_flight),
         )));
@@ -685,11 +865,26 @@ mod tests {
         assert!(runtime.block_on(readiness(
             Arc::clone(&ready),
             Arc::clone(&service_live),
+            fatal.clone(),
+            writer.handle(),
+            Arc::clone(&in_flight),
+        )));
+        fatal.notify(CoreThread::Maintenance);
+        assert!(!runtime.block_on(readiness(
+            Arc::clone(&ready),
+            Arc::clone(&service_live),
+            fatal,
             writer.handle(),
             Arc::clone(&in_flight),
         )));
         service_live.store(false, Ordering::Release);
-        assert!(!runtime.block_on(readiness(ready, service_live, writer.handle(), in_flight,)));
+        assert!(!runtime.block_on(readiness(
+            ready,
+            service_live,
+            FatalSignal::default(),
+            writer.handle(),
+            in_flight,
+        )));
         writer.shutdown().unwrap();
     }
 
@@ -718,6 +913,7 @@ mod tests {
 
         let ready = Arc::new(AtomicBool::new(true));
         let service_live = Arc::new(AtomicBool::new(true));
+        let fatal = FatalSignal::default();
         let in_flight = Arc::new(AtomicBool::new(false));
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -726,6 +922,7 @@ mod tests {
         assert!(!runtime.block_on(readiness(
             Arc::clone(&ready),
             Arc::clone(&service_live),
+            fatal.clone(),
             writer.handle(),
             Arc::clone(&in_flight),
         )));
@@ -737,6 +934,7 @@ mod tests {
             assert!(!runtime.block_on(readiness(
                 Arc::clone(&ready),
                 Arc::clone(&service_live),
+                fatal.clone(),
                 writer.handle(),
                 Arc::clone(&in_flight),
             )));

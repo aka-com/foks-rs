@@ -1,6 +1,7 @@
 //! Narrow HTTP adapter; no provider credentials or callback parameters are logged/reflected.
 use super::SsoService;
-use crate::{Error, Result};
+use crate::fatal::{CoreThread, FatalSignal};
+use crate::{Error, Result, ServerMetrics};
 use http_body_util::Full;
 use hyper::{
     body::{Bytes, Incoming},
@@ -22,13 +23,28 @@ pub struct OidcHttpServer {
 }
 impl OidcHttpServer {
     pub fn start(service: Arc<SsoService>) -> Result<Self> {
+        Self::start_monitored(
+            service,
+            Arc::new(ServerMetrics::default()),
+            FatalSignal::default(),
+        )
+    }
+
+    /// Starts the listener, counts transient accept() failures in `metrics`
+    /// and reports an exit other than a requested shutdown to `fatal`.
+    pub(crate) fn start_monitored(
+        service: Arc<SsoService>,
+        metrics: Arc<ServerMetrics>,
+        fatal: FatalSignal,
+    ) -> Result<Self> {
         let listener = TcpListener::bind(service.config.listen)?;
         listener.set_nonblocking(true)?;
         let address = listener.local_addr()?;
         let (shutdown, mut stopped) = oneshot::channel();
         let thread=std::thread::Builder::new().name("foks-oidc-http".into()).spawn(move||{
+            let exit=fatal.exit_guard(CoreThread::Oidc);
             let runtime=tokio::runtime::Builder::new_multi_thread().worker_threads(2).max_blocking_threads(16).enable_all().build()?;
-            runtime.block_on(async move {
+            let outcome=runtime.block_on(async move {
                 let listener=tokio::net::TcpListener::from_std(listener)?;
                 let slots=Arc::new(tokio::sync::Semaphore::new(32));
                 let mut connections=tokio::task::JoinSet::new();
@@ -36,7 +52,10 @@ impl OidcHttpServer {
                     _=&mut stopped=>break,
                     Some(_)=connections.join_next(),if !connections.is_empty()=>{},
                     accepted=listener.accept()=>{
-                        let (stream,_)=accepted?;
+                        let stream=match accepted {
+                            Ok((stream,_))=>stream,
+                            Err(error)=>{crate::net::retry_accept(error,&metrics).await?;continue;}
+                        };
                         let Ok(permit)=slots.clone().try_acquire_owned() else {drop(stream);continue;};
                         let service=service.clone();
                         connections.spawn(async move {
@@ -52,7 +71,10 @@ impl OidcHttpServer {
                 connections.abort_all();
                 while connections.join_next().await.is_some() {}
                 Ok(())
-            })
+            });
+            // The loop returns Ok only when shutdown was requested.
+            exit.end(outcome.is_ok());
+            outcome
         })?;
         Ok(Self {
             address,

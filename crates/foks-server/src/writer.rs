@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use foks_server_db::{Database, DatabasePathIdentity};
 
+use crate::fatal::{CoreThread, FatalSignal};
 use crate::{Error, Result};
 
 trait Task: Send {
@@ -17,6 +18,7 @@ struct Call<F, T> {
     operation: F,
     response: SyncSender<Result<T>>,
     queued_at: Instant,
+    /// The submitting request's deadline, taken from its ambient scope.
     deadline: Option<crate::deadline::Deadline>,
     timing: Arc<WriterTiming>,
     reconciliation: Option<(
@@ -44,9 +46,17 @@ where
         } = *self;
         let queue_wait = queued_at.elapsed();
         timing.observe_queue_wait(queue_wait);
+        // The request that submitted this job has used its execution budget,
+        // and its session closes the connection without a response, so the
+        // client already treats the outcome as ambiguous. The job has not
+        // opened a transaction, and skipping it leaves no partial effect.
+        if deadline.is_some_and(|deadline| deadline.remaining().is_err()) {
+            timing.expired.fetch_add(1, Ordering::Relaxed);
+            let _ = response.send(Err(crate::deadline::expired()));
+            return;
+        }
         let started = Instant::now();
         let result = crate::deadline::scope(deadline, || {
-            crate::deadline::check()?;
             if let Some(resources) = resources.as_ref() {
                 resources.sync(|| operation(database))
             } else {
@@ -99,6 +109,7 @@ struct WriterQueue {
 
 #[derive(Default)]
 struct WriterTiming {
+    expired: AtomicU64,
     queue_wait_observations: AtomicU64,
     queue_wait_microseconds_total: AtomicU64,
     queue_wait_microseconds_max: AtomicU64,
@@ -132,6 +143,9 @@ pub struct WriterMetrics {
     pub accepted: u64,
     pub rejected: u64,
     pub pending: u64,
+    /// Jobs skipped because their request deadline passed before they
+    /// started, either before submission or while they waited in the queue.
+    pub expired: u64,
     pub queue_wait_observations: u64,
     pub queue_wait_microseconds_total: u64,
     pub queue_wait_microseconds_max: u64,
@@ -145,6 +159,25 @@ impl Writer {
         database_path: PathBuf,
         database_config: foks_server_db::Config,
         maximum_pending: usize,
+    ) -> Result<Self> {
+        Self::start_monitored(
+            database_path,
+            database_config,
+            maximum_pending,
+            FatalSignal::default(),
+        )
+    }
+
+    /// Starts the writer thread and reports a panic in any queued operation
+    /// to `fatal`. The thread does not continue after such a panic: unwinding
+    /// drops the operation's open rusqlite transaction, which rolls it back,
+    /// then the connection and the queue receiver, so queued and later calls
+    /// fail with `Error::WriterQueue`.
+    pub(crate) fn start_monitored(
+        database_path: PathBuf,
+        database_config: foks_server_db::Config,
+        maximum_pending: usize,
+        fatal: FatalSignal,
     ) -> Result<Self> {
         if maximum_pending == 0 {
             return Err(Error::Config("zero writer queue limit"));
@@ -162,7 +195,9 @@ impl Writer {
             match database {
                 Ok(mut database) => {
                     if startup_sender.send(Ok(())).is_ok() {
+                        let exit = fatal.exit_guard(CoreThread::Writer);
                         run(&mut database, &receiver);
+                        exit.end(true);
                     }
                 }
                 Err(error) => {
@@ -309,8 +344,21 @@ impl WriterHandle {
         F: FnOnce(&mut Database) -> Result<T> + Send + 'static,
         T: Send + 'static,
     {
-        crate::deadline::check()?;
+        // A call takes the deadline of the request scope it runs in, if any.
+        // The writer skips the call with `Error::DeadlineExceeded`, without
+        // running its operation, if it is submitted at or after the deadline
+        // or the writer reaches it then. The session closes the connection of
+        // an expired request without a response, so the client already treats
+        // the outcome as ambiguous, and a skipped call has opened no
+        // transaction. An operation that has started runs to completion. A
+        // write that must follow an already committed step regardless of the
+        // request deadline runs under `crate::deadline::scope(None, ..)`, as
+        // the chunk settlement calls below and the SSO access refresh do.
         let deadline = crate::deadline::current();
+        if deadline.is_some_and(|deadline| deadline.remaining().is_err()) {
+            self.queue.timing.expired.fetch_add(1, Ordering::Relaxed);
+            return Err(crate::deadline::expired());
+        }
         let authorization = self.authorization.clone();
         let operation = move |database: &mut Database| {
             if let Some(auth) = authorization {
@@ -340,24 +388,22 @@ impl WriterHandle {
         if !*accepting {
             return Err(Error::WriterQueue);
         }
-        crate::deadline::check()?;
         self.queue.pending.fetch_add(1, Ordering::AcqRel);
-        if self
-            .queue
-            .sender
-            .try_send(Message::Task(Box::new(Call {
-                resources: crate::net::memory::current(),
-                operation,
-                response,
-                queued_at: Instant::now(),
-                deadline,
-                timing: Arc::clone(&self.queue.timing),
-                reconciliation,
-            })))
-            .is_err()
-        {
+        if let Err(error) = self.queue.sender.try_send(Message::Task(Box::new(Call {
+            resources: crate::net::memory::current(),
+            operation,
+            response,
+            queued_at: Instant::now(),
+            deadline,
+            timing: Arc::clone(&self.queue.timing),
+            reconciliation,
+        }))) {
             self.queue.pending.fetch_sub(1, Ordering::AcqRel);
-            self.queue.rejected.fetch_add(1, Ordering::Relaxed);
+            // A disconnected queue means the writer thread has exited, which
+            // is reported as a fatal thread exit rather than as saturation.
+            if matches!(error, mpsc::TrySendError::Full(_)) {
+                self.queue.rejected.fetch_add(1, Ordering::Relaxed);
+            }
             return Err(Error::WriterQueue);
         }
         self.queue.accepted.fetch_add(1, Ordering::Relaxed);
@@ -388,6 +434,7 @@ impl WriterHandle {
             accepted: self.queue.accepted.load(Ordering::Relaxed),
             rejected: self.queue.rejected.load(Ordering::Relaxed),
             pending: self.queue.pending.load(Ordering::Acquire),
+            expired: timing.expired.load(Ordering::Relaxed),
             queue_wait_observations: timing.queue_wait_observations.load(Ordering::Relaxed),
             queue_wait_microseconds_total: timing
                 .queue_wait_microseconds_total
@@ -517,8 +564,10 @@ mod tests {
             resources: None,
         };
         Box::new(task).run(&mut db);
-        assert!(matches!(receiver.recv().unwrap(), Err(Error::Io(e))
-            if e.kind() == std::io::ErrorKind::TimedOut));
+        assert!(matches!(
+            receiver.recv().unwrap(),
+            Err(Error::DeadlineExceeded)
+        ));
         assert!(!ran.load(Ordering::Acquire));
         let writer_path = temporary.path().join("writer");
         let mut accounting_db = Database::open(&writer_path, Default::default()).unwrap();
@@ -636,6 +685,134 @@ mod tests {
         assert!(DatabaseWriterGuard::acquire(&path).is_err());
         writer.shutdown().unwrap();
         assert!(DatabaseWriterGuard::acquire(&path).is_ok());
+    }
+
+    #[test]
+    fn panicking_operation_stops_the_writer_and_reports_it() {
+        let temporary = tempfile::tempdir().unwrap();
+        let fatal = FatalSignal::default();
+        let writer = Writer::start_monitored(
+            temporary.path().join("foks-server.sqlite"),
+            foks_server_db::Config::default(),
+            2,
+            fatal.clone(),
+        )
+        .unwrap();
+        writer
+            .call(|database| {
+                database.reserve_name(b"committed", &[1; 17], 1, 1, 10_000_000)?;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(fatal.exited(), None);
+        let panicked = writer.call::<_, ()>(|_| panic!("injected writer panic"));
+        assert!(matches!(panicked, Err(Error::WriterQueue)));
+        // The response channel closes while the thread unwinds, before the
+        // guard in its outer frame reports the exit.
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        while fatal.exited().is_none() {
+            assert!(Instant::now() < deadline, "writer panic was not reported");
+            thread::yield_now();
+        }
+        assert_eq!(fatal.exited(), Some(CoreThread::Writer));
+        // A later call either finds the queue disconnected or, if it was
+        // queued before the unwinding thread dropped its receiver, is dropped
+        // unanswered. Neither runs the operation.
+        assert!(matches!(
+            writer.call(|_| -> Result<()> { unreachable!("writer ran after a panic") }),
+            Err(Error::WriterQueue)
+        ));
+        assert_eq!(writer.handle().metrics().rejected, 0);
+        assert!(matches!(writer.shutdown(), Err(Error::Thread)));
+    }
+
+    #[test]
+    fn queued_call_past_its_deadline_is_skipped() {
+        let temporary = tempfile::tempdir().unwrap();
+        let writer = Arc::new(
+            Writer::start(
+                temporary.path().join("foks-server.sqlite"),
+                foks_server_db::Config::default(),
+                4,
+            )
+            .unwrap(),
+        );
+        let (entered_sender, entered_receiver) = mpsc::sync_channel(1);
+        let (release_sender, release_receiver) = mpsc::sync_channel(1);
+        let blocker_writer = Arc::clone(&writer);
+        let blocker = thread::spawn(move || {
+            blocker_writer.call(move |_| {
+                entered_sender.send(()).unwrap();
+                release_receiver.recv().unwrap();
+                Ok(())
+            })
+        });
+        entered_receiver.recv().unwrap();
+
+        // The credential is unknown, so the authorization check would fail
+        // with AuthorizationChanged if the expired job reached it.
+        let deadline =
+            crate::deadline::Deadline::after(std::time::Duration::from_millis(50)).unwrap();
+        let clock: Arc<dyn foks_server_db::Clock> = Arc::new(TestClock(AtomicU64::new(0)));
+        let expiring = writer
+            .handle()
+            .for_authenticated_request(&[1; 33], &[2; 33], clock);
+        let expired = thread::spawn(move || {
+            crate::deadline::scope(Some(deadline), || {
+                expiring.call(|_| -> Result<()> { unreachable!("expired job ran") })
+            })
+        });
+        let current = writer.handle();
+        let live_deadline =
+            crate::deadline::Deadline::after(std::time::Duration::from_secs(60)).unwrap();
+        let live = thread::spawn(move || {
+            crate::deadline::scope(Some(live_deadline), || current.call(|_| Ok(7)))
+        });
+        let queued = Instant::now() + std::time::Duration::from_secs(2);
+        while writer.handle().metrics().pending != 3 {
+            assert!(Instant::now() < queued, "jobs were not queued");
+            thread::yield_now();
+        }
+        thread::sleep(deadline.instant().saturating_duration_since(Instant::now()));
+        release_sender.send(()).unwrap();
+
+        blocker.join().unwrap().unwrap();
+        assert!(matches!(
+            expired.join().unwrap(),
+            Err(Error::DeadlineExceeded)
+        ));
+        assert_eq!(live.join().unwrap().unwrap(), 7);
+        let metrics = writer.handle().metrics();
+        assert_eq!(metrics.expired, 1);
+        assert_eq!(metrics.pending, 0);
+        assert_eq!(metrics.queue_wait_observations, 3);
+        assert_eq!(metrics.execution_observations, 2);
+        Arc::into_inner(writer).unwrap().shutdown().unwrap();
+    }
+
+    #[test]
+    fn call_submitted_after_its_deadline_is_not_queued() {
+        let temporary = tempfile::tempdir().unwrap();
+        let writer = Writer::start(
+            temporary.path().join("foks-server.sqlite"),
+            foks_server_db::Config::default(),
+            4,
+        )
+        .unwrap();
+        let expired = crate::deadline::Deadline::at(Instant::now());
+        assert!(matches!(
+            crate::deadline::scope(Some(expired), || {
+                writer.call(|_| -> Result<()> { unreachable!("expired job ran") })
+            }),
+            Err(Error::DeadlineExceeded)
+        ));
+        let metrics = writer.handle().metrics();
+        assert_eq!(metrics.expired, 1);
+        assert_eq!(metrics.accepted, 0);
+        assert_eq!(metrics.rejected, 0);
+        assert_eq!(metrics.pending, 0);
+        assert_eq!(metrics.queue_wait_observations, 0);
+        writer.shutdown().unwrap();
     }
 
     #[test]

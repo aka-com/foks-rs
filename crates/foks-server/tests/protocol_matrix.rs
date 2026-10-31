@@ -253,6 +253,7 @@ fn protocol_contract_is_valid_and_exactly_registered() {
     assert_eq!(
         contract.status_codes,
         BTreeMap::from([
+            ("auth_error".to_owned(), 1006),
             ("bad_args".to_owned(), 1030),
             ("bad_invite".to_owned(), 1019),
             ("bad_passphrase".to_owned(), 1011),

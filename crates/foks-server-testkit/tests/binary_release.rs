@@ -199,6 +199,90 @@ fn explicit_binary_passes_serve_backup_restore_and_crash_restart_scenario() {
     }
 }
 
+/// Invalidates the authenticated listener's socket from outside the server
+/// process and checks that `foks-server` then exits with status 1. Shutting
+/// down a copy of the descriptor shuts down the socket the server shares, so
+/// the server's next accept() fails with EINVAL, which ends the accept loop
+/// and records an unexpected listener thread exit. Every core thread reaches
+/// the binary's fatal-exit wait through the same signal.
+#[cfg(target_os = "linux")]
+#[test]
+fn explicit_binary_exits_with_failure_after_losing_a_listening_socket() {
+    let Some(binary) = std::env::var_os("FOKS_SERVER_BIN").map(PathBuf::from) else {
+        return;
+    };
+    let environment = TestEnvironment::new().unwrap();
+    let server = BinaryServer::start(&environment, &binary).unwrap();
+    let address = server.addresses().authenticated;
+    let process = server.process_id().unwrap();
+    let listener = match copy_listening_socket(process, address) {
+        Ok(listener) => listener,
+        // pidfd_getfd needs Linux 5.6 and ptrace access to the child.
+        Err(error) if error == rustix::io::Errno::NOSYS || error == rustix::io::Errno::PERM => {
+            eprintln!("skipping listener loss test: pidfd_getfd failed: {error}");
+            return;
+        }
+        Err(error) => panic!("copying the server's listening socket failed: {error}"),
+    };
+    rustix::net::shutdown(&listener, rustix::net::Shutdown::Both).unwrap();
+    let exit = server.wait_for_exit(Duration::from_secs(30)).unwrap();
+    let stderr = String::from_utf8_lossy(&exit.stderr);
+    assert_eq!(exit.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("FOKS server stopping: the listener thread exited unexpectedly"),
+        "{stderr}"
+    );
+}
+
+/// Copies the listening socket bound to `address` out of process `process`.
+/// Accepted connections share the listener's local address, so the copy must
+/// also report SO_ACCEPTCONN.
+#[cfg(target_os = "linux")]
+fn copy_listening_socket(
+    process: u32,
+    address: std::net::SocketAddr,
+) -> rustix::io::Result<rustix::fd::OwnedFd> {
+    use rustix::process::{pidfd_getfd, pidfd_open, Pid, PidfdFlags, PidfdGetfdFlags};
+
+    let pid = i32::try_from(process)
+        .ok()
+        .and_then(Pid::from_raw)
+        .expect("server process ID");
+    let pidfd = pidfd_open(pid, PidfdFlags::empty())?;
+    for entry in std::fs::read_dir(format!("/proc/{process}/fd")).unwrap() {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let Some(target) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        let Ok(link) = std::fs::read_link(entry.path()) else {
+            continue;
+        };
+        if !link.to_string_lossy().starts_with("socket:") {
+            continue;
+        }
+        let copy = match pidfd_getfd(&pidfd, target, PidfdGetfdFlags::empty()) {
+            Ok(copy) => copy,
+            // The descriptor closed between the listing and the copy.
+            Err(rustix::io::Errno::BADF) => continue,
+            Err(error) => return Err(error),
+        };
+        let listening = rustix::net::sockopt::socket_acceptconn(&copy).unwrap_or(false);
+        let local = rustix::net::getsockname(&copy)
+            .ok()
+            .and_then(|local| std::net::SocketAddr::try_from(local).ok());
+        if listening && local == Some(address) {
+            return Ok(copy);
+        }
+    }
+    panic!("the server process has no listening socket for {address}");
+}
+
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
     !needle.is_empty()
         && haystack

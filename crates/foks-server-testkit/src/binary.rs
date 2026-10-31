@@ -133,6 +133,17 @@ impl BinaryServer {
         self.finish(Duration::from_secs(5), true)
     }
 
+    /// The operating-system process ID of the running server.
+    pub fn process_id(&self) -> Option<u32> {
+        self.child.as_ref().map(Child::id)
+    }
+
+    /// Waits for the server to exit without signalling it, and kills it if it
+    /// still runs after `timeout`.
+    pub fn wait_for_exit(mut self, timeout: Duration) -> foks_server::Result<BinaryExit> {
+        self.finish(timeout, false)
+    }
+
     fn await_readiness(&mut self) -> foks_server::Result<()> {
         let deadline = Instant::now() + Duration::from_secs(10);
         let client = TestClient::new(&self.environment, "binary-readiness")?;

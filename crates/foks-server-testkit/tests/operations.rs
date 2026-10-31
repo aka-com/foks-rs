@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use foks_rpc::{Error as RpcError, DEFAULT_MAX_FRAME_LENGTH};
-use foks_server_testkit::{TestEnvironment, TestProfile};
+use foks_server_testkit::{oidc::TestOidcProvider, TestEnvironment, TestProfile};
 
 #[test]
 fn health_readiness_and_metrics_are_isolated_on_management_http() {
@@ -22,6 +22,7 @@ fn health_readiness_and_metrics_are_isolated_on_management_http() {
         "foks_requests_started_total",
         "foks_active_connections",
         "foks_writer_pending",
+        "foks_writer_expired_total",
         "foks_writer_queue_wait_seconds_count",
         "foks_writer_execution_duration_seconds_count",
         "foks_request_duration_seconds_count",
@@ -42,11 +43,18 @@ fn health_readiness_and_metrics_are_isolated_on_management_http() {
         "foks_checkpoint_duration_seconds_bucket",
         "foks_checkpoint_frame_counts_available",
         "foks_checkpoint_remaining_frames",
+        "foks_accept_errors_total{kind=\"emfile\"}",
+        "foks_accept_errors_total{kind=\"other\"}",
+        "foks_admission_rejected_total{reason=\"source_connections\"}",
+        "foks_admission_rejected_total{reason=\"account_realtime_polls\"}",
     ] {
         assert!(metrics.contains(name));
     }
     assert!(metric(&metrics, "foks_database_bytes") > 0.0);
     assert_eq!(metric(&metrics, "foks_storage_sample_failures_total"), 0.0);
+    // Without OIDC the rollout is never sampled and its gauges are omitted.
+    assert!(!metrics.contains("foks_oidc_rollout_mode"));
+    assert_eq!(metric(&metrics, "foks_oidc_sample_failures_total"), 0.0);
     assert!(!metrics.contains(environment.root().to_string_lossy().as_ref()));
     server.run_maintenance().unwrap();
     let after = get(address, "/metrics");
@@ -68,6 +76,84 @@ fn health_readiness_and_metrics_are_isolated_on_management_http() {
     );
     assert!(get(address, "/missing").starts_with("HTTP/1.1 404 Not Found\r\n"));
     server.shutdown().unwrap();
+}
+
+#[test]
+fn oidc_rollout_gauges_are_exported_when_oidc_is_configured() {
+    let provider = TestOidcProvider::start();
+    let environment = TestEnvironment::new().unwrap();
+    let config = provider.config(environment.client_path("oidc", "secret").unwrap());
+    // Starting with OIDC activates the rollout policy, so a sample exists.
+    let server = environment.start_oidc_server(config).unwrap();
+    let address = server.management_address();
+    for _ in 0..2 {
+        let metrics = get(address, "/metrics");
+        assert!(metrics.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(metric(&metrics, "foks_oidc_rollout_mode") >= 1.0);
+        assert_eq!(metric(&metrics, "foks_oidc_provider_blocked"), 0.0);
+        assert_eq!(metric(&metrics, "foks_oidc_cohort_accounts"), 0.0);
+        assert_eq!(metric(&metrics, "foks_oidc_sample_failures_total"), 0.0);
+    }
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn writer_panic_fails_health_and_reports_a_fatal_exit() {
+    let environment = TestEnvironment::new().unwrap();
+    let server = environment.start_server().unwrap();
+    let address = server.management_address();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    server.on_fatal_exit(move |thread| {
+        let _ = sender.send(thread);
+    });
+    assert!(get(address, "/healthz").starts_with("HTTP/1.1 200 OK\r\n"));
+    let writer = server.writer_handle();
+    assert!(matches!(
+        writer.call::<_, ()>(|_| panic!("injected writer panic")),
+        Err(foks_server::Error::WriterQueue)
+    ));
+    // The foks-server binary closes its signal iterator from this observer
+    // and exits non-zero.
+    assert_eq!(
+        receiver.recv_timeout(Duration::from_secs(5)).unwrap(),
+        foks_server::CoreThread::Writer
+    );
+    assert_eq!(server.fatal_thread(), Some(foks_server::CoreThread::Writer));
+    let health = get(address, "/healthz");
+    assert!(health.starts_with("HTTP/1.1 503 Service Unavailable\r\n"));
+    assert!(health.ends_with("\r\n\r\nwriter thread exited\n"));
+    assert!(get(address, "/readyz").starts_with("HTTP/1.1 503 Service Unavailable\r\n"));
+    assert!(matches!(
+        writer.call(|_| -> foks_server::Result<()> { unreachable!("writer ran after a panic") }),
+        Err(foks_server::Error::WriterQueue)
+    ));
+    assert!(matches!(server.shutdown(), Err(foks_server::Error::Thread)));
+}
+
+#[test]
+fn orderly_shutdown_is_not_a_fatal_exit() {
+    let environment = TestEnvironment::with_profile(TestProfile::BackupAutomation).unwrap();
+    let server = environment.start_server().unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    server.on_fatal_exit(move |thread| {
+        let _ = sender.send(thread);
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while server.metrics().backup_successes == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "automatic backup did not complete"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    server.run_maintenance().unwrap();
+    assert_eq!(server.fatal_thread(), None);
+    server.shutdown().unwrap();
+    // Dropping the server drops the unused observer and its sender.
+    assert!(matches!(
+        receiver.recv_timeout(Duration::from_secs(1)),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+    ));
 }
 
 #[test]
@@ -155,20 +241,25 @@ fn request_rate_limit_returns_typed_status_and_counts_rejection() {
     let environment = TestEnvironment::with_profile(TestProfile::RateLimited).unwrap();
     let server = environment.start_server().unwrap();
     let mut connection = connect_public(server.addresses().public_services, server.service_roots());
-    for _ in 0..2 {
-        let request = foks_rpc::encode_load_user_chain_request(&[1; 33], 0).unwrap();
-        connection.write_all(&request).unwrap();
-        connection.flush().unwrap();
-        assert!(matches!(
-            foks_rpc::read_void_response(&mut connection, DEFAULT_MAX_FRAME_LENGTH, 0),
-            Err(RpcError::RemoteStatus { code: 1020, .. })
-        ));
-    }
+    let request = foks_rpc::encode_get_host_id_request_at(0).unwrap();
+    connection.write_all(&request).unwrap();
+    connection.flush().unwrap();
+    foks_rpc::read_response(&mut connection, DEFAULT_MAX_FRAME_LENGTH, 0).unwrap();
+    // LoadUserChain is a User method, which the public listener refuses.
     let request = foks_rpc::encode_load_user_chain_request(&[1; 33], 0).unwrap();
     connection.write_all(&request).unwrap();
     connection.flush().unwrap();
     assert!(matches!(
         foks_rpc::read_void_response(&mut connection, DEFAULT_MAX_FRAME_LENGTH, 0),
+        Err(RpcError::RemoteStatus { code: 1020, .. })
+    ));
+    // Clients number calls per connection, so the refusal of the third call
+    // must carry that call's sequence number, not 0.
+    let request = foks_rpc::encode_get_host_id_request_at(2).unwrap();
+    connection.write_all(&request).unwrap();
+    connection.flush().unwrap();
+    assert!(matches!(
+        foks_rpc::read_response(&mut connection, DEFAULT_MAX_FRAME_LENGTH, 2),
         Err(RpcError::RemoteStatus { code: 1012, .. })
     ));
     assert_eq!(server.metrics().rate_limited_requests, 1);
@@ -182,6 +273,35 @@ fn request_rate_limit_returns_typed_status_and_counts_rejection() {
     }
     assert_eq!(server.metrics().request_duration_observations, 3);
     assert_eq!(server.metrics().handler_duration_observations, 2);
+    let outcome_deadline = Instant::now() + Duration::from_secs(2);
+    while server.metrics().responses_completed < 3 {
+        assert!(
+            Instant::now() < outcome_deadline,
+            "response completion was not counted"
+        );
+        std::thread::yield_now();
+    }
+    let text = get(server.management_address(), "/metrics");
+    let outcomes: Vec<&str> = text
+        .lines()
+        .filter(|line| line.starts_with("foks_requests_total{"))
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            "foks_requests_total{family=\"Reg\",status=\"0\"} 1",
+            "foks_requests_total{family=\"unrouted\",status=\"1012\"} 1",
+            "foks_requests_total{family=\"unrouted\",status=\"1020\"} 1",
+        ]
+    );
+    assert_eq!(metric(&text, "foks_reader_pool_exhausted_total"), 0.0);
+    assert_eq!(
+        metric(
+            &text,
+            "foks_admission_rejected_total{reason=\"request_rate\"}"
+        ),
+        1.0
+    );
     let held = (0..20)
         .map(|_| TcpStream::connect(server.addresses().public_services).unwrap())
         .collect::<Vec<_>>();
@@ -193,6 +313,21 @@ fn request_rate_limit_returns_typed_status_and_counts_rejection() {
         );
         std::thread::yield_now();
     }
+    let text = get(server.management_address(), "/metrics");
+    assert!(
+        metric(
+            &text,
+            "foks_admission_rejected_total{reason=\"connection_rate\"}"
+        ) >= 1.0
+    );
+    // Loopback peers are exempt from the per-source connection allowance.
+    assert_eq!(
+        metric(
+            &text,
+            "foks_admission_rejected_total{reason=\"source_connections\"}"
+        ),
+        0.0
+    );
     drop(held);
     server.shutdown().unwrap();
 }
@@ -289,4 +424,32 @@ fn connect_public(
     )
     .unwrap();
     rustls::StreamOwned::new(connection, tcp)
+}
+
+/// A refusal that ends the session is followed by an orderly close: a peer
+/// that pipelined more frames behind the refused call still reads the
+/// refusal, then a TLS close_notify rather than a reset.
+#[test]
+fn a_closing_refusal_reaches_a_pipelining_peer_before_an_orderly_close() {
+    let environment = TestEnvironment::with_profile(TestProfile::RateLimited).unwrap();
+    let server = environment.start_server().unwrap();
+    let mut connection = connect_public(server.addresses().public_services, server.service_roots());
+    // Two calls fit the request bucket; the third is refused and the fourth
+    // is already on the wire when the server ends the session.
+    let mut pipelined = Vec::new();
+    for sequence in 0..4 {
+        pipelined.extend(foks_rpc::encode_get_host_id_request_at(sequence).unwrap());
+    }
+    connection.write_all(&pipelined).unwrap();
+    connection.flush().unwrap();
+    for sequence in 0..2 {
+        foks_rpc::read_response(&mut connection, DEFAULT_MAX_FRAME_LENGTH, sequence).unwrap();
+    }
+    assert!(matches!(
+        foks_rpc::read_response(&mut connection, DEFAULT_MAX_FRAME_LENGTH, 2),
+        Err(RpcError::RemoteStatus { code: 1012, .. })
+    ));
+    let mut byte = [0];
+    assert_eq!(connection.read(&mut byte).unwrap(), 0);
+    server.shutdown().unwrap();
 }

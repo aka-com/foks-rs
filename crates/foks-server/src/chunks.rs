@@ -168,6 +168,13 @@ pub trait ChunkStore: Send + Sync {
     fn delete_object(&self, _object: &ChunkObject) -> Result<()> {
         Err(Error::Chunk("collection is not qualified for this backend"))
     }
+    /// Removes temporary files that this backend's own interrupted writes left
+    /// in the namespace and returns how many it removed. Only collection calls
+    /// it, after the binding is verified and while it holds the installation
+    /// writer guard and the exclusive namespace lease, so no publisher can be
+    /// writing. Every implementation decides: a wrapper must forward it, and a
+    /// backend without local temporaries returns 0.
+    fn remove_stale_temporaries(&self) -> Result<u64>;
 }
 
 pub fn chunk_digest(bytes: &[u8]) -> [u8; 32] {
@@ -281,6 +288,13 @@ fn create_directory_durable(directory: &Path) -> Result<()> {
 
 const NAMESPACE_MARKER: &str = "_foks_namespace_v1";
 const NAMESPACE_LOCK: &str = "_foks_namespace_lock_v2";
+/// Another lease holder holds the namespace lock in a conflicting mode.
+/// Operational diagnostics report it as `busy`.
+pub(crate) const NAMESPACE_IN_USE: &str = "object namespace is in use";
+/// Prefix of the filesystem backend's temporaries before they are persisted
+/// under their final name. A process killed between create and persist leaves
+/// one behind; such a file is never an object.
+pub(crate) const TEMPORARY_PREFIX: &str = "_foks_tmp-";
 const MAXIMUM_MARKER_BYTES: usize = 1024;
 
 fn check_marker_size(bytes: &[u8]) -> Result<()> {
@@ -288,6 +302,14 @@ fn check_marker_size(bytes: &[u8]) -> Result<()> {
         return Err(Error::Chunk("invalid storage namespace marker size"));
     }
     Ok(())
+}
+
+impl FilesystemChunks {
+    fn temporary(&self) -> Result<tempfile::NamedTempFile> {
+        Ok(tempfile::Builder::new()
+            .prefix(TEMPORARY_PREFIX)
+            .tempfile_in(&self.directory)?)
+    }
 }
 
 impl ChunkStore for FilesystemChunks {
@@ -320,13 +342,57 @@ impl ChunkStore for FilesystemChunks {
         } else {
             file.try_lock_shared()
         }
-        .map_err(|_| Error::Chunk("object namespace is in use"))?;
+        .map_err(|error| match error {
+            std::fs::TryLockError::WouldBlock => Error::Chunk(NAMESPACE_IN_USE),
+            std::fs::TryLockError::Error(error) => Error::Io(error),
+        })?;
         self.recheck()?;
         Ok(Some(ChunkNamespaceLease { _file: file }))
     }
 
     fn supports_collection(&self) -> bool {
         true
+    }
+    fn remove_stale_temporaries(&self) -> Result<u64> {
+        self.recheck()?;
+        let mut removed = 0;
+        for entry in std::fs::read_dir(&self.directory)? {
+            let entry = entry?;
+            if !entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(TEMPORARY_PREFIX))
+            {
+                continue;
+            }
+            let metadata = match std::fs::symlink_metadata(entry.path()) {
+                Ok(metadata) => metadata,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.into()),
+            };
+            // The backend never creates anything but regular files under this
+            // prefix. Another entry, such as a planted symlink, is left in
+            // place and named for the operator rather than stopping the
+            // collection of every other temporary and object.
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                eprintln!(
+                    "FOKS chunk store warning: skipped the nonregular entry {:?} with the \
+                     temporary prefix; remove it by hand",
+                    entry.file_name()
+                );
+                continue;
+            }
+            match std::fs::remove_file(entry.path()) {
+                Ok(()) => removed += 1,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        if removed != 0 {
+            std::fs::File::open(&self.directory)?.sync_all()?;
+        }
+        self.recheck()?;
+        Ok(removed)
     }
     fn delete_object(&self, object: &ChunkObject) -> Result<()> {
         object.validate_key()?;
@@ -394,7 +460,7 @@ impl ChunkStore for FilesystemChunks {
     fn create_namespace_marker_if_absent(&self, marker: &[u8]) -> Result<()> {
         check_marker_size(marker)?;
         self.recheck()?;
-        let mut temporary = tempfile::NamedTempFile::new_in(&self.directory)?;
+        let mut temporary = self.temporary()?;
         temporary.write_all(marker)?;
         temporary.as_file().sync_all()?;
         self.recheck()?;
@@ -422,7 +488,7 @@ impl ChunkStore for FilesystemChunks {
         verify(digest, bytes, length)?;
         self.recheck()?;
         let path = self.directory.join(&object.object_key);
-        let mut temporary = tempfile::NamedTempFile::new_in(&self.directory)?;
+        let mut temporary = self.temporary()?;
         temporary.write_all(bytes)?;
         temporary.as_file().sync_all()?;
         self.recheck()?;
@@ -603,26 +669,36 @@ impl S3Chunks {
         let configured_until = std::time::Instant::now()
             .checked_add(self.timeout)
             .ok_or(Error::Config("object deadline overflow"))?;
-        let until = crate::deadline::current().map_or(configured_until, |deadline| {
-            deadline.instant().min(configured_until)
-        });
+        let request_until = crate::deadline::current()
+            .map(|deadline| deadline.instant())
+            .filter(|request_until| *request_until < configured_until);
+        let until = request_until.unwrap_or(configured_until);
+        // Running out of time is a request deadline expiry when the request
+        // deadline is the earlier bound, and a chunk-store fault otherwise.
+        let timed_out = move || {
+            if request_until.is_some() {
+                crate::deadline::expired()
+            } else {
+                Error::Chunk("object operation timed out")
+            }
+        };
         // The caller can time out before a spawned transfer is dropped. Keep
         // its allocation reservation with the future that owns payload buffers.
         let task = remote_runtime()?.spawn(crate::net::memory::retain_future(async move {
             if std::time::Instant::now() >= until {
-                let _ = sender.send(Err(crate::deadline::expired()));
+                let _ = sender.send(Err(timed_out()));
                 return;
             }
             let result = tokio::time::timeout_at(until.into(), future)
                 .await
-                .unwrap_or(Err(Error::Chunk("object operation timed out")));
+                .unwrap_or_else(|_| Err(timed_out()));
             let _ = sender.send(result);
         }));
         // This also bounds waiting if runtime workers are overloaded. Abort is
         // cancellation, not a claim that an in-flight PUT could not complete.
         let result = receiver
             .recv_timeout(until.saturating_duration_since(std::time::Instant::now()))
-            .unwrap_or(Err(Error::Chunk("object operation timed out")));
+            .unwrap_or_else(|_| Err(timed_out()));
         task.abort();
         result
     }
@@ -699,6 +775,10 @@ async fn read_remote_marker(
 }
 
 impl ChunkStore for S3Chunks {
+    /// S3 puts are single requests with no temporary object.
+    fn remove_stale_temporaries(&self) -> Result<u64> {
+        Ok(0)
+    }
     fn publication_policy(&self) -> foks_server_db::ChunkPublicationPolicy {
         // object_store retries can leave an earlier physical PUT outstanding.
         // A later conditional-write conflict plus successful GET proves presence
@@ -864,6 +944,54 @@ mod tests {
     }
 
     #[test]
+    fn stale_temporaries_are_not_objects_and_offline_commands_remove_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let fs = FilesystemChunks::open(directory.path()).unwrap();
+        let temporary = fs.temporary().unwrap();
+        assert!(temporary
+            .path()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with(TEMPORARY_PREFIX));
+        drop(temporary);
+        fs.create_namespace_marker_if_absent(b"marker").unwrap();
+        // What a process killed between create and persist leaves behind.
+        let stale = directory.path().join("_foks_tmp-Ab12Cd");
+        std::fs::write(&stale, [7; 9]).unwrap();
+        assert!(fs.namespace_is_empty().unwrap());
+        let page = fs.inventory_page(None, 256).unwrap();
+        assert!(page.entries.is_empty() && page.next.is_none());
+        std::fs::write(directory.path().join("object"), [1; 3]).unwrap();
+        let page = fs.inventory_page(None, 256).unwrap();
+        assert_eq!(
+            page.entries
+                .iter()
+                .map(|e| e.key.as_str())
+                .collect::<Vec<_>>(),
+            ["object"]
+        );
+        assert_eq!(fs.remove_stale_temporaries().unwrap(), 1);
+        assert!(!stale.exists());
+        assert!(directory.path().join("object").exists());
+        assert_eq!(fs.remove_stale_temporaries().unwrap(), 0);
+        #[cfg(unix)]
+        {
+            // A nonregular entry is skipped, not followed or deleted, and the
+            // regular temporaries beside it are still removed.
+            std::os::unix::fs::symlink("object", directory.path().join("_foks_tmp-link")).unwrap();
+            std::fs::create_dir(directory.path().join("_foks_tmp-dir")).unwrap();
+            std::fs::write(&stale, [7; 9]).unwrap();
+            assert_eq!(fs.remove_stale_temporaries().unwrap(), 1);
+            assert!(!stale.exists());
+            assert!(std::fs::symlink_metadata(directory.path().join("_foks_tmp-link")).is_ok());
+            assert!(directory.path().join("_foks_tmp-dir").is_dir());
+            assert!(directory.path().join("object").exists());
+        }
+    }
+
+    #[test]
     fn inventory_pages_count_unknown_objects_and_preserve_opaque_provider_tokens() {
         let directory = tempfile::tempdir().unwrap();
         let fs = FilesystemChunks::open(directory.path()).unwrap();
@@ -903,7 +1031,9 @@ mod tests {
         assert!(store.namespace_is_empty().unwrap());
         {
             let mut objects = mock.state.objects.lock().unwrap();
-            for key in ["a", "b", "c", "d"] {
+            // An S3 object with the filesystem temporary prefix is foreign
+            // data, listed and charged like any other unknown object.
+            for key in ["_foks_tmp-synced", "a", "b", "c", "d"] {
                 objects.insert(format!("/test-bucket/tenant/chunks/{key}"), vec![1; 3]);
             }
             objects.insert("/test-bucket/another-tenant/secret".into(), vec![9; 9]);
@@ -921,7 +1051,8 @@ mod tests {
             }
             assert!(cursor.as_ref().unwrap().starts_with("opaque:"));
         }
-        assert_eq!(keys, ["a", "b", "c", "d"]);
+        assert_eq!(keys, ["_foks_tmp-synced", "a", "b", "c", "d"]);
+        assert_eq!(store.remove_stale_temporaries().unwrap(), 0);
         mock.state.redirect.store(true, Ordering::Release);
         assert!(store.inventory_page(None, 2).is_err());
     }
@@ -1388,6 +1519,20 @@ secret_access_key = "not-accepted"
         let started = Instant::now();
         assert!(store.put(&chunk_digest(b"payload"), b"payload").is_err());
         assert!(started.elapsed() < Duration::from_millis(1800));
+    }
+
+    #[test]
+    fn s3_timeout_is_a_deadline_expiry_only_when_the_request_deadline_binds() {
+        let mock = MockS3::start();
+        let store = mock.store();
+        mock.state.slow.store(true, Ordering::Release);
+        let request = crate::deadline::Deadline::at(Instant::now() + Duration::from_millis(200));
+        let result = crate::deadline::scope(Some(request), || {
+            store.put(&chunk_digest(b"payload"), b"payload")
+        });
+        assert!(matches!(result, Err(Error::DeadlineExceeded)), "{result:?}");
+        let result = store.put(&chunk_digest(b"payload"), b"payload");
+        assert!(matches!(result, Err(Error::Chunk(_))), "{result:?}");
     }
 
     #[test]

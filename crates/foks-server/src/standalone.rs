@@ -8,6 +8,7 @@ use zeroize::Zeroizing;
 
 mod backup_finalization;
 
+use crate::fatal::{CoreThread, FatalSignal};
 use crate::host::{load_or_bootstrap, BootstrapEndpoints, BootstrapInput, BootstrapState};
 use crate::keys::{DirectoryKeyProvider, HostKeyProvider as _};
 use crate::maintenance::Maintenance;
@@ -63,6 +64,7 @@ pub struct RunningStandaloneServer {
     clock: Arc<dyn foks_server_db::Clock>,
     metrics: Arc<crate::ServerMetrics>,
     management: crate::operations::ManagementServer,
+    fatal: FatalSignal,
 }
 
 #[derive(Clone, Debug)]
@@ -115,6 +117,10 @@ pub fn restore_backup(
 ) -> Result<()> {
     let database_path = database_path.as_ref();
     let key_directory = key_directory.as_ref();
+    // Lock first so that no server or offline command can create the
+    // database or a sidecar between the checks and the copy.
+    let _destination_locks = lock_restore_destination(database_path)?;
+    refuse_restore_sidecars(database_path)?;
     if database_path.exists() || directory_has_entries(key_directory)? {
         return Err(crate::Error::Config("restore destination is not empty"));
     }
@@ -281,6 +287,98 @@ pub(crate) fn validate_completed_backup(
     database_config: foks_server_db::Config,
 ) -> Result<()> {
     read_validated_backup_artifacts(artifacts, database_config).map(drop)
+}
+
+/// SQLite files kept next to a database. SQLite replays a `-wal` whose own
+/// header is valid into whichever main file sits beside it, so a sidecar left
+/// by an earlier installation would silently replace pages of the restored
+/// database on its first open.
+const RESTORE_SIDECARS: [(&str, &str); 3] = [
+    (
+        "-wal",
+        "restore destination has a SQLite -wal sidecar; remove it or choose a new path",
+    ),
+    (
+        "-shm",
+        "restore destination has a SQLite -shm sidecar; remove it or choose a new path",
+    ),
+    (
+        "-journal",
+        "restore destination has a SQLite -journal sidecar; remove it or choose a new path",
+    ),
+];
+
+/// Lock files the server and the offline commands keep next to a database.
+/// They remain after a clean shutdown, so their presence alone is not refused;
+/// a lock that is held means a server or command is using the path.
+const RESTORE_LOCKS: [(&str, &str); 2] = [
+    (
+        ".storage-lock",
+        "restore destination storage lock is held; stop every server and offline command using this path",
+    ),
+    (
+        ".writer-lock",
+        "restore destination writer lock is held; stop every server and offline command using this path",
+    ),
+];
+
+fn refuse_restore_sidecars(database_path: &Path) -> Result<()> {
+    for (suffix, message) in RESTORE_SIDECARS {
+        match std::fs::symlink_metadata(sidecar_path(database_path, suffix)) {
+            Ok(_) => return Err(crate::Error::Config(message)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+fn sidecar_path(database_path: &Path, suffix: &str) -> PathBuf {
+    let mut path = database_path.as_os_str().to_os_string();
+    path.push(suffix);
+    PathBuf::from(path)
+}
+
+/// Takes whichever lock files exist at the destination exclusively and keeps
+/// them for the whole restore, so no server or offline command can start on
+/// the path meanwhile. A held lock refuses the restore. The files are opened
+/// read-only: flock does not need write access, so a 0600 lock file owned by
+/// the server's user does not stop a restore run by an operator who can read
+/// it.
+fn lock_restore_destination(database_path: &Path) -> Result<Vec<std::fs::File>> {
+    let mut held = Vec::new();
+    for (suffix, message) in RESTORE_LOCKS {
+        let path = sidecar_path(database_path, suffix);
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_file() => {}
+            Ok(_) => {
+                return Err(crate::Error::Config(
+                    "restore destination lock is not a regular file",
+                ))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        let file = options.open(&path)?;
+        if !file.metadata()?.is_file() {
+            return Err(crate::Error::Config(
+                "restore destination lock is not a regular file",
+            ));
+        }
+        match file.try_lock() {
+            Ok(()) => held.push(file),
+            Err(std::fs::TryLockError::WouldBlock) => return Err(crate::Error::Config(message)),
+            Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
+        }
+    }
+    Ok(held)
 }
 
 fn directory_has_entries(path: &Path) -> std::io::Result<bool> {
@@ -654,6 +752,22 @@ impl RunningStandaloneServer {
         self.management.address()
     }
 
+    /// The first core thread that exited without a requested shutdown, if
+    /// any. The server then lacks a service it cannot restart in place, and
+    /// `/healthz` and `/readyz` return 503; shut it down and start a new
+    /// process.
+    pub fn fatal_thread(&self) -> Option<CoreThread> {
+        self.fatal.exited()
+    }
+
+    /// Runs `observer` once, on the first unexpected core-thread exit. It
+    /// runs on the exiting thread, possibly while that thread unwinds from a
+    /// panic, so it must not block or panic. When an exit has already
+    /// happened, it runs immediately on the calling thread.
+    pub fn on_fatal_exit(&self, observer: impl FnOnce(CoreThread) + Send + 'static) {
+        self.fatal.observe(Box::new(observer));
+    }
+
     pub fn storage_report(&self) -> Result<foks_server_db::StorageReport> {
         self.writer
             .handle()
@@ -877,10 +991,12 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
         now_microseconds: config.now_microseconds,
     };
     let database_config = config.database;
-    let writer = Writer::start(
+    let fatal = FatalSignal::default();
+    let writer = Writer::start_monitored(
         config.database_path.clone(),
         database_config.clone(),
         config.maximum_pending_writes,
+        fatal.clone(),
     )?;
     if config.chunk_store.is_none() && writer.call(|db| Ok(db.has_external_chunks()?))? {
         return Err(crate::Error::Chunk(
@@ -910,6 +1026,7 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
     let metrics = Arc::new(crate::ServerMetrics::default());
     let backup_schedule = config.backup;
 
+    let oidc_configured = config.oidc.is_some();
     let sso = if let Some((operator, policy)) = config.oidc {
         let host: [u8; 33] = bootstrap
             .host_id
@@ -974,17 +1091,30 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
     };
     let oidc_http = sso
         .as_ref()
-        .map(|service| crate::sso::OidcHttpServer::start(service.clone()))
+        .map(|service| {
+            crate::sso::OidcHttpServer::start_monitored(
+                service.clone(),
+                Arc::clone(&metrics),
+                fatal.clone(),
+            )
+        })
         .transpose()?;
     let web_admin_http = web_admin
         .as_ref()
-        .map(|service| crate::web_admin::WebAdminHttpServer::start(service.clone()))
+        .map(|service| {
+            crate::web_admin::WebAdminHttpServer::start_monitored(
+                service.clone(),
+                Arc::clone(&metrics),
+                fatal.clone(),
+            )
+        })
         .transpose()?;
     let maintenance = Maintenance::start(
         writer_handle.clone(),
         config.clock.clone(),
         metrics.clone(),
         web_admin.clone(),
+        fatal.clone(),
     );
     let server = RunningServer::start_bound(
         Config {
@@ -1014,13 +1144,19 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
             limits: rpc_limits,
         },
         listeners,
+        fatal.clone(),
     )?;
     let management = crate::operations::ManagementServer::start(
         config.management_address,
         writer_handle,
-        config.database_path.clone(),
+        ReadDatabaseConfig {
+            path: config.database_path.clone(),
+            database: database_config.clone(),
+        },
+        oidc_configured,
         Arc::clone(&metrics),
         server.liveness(),
+        fatal.clone(),
     )?;
     let backup = backup_schedule
         .map(|schedule| {
@@ -1033,6 +1169,7 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
                 config.chunk_store.clone(),
                 Arc::clone(&config.clock),
                 Arc::clone(&metrics),
+                fatal.clone(),
             )
         })
         .transpose()?;
@@ -1054,5 +1191,129 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
         clock: config.clock,
         metrics,
         management,
+        fatal,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restore_refuses_each_sidecar_without_writing() {
+        for (suffix, message) in RESTORE_SIDECARS {
+            let root = tempfile::tempdir().unwrap();
+            let database = root.path().join("data").join("foks-server.sqlite");
+            let keys = root.path().join("keys");
+            std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+            let sidecar = sidecar_path(&database, suffix);
+            std::fs::write(&sidecar, b"stale").unwrap();
+            // The artifacts do not exist: the refusal must come before the
+            // backup is read and before anything is written.
+            let missing = root.path().join("backup");
+            let artifacts = BackupArtifacts {
+                database: missing.join("foks-server.sqlite"),
+                key_directory: missing.join("keys"),
+                key_manifest: missing.join("key-manifest.txt"),
+            };
+            match restore_backup(
+                &artifacts,
+                &database,
+                &keys,
+                foks_server_db::Config::default(),
+            ) {
+                Err(crate::Error::Config(found)) => assert_eq!(found, message, "{suffix}"),
+                other => panic!("{suffix}: unexpected result {other:?}"),
+            }
+            assert!(!database.exists(), "{suffix}");
+            assert!(!keys.exists(), "{suffix}");
+            let entries: Vec<_> = std::fs::read_dir(database.parent().unwrap())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            assert_eq!(entries.len(), 1, "{suffix}: {entries:?}");
+            assert_eq!(std::fs::read(&sidecar).unwrap(), b"stale");
+        }
+    }
+
+    fn missing_artifacts(root: &Path) -> BackupArtifacts {
+        let missing = root.join("backup");
+        BackupArtifacts {
+            database: missing.join("foks-server.sqlite"),
+            key_directory: missing.join("keys"),
+            key_manifest: missing.join("key-manifest.txt"),
+        }
+    }
+
+    #[test]
+    fn restore_accepts_released_lock_files_and_refuses_held_ones() {
+        for (suffix, message) in RESTORE_LOCKS {
+            let root = tempfile::tempdir().unwrap();
+            let database = root.path().join("foks-server.sqlite");
+            let keys = root.path().join("keys");
+            let lock = sidecar_path(&database, suffix);
+            // Left behind by a clean shutdown: not held, so restore proceeds
+            // to read the (absent) backup. A read-only file shows that the
+            // restore does not need write access to take the lock.
+            std::fs::write(&lock, b"").unwrap();
+            let mut permissions = std::fs::metadata(&lock).unwrap().permissions();
+            permissions.set_readonly(true);
+            std::fs::set_permissions(&lock, permissions).unwrap();
+            assert!(matches!(
+                restore_backup(
+                    &missing_artifacts(root.path()),
+                    &database,
+                    &keys,
+                    foks_server_db::Config::default(),
+                ),
+                Err(crate::Error::Io(_))
+            ));
+            // Held by a running server or offline command.
+            let holder = std::fs::File::open(&lock).unwrap();
+            holder.try_lock().unwrap();
+            match restore_backup(
+                &missing_artifacts(root.path()),
+                &database,
+                &keys,
+                foks_server_db::Config::default(),
+            ) {
+                Err(crate::Error::Config(found)) => assert_eq!(found, message, "{suffix}"),
+                other => panic!("{suffix}: unexpected result {other:?}"),
+            }
+            assert!(!database.exists());
+            assert!(!keys.exists());
+            // The restore holds the existing locks while it runs.
+            drop(holder);
+            let held = lock_restore_destination(&database).unwrap();
+            assert_eq!(held.len(), 1);
+            let other = std::fs::File::open(&lock).unwrap();
+            assert!(matches!(
+                other.try_lock(),
+                Err(std::fs::TryLockError::WouldBlock)
+            ));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restore_refuses_a_dangling_sidecar_symlink() {
+        let root = tempfile::tempdir().unwrap();
+        let database = root.path().join("foks-server.sqlite");
+        std::os::unix::fs::symlink("absent", root.path().join("foks-server.sqlite-wal")).unwrap();
+        let missing = root.path().join("backup");
+        let artifacts = BackupArtifacts {
+            database: missing.join("foks-server.sqlite"),
+            key_directory: missing.join("keys"),
+            key_manifest: missing.join("key-manifest.txt"),
+        };
+        assert!(matches!(
+            restore_backup(
+                &artifacts,
+                &database,
+                root.path().join("keys"),
+                foks_server_db::Config::default(),
+            ),
+            Err(crate::Error::Config(message)) if message == RESTORE_SIDECARS[0].1
+        ));
+    }
 }

@@ -77,7 +77,9 @@ delegated Ed25519 mTLS subkey, burns one-time hardware recovery challenges, and
 stores PUK-encrypted PIV management-key envelopes with monotonic generations.
 The server never talks to PC/SC and never receives a PIN, PUK, management key,
 or private hardware key. Client-side hardware support is macOS/Linux only.
-Interactive software-device KEX is supported. Rotation to another
+Interactive software-device KEX is supported, for Rust clients and for Go
+v0.1.9 clients, which multiplex KEX calls on one connection (see the session
+limits below). Rotation to another
 already-enrolled Yubi recipient remains outside this slice.
 
 Protocol IDs, method positions, status codes, and service numbers are extracted
@@ -126,6 +128,70 @@ operator-managed material before exposing a public deployment. Use
 `client-bootstrap` to write a post-bootstrap client import bundle. Example
 systemd units and deployment notes are in [`../../packaging`](../../packaging).
 
+`server.toml` is parsed strictly: an unknown key or table is an error, so
+`config-check` does not accept a misspelled setting. Besides the paths,
+listeners and backup schedule, it holds four limit
+tables. `init` writes them with their defaults; an omitted key or table takes
+the same default.
+
+- `[limits]` sets the RPC session limits and the writer queue:
+  `worker_threads` (4), `maximum_read_connections` (32),
+  `maximum_active_connections` (256), `maximum_pending_connections` (32),
+  `maximum_kex_receive_polls` (32), `maximum_in_flight_requests` (64, at
+  least 2), `maximum_realtime_polls_per_account` (8),
+  `request_timeout_seconds` (30), `idle_timeout_seconds` (330) and
+  `maximum_pending_writes` (64). The `serve` flags of the same names set the
+  same values.
+- `[rate_limits]` sets the per-source admission limits: the token buckets
+  `connection_burst` (512), `connections_per_second` (256), `request_burst`
+  (2,000) and `requests_per_second` (1,000), `maximum_tracked_ips` (4,096),
+  `ipv6_source_prefix` (64, 1 to 128), `maximum_connections_per_source`
+  (32; 0 removes the limit) and `trusted_sources` (empty; a list of
+  addresses or prefixes such as `"10.0.0.0/8"`, at most 256). The `serve`
+  flags set the same values; the token bucket and tracking flags are named
+  `--connection-rate-burst`, `--request-rate-burst` and
+  `--maximum-rate-limit-ips`, and `--trusted-source` is repeated once per
+  entry.
+- `[storage]` sets database capacity: `maximum_database_bytes` (64 GiB),
+  `maximum_teams` (4,096), `maximum_team_members` (64),
+  `maximum_kv_namespace_bytes` (16 GiB) and `maximum_kv_namespace_objects`
+  (1,000,000). Other database limits keep their compiled defaults. Every
+  command that reads `server.toml` opens the database with these limits;
+  `serve` has no flags for them and uses the defaults. `backup` and `restore`
+  take their paths from flags and use the defaults, including the 64 GiB
+  database ceiling, unless `--config` names a `server.toml`; pass it when the
+  table raises `maximum_database_bytes`.
+- `[chunk_capacity]` sets the physical capacity of an external chunk store:
+  `maximum_bytes` (64 GiB), `maximum_objects` (1,000,000),
+  `maximum_unresolved_attempts` (128) and `maximum_uncertain_bytes`
+  (256 MiB). The `serve` flags `--maximum-chunk-bytes`,
+  `--maximum-chunk-objects`, `--maximum-chunk-unresolved-attempts` and
+  `--maximum-chunk-uncertain-bytes` set the same values. Each value must be
+  at most 2^63 - 1.
+
+Each value must be non-zero, except `maximum_kex_receive_polls`, where zero
+refuses every KEX receive, and `maximum_connections_per_source`, where zero
+removes the per-source connection limit. `maximum_team_members` bounds the rows of one
+team roster and must not exceed 1,024, the number of roster rows a realtime
+mutation scans when it records message recipients; a larger roster could not
+create channels or send messages. A configured `[web_admin]` listener requires
+at least 3 read connections and 2 writer slots. `config-check` reports the
+first condition that fails. `config-check --print-effective` writes the
+configuration that `serve-config` would run, defaults included, as TOML to
+standard output and the check report to standard error, so the output can be
+redirected to a loadable `server.toml`. The zone TTL is not a setting: the
+first start signs 60 seconds into the stored probe response, and later starts
+refuse a different value.
+
+A write that would grow the database past `maximum_database_bytes` fails in
+SQLite with `SQLITE_FULL`. Every RPC route reports it as FOKS status 1060
+(over quota), the same status as a write refused by a configured storage
+quota, and the status detail does not include SQLite error text. On an SSO
+host this includes the access-token refresh that runs before an authenticated
+request: a full database during the refresh is reported as 1060, not wrapped
+in an OAuth2 authentication error that clients treat as a reauthentication
+requirement.
+
 The lower-level `serve` command remains available when every artifact and
 listener should be supplied individually:
 
@@ -149,15 +215,260 @@ and the server rejects every non-loopback bind address. A reverse proxy that
 needs remote access must connect to this loopback listener and provide its own
 authenticated transport. Readiness requires both completed startup and a
 bounded round trip through the SQLite writer. Metrics cover end-to-end request
-and actual handler duration (including work that outlives a client deadline),
-writer queue wait and execution duration, database and WAL bytes, backup
-duration, saturation, and backup outcomes. They use fixed, non-user-derived
-names and never export paths, identities, request values, or key material.
+and actual handler duration (including work that outlives a client deadline,
+and the time an OIDC completion, KEX receive or realtime inbox long poll
+waits), writer queue wait and execution duration, database and WAL bytes, backup
+duration, saturation, backup outcomes and transient `accept()` failures. They
+use fixed, non-user-derived names and never export paths, identities, request
+values, or key material.
 
-Connection and request token buckets are enforced per source IP with bounded
-tracking memory. CLI flags set their refill rates, bursts, and maximum tracked
-IP count. Saturated connection admission is dropped; a framed request that
-exceeds its bucket receives FOKS status 1012 and the connection closes.
+A connection may wait `idle_timeout_seconds` (330 s) between requests, with no
+long poll pending, before the server closes it. Reads and writes within a
+frame are bounded separately by the 15 s I/O timeout (`io_timeout`). A Go
+v0.1.9 server never closes an idle connection and a Go client closes its own
+after five minutes idle, so the default lets the client's close come first; a
+call that raced a server-side close would otherwise fail with an RPC EOF that
+the Go client does not retry. The first frame of a connection must start
+within the 15 s I/O timeout of the TLS handshake; Go and Rust clients send
+their first call at once, and a peer that sends nothing does not hold its
+connection slots for the idle timeout.
+
+Idle connections count against `maximum_active_connections` and
+`maximum_connections_per_source` for as long as they stay open, so both
+limits must cover every client that was active within the last
+`idle_timeout_seconds`, not only the ones with a request in progress. Size
+them in connections per device per listener: go-foks keeps one connection
+per server type (probe, registration, user, Merkle query, KV, realtime) open
+for about five minutes after its last call, so a Go device holds several on
+the authenticated listener (user, KV and realtime) and some on the public
+one, and the Rust client pools up to two idle connections per endpoint
+besides the connections its long polls hold. A connection that finds every active slot taken waits in the
+listener's queue of `maximum_pending_connections` and is dropped when that
+queue is full. Size the limits for the number of devices active in any 5.5
+minute window, or lower `idle_timeout_seconds` (at the cost of Go calls that
+race a server-side close).
+
+Each request has one deadline, `request_timeout_seconds` after the first byte
+of its frame arrives. Reading the rest of the frame, reader checkout, the
+handler, its queued writes and external chunk transfers all consume it; idle
+time between requests does not. A request does not wait for a handler permit:
+when every permit is in use it is answered at once with status 1012. Once the
+handler has returned, the response write gets a fresh `io_timeout` allowance,
+so a response whose work used most of the deadline is still delivered to a
+slow reader instead of being discarded. A request that reaches its deadline
+before the handler returns is closed without a response, and so is one whose
+handler returns only after the deadline has passed: such a handler may have
+committed one write before a later one was skipped, so no status may present
+its outcome as definite. If its write is still in the writer queue at that
+point, the writer does not run it: it opens no transaction for the job and
+counts it in `foks_writer_expired_total`. A write that the handler submits
+after that point is refused without entering the queue and is counted the same
+way. A write that has already started runs to completion, and so do the writes
+that settle an already published chunk and the write that records the outcome
+of a committed SSO access-refresh claim. A rising count means that handlers,
+including their wait in the writer queue, take longer than the request timeout
+before their writes start. Long polls (OIDC completion, KEX receive and
+realtime inbox) wait on their own timeouts instead, and their response write
+gets the same fresh allowance.
+
+A long poll does not block its connection. Go clients multiplex calls on one
+connection by sequence number, and go-foks device pairing issues further KEX
+calls while an hour-long KEX receive is pending. While long polls are
+pending, the session keeps reading frames: a call is served (ordinary
+requests one at a time, as on an idle connection), and each response is
+written when it is ready, so responses can arrive in a different order than
+their calls. A CANCEL control message for a pending poll's sequence number
+ends that poll without a response and releases its permits; end of stream or
+a read error closes the connection and drops its pending polls. One
+connection holds at most four pending long polls; a fifth is answered with
+status 1012 at its sequence number, counted as
+`foks_admission_rejected_total{reason="connection_long_polls"}`, and the
+connection goes on serving the peer's other calls. A long poll refused by the
+KEX receive budget is answered the same way, and so are a request refused
+because every handler permit is in use or its working memory cannot be
+admitted. A connection with a pending long poll is not idle. As on a Go
+host, a connection has no limit on the number of frames it serves; it ends
+when the peer closes it, it stays idle past the idle timeout, a frame fails
+or the server stops, and long polls still pending then end without a
+response and release their permits.
+
+A session that ends in order (on end of stream, an idle or
+frame-read timeout, or after a refusal that closes the connection, such as
+the per-source request rate) sends TLS close_notify and a TCP FIN and reads
+what the peer still sends for up to two seconds, so that its last response
+is not lost to a reset. A malformed or oversized frame, a handler timeout,
+an armed fault and a server stop close the connection without that.
+
+`foks_requests_total{family,status}` counts written responses by route family
+(the protocol name, such as `KvStore` or `Reg`) and wire status code (`0` for
+a success). Responses written before a route is resolved have
+`family="unrouted"`: per-address rate-limit refusals, unknown methods,
+methods on the wrong listener and oversized arguments. A request whose client
+certificate is not bound to an active credential, such as one from a revoked
+device whose certificate has not expired, receives status 1006 (`AUTH_ERROR`,
+as on a Go host), counted under its route's family, and the connection stays
+open; this holds for ordinary routes and the realtime inbox poll. A storage
+fault during that lookup is reported with site `authenticate`. A request that ends without a
+response, for example on a handler timeout, appears only in
+`foks_requests_started_total`. `foks_request_internal_errors_total{site,reason}`
+counts server faults that a handler reported as status 1014 (transaction
+retry). `site` names the handler's error mapper, such as `kv_write` or
+`team_admin`, and `reason` is a fixed class such as `busy`, `corrupt_storage`,
+`disk_full`, `io` or `internal`. Each site and reason also writes at most one
+stderr line per minute, `FOKS request failed: site=..., reason=...,
+count_since_last_line=...`, without error text. This counter is process-wide.
+Handler paths that still map an error to status 1014 inline, without a mapper,
+are not counted. `foks_reader_pool_exhausted_total` counts requests refused
+with status 1012 because every pooled read connection was in use. The
+`foks_reader_pool_open` gauge is the number of connections that pool holds
+open; it never decreases, because the pool keeps every connection it opens.
+`foks_rate_limited_requests_total` counts per-source token-bucket,
+handler-permit, request-memory, KEX receive and per-connection long-poll
+refusals.
+`foks_admission_rejected_total{reason}` counts every admission refusal by its
+cause: `connection_rate` and `request_rate` (the per-source token buckets),
+`source_connections` (the per-source connection limit), `admission_queue` (a
+full queue of accepted connections), `request_handlers` (every handler permit
+in use), `account_realtime_polls` (the per-account realtime inbox poll limit),
+`kex_receive_polls` (the global KEX receive limit and each source's share
+of it), `connection_long_polls` (more than four long polls pending on one
+connection) and `request_memory` (the shared request input, working and
+response memory budgets). A request whose working or response memory runs
+out is answered with status 1012 when the shortfall comes while its argument
+is decoded, before any handler runs, or when its route only reads (KV reads
+and listings, chain and Merkle loads, realtime reads). On any other route the
+handler may already have committed a write, so the connection closes without
+a response and the client keeps the outcome as unknown. `foks_kex_active_polls`,
+`foks_kex_admitted_total`, `foks_kex_rejected_total` and
+`foks_kex_completed_total{reason}` (`delivered`, `timeout`, `disconnected`,
+`cancelled` by the client's CANCEL message, `shutdown`, `failed`) describe
+KEX receives.
+
+When OIDC is configured and the host has a rollout policy, `/metrics` also
+reports the `foks_oidc_*` rollout gauges: mode, provider block, authorization
+epoch and cohort counts. The sample runs on a blocking worker over one retained
+read connection and answers scrapes for 30 seconds. A scrape that receives no
+sample within 1 second, or whose sample fails, omits these gauges and
+increments `foks_oidc_sample_failures_total`. Without OIDC configuration the
+gauges are absent and `/metrics` does not read the database for them.
+
+`/healthz` returns 200 while every core thread runs: the three RPC listeners,
+the SQLite writer, the maintenance loop, the automatic backup scheduler, the
+management listener, and the administration and OIDC listeners when they are
+configured. None of them restarts in place. When one exits without a requested
+shutdown, for example because a writer operation panicked, an accept loop
+lost its listening socket, or a panic in one connection's session task ended
+its RPC listener, `/healthz` and `/readyz` return 503 and
+`foks-server` shuts down the remaining threads and exits with status 1, so a
+service manager that restarts on failure starts a new process. The writer runs
+no further operations after a panic; queued and later writes fail, and most
+handlers report that as FOKS status 1012. Readiness turns 503 as soon as an
+RPC accept loop ends, without waiting for that listener's open sessions to
+finish.
+
+Every listener retries transient `accept()` failures (EMFILE, ENFILE, ENOBUFS,
+ENOMEM, ECONNABORTED, the network errors that Linux reports for a pending
+connection, and other errors that leave the listening socket usable). It
+retries at once for ECONNABORTED and the pending network errors, which concern
+only the connection that `accept()` dequeued, and after 50 ms otherwise. Only
+errors that invalidate the listening socket end the accept loop. Retries are
+counted in `foks_accept_errors_total{kind}`, and each kind also writes at most
+one stderr line per minute, `FOKS server warning: accept() failed: kind=...,
+errno=..., count_since_last_line=...`, so that a sustained EMFILE or an
+unclassified error is visible in the service log. With every connection limit
+reached, the `serve-config` defaults can use up to an estimated 1,202 file
+descriptors, more than systemd's default soft `RLIMIT_NOFILE` of 1,024.
+`serve` and `serve-config` therefore raise the soft limit to the hard limit at
+startup and print a warning when it stays below the estimate; the example unit
+sets `LimitNOFILE=65536`.
+
+Connection and request token buckets are enforced per source with bounded
+tracking memory. A source is one IPv4 address, or one IPv6 prefix of
+`ipv6_source_prefix` bits (a /64 by default), so that a host cannot obtain a
+new bucket by choosing another address within its prefix. An IPv4-mapped IPv6
+peer is its IPv4 source. The `[rate_limits]` table or the `serve` flags set
+the refill rates, bursts, prefix length and maximum tracked source count. A
+connection whose bucket is empty is closed without a response. A framed
+request that exceeds its bucket is still read, within the frame and request
+memory limits, and receives FOKS status 1012 at the request's own sequence
+number; the connection then closes. A control frame (NOTIFY or CANCEL) over
+the bucket has no sequence number and closes the connection unanswered.
+
+Each listener also limits the connections one source holds at once, queued
+or active, to `maximum_connections_per_source`, so that one source cannot
+occupy all `maximum_active_connections` slots with long polls or slow
+requests. A connection over the limit is closed without a response and
+counted in `foks_admission_rejected_total{reason="source_connections"}`; at
+most once a minute per listener, stderr gets a line `FOKS connection refused:
+reason=source_connections, source=...` with the number of refusals since the
+previous line. Loopback peers are exempt: they are local processes or a local
+TCP proxy, and behind such a proxy every client would share one source.
+
+The same holds for any forwarder or network address translation between the
+clients and the server that rewrites the client's source address: a load
+balancer or TCP proxy on another host that uses source NAT (for example a
+Kubernetes Service with `externalTrafficPolicy: Cluster`, or Docker's
+userland proxy), an office NAT, carrier-grade NAT, or an IPv6 site whose
+clients share one /64. Every client behind it is one source. The Rust client
+holds a connection open for each realtime inbox poll, KEX receive or OIDC
+completion poll (a Go client multiplexes its polls on one connection per
+host), and every client keeps its connections open while idle for up to
+`idle_timeout_seconds` (330 s), so a small number of devices behind one
+such address can reach the default limit of 32, and a refused client sees
+only a reset connection. Go v0.1.9 hosts have no such limit. For a forwarder the operator
+controls, list its address or prefix in `trusted_sources`: those peers are
+exempt from the per-source connection limit, the KEX relay's per-source
+share and the per-source share of KEX receives (8 by default; see below), as
+loopback peers are. For clients behind NAT that the operator does
+not control, raise `maximum_connections_per_source` or set it to 0 to remove
+the limit. The token buckets still count a trusted source or a NAT address
+as one source, so `connection_burst`, `request_burst` and their rates must
+cover the aggregate of the clients behind it. Passthrough load balancers that
+preserve the client address need neither setting. The server does not read
+the PROXY protocol.
+
+A realtime inbox poll (`RtPollInbox`) holds its connection for up to 55
+seconds. One account, across all of its devices, can hold at most
+`maximum_realtime_polls_per_account` polls; a poll over that limit receives
+status 1012 (rate limited). The route is served only on the authenticated
+listener, so that listener's `maximum_active_connections` bounds the total.
+Each poll re-reads its inbox state from the reader pool at least once per
+second and after every wake hint, and one hint can wake many polls at once.
+Poll reads therefore wait for one of `maximum_read_connections / 2` permits
+(at least one) before leasing a reader, so that polls never hold more than
+half of the pool and ordinary requests are not refused with status 1012
+because polls hold every reader.
+
+A KEX receive can stay open for up to an hour. At most
+`maximum_kex_receive_polls` receives, capped at half of
+`maximum_active_connections`, are outstanding at once across all
+connections; a receive over that limit is refused at once with status 1012
+and is not queued, so receives cannot hold every connection of the public
+listener. The refusal leaves its connection open. One source can hold at
+most a quarter of that budget (8 of the default 32, and at least one), so
+that a single address cannot take every pairing slot for an hour; a receive
+over its source's share is refused the same way. Pairing one Go device holds
+up to three receives across both devices, so two concurrent pairings behind
+one NAT address fit in the default share; raising
+`maximum_kex_receive_polls` (and `maximum_active_connections`, which caps it
+at half) raises the share with it. Both refusals are counted in
+`foks_kex_rejected_total` and
+`foks_admission_rejected_total{reason="kex_receive_polls"}`. Loopback peers
+and `trusted_sources` are exempt from the per-source share. Accepted RPC
+connections send TCP keepalive probes after 15 s of silence, as a Go
+listener does, then every 15 s, at most nine times, where the platform
+allows setting those (Linux, the BSDs, macOS; Windows keeps its own probe
+count). A receive left by a client that vanished without closing its
+connection then releases its slot within a few minutes rather than after an
+hour. If keepalive cannot be enabled, the connection is still served and
+stderr gets one warning.
+
+The public KEX relay holds at most 4,096 pairing packets or 32 MiB of them,
+each for up to two hours, and refuses a send at either bound with status 1012.
+One source can hold at most a sixteenth of each (256 packets or 2 MiB), so
+that it cannot fill the relay and block device pairing for other users.
+Loopback peers and `trusted_sources` are exempt, as from the per-source
+connection limit.
 
 Automatic backups are opt-in:
 
@@ -229,9 +540,9 @@ sessions, drain accepted writer work, stop maintenance, and join all threads.
 One bounded writer actor owns every authoritative SQLite mutation. Network
 reads use read-only connections from bounded asynchronous sessions; the default
 limits are four async runtime workers, 256 active and 32 pending connections per
-listener, 64 request handlers shared across listeners, 4,096 requests per
-connection, 64 pending writes in the executable, a 15-second I/O timeout, a
-30-second request-execution timeout, and a 16 MiB frame ceiling. A timed-out
+listener, 64 request handlers shared across listeners, 64 pending writes in the executable, a 15-second I/O timeout, a
+330-second idle timeout between requests, a 30-second request-execution
+timeout, and a 16 MiB frame ceiling. A timed-out
 handler closes its connection without claiming that a durable mutation was
 cancelled; any surviving synchronous work retains its execution permit until
 it exits, keeping resource use bounded.
@@ -321,7 +632,9 @@ Clean `PollInbox` and `GetChangedThreads` requests read authenticated durable
 inbox state without entering the writer queue. Membership changes invalidate
 existing inboxes transactionally. Dirty or incomplete inboxes advance one bounded
 page per request/iteration. Polls retain the one-second authorization and missed
-notification check, the 25-second default/55-second maximum, and the 32-poll cap.
+notification check and the 25-second default/55-second maximum. The
+per-account poll limit and the poll reads' share of the reader pool are
+described under [Running](#running).
 
 Schema 44 automatically upgrades only FOKS schema 43 during writer database
 initialization, under the process lock and before reader pools open. Stop the
@@ -424,15 +737,63 @@ The filesystem implementation fsyncs objects and directories, rejects symlink
 leaves, and verifies existing objects. It cannot bound a hung filesystem call.
 S3 uses one deadline across each operation, retries and verification reads. That
 deadline alone does not bound the complete RPC: queuing, SQLite and client
-retries also count toward the 15-second hosted target.
+retries also count toward the request deadline (`request_timeout_seconds`,
+30 seconds by default).
 
 Object publication precedes the SQLite commit; authorization, ordering and quota
 are checked again before commit. An interrupted or rejected commit can leave an
-unreferenced object. **There is no object garbage collector in this release.**
-Objects remain after upload cleanup or removal of their SQLite references. Do
-not configure bucket lifecycle deletion. Monitor physical object growth; current
-quota charging does not include orphan objects. History pruning and deletion
-need coordinated writers, reads and backups before they are safe to enable.
+unreferenced object. Such objects, and objects whose SQLite references upload
+cleanup or namespace removal deletes, stay in the store until an offline
+collection removes them; for S3 nothing removes them. Do not configure bucket
+lifecycle deletion. Monitor physical object growth: physical capacity
+accounting charges orphan objects, per-user quota charging does not. History
+pruning and deletion need coordinated writers, reads and backups before they
+are safe to enable.
+
+Two offline commands maintain the physical object ledger. Stop the server
+first: both take the installation writer lock and the storage lease
+(collection takes the lease exclusively, so no backup can run at the same
+time) and use the store configured in the installation TOML.
+
+```sh
+foks-server inventory-chunk-store --config /srv/foks/server.toml [--restart]
+foks-server collect-chunk-store --config /srv/foks/server.toml \
+  [--maximum-objects 128] [--maximum-bytes 1073741824] [--dry-run]
+```
+
+`inventory-chunk-store` lists the namespace and records every object in the
+ledger. An object the database does not know is recorded as unknown and stays
+charged against physical capacity; the command never deletes objects.
+`--restart` starts the listing again after missing objects or a stale cursor
+have been corrected. It prints the physical usage totals.
+
+`collect-chunk-store` deletes one batch (at most `--maximum-objects`, 1 to
+128, and `--maximum-bytes`) of objects that no SQLite row references, after a
+complete inventory; repeat it to drain further batches, or pass `--dry-run`
+to report only. It deletes only from a filesystem store, and only when the
+database's binding carries the authority identity of this database path;
+an installation bound before authority identities were recorded, and every S3
+store, is report-only, because the termination of late S3 PUT retries is not
+qualified. It never deletes unknown objects (those it did not publish and
+record with a digest), objects with an unresolved or retrying publication
+attempt, or objects of another namespace.
+
+A filesystem write that a process kill interrupts can leave a temporary file
+named `_foks_tmp-*` in the directory. Inventory and the empty-namespace check
+skip these files, so they are never recorded or charged. `collect-chunk-store`
+removes them when it is allowed to delete (not with `--dry-run`, and only with
+a matching authority identity), after it has verified the binding and while it
+holds the exclusive namespace lease. An entry with that prefix that is not a regular
+file, such as a symlink, is never followed or removed: collection names it on
+stderr, leaves it for the operator and goes on. Temporaries left by earlier releases are
+named `.tmp` followed by six random characters; they are indistinguishable
+from foreign objects, so inventory records them as unknown objects that stay
+charged against physical capacity, and nothing deletes them automatically.
+
+Once collection has run, a copy of the SQLite database whose external
+chunks were not hydrated is not a backup: its references can name objects
+that collection has deleted. Use the `backup` command or scheduled backups,
+which hydrate external chunks into the snapshot.
 
 To convert existing inline chunks, stop the server and run:
 
@@ -451,7 +812,8 @@ snapshot before publishing its completeness manifest. Completed backups remain
 self-contained and restore without the original store. Missing/corrupt objects
 fail backup creation. Hydration requires temporary disk and database capacity
 for the original duplicated inline representation and can be slow; it is not a
-15-second failover path. Scheduled shutdown checks cancellation between chunks.
+failover path that completes within a request deadline. Scheduled shutdown
+checks cancellation between chunks.
 
 A restored database has no chunk store binding and no object ledger. If the
 restored installation is configured with a chunk store, that store must be a
@@ -501,10 +863,22 @@ foks-server restore \
 Backup authenticates every encrypted key generation with the root key and
 uses a read-only source connection. Restore accepts only a complete manifest,
 integrity-checked database, and exact declared key set, and requires empty
-destination paths.
+destination paths. It also refuses a destination where any of the database's
+`-wal`, `-shm` or `-journal` sidecars exists: SQLite replays a leftover `-wal`
+into whichever database file sits next to it, so deleting only
+`foks-server.sqlite` and restoring into the same path would silently replace
+pages of the restored database. Remove the whole old database directory, or
+restore to a new path. The `.storage-lock` and `.writer-lock` files remain
+after a clean shutdown and do not block a restore, but restore refuses while
+either is held, so stop every server and offline command using the path
+first. Before checking the destination it takes whichever of the two lock
+files exist (read-only access is enough) and holds them until it finishes.
+Both commands open the database with the compiled limits unless `--config
+/var/lib/foks/server.toml` supplies the `[storage]` and `[chunk_capacity]`
+tables; the paths still come from the flags.
 
 Restore and retention validation also accept the same prior schemas as server
-startup (43 through 49, upgraded to 50). They copy the database and any WAL into
+startup (43 through 58, upgraded to 59). They copy the database and any WAL into
 a private temporary directory, apply the normal transactional migrations,
 checkpoint, and validate that copy. Restore installs the migrated database;
 validation never opens or changes the original snapshot in SQLite. Retention
@@ -610,7 +984,9 @@ authority and backup/restore rules. It is disabled by default.
 
 Scheduled backups and manual/periodic maintenance emit a bounded stderr record:
 `FOKS operation failed: phase=backup_retention, reason=schema_mismatch`.
-Backup phases are `backup_read`, `backup_create`, `backup_publish`, and
+Backup phases are `backup_lease` (the shared storage lease and, with a chunk
+store, the object namespace lease; `reason=busy` while an offline command
+holds them), `backup_read`, `backup_create`, `backup_publish`, and
 `backup_retention`. Maintenance phases are `maintenance_admission` (including
 clock sampling before dispatch), `maintenance_expiry`, `maintenance_admin`, and
 `maintenance_checkpoint`.

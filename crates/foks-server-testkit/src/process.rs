@@ -61,7 +61,7 @@ impl InProcessServer {
             probe_tls: Arc::clone(&environment.inner.tls.public),
             database: environment.inner.database_config.clone(),
             limits: environment.inner.session_limits,
-            rate_limits: environment.inner.rate_limits,
+            rate_limits: environment.inner.rate_limits.clone(),
             backup: environment.inner.backup.clone(),
             chunk_store: environment
                 .inner
@@ -246,6 +246,14 @@ impl InProcessServer {
 
     pub fn storage_report(&self) -> foks_server::Result<foks_server_db::StorageReport> {
         self.server().storage_report()
+    }
+
+    pub fn fatal_thread(&self) -> Option<foks_server::CoreThread> {
+        self.server().fatal_thread()
+    }
+
+    pub fn on_fatal_exit(&self, observer: impl FnOnce(foks_server::CoreThread) + Send + 'static) {
+        self.server().on_fatal_exit(observer);
     }
 
     pub fn shutdown(mut self) -> foks_server::Result<()> {

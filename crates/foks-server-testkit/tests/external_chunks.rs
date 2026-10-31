@@ -2,7 +2,7 @@ use std::io::{Cursor, Write as _};
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::{mpsc, Condvar, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use foks_client::{CreatedSoftwareAccount, KvWriteOptions, PinnedHost};
 use foks_client_db::SoftStateStore;
@@ -18,6 +18,9 @@ struct FaultStore {
 }
 
 impl ChunkStore for FaultStore {
+    fn remove_stale_temporaries(&self) -> foks_server::Result<u64> {
+        self.inner.remove_stale_temporaries()
+    }
     fn namespace_lease(
         &self,
         exclusive: bool,
@@ -81,6 +84,9 @@ struct GatedStore {
 }
 
 impl ChunkStore for GatedStore {
+    fn remove_stale_temporaries(&self) -> foks_server::Result<u64> {
+        self.inner.remove_stale_temporaries()
+    }
     fn namespace_lease(
         &self,
         exclusive: bool,
@@ -205,6 +211,25 @@ fn revocation_during_external_put_prevents_publication_without_blocking_writer()
             "revoked upload must not publish"
         );
     });
+    // The client can see its upload fail before the server's handler, which
+    // was blocked in put_object until the gate opened, has finished: a client
+    // or server timeout under load ends the request first. Wait until the
+    // handler has settled the publication attempt, then stop the server,
+    // which drains or stops the handler before its metadata write, and only
+    // then check that nothing was published.
+    let settled = Instant::now() + Duration::from_secs(30);
+    while environment
+        .read_database()
+        .unwrap()
+        .chunk_physical_usage()
+        .unwrap()
+        .unresolved_attempts
+        != 0
+        && Instant::now() < settled
+    {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    server.shutdown().unwrap();
     let usage = environment
         .read_database()
         .unwrap()
@@ -226,7 +251,6 @@ fn revocation_during_external_put_prevents_publication_without_blocking_writer()
         (1, 1, 0)
     );
     assert!(physical.present_bytes > 0);
-    server.shutdown().unwrap();
 }
 
 #[test]
@@ -879,6 +903,9 @@ struct BackupReadGate {
     release: Mutex<mpsc::Receiver<()>>,
 }
 impl ChunkStore for BackupReadGate {
+    fn remove_stale_temporaries(&self) -> foks_server::Result<u64> {
+        self.inner.remove_stale_temporaries()
+    }
     fn namespace_lease(
         &self,
         exclusive: bool,
@@ -1129,6 +1156,9 @@ struct LostDeleteReply {
     lose: std::sync::atomic::AtomicBool,
 }
 impl ChunkStore for LostDeleteReply {
+    fn remove_stale_temporaries(&self) -> foks_server::Result<u64> {
+        self.inner.remove_stale_temporaries()
+    }
     fn namespace_lease(
         &self,
         exclusive: bool,
@@ -1373,4 +1403,71 @@ fn restored_backup_refuses_the_previous_store_and_starts_on_a_new_one() {
         })
         .count();
     assert!(objects > 0);
+}
+
+#[test]
+fn collection_removes_interrupted_filesystem_temporaries_without_charging_them() {
+    let environment = TestEnvironment::new().unwrap();
+    environment.use_filesystem_chunks().unwrap();
+    let store = environment.filesystem_chunk_store().unwrap();
+    let server = environment.start_server().unwrap();
+    let client = TestClient::new(&environment, "temporaries").unwrap();
+    let host = client.probe_and_pin().unwrap().pinned;
+    let account = client
+        .create_account(&host, &TestAccountSpec::new("temporaries", 0x5b))
+        .unwrap();
+    let bytes = vec![0x44; 4 * 1024 * 1024 + 9];
+    put(&client, &host, &account, "kept.bin", &bytes).unwrap();
+    server.shutdown().unwrap();
+
+    // What a process killed between create and persist leaves behind.
+    let temporary = environment.root().join("chunks/_foks_tmp-x");
+    std::fs::write(&temporary, vec![7; 4096]).unwrap();
+    let usage = || {
+        let usage = environment
+            .read_database()
+            .unwrap()
+            .chunk_physical_usage()
+            .unwrap();
+        (
+            usage.present_bytes,
+            usage.objects,
+            usage.unknown_objects,
+            usage.unknown_bytes,
+        )
+    };
+    let before = usage();
+    foks_server::inventory_chunk_store(
+        environment.database_path(),
+        foks_server_db::Config::default(),
+        store.as_ref(),
+        true,
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(usage(), before, "inventory must not charge a temporary");
+    assert!(temporary.exists(), "inventory removes nothing");
+    let collect = |dry_run| {
+        foks_server::collect_chunk_store(
+            environment.database_path(),
+            foks_server_db::Config::default(),
+            store.as_ref(),
+            128,
+            1024 * 1024 * 1024,
+            dry_run,
+        )
+        .unwrap()
+    };
+    let report = collect(true);
+    assert_eq!(report.removed_temporaries, 0);
+    assert!(temporary.exists(), "a dry run removes nothing");
+    let report = collect(false);
+    assert!(report.backend_qualified);
+    assert_eq!(report.removed_temporaries, 1);
+    assert!(!temporary.exists());
+    assert_eq!(usage(), before);
+    let server = environment.start_server().unwrap();
+    let client = TestClient::new(&environment, "temporaries").unwrap();
+    assert_files(&client, &host, &account, &[("kept.bin", &bytes)]);
+    server.shutdown().unwrap();
 }

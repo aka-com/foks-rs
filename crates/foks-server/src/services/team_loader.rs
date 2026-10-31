@@ -691,14 +691,12 @@ fn permission_denied() -> RpcStatus {
     RpcStatus::PermissionDenied("team-view authorization failed".to_owned())
 }
 
-fn map_write_error(error: crate::Error) -> RpcStatus {
+pub(super) fn map_write_error(error: crate::Error) -> RpcStatus {
     match error {
-        crate::Error::WriterQueue => RpcStatus::RateLimited,
-        crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::QuotaExceeded,
         crate::Error::Database(foks_server_db::Error::OperationConflict) => {
             bad_arguments("conflicting team-view activation replay")
         }
-        _ => RpcStatus::TransactionRetry,
+        other => crate::status::unmapped(other, "team_loader_write"),
     }
 }
 

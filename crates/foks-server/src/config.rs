@@ -51,6 +51,9 @@ pub struct SessionLimits {
     pub maximum_working_memory_bytes: usize,
     /// Separate bounded capacity for small status/void responses.
     pub maximum_control_memory_bytes: usize,
+    /// Frames one restricted-list output connection serves before it closes.
+    /// RPC sessions have no frame budget, as go-snowpack-rpc servers have
+    /// none.
     pub maximum_requests: usize,
     pub worker_threads: usize,
     pub maximum_read_connections: usize,
@@ -60,7 +63,16 @@ pub struct SessionLimits {
     pub maximum_kex_receive_polls: usize,
     pub maximum_pending_connections: usize,
     pub maximum_in_flight_requests: usize,
+    /// Realtime inbox long polls one account can hold at once, across its
+    /// devices and connections.
+    pub maximum_realtime_polls_per_account: usize,
+    /// Reads and writes within a frame, and each response write.
     pub io_timeout: Duration,
+    /// How long a connection may wait between frames, with no long poll
+    /// pending, before the server closes it. A Go v0.1.9 server never closes
+    /// an idle connection, and a Go client closes its own after five minutes
+    /// idle, so the default is a little longer.
+    pub idle_timeout: Duration,
     pub request_timeout: Duration,
 }
 
@@ -79,8 +91,10 @@ impl Default for SessionLimits {
             maximum_kex_receive_polls: 32,
             maximum_pending_connections: 32,
             maximum_in_flight_requests: 64,
+            maximum_realtime_polls_per_account: 8,
             io_timeout: Duration::from_secs(15),
-            request_timeout: Duration::from_secs(15),
+            idle_timeout: Duration::from_secs(330),
+            request_timeout: Duration::from_secs(30),
         }
     }
 }
@@ -115,10 +129,12 @@ impl SessionLimits {
             || self.maximum_active_connections == 0
             || self.maximum_pending_connections == 0
             || self.maximum_in_flight_requests < 2
+            || self.maximum_realtime_polls_per_account == 0
             || self.maximum_active_connections > tokio::sync::Semaphore::MAX_PERMITS
             || self.maximum_kex_receive_polls > tokio::sync::Semaphore::MAX_PERMITS
             || self.maximum_in_flight_requests > tokio::sync::Semaphore::MAX_PERMITS
             || self.io_timeout.is_zero()
+            || self.idle_timeout.is_zero()
             || self.request_timeout.is_zero()
         {
             return Err(crate::Error::Config("invalid session limit"));

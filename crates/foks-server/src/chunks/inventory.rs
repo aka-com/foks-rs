@@ -20,7 +20,13 @@ impl FilesystemChunks {
         self.recheck()?;
         for entry in std::fs::read_dir(&self.directory)? {
             let entry = entry?;
-            if entry.file_name() != NAMESPACE_MARKER && entry.file_name() != NAMESPACE_LOCK {
+            let name = entry.file_name();
+            if name != NAMESPACE_MARKER
+                && name != NAMESPACE_LOCK
+                && !name
+                    .to_str()
+                    .is_some_and(|name| name.starts_with(TEMPORARY_PREFIX))
+            {
                 return Ok(false);
             }
         }
@@ -44,6 +50,7 @@ impl FilesystemChunks {
                 .map_err(|_| Error::Chunk("inventory key is not UTF-8"))?;
             if name == NAMESPACE_MARKER
                 || name == NAMESPACE_LOCK
+                || name.starts_with(TEMPORARY_PREFIX)
                 || cursor.is_some_and(|c| name.as_str() <= c)
             {
                 continue;

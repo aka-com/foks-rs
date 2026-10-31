@@ -74,6 +74,7 @@ func TestGoClientAgainstRustServer(t *testing.T) {
 	regClient := core.NewRegClient(publicRPC, nil)
 	merkleClient := core.NewMerkleQueryClient(publicRPC, nil)
 	liveKexRelay(t, ctx, publicRPC, host)
+	liveKexMultiplexed(t, ctx, publicRPC, host)
 	if id, err := regClient.JoinWaitList(ctx, proto.Email("go-client@example.com")); err != nil || id[0] != 1 {
 		t.Fatalf("official waitlist registration: id=%v err=%v", id, err)
 	}
@@ -246,6 +247,152 @@ func liveKexRelay(
 		received.Seq != wrapper.Seq ||
 		!bytes.Equal(received.Payload.Nacl().Ciphertext, wrapper.Payload.Nacl().Ciphertext) {
 		t.Fatalf("official KEX relay changed packet: got=%v want=%v", received, wrapper)
+	}
+}
+
+// liveKexMultiplexed reproduces the call pattern of go-foks device pairing
+// (client/libclient/kex.go receiveHello and receiveLink) on one
+// go-snowpack-rpc client: an hour-long receive stays pending while a
+// fail-fast receive, a send and further receives run on the same connection,
+// and the pending receive is then cancelled by its context.
+func liveKexMultiplexed(
+	t *testing.T,
+	ctx context.Context,
+	publicRPC *rpc.Client,
+	host proto.HostID,
+) {
+	t.Helper()
+	client := rem.KexClient{Cli: publicRPC, ErrorUnwrapper: core.StatusToError}
+	suite := func(base byte) core.PrivateSuiter {
+		var seed proto.SecretSeed32
+		for index := range seed {
+			seed[index] = byte(index) + base
+		}
+		ret, err := core.NewPrivateSuite25519(proto.EntityType_Device, proto.OwnerRole, seed, host)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ret
+	}
+	entity := func(s core.PrivateSuiter) proto.EntityID {
+		public, err := s.EntityPublic()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return public.GetEntityID()
+	}
+	sender, receiver := suite(7), suite(97)
+	session := func(base byte) proto.KexSessionID {
+		var ret proto.KexSessionID
+		for index := range ret {
+			ret[index] = byte(index) + base
+		}
+		return ret
+	}
+	send := func(id proto.KexSessionID, seq proto.KexSeqNo, payload string) rem.KexWrapperMsg {
+		var nonce proto.NaclNonce
+		for index := range nonce {
+			nonce[index] = byte(index) + byte(seq) + 61
+		}
+		wrapper := rem.KexWrapperMsg{
+			SessionID: id,
+			Sender:    entity(sender),
+			Seq:       seq,
+			Payload: proto.NewSecretBoxWithNacl(proto.NaclSecretBox{
+				Nonce:      nonce,
+				Ciphertext: proto.NaclCiphertext([]byte(payload)),
+			}),
+		}
+		signature, err := sender.Sign(&wrapper)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := client.Send(ctx, rem.SendArg{
+			Msg: wrapper, Sig: *signature, Actor: rem.KexActorType_Provisioner,
+		}); err != nil {
+			t.Fatalf("multiplexed KEX send: %v", err)
+		}
+		return wrapper
+	}
+	receive := func(ctx context.Context, id proto.KexSessionID, seq proto.KexSeqNo, wait int64) (rem.KexWrapperMsg, error) {
+		return client.Receive(ctx, rem.ReceiveArg{
+			SessionID: id,
+			Receiver:  entity(receiver),
+			Seq:       seq,
+			PollWait:  proto.DurationMilli(wait),
+			Actor:     rem.KexActorType_Provisionee,
+		})
+	}
+	ours, theirs := session(101), session(151)
+
+	// The hour-long receive on our own channel, as receiveHelloOurChannel
+	// and receivePleaseSign(k.mine) issue it.
+	pendingContext, cancelPending := context.WithCancel(ctx)
+	defer cancelPending()
+	pending := make(chan error, 1)
+	go func() {
+		_, err := receive(pendingContext, ours, 0, 1000*60*60)
+		pending <- err
+	}()
+	time.Sleep(200 * time.Millisecond)
+
+	// The other device's channel already holds a packet: the fail-fast
+	// receive answers at once while the hour-long one is pending.
+	first := send(theirs, 0, "multiplexed-start")
+	got, err := receive(ctx, theirs, 0, 0)
+	if err != nil {
+		t.Fatalf("fail-fast KEX receive behind a pending receive: %v", err)
+	}
+	if !bytes.Equal(got.Payload.Nacl().Ciphertext, first.Payload.Nacl().Ciphertext) {
+		t.Fatalf("fail-fast KEX receive returned the wrong packet: %v", got)
+	}
+	// A second waiting receive, then the send it waits for.
+	second := make(chan rem.KexWrapperMsg, 1)
+	secondErr := make(chan error, 1)
+	go func() {
+		msg, err := receive(ctx, theirs, 1, 1000*60*60)
+		if err != nil {
+			secondErr <- err
+			return
+		}
+		second <- msg
+	}()
+	time.Sleep(200 * time.Millisecond)
+	wanted := send(theirs, 1, "multiplexed-please-sign")
+	select {
+	case msg := <-second:
+		if !bytes.Equal(msg.Payload.Nacl().Ciphertext, wanted.Payload.Nacl().Ciphertext) {
+			t.Fatalf("second KEX receive returned the wrong packet: %v", msg)
+		}
+	case err := <-secondErr:
+		t.Fatalf("second KEX receive: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("second KEX receive was not answered")
+	}
+	select {
+	case err := <-pending:
+		t.Fatalf("hour-long KEX receive ended early: %v", err)
+	default:
+	}
+
+	// Ending the pairing cancels the pending receive; go-snowpack-rpc sends
+	// a CANCEL and the connection stays usable.
+	cancelPending()
+	select {
+	case err := <-pending:
+		if err == nil {
+			t.Fatal("cancelled KEX receive returned a packet")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("cancelled KEX receive did not return")
+	}
+	after := send(theirs, 2, "multiplexed-done")
+	got, err = receive(ctx, theirs, 2, 0)
+	if err != nil {
+		t.Fatalf("KEX receive after a cancelled receive: %v", err)
+	}
+	if !bytes.Equal(got.Payload.Nacl().Ciphertext, after.Payload.Nacl().Ciphertext) {
+		t.Fatalf("KEX receive after cancel returned the wrong packet: %v", got)
 	}
 }
 

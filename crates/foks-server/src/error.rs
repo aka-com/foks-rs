@@ -36,6 +36,8 @@ pub enum Error {
     Thread,
     #[error("SQLite writer queue is full or closed")]
     WriterQueue,
+    #[error("request deadline passed before the work started")]
+    DeadlineExceeded,
     #[error("SQLite reader pool is exhausted")]
     ReaderPool,
     #[error("request authorization changed before the queued write committed")]
@@ -58,22 +60,6 @@ impl From<foks_hosted_transport::Error> for Error {
             foks_hosted_transport::Error::Config(message) => Self::Config(message),
             foks_hosted_transport::Error::Io(error) => Self::Io(error),
         }
-    }
-}
-
-/// Preserve authentication and Merkle failures across queued mutation boundaries.
-pub(crate) fn mutation_failure_status(error: &Error) -> Option<foks_rpc::RpcStatus> {
-    match error {
-        Error::Sso(message) => Some(foks_rpc::RpcStatus::OAuth2Auth(Box::new(
-            foks_rpc::RpcStatus::OAuth2((*message).into()),
-        ))),
-        Error::AuthorizationChanged => Some(foks_rpc::RpcStatus::PermissionDenied(
-            "credential authorization changed".into(),
-        )),
-        Error::Merkle(foks_merkle_store::Error::EpochLimitExceeded { .. }) => {
-            Some(foks_rpc::RpcStatus::MerkleVerify(error.to_string()))
-        }
-        _ => None,
     }
 }
 
@@ -103,22 +89,11 @@ mod tests {
         );
         let deadline = crate::deadline::Deadline::after(std::time::Duration::ZERO).unwrap();
         crate::deadline::scope(Some(deadline), || {
-            assert!(
-                matches!(crate::deadline::check(), Err(super::Error::Io(error)) if error.kind() == std::io::ErrorKind::TimedOut)
-            );
+            assert!(matches!(
+                crate::deadline::check(),
+                Err(super::Error::DeadlineExceeded)
+            ));
         });
         assert!(crate::deadline::check().is_ok());
-    }
-    #[test]
-    fn epoch_limit_maps_to_explicit_verification_status() {
-        let error = super::Error::Merkle(foks_merkle_store::Error::EpochLimitExceeded {
-            epoch: 65_536,
-            pointer_count: 16,
-        });
-        assert!(matches!(
-            super::mutation_failure_status(&error),
-            Some(foks_rpc::RpcStatus::MerkleVerify(detail))
-                if detail.contains("epoch 65536") && detail.contains("back-pointer count 16")
-        ));
     }
 }

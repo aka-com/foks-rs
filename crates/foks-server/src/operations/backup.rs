@@ -6,6 +6,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use crate::diagnostics::operational::{checked, Phase};
+use crate::fatal::{CoreThread, FatalSignal};
 use crate::{BackupSchedule, Error, Result, ServerMetrics};
 
 pub(crate) struct BackupScheduler {
@@ -34,6 +35,7 @@ impl BackupScheduler {
         chunk_store: Option<Arc<dyn crate::chunks::ChunkStore>>,
         clock: Arc<dyn foks_server_db::Clock>,
         metrics: Arc<ServerMetrics>,
+        fatal: FatalSignal,
     ) -> Result<Self> {
         schedule.validate()?;
         std::fs::create_dir_all(&schedule.directory)?;
@@ -54,6 +56,7 @@ impl BackupScheduler {
             clock,
         };
         let thread = thread::spawn(move || {
+            let exit = fatal.exit_guard(CoreThread::Backup);
             let mut sequence = 0_u64;
             loop {
                 match receiver.recv_timeout(schedule.interval) {
@@ -74,6 +77,7 @@ impl BackupScheduler {
                     }
                 }
             }
+            exit.end(true);
         });
         Ok(Self {
             stop,
@@ -108,10 +112,13 @@ fn run_backup(
     sequence: u64,
     cancelled: &AtomicBool,
 ) -> Result<u64> {
-    let _storage_lease = crate::storage_lease::StorageLease::with_store(
-        &source.database_path,
-        source.chunk_store.as_deref(),
-        false,
+    let _storage_lease = checked(
+        Phase::BackupLease,
+        crate::storage_lease::StorageLease::with_store(
+            &source.database_path,
+            source.chunk_store.as_deref(),
+            false,
+        ),
     )?;
     let (now, database, host_key_files) = checked(
         Phase::BackupRead,
@@ -279,5 +286,34 @@ mod tests {
         assert!(enforce_retention(root.path(), 1, &foks_server_db::Config::default()).is_err());
         assert!(incomplete.is_dir());
         assert!(foreign.is_dir());
+    }
+
+    #[test]
+    fn storage_lease_failure_is_reported_with_its_phase_and_reason() {
+        let root = tempfile::tempdir().unwrap();
+        let database = root.path().join("foks-server.sqlite");
+        drop(foks_server_db::Database::open(&database, foks_server_db::Config::default()).unwrap());
+        // An offline command holds the exclusive storage lease.
+        let held = crate::storage_lease::StorageLease::exclusive(&database).unwrap();
+        let schedule = BackupSchedule {
+            directory: root.path().join("backups"),
+            interval: std::time::Duration::from_secs(60),
+            retain: 1,
+        };
+        let source = BackupSource {
+            chunk_store: None,
+            database_path: database.clone(),
+            key_directory: root.path().join("keys"),
+            manifest: Vec::new(),
+            database_config: foks_server_db::Config::default(),
+            clock: Arc::new(foks_server_db::SystemClock),
+        };
+        crate::diagnostics::operational::take_reported();
+        assert!(run_backup(&schedule, &source, 1, &AtomicBool::new(false)).is_err());
+        assert_eq!(
+            crate::diagnostics::operational::take_reported(),
+            [("backup_lease", "busy")]
+        );
+        drop(held);
     }
 }

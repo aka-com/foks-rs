@@ -50,7 +50,10 @@ with that trade.
 The Rust server sets its writer connection to WAL mode with `synchronous =
 FULL` (every commit is flushed to stable storage before it is acknowledged),
 `foreign_keys = ON`, `trusted_schema = OFF`, and a hard page-count ceiling
-so that a full disk produces a clean quota error rather than corruption.
+so that a full disk produces a clean quota error rather than corruption. A
+write that reaches the ceiling fails with `SQLITE_FULL`, and every route that
+writes reports it to the client as status 1060 (over quota). This includes the
+SSO access-token refresh that runs before an authenticated request.
 
 | Writer connection pragma | Value |
 |---|---|
@@ -84,6 +87,7 @@ property of one actor.
    +-------------------------+
    | writer thread           |   one OS thread, one RW connection
    |   recv job              |
+   |   skip if past deadline |   (the request already timed out)
    |   re-check credential   |   (active_credential_owner, sso_require_access)
    |   sample clock          |
    |   run closure in txn    |
@@ -124,6 +128,31 @@ reads the clock inside the closure, not at enqueue time, so timestamps stay
 monotone with the total order the writer imposes. A test pins this: a job
 queued behind a slow one records a time after the slow one finished.
 
+**A job whose request has timed out is skipped.** Each request has one
+deadline, the request timeout (30 s by default) after the first byte of its frame. Body
+reading, the handler, reader checkout, queued writes and external chunk
+transfers all consume it; the response write of a completed request gets a
+fresh allowance of the I/O timeout (15 s), so finished work is not discarded
+because the deadline ran short. The session stops waiting for the
+handler at the deadline and closes the connection without a response, and the
+client treats the outcome as ambiguous. A handler that returns after the
+deadline has passed is treated the same way, whatever it returned: it may
+have committed one write before a later one was skipped. The handler runs inside a thread-local
+deadline scope, and `WriterHandle::call` records the scope's deadline with the
+job. If the writer reaches a queued job at or after it, the job is answered
+with `DeadlineExceeded` without opening a transaction and is counted in
+`foks_writer_expired_total`. A job submitted after the deadline is refused
+the same way before it enters the queue, so it does not take a queue slot from
+a request that is still waiting. The client already has to allow for the write
+having happened or not, so skipping a job that never started is safe, and
+under overload it keeps the writer on requests that are still waiting. A job
+that has started runs to completion; SQLite work is not cancelled midway.
+Writes that complete an already committed step run under an empty deadline
+scope: the settlement of a published chunk object, and the part of the SSO
+access refresh that request authorization can trigger after its claim has
+committed, which calls the provider and must then commit the rotated refresh
+token.
+
 Queue wait and execution time are measured per job into counters that the
 metrics endpoint exposes, so an operator can see the queue filling before
 callers see rejections.
@@ -151,10 +180,24 @@ registry of inodes.
 
 Network reads go through read-only connections opened with
 `SQLITE_OPEN_READ_ONLY | NO_MUTEX | NOFOLLOW`. Each validates the
-application ID and schema version before use. The pool is a vector of idle
-connections behind a mutex; it opens connections lazily up to a maximum
-(default 32) and, when exhausted, returns `Error::ReaderPool` rather than
-waiting. A lease returns its connection to the pool on drop.
+application ID, the schema version and the schema contract before use.
+`ReadDatabase::open` also runs the KV-tree capacity check, which reads the
+stored synchronization heads of every namespace. The pool opens its
+connections through a `ReadDatabaseOpener`. A server that owns the writer
+takes the opener from it (`Database::read_opener`): the writer ran the check
+when it opened the file and enforces the same limits on every mutation, so
+when the readers' KV limits are at least the writer's, no reader repeats the
+check. Without a writer, or with stricter reader limits,
+`ReadDatabaseOpener::new` runs it once. The listener's startup check, the
+request pool, the web admin pool and the metrics sampler open readers this
+way. Later connections recheck the file identity, the schema version and the
+contract. Only the writer may modify the database while an opener is in use. The pool is a vector of idle connections behind a mutex; it
+opens connections lazily up to a maximum (default 32) and, when exhausted,
+returns `Error::ReaderPool` rather than waiting. The request is answered
+with status 1012 and counted in `foks_reader_pool_exhausted_total`, apart
+from the per-address rate limit. A lease returns its connection to the pool
+on drop; the pool never closes a connection it opened, and the
+`foks_reader_pool_open` gauge reports how many it holds.
 
 A `ReadSnapshot` wraps a read transaction on one of these connections and
 is the unit of consistency: every query inside it sees the same WAL state.
@@ -173,12 +216,18 @@ mechanism differs by resource.
 | Writer queue | 64 pending jobs | `try_send` fails; status 1012 |
 | Reader pool | 32 connections | `Error::ReaderPool`; status 1012 |
 | Listener admission queue | 32 pending connections | `try_send` fails; connection dropped |
-| Active sessions per listener | 256 | accept loop waits for a permit |
+| Active sessions per listener | 256, including idle sessions for up to 330 s | accepted connections wait in the 32-entry queue; dropped when it is full |
+| Connections per source per listener | 32 (0 = unlimited); loopback and `trusted_sources` exempt | connection dropped |
 | Request handlers (shared) | 64 blocking permits | `try_acquire_owned` fails; status 1012 |
-| Long-poll handlers | min(64, 32) = 32 permits | as above |
-| Request memory | 64 MiB, 2 × frame length reserved per frame | frames wait for permits |
+| Pending long polls per connection | 4 | status 1012 at the call's sequence; the connection stays open |
+| Realtime inbox polls | 8 per account; 256 in total (the authenticated listener's sessions) | status 1012 |
+| Realtime poll state reads | 16 readers (half the reader pool) | reads wait for a permit |
+| KEX receives | 32, at most half the active sessions; 8 (a quarter) per source, loopback and `trusted_sources` exempt | status 1012, not queued |
+| Request memory | 64 MiB, 2 × frame length reserved per frame; frames up to 4 KiB use a separate 1 MiB budget | frames wait for permits |
+| Working and response memory | 512 MiB and 128 MiB, charged by the codec, SQL results and chunk transfers | status 1012 during decoding or on a read-only route; on a route that may write, the connection closes unanswered |
 | Frame size | 16 MiB | rejected before allocation |
-| Request execution timeout | 30 s | connection closed |
+| Request deadline | 30 s from the first frame byte | connection closed; a write still queued is skipped |
+| Idle time between requests | 330 s with no long poll pending (`idle_timeout_seconds`); the first frame after the handshake, and reads and writes inside a frame, have 15 s | connection closed |
 | I/O timeout | 15 s | connection closed |
 
 Handlers run on blocking threads under a semaphore, and they acquire their
@@ -198,7 +247,7 @@ exhausting memory.
 
 ### Token buckets
 
-Per-IP rate limiting uses the *token bucket*, a standard algorithm from
+Per-source rate limiting uses the *token bucket*, a standard algorithm from
 network traffic shaping. A bucket holds up to B tokens and is refilled at a
 rate of r tokens per second. Each admitted event removes one token; an
 event arriving when the bucket is empty is refused. The parameter B sets
@@ -209,16 +258,50 @@ remains.
 
 | Bucket | Burst (B) | Rate (r) |
 |---|---|---|
-| Connections per IP | 512 | 256 per second |
-| Framed requests per IP | 2,000 | 1,000 per second |
+| Connections per source | 512 | 256 per second |
+| Framed requests per source | 2,000 | 1,000 per second |
 
-The subtlety is memory. A naive per-IP map grows without bound when an
+A source is an IPv4 address or an IPv6 /64 prefix (the prefix length is
+configurable). An IPv6 host is usually assigned a whole /64 and can pick
+any address in it, so a bucket per full IPv6 address would give one host
+2^64 buckets.
+
+The subtlety is memory. A naive per-source map grows without bound when an
 attacker cycles source addresses. The server keeps its buckets in a
-least-recently-used cache capped at 4,096 addresses; when a new address
+least-recently-used cache capped at 4,096 sources; when a new source
 arrives at capacity, the bucket used longest ago is evicted. An evicted
-address that returns gets a full bucket, which is a small leniency in
+source that returns gets a full bucket, which is a small leniency in
 exchange for a hard memory bound. A request that exceeds its bucket gets
-status 1012 and the connection is closed.
+status 1012 at the request's own sequence number, and the connection is
+closed. The server reads the call body first to learn that number: both the
+Go and the Rust client number calls per connection, so a refusal at any
+other sequence would not match the pending call.
+
+Token buckets limit the rate of new work, not how much a source holds at
+once. A source within its connection burst could otherwise open every
+active-session slot and keep each one with a long poll. Each listener
+therefore also counts the connections a source holds, from acceptance
+until the session ends, and closes a new connection beyond 32 (0 removes
+the limit). Loopback peers are exempt, since behind a local TCP proxy every
+client would appear as one loopback source. A forwarder on another host that
+rewrites client addresses, or a NAT, has the same effect: every client
+behind it is one source, and since the Rust client holds a connection for
+each realtime inbox poll or KEX receive (a Go client multiplexes them on one
+connection), and every client's idle connections stay open for up to the
+330 s idle timeout, a small number of devices can reach the limit. The same
+holds for the 256 active sessions per listener: both limits must cover the
+devices active within one idle timeout, sized in connections per device per
+listener: a go-foks client keeps one connection per server type (probe,
+registration, user, Merkle query, KV, realtime), several of them on the
+authenticated listener, and the Rust client pools up to two idle
+connections per endpoint. The operator
+lists such a forwarder's address or prefix in `trusted_sources`, which
+exempts it as loopback is exempt, or raises or removes the limit for NAT
+that it does not control. A Go v0.1.9 host has no per-source connection
+limit at all. Realtime inbox polls are limited in the same way per
+account rather than per source: one account holds at most 8, so it cannot
+take every poll slot from other users. Every refusal is counted in
+`foks_admission_rejected_total` with a `reason` label.
 
 ## Schema versioning and single-transaction upgrades
 
@@ -259,6 +342,15 @@ snapshot deletion. Temporary space is required for the copy and migration;
 each input database or WAL file is bounded by the configured database size
 limit. As on normal startup, the migration to 48 discards old SSO browser
 challenges, sessions, access state, and binding receipts.
+
+Restore refuses a destination that already holds the database, a non-empty key
+directory, or a `-wal`, `-shm` or `-journal` file beside the database path.
+SQLite checks a WAL only against its own header, so a WAL left by an earlier
+installation would be replayed into the restored file on its first open. The
+`.storage-lock` and `.writer-lock` files survive a clean shutdown and are
+accepted when nobody holds them; restore refuses while either is held, and
+holds whichever of them exist from before its destination checks until it
+finishes.
 
 ## Invariants written in SQL
 

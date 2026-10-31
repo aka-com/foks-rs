@@ -136,21 +136,6 @@ Required resolution:
 - Add distributed-source flood tests and prove that authenticated administrators
   can still list and decide existing requests at capacity.
 
-## Stage 6 — Realtime fanout and configurable team capacity
-
-**Priority: lower.** Realtime mutations refuse to proceed after scanning more than
-1,024 direct membership rows. The default server team-member limit is 64, but the
-configurable `maximum_team_members` setting has no upper-bound relationship to the
-fixed realtime fanout limit. Raising team capacity above 1,024 can therefore make
-channel creation and message sending fail for that team.
-
-Required resolution:
-
-- Reject incompatible server configuration, derive realtime fanout from the team
-  limit, or implement bounded/paged fanout with atomic delivery semantics.
-- Add a configuration relationship test and an operator-facing error before a team
-  crosses the usable chat boundary.
-
 ## Deferred extended-chat prerequisite
 
 The extension capability method uses a locally selected method position rather
@@ -163,6 +148,68 @@ The remaining extended-chat work stays deferred. In particular, reaction
 equality, exact event-body wire forms, method/status allocation, attachment
 authorization and committed-object retention are designs rather than enabled
 features.
+
+## Chunk temporaries left by earlier releases stay charged
+
+**Priority: low.** Before the filesystem chunk store named its temporaries
+`_foks_tmp-*`, it used the tempfile default (`.tmp` plus six random
+characters). A process killed between creating and persisting one left a file
+that inventory cannot tell from a foreign object. Inventory records it as an
+unknown object, which stays charged against `maximum_chunk_physical_bytes` and
+`maximum_chunk_objects`, and collection never deletes unknown objects.
+
+Required resolution:
+
+- Decide whether an operator command may remove `.tmp??????` files from a
+  filesystem namespace, with the same writer guard, exclusive namespace lease
+  and authority checks as collection, and release their ledger rows; or keep
+  them charged and document how to remove them by hand.
+
+## Unbounded waitlist inserts
+
+**Priority: medium.** `Reg.joinWaitList` is an unauthenticated route that the
+server answers by default. Each call inserts a new `waitlist_entries` row
+(`Database::join_waitlist` in `crates/foks-server-db/src/waitlist.rs`) with a
+fresh random identifier: there is no entry cap, no uniqueness on the address,
+no retention expiry and no operator command to list or delete entries. Only the
+per-source request token bucket and the per-source connection limit slow a
+client down, so clients that rotate source addresses can grow the table until
+`maximum_database_bytes` is reached, after which every write on the host fails
+with status 1060. The stored addresses are also kept indefinitely.
+
+A bound was designed in 454cc8b and c871f5a: the route is off by default and
+answers `Unsupported` until `[waitlist]` enables it; a unique index on the
+address under ASCII case folding makes a repeated join return the stored
+identifier; an entry cap (10,000 by default) is checked against a one-row
+count kept by triggers; maintenance expires entries after a retention period;
+and `foks-server waitlist list/export/purge` gives operators access. It needs
+server schema 60, so it was not ported, by maintainer decision; the schema
+stays at 59.
+
+Required resolution:
+
+- Decide whether to serve the route by default, and bound the table by count,
+  address uniqueness and age, with or without a schema step.
+- Give operators a way to read and delete the stored addresses.
+
+## Restricted-list qualification listener ends on any accept error
+
+**Priority: low.** The native personal-list qualification listener
+(`serve` in `crates/foks-server/src/restricted_list/output.rs`, started by
+`start_native_personal_list_qualification`) ends its accept loop on the first
+`accept()` error, including transient ones such as EMFILE or ECONNABORTED, and
+reports the end to nobody: it has no `ServerMetrics` and no `FatalSignal`. The
+RPC, management, administration and OIDC listeners retry these errors through
+`net::retry_accept` and report an unrequested exit. This listener serves only
+the celld qualification harness, not production traffic, so a lost listener
+shows up as a failed qualification run.
+
+Required resolution:
+
+- Route its accept errors through `retry_accept`, and report the loop's end to
+  the qualification report or a fatal signal, with a test that injects
+  accept errors (the RPC acceptor's `accept_connections` takes an accept
+  closure for this).
 
 ## Existing disclosed limitations
 

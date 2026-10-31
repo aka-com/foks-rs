@@ -97,7 +97,12 @@ impl SsoService {
             .try_acquire_owned()
             .map_err(|_| Error::Sso("provider refresh busy"))?;
         let mut payload = self.access_payload(&row)?;
-        let Some(refresh) = payload.refresh_token.as_deref() else {
+        // A copy erased on drop: the refresh below replaces the stored token.
+        let Some(refresh) = payload
+            .refresh_token
+            .as_deref()
+            .map(|token| Zeroizing::new(token.to_owned()))
+        else {
             return Err(Error::Sso("reauthentication required"));
         };
         // A discovery failure has not submitted a rotating credential and is safe to retry.
@@ -109,63 +114,75 @@ impl SsoService {
             &credential,
             sequence,
         )?;
-        let result = provider.refresh(
-            &self.http,
-            &self.client_config(),
-            refresh,
-            &payload.nonce,
-            self.now_ms()?,
-        );
-        let (tokens, identity) = match result {
-            Ok(v) => v,
-            Err(error) => {
-                let state = if matches!(
-                    error,
-                    foks_oidc::Error::ProviderUnavailable | foks_oidc::Error::DocumentLimit
-                ) {
-                    SsoAccessState::ProviderUnavailable
-                } else {
-                    SsoAccessState::ReauthenticationRequired
-                };
-                self.transition_access(&claimed, state, &payload, &credential, sequence)?;
-                return Err(error.into());
+        // The claim has committed. The provider call and the write that
+        // records its outcome run without the request deadline: a skipped
+        // write would leave the account in `Refreshing` after the provider
+        // has rotated the refresh token.
+        Self::after_claim(|| {
+            let result = provider.refresh(
+                &self.http,
+                &self.client_config(),
+                &refresh,
+                &payload.nonce,
+                self.now_ms()?,
+            );
+            let (tokens, identity) = match result {
+                Ok(v) => v,
+                Err(error) => {
+                    let state = if matches!(
+                        error,
+                        foks_oidc::Error::ProviderUnavailable | foks_oidc::Error::DocumentLimit
+                    ) {
+                        SsoAccessState::ProviderUnavailable
+                    } else {
+                        SsoAccessState::ReauthenticationRequired
+                    };
+                    self.transition_access(&claimed, state, &payload, &credential, sequence)?;
+                    return Err(error.into());
+                }
+            };
+            if tokens.access_expires_at_ms <= self.now_ms()?
+                || identity
+                    .as_ref()
+                    .is_some_and(|i| i.issuer != row.issuer || i.subject != row.subject)
+            {
+                self.transition_access(
+                    &claimed,
+                    SsoAccessState::ReauthenticationRequired,
+                    &payload,
+                    &credential,
+                    sequence,
+                )?;
+                return Err(Error::Sso(
+                    "refreshed provider identity mismatch or expired",
+                ));
             }
-        };
-        if tokens.access_expires_at_ms <= self.now_ms()?
-            || identity
-                .as_ref()
-                .is_some_and(|i| i.issuer != row.issuer || i.subject != row.subject)
-        {
+            payload.access_token.zeroize();
+            payload.access_token = tokens.access.to_string();
+            if !tokens.id.is_empty() {
+                payload.id_token.zeroize();
+                payload.id_token = tokens.id.to_string();
+            }
+            if let Some(refresh) = tokens.refresh {
+                payload.refresh_token.zeroize();
+                payload.refresh_token = Some(refresh.to_string());
+            }
+            payload.expires_at_ms = tokens.access_expires_at_ms;
             self.transition_access(
                 &claimed,
-                SsoAccessState::ReauthenticationRequired,
+                SsoAccessState::Active,
                 &payload,
                 &credential,
                 sequence,
             )?;
-            return Err(Error::Sso(
-                "refreshed provider identity mismatch or expired",
-            ));
-        }
-        payload.access_token.zeroize();
-        payload.access_token = tokens.access.to_string();
-        if !tokens.id.is_empty() {
-            payload.id_token.zeroize();
-            payload.id_token = tokens.id.to_string();
-        }
-        if let Some(refresh) = tokens.refresh {
-            payload.refresh_token.zeroize();
-            payload.refresh_token = Some(refresh.to_string());
-        }
-        payload.expires_at_ms = tokens.access_expires_at_ms;
-        self.transition_access(
-            &claimed,
-            SsoAccessState::Active,
-            &payload,
-            &credential,
-            sequence,
-        )?;
-        Ok(())
+            Ok(())
+        })
+    }
+
+    /// Runs `operation` outside the request deadline scope, so that the
+    /// writer does not skip its calls when the request deadline passes.
+    pub(super) fn after_claim<T>(operation: impl FnOnce() -> Result<T>) -> Result<T> {
+        crate::deadline::scope(None, operation)
     }
     fn transition_access(
         &self,
