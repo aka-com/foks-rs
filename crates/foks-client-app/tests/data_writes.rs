@@ -146,9 +146,10 @@ fn adapter_writes_are_bound_durable_and_never_replayed() {
             let mut maintenance = foks_client_app::AdapterMaintenanceCursor::default();
             let cleanup_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
             loop {
-                // Production turns get 50 ms, and an owner starved past that
-                // deadline is backed off for 60 s. Record-count budgets still
-                // bound each turn; the wide cap keeps this drain load-independent.
+                // Production turns get 50 ms; an owner whose turn runs out
+                // before its first erasure keeps the next turn, up to the
+                // burst cap. Record-count budgets still bound each turn; the
+                // wide cap keeps this drain load-independent.
                 session.maintain_adapter_state_until(
                     &mut maintenance,
                     &master,
