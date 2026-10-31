@@ -19,8 +19,9 @@ RPC exercises the client response envelopes (data, void, bare and bare void)
 and length-prefixed framing. `server_rpc`
 exercises the production call and control-message parsers with bare/framed
 inputs, generated valid calls, and malformed optional log tags. `agent_frames`
-exercises request correlation IDs, protocol versions, JSON requests and streamed
-upload frames, with bounded canonical round trips. Archive fuzzing combines
+exercises request correlation IDs, protocol versions, JSON requests, Hello
+requests of any version, streamed upload frames and the client's response and
+Hello-reply decoders, with bounded canonical round trips. Archive fuzzing combines
 raw input (seeded with the authenticated compatibility vector) and generated
 authenticated archives, including empty and multi-chunk entries, to reach
 entry and trailer validation. An independent test-only encoder also generates

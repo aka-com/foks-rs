@@ -544,9 +544,7 @@ fn bind_account(
                 foks_agent_client::Error::DeadlineExceeded => {
                     "local account binding deadline exceeded".to_owned()
                 }
-                foks_agent_client::Error::LocalDeadline(error) => error.to_string(),
-                _ => "authenticated local agent unavailable; start or unlock the selected account"
-                    .to_owned(),
+                error => agent_failure(&error),
             })?;
         match response.result {
             ResponseResult::Success { value } => {
@@ -576,6 +574,31 @@ fn error_code_name(code: foks_agent_proto::ErrorCode) -> String {
     }
 }
 
+/// The tool error for a request the agent did not answer. A version
+/// mismatch is reported as such: the agent of another version refused the
+/// request without running it, and only stopping that agent resolves it.
+fn agent_failure(error: &foks_agent_client::Error) -> String {
+    match error {
+        foks_agent_client::Error::Ambiguous(_) => {
+            return "submission outcome unknown; inspect status; do not repeat with a new submission ID"
+                .to_owned()
+        }
+        foks_agent_client::Error::DeadlineExceeded => {
+            return "local request deadline exceeded".to_owned()
+        }
+        foks_agent_client::Error::LocalDeadline(error) => return error.to_string(),
+        foks_agent_client::Error::Cancelled => return "local request cancelled".to_owned(),
+        _ => {}
+    }
+    match error.version_mismatch() {
+        Some(mismatch) => format!(
+            "incompatible local agent: {mismatch}; stop the running foks-agent and restart this MCP server"
+        ),
+        None => "authenticated local agent unavailable; start or unlock the selected account"
+            .to_owned(),
+    }
+}
+
 fn call<T: DeserializeOwned>(
     client: &AgentClient,
     operation: Operation,
@@ -583,19 +606,7 @@ fn call<T: DeserializeOwned>(
 ) -> Result<T, String> {
     let response = client
         .call_cancellable(operation, &|| cancelled.is_cancelled())
-        .map_err(|error| match error {
-            foks_agent_client::Error::Ambiguous(_) => {
-                "submission outcome unknown; inspect status; do not repeat with a new submission ID"
-                    .to_owned()
-            }
-            foks_agent_client::Error::DeadlineExceeded => {
-                "local request deadline exceeded".to_owned()
-            }
-            foks_agent_client::Error::LocalDeadline(error) => error.to_string(),
-            foks_agent_client::Error::Cancelled => "local request cancelled".to_owned(),
-            _ => "authenticated local agent unavailable; start or unlock the selected account"
-                .to_owned(),
-        })?;
+        .map_err(|error| agent_failure(&error))?;
     match response.result {
         ResponseResult::Success { value } => {
             serde_json::from_value(value).map_err(|_| "invalid typed agent response".to_owned())
@@ -671,6 +682,31 @@ mod tests {
         assert_eq!(encode_path("a/../ü %20").unwrap(), "/%C3%BC%20%2520");
         assert_eq!(decode_path("/%C3%BC%20%2520").unwrap(), "/ü %20");
         assert!(encode_path("bad\0path").is_err());
+    }
+
+    #[test]
+    fn a_version_mismatch_is_reported_as_such_and_not_as_an_unknown_outcome() {
+        use foks_agent_client::Error;
+        let refused = Error::Protocol(foks_agent_proto::Error::VersionMismatch {
+            agent: 34,
+            supported: None,
+        });
+        assert_eq!(
+            agent_failure(&refused),
+            format!(
+                "incompatible local agent: agent protocol version 34 does not match client \
+                 protocol version {}; stop the running foks-agent and restart this MCP server",
+                foks_agent_proto::PROTOCOL_VERSION
+            )
+        );
+        let lost = || std::io::Error::from(std::io::ErrorKind::UnexpectedEof);
+        assert!(
+            agent_failure(&Error::Ambiguous(Box::new(Error::Io(lost()))))
+                .starts_with("submission outcome unknown")
+        );
+        assert!(
+            agent_failure(&Error::Io(lost())).starts_with("authenticated local agent unavailable")
+        );
     }
 }
 
