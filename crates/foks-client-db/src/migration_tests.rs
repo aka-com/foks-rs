@@ -6,6 +6,9 @@ use std::path::Path;
 const PROBE: &[u8] =
     include_bytes!("../../foks-snowpack/tests/fixtures/foks-v0.1.9/foks.app/probe-response.snowp");
 
+/// The operation of the prepared upload a version 41 predecessor holds.
+const LEGACY_UPLOAD: [u8; 16] = [4; 16];
+
 /// The merkle_heads table as version 38 defined it, before evidence kind 4.
 const MERKLE_HEADS_V38: &str = r#"CREATE TABLE merkle_heads (
     host_id BLOB PRIMARY KEY REFERENCES hosts(host_id) ON DELETE CASCADE,
@@ -95,10 +98,11 @@ pub(crate) fn rebuild_predecessor(transaction: &Transaction<'_>, predecessor: Pr
         .unwrap();
 }
 
-/// A predecessor database holding a verified host, its Merkle head and one
-/// adapter clock row, with the Merkle head a current database stores for the
-/// same host. Version 38 had no `LocalCheckpoint` evidence, so its head holds
-/// the same signed root as legacy `SignedBootstrap` evidence.
+/// A predecessor database holding a verified host, its Merkle head, one
+/// adapter clock row and, for version 41, one prepared upload, with the
+/// Merkle head a current database stores for the same host. Version 38 had
+/// no `LocalCheckpoint` evidence, so its head holds the same signed root as
+/// legacy `SignedBootstrap` evidence.
 fn predecessor_store(path: &Path, predecessor: Predecessor) -> (HardStateStore, (i64, Vec<u8>)) {
     let mut store = HardStateStore::open(path).unwrap();
     let public = foks_verify::verify_public_host("foks.app", PROBE).unwrap();
@@ -128,6 +132,22 @@ fn predecessor_store(path: &Path, predecessor: Predecessor) -> (HardStateStore, 
         .unwrap();
     let transaction = store.write_transaction().unwrap();
     rebuild_predecessor(&transaction, predecessor);
+    if predecessor.version == 41 {
+        // Version 42 registers each existing upload under a legacy handle.
+        transaction
+            .execute(
+                "INSERT INTO kv_uploads
+                     (operation_id, host_id, uid, party_id, file_id, manifest_hash,
+                      state, reserved_bytes, created_at)
+                 VALUES (?1, ?2, ?3, ?3, zeroblob(17), zeroblob(32), 0, 0, 100)",
+                params![
+                    LEGACY_UPLOAD.as_slice(),
+                    [1u8; 33].as_slice(),
+                    [2u8; 33].as_slice()
+                ],
+            )
+            .unwrap();
+    }
     transaction.commit().unwrap();
     (store, current_head)
 }
@@ -205,6 +225,20 @@ fn every_supported_predecessor_migrates_to_the_initial_schema() {
             .query_row("SELECT count(*) FROM kv_upload_clocks", [], |r| r.get(0))
             .unwrap();
         assert_eq!(upload_clocks, 0, "{predecessor:?}");
+        let handles: Vec<(Vec<u8>, i64)> = migrated
+            .connection
+            .prepare("SELECT operation_id, handle_version FROM kv_upload_handles")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        let expected = if predecessor.version == 41 {
+            vec![(LEGACY_UPLOAD.to_vec(), 0)]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(handles, expected, "{predecessor:?}");
         assert!(
             migrated.host_for_lookup("foks.app").unwrap().is_some(),
             "{predecessor:?}"
