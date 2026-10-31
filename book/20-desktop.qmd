@@ -250,10 +250,13 @@ under the chosen name.
 The Uploads button below the Files list calls `list_file_uploads`, which
 returns the durable uploads the agent holds for the selected store and its
 upload capacity; `resume_file_upload` and `cancel_file_upload` act on one
-upload handle. An upload whose publication the server definitely rejected
-is listed as `publication-rejected`, not `publishing`. Its content is
-complete, so Resume synchronizes the store, checks that the destination
-still matches the recorded intent and publishes again; Cancel releases it.
+upload handle. These two check the application lock before the agent call
+but not after it: a lock taken while the agent resumes or cancels does not
+undo the change, and the answer holds no plaintext. An upload whose
+publication the server definitely rejected is listed as
+`publication-rejected`, not `publishing`. Its content is complete, so
+Resume synchronizes the store, checks that the destination still matches
+the recorded intent and publishes again; Cancel releases it.
 
 | Bound | Value |
 |---|---|
