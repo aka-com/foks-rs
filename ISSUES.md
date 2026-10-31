@@ -188,6 +188,25 @@ Required resolution:
   address uniqueness and age, with or without a schema step.
 - Give operators a way to read and delete the stored addresses.
 
+## Restricted-list qualification listener ends on any accept error
+
+**Priority: low.** The native personal-list qualification listener
+(`serve` in `crates/foks-server/src/restricted_list/output.rs`, started by
+`start_native_personal_list_qualification`) ends its accept loop on the first
+`accept()` error, including transient ones such as EMFILE or ECONNABORTED, and
+reports the end to nobody: it has no `ServerMetrics` and no `FatalSignal`. The
+RPC, management, administration and OIDC listeners retry these errors through
+`net::retry_accept` and report an unrequested exit. This listener serves only
+the celld qualification harness, not production traffic, so a lost listener
+shows up as a failed qualification run.
+
+Required resolution:
+
+- Route its accept errors through `retry_accept`, and report the loop's end to
+  the qualification report or a fatal signal, with a test that injects
+  accept errors (the RPC acceptor's `accept_connections` takes an accept
+  closure for this).
+
 ## Existing disclosed limitations
 
 These are real product or verification limits, but the reviewed plans already
