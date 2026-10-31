@@ -165,6 +165,29 @@ Required resolution:
   and authority checks as collection, and release their ledger rows; or keep
   them charged and document how to remove them by hand.
 
+## Unbounded waitlist inserts
+
+**Priority: medium.** `Reg.joinWaitList` is an unauthenticated route that the
+server answers by default. Each call inserts a new `waitlist_entries` row
+(`Database::join_waitlist` in `crates/foks-server-db/src/waitlist.rs`) with a
+fresh random identifier: there is no entry cap, no uniqueness on the address,
+no retention expiry and no operator command to list or delete entries. Only the
+per-source request token bucket and the per-source connection limit slow a
+client down, so clients that rotate source addresses can grow the table until
+`maximum_database_bytes` is reached, after which every write on the host fails
+with status 1060. The stored addresses are also kept indefinitely.
+
+The bound on our branch (a disabled-by-default route, a unique case-folded
+address index, an entry cap with a one-row count, retention expiry and
+`foks-server waitlist list/export/purge`) needs server schema 60 and was not
+ported, by maintainer decision; the schema stays at 59.
+
+Required resolution:
+
+- Decide whether to serve the route by default, and bound the table by count,
+  address uniqueness and age, with or without a schema step.
+- Give operators a way to read and delete the stored addresses.
+
 ## Existing disclosed limitations
 
 These are real product or verification limits, but the reviewed plans already
