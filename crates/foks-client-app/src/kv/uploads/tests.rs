@@ -18,7 +18,11 @@ fn drain(s: &CheckedProfileSession<'_>, master: &[u8; 32]) -> Result<()> {
     let mut cursor = crate::AdapterMaintenanceCursor::default();
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
-        s.maintain_adapter_state(&mut cursor, master)?;
+        s.maintain_adapter_state_until(
+            &mut cursor,
+            master,
+            crate::test_support::maintenance_deadline(),
+        )?;
         let hard = HardStateStore::open(&s.paths.hard_database)?;
         let mut after = None;
         let mut outstanding = None;
