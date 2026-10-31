@@ -74,6 +74,25 @@ fn platform_boot() -> Result<crate::BootId> {
     Err(Error::Unavailable("this OS has no boot identifier".into()))
 }
 
+/// The identity of the calling thread's time namespace, as the device and
+/// inode the Linux deadline clock domain records: `(0, 0)` on a kernel
+/// without time namespaces, and on platforms that have none. A time
+/// namespace offsets `CLOCK_MONOTONIC` and `CLOCK_BOOTTIME`, so two processes
+/// of one boot compare readings of either clock only within one namespace.
+pub fn time_namespace() -> Result<(u64, u64)> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::MetadataExt;
+        linux_time_namespace_with(|path| {
+            std::fs::metadata(path).map(|metadata| (metadata.dev(), metadata.ino()))
+        })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Ok((0, 0))
+    }
+}
+
 #[cfg(target_os = "linux")]
 const TIME_NAMESPACE: &str = "/proc/thread-self/ns/time";
 #[cfg(target_os = "linux")]
@@ -99,25 +118,29 @@ fn linux_domain_with(
     boot: crate::BootId,
     metadata: impl Fn(&str) -> std::io::Result<(u64, u64)>,
 ) -> Result<Domain> {
-    let (device, inode) = match metadata(TIME_NAMESPACE) {
-        Ok(identity) => identity,
-        Err(error)
-            if error.kind() == std::io::ErrorKind::NotFound && metadata(NAMESPACES).is_ok() =>
-        {
-            (0, 0)
-        }
-        Err(error) => {
-            return Err(Error::Unavailable(format!(
-                "cannot read {TIME_NAMESPACE}: {error}; the local deadline clock needs \
-                 /proc/thread-self/ns, with a time entry on kernels that have time namespaces"
-            )))
-        }
-    };
+    let (device, inode) = linux_time_namespace_with(metadata)?;
     Ok(Domain(crate::DomainValue::Linux {
         boot,
         device: Decimal(device),
         inode: Decimal(inode),
     }))
+}
+#[cfg(target_os = "linux")]
+fn linux_time_namespace_with(
+    metadata: impl Fn(&str) -> std::io::Result<(u64, u64)>,
+) -> Result<(u64, u64)> {
+    match metadata(TIME_NAMESPACE) {
+        Ok(identity) => Ok(identity),
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound && metadata(NAMESPACES).is_ok() =>
+        {
+            Ok((0, 0))
+        }
+        Err(error) => Err(Error::Unavailable(format!(
+            "cannot read {TIME_NAMESPACE}: {error}; the local deadline clock needs \
+             /proc/thread-self/ns, with a time entry on kernels that have time namespaces"
+        ))),
+    }
 }
 #[cfg(target_os = "linux")]
 fn platform_sample() -> Result<ClockSample> {
