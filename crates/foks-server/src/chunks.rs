@@ -365,9 +365,22 @@ impl ChunkStore for FilesystemChunks {
             {
                 continue;
             }
-            let metadata = std::fs::symlink_metadata(entry.path())?;
+            let metadata = match std::fs::symlink_metadata(entry.path()) {
+                Ok(metadata) => metadata,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.into()),
+            };
+            // The backend never creates anything but regular files under this
+            // prefix. Another entry, such as a planted symlink, is left in
+            // place and named for the operator rather than stopping the
+            // collection of every other temporary and object.
             if !metadata.is_file() || metadata.file_type().is_symlink() {
-                return Err(Error::Chunk("refusing to delete nonregular temporary"));
+                eprintln!(
+                    "FOKS chunk store warning: skipped the nonregular entry {:?} with the \
+                     temporary prefix; remove it by hand",
+                    entry.file_name()
+                );
+                continue;
             }
             match std::fs::remove_file(entry.path()) {
                 Ok(()) => removed += 1,
@@ -965,8 +978,15 @@ mod tests {
         assert_eq!(fs.remove_stale_temporaries().unwrap(), 0);
         #[cfg(unix)]
         {
+            // A nonregular entry is skipped, not followed or deleted, and the
+            // regular temporaries beside it are still removed.
             std::os::unix::fs::symlink("object", directory.path().join("_foks_tmp-link")).unwrap();
-            assert!(fs.remove_stale_temporaries().is_err());
+            std::fs::create_dir(directory.path().join("_foks_tmp-dir")).unwrap();
+            std::fs::write(&stale, [7; 9]).unwrap();
+            assert_eq!(fs.remove_stale_temporaries().unwrap(), 1);
+            assert!(!stale.exists());
+            assert!(std::fs::symlink_metadata(directory.path().join("_foks_tmp-link")).is_ok());
+            assert!(directory.path().join("_foks_tmp-dir").is_dir());
             assert!(directory.path().join("object").exists());
         }
     }

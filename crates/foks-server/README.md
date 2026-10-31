@@ -782,7 +782,9 @@ named `_foks_tmp-*` in the directory. Inventory and the empty-namespace check
 skip these files, so they are never recorded or charged. `collect-chunk-store`
 removes them when it is allowed to delete (not with `--dry-run`, and only with
 a matching authority identity), after it has verified the binding and while it
-holds the exclusive namespace lease. Temporaries left by earlier releases are
+holds the exclusive namespace lease. An entry with that prefix that is not a regular
+file, such as a symlink, is never followed or removed: collection names it on
+stderr, leaves it for the operator and goes on. Temporaries left by earlier releases are
 named `.tmp` followed by six random characters; they are indistinguishable
 from foreign objects, so inventory records them as unknown objects that stay
 charged against physical capacity, and nothing deletes them automatically.
