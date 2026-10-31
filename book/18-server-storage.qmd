@@ -213,8 +213,9 @@ mechanism differs by resource.
 | Reader pool | 32 connections | `Error::ReaderPool`; status 1012 |
 | Listener admission queue | 32 pending connections | `try_send` fails; connection dropped |
 | Active sessions per listener | 256 | accept loop waits for a permit |
-| Connections per source per listener | 32, loopback exempt | connection dropped |
+| Connections per source per listener | 32 (0 = unlimited); loopback and `trusted_sources` exempt | connection dropped |
 | Request handlers (shared) | 64 blocking permits | `try_acquire_owned` fails; status 1012 |
+| Pending long polls per connection | 4 | status 1012 at the call's sequence; the connection stays open |
 | Realtime inbox polls | 8 per account; 256 in total (the authenticated listener's sessions) | status 1012 |
 | Realtime poll state reads | 16 readers (half the reader pool) | reads wait for a permit |
 | KEX receives | 32, at most half the active sessions | status 1012, not queued |
@@ -275,9 +276,16 @@ Token buckets limit the rate of new work, not how much a source holds at
 once. A source within its connection burst could otherwise open every
 active-session slot and keep each one with a long poll. Each listener
 therefore also counts the connections a source holds, from acceptance
-until the session ends, and closes a new connection beyond 32. Loopback
-peers are exempt, since behind a local TCP proxy every client would appear
-as one loopback source. Realtime inbox polls are limited in the same way per
+until the session ends, and closes a new connection beyond 32 (0 removes
+the limit). Loopback peers are exempt, since behind a local TCP proxy every
+client would appear as one loopback source. A forwarder on another host that
+rewrites client addresses, or a NAT, has the same effect: every client
+behind it is one source, and since each realtime inbox poll or KEX receive
+holds a connection, a small number of devices can reach the limit. The operator
+lists such a forwarder's address or prefix in `trusted_sources`, which
+exempts it as loopback is exempt, or raises or removes the limit for NAT
+that it does not control. A Go v0.1.9 host has no per-source connection
+limit at all. Realtime inbox polls are limited in the same way per
 account rather than per source: one account holds at most 8, so it cannot
 take every poll slot from other users. Every refusal is counted in
 `foks_admission_rejected_total` with a `reason` label.
