@@ -927,12 +927,58 @@ pub(super) fn upload_file(
     result.map(|_| ()).map_err(|error| {
         let mut error = map_mutation_error(error, kind);
         if let Some(id) = upload_id {
-            error.message = format!(
-                "{} Upload handle: {id}. Open Uploads to inspect or resume prepared content.",
-                error.message
-            );
+            if let Some(hint) = upload_handle_hint(&error, &id) {
+                error.message = format!("{} {hint}", error.message);
+            }
         }
         error
+    })
+}
+
+/// What a failed upload's message says about its handle. The desktop issues
+/// the handle before the stream starts, and the agent records it only in
+/// `register_upload_intent`, after its admission, capability, credential,
+/// clock and capacity checks; refusals there leave nothing for the Uploads
+/// list to show. The hint is therefore given only for failures that can
+/// follow registration: an ambiguous outcome, a deadline or cancellation, a
+/// conflict, a full spool or an existing handle with another intent, and the
+/// server failures of the upload itself, reauthentication included (the
+/// agent does no network work before it registers the handle). A lost agent
+/// connection, a busy profile lock, `busy` (the worker pool before
+/// registration, the server's KV lock after it), `invalid-request` (a
+/// malformed request before, the server's BAD_ARGS after) and
+/// `rollback-detected` can come before or after registration, so their hint
+/// says that the agent may have recorded the handle.
+pub(super) fn upload_handle_hint(error: &AgentError, id: &str) -> Option<String> {
+    const RECORDED: &[&str] = &[
+        "ambiguous",
+        "deadline-exceeded",
+        "cancelled",
+        "conflict",
+        "already-exists",
+        "upload-spool-full",
+        "upload-identity-conflict",
+        "server-unavailable",
+        "rate-limited",
+        "quota-exceeded",
+        "operation-failed",
+        "reauthentication-required",
+    ];
+    const UNCERTAIN: &[&str] = &[
+        "agent-lost",
+        "profile-busy",
+        "busy",
+        "invalid-request",
+        "rollback-detected",
+    ];
+    let code = error.code.as_str();
+    if UNCERTAIN.contains(&code) {
+        return Some(format!(
+            "If the agent recorded upload handle {id} before the failure, open Uploads to inspect or resume prepared content."
+        ));
+    }
+    (error.ambiguous || RECORDED.contains(&code)).then(|| {
+        format!("Upload handle: {id}. Open Uploads to inspect or resume prepared content.")
     })
 }
 

@@ -427,6 +427,17 @@ The list foot holds the drop hint and the store's Uploads… sheet; the item
 sheets (New Password, New Document, New Folder, Rename or Move) carry the kind
 tile and a subtitle saying where they save.
 
+A failed `import_dropped_file` or `replace_dropped_file` names the upload
+handle the host issued and points to Uploads only after failures that can
+follow the agent's registration of the handle: an ambiguous outcome,
+`deadline-exceeded`, `cancelled`, `conflict`, `upload-spool-full`,
+`upload-identity-conflict`, `reauthentication-required` and the server
+failures of the upload itself. Refusals before registration (capability,
+credential, clock and capacity checks) name no handle; after a lost agent
+connection, `profile-busy`, `busy`, `invalid-request` or `rollback-detected`,
+which can come before or after registration, the message says that the
+agent may have recorded it.
+
 Every bar is 44px with a hairline under it, centred on the lights' line at
 y=30. The panel's first bar (`src/shell/topbar.tsx`) is the list column's on
 Files, Chat, Activity and Devices — the search field (⌘F focuses it; the
