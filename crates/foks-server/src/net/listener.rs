@@ -212,7 +212,9 @@ impl RunningServer {
             authenticated,
             addresses,
         } = listeners;
-        let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(config.rate_limits)?);
+        let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(
+            config.rate_limits.clone(),
+        )?);
         let service_data =
             ServerData::from_config(&config, read_opener, Arc::clone(&rate_limiter))?;
         #[cfg(feature = "celld-proof")]
@@ -444,7 +446,7 @@ async fn run_listener(
         sender,
         Arc::clone(&context.metrics),
         Arc::clone(&context.rate_limiter),
-        SourceConnections::new(context.rate_limiter.config()),
+        SourceConnections::new(context.rate_limiter.config().clone()),
         context.failure.clone(),
         stop.clone(),
     ));
@@ -650,7 +652,7 @@ mod tests {
 
     impl Harness {
         fn sources(&self) -> SourceConnections {
-            SourceConnections::new(self.rate_limiter.config())
+            SourceConnections::new(self.rate_limiter.config().clone())
         }
 
         fn new() -> Self {
