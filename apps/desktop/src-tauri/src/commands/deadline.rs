@@ -94,6 +94,7 @@ fn command_class(name: &str) -> Result<Option<DeadlineClass>, AgentError> {
         | "check_server"
         | "commit_owner_backup"
         | "configure_web_admin"
+        | "copy_item_field"
         | "copy_item_value"
         | "create_first_run_account"
         | "create_folder"
@@ -256,5 +257,18 @@ mod tests {
                 .code,
             "missing-deadline-policy"
         );
+    }
+
+    #[test]
+    fn vault_item_commands_take_the_ordinary_budget() {
+        for name in ["copy_item_field", "copy_item_value"] {
+            let admitted = CommandState::admitted(&state(), name).unwrap();
+            let remaining = admitted
+                .deadline()
+                .unwrap()
+                .instant()
+                .saturating_duration_since(std::time::Instant::now());
+            assert!(remaining <= std::time::Duration::from_secs(15), "{name}");
+        }
     }
 }
