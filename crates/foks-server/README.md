@@ -228,7 +228,10 @@ frame are bounded separately by the 15 s I/O timeout (`io_timeout`). A Go
 v0.1.9 server never closes an idle connection and a Go client closes its own
 after five minutes idle, so the default lets the client's close come first; a
 call that raced a server-side close would otherwise fail with an RPC EOF that
-the Go client does not retry.
+the Go client does not retry. The first frame of a connection must start
+within the 15 s I/O timeout of the TLS handshake; Go and Rust clients send
+their first call at once, and a peer that sends nothing does not hold its
+connection slots for the idle timeout.
 
 Idle connections count against `maximum_active_connections` and
 `maximum_connections_per_source` for as long as they stay open, so both

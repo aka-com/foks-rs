@@ -328,6 +328,12 @@ pub(crate) async fn serve(
     // served until the peer closes it, it stays idle past the idle timeout, a
     // frame fails or the server stops. Long polls still pending then end
     // unanswered and release their permits.
+    //
+    // The first frame must start within the I/O timeout of the handshake. Go
+    // and Rust clients send their first call at once, and a peer that never
+    // sends one must not hold an active and a per-source slot for the whole
+    // idle timeout.
+    let mut idle = limits.io_timeout;
     let close = loop {
         // The request deadline starts at the first byte of the frame. Body
         // reading, handler execution and queued writes all consume it; idle
@@ -340,7 +346,7 @@ pub(crate) async fn serve(
                     limits.maximum_frame_bytes,
                     limits.request_timeout,
                 ),
-                Some(limits.idle_timeout),
+                Some(idle),
                 &mut stop,
             )
             .await?
@@ -348,6 +354,7 @@ pub(crate) async fn serve(
             Waited::Done(read) => read,
             Waited::End(close) => break close,
         };
+        idle = limits.idle_timeout;
         let (length, deadline) = match read {
             Ok(length) => length,
             Err(foks_rpc::Error::Io(error))
