@@ -361,6 +361,20 @@ fn main() {
         "version-mismatch",
         &foks_agent_proto::encode(&Response::version_mismatch(Some(1))).unwrap(),
     );
+    // The refusal of an agent that predates the handshake: an older version
+    // and no `fields`, decoded only through the frozen envelope.
+    seed(
+        "agent_frames",
+        "version-mismatch-older",
+        &foks_agent_proto::encode(&serde_json::json!({
+            "version": 34,
+            "id": 1,
+            "status": "error",
+            "code": "version-mismatch",
+            "message": "unsupported protocol version",
+        }))
+        .unwrap(),
+    );
     for scenario in 0..13 {
         seed(
             "state_archive",
