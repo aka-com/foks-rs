@@ -41,8 +41,9 @@ tracking, and bounded background work.
 ```
 
 The renderer is treated as untrusted. It renders a catalog of names,
-types, and sizes; it asks for one value at a time; and it receives that
-value only through the single content-returning command. The host is
+types, sizes, and whether each small file holds a login; it asks for one
+value at a time; and it receives that value only through the single
+content-returning command. The host is
 privileged but, outside offline maintenance, holds no long-lived secrets: it
 forwards requests to the agent and moves bytes between the agent and the disk
 or clipboard. The agent, described in [Chapter 19](19-agent.qmd), is a
@@ -213,6 +214,64 @@ tool on the machine. The host's `copy_with_hygiene` does three things:
 | macOS and others | 30 s |
 
 The exit handler performs one best-effort clear before the process ends.
+`copy_item_field` and `copy_item_value` return the interval as
+`clearAfterSeconds`, and the copy toast states it, for example "Password
+copied · clears in 30 s".
+
+## Logins
+
+FOKS v0.1.9 has no login type. The desktop stores a login as an ordinary
+small file of UTF-8 `key: value` lines, `user: …`, `password: …` and
+`url: …`, so Go clients read and write it as any other value.
+
+The catalog marks which small files are logins without carrying their
+contents. A metadata listing already fetches and opens every small-file
+node to authenticate it. Before it zeroizes that plaintext, `foks-client`
+records one bit, `shape: login` when the text has the layout the desktop
+writes and `shape: other` otherwise, and the bit travels through
+`KvCatalogReport`, the agent's `KvEntryMetadata` and its retained catalog
+pages, and the host's `ItemDto`. It is agent IPC only and never reaches the
+Go wire. The field is optional and omitted when unknown, so an agent and a
+host of the same protocol version that predate it still exchange catalogs.
+The renderer lists a small file with `shape: login` as a Password wherever
+it is filed; a catalog entry without a shape, from an agent that predates
+the field, falls back to the `/logins/` folder. Such a Password may hold no
+`password:` line, so its row menu and its details panel also offer Copy
+Value.
+
+Copy on a login reaches the clipboard one field at a time.
+`copy_item_field` reads the exact listed version, selects the password,
+user name or website line in the host, and passes only that value to
+`copy_with_hygiene`; the other lines are dropped with the zeroizing read
+buffer. Lines are separated by `\n` with one trailing `\r` removed. A field
+line splits at its first `:`; its key is not trimmed and must be non-empty
+with no ASCII whitespace, so an indented `  password: x`, a spaced
+`password : x` and a sentence such as `Reset it at https://example.com` are
+not field lines. Neither is a line whose `:` is followed directly by `//`,
+such as a bare URL. The value loses exactly the one space the desktop
+writes after the `:`, so a password that begins or ends with a space is
+copied whole. `user` and `username` name the user name, `url` and `website`
+name the website, and the first line naming a field wins. A small file is a
+login when every line that is not blank is a field line and one has the key
+`password`; an indented YAML document, an INI section, or a note with a
+line of prose or a URL stays a Document with Copy Value. A note line of the
+form `Note: text` is a field line, so a login may carry it and the details
+panel lists it as its own row. A field that is absent or empty
+fails with `field-missing` instead of copying something else. Both the
+listing's classification and the host's field selection use
+`foks_client::kv::login`, so an item listed as a login has a password line
+the host finds, though that line may be empty and then fails with
+`field-missing`. The renderer's `model/login.ts` applies the same rules to
+text it has read. `copy_item_value` copies a text document's whole value; it
+is `copy_item_field` with the field `value`.
+
+The details panel lists a login's User name, Password and Website as
+separate rows, each masked until shown and each with its own Copy. Showing
+one row reads the item once and reveals only that row; the read text is
+dropped when the last shown row is hidden, the selection changes or the
+window loses focus. The login editor lists one row per stored line and
+rewrites only the line that changes, so every other line is saved as it was
+read.
 
 ## Command deadlines
 
@@ -402,7 +461,7 @@ mounting every card. It no longer imposes the former 200-card cap.
   ACL resolution test), `src/applock.rs` and `src/applock/polkit.rs`,
   `src/clipboard.rs`, `src/dragdrop.rs`, `src/commands/context.rs`
   (`record_drop_paths`, `upload_path`), `src/commands/vault.rs`
-  (`read_item`, `copy_item_value`, `download_file`),
+  (`read_item`, `copy_item_value`, `copy_item_field`, `download_file`),
   `src/commands/validation.rs`, `src/agent.rs` (binary validation, launch,
   takeover), `src/close_guard.rs`, `PERMISSIONS.md`,
   `linux/com.aka.foks.desktop.policy`.

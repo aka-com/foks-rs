@@ -59,7 +59,7 @@ import {
 import type { Item, Store, AgentSnapshot } from '../model';
 import type { KindFilter, LocationStore, LocationState } from '../location';
 import { normalizeCommandError } from '../bridge';
-import type { Bridge } from '../bridge';
+import type { Bridge, ItemField } from '../bridge';
 import { useFileDrop } from '../file-drop';
 import { fileDropPath, writeBlockReason } from './write-workflows';
 import type { NewKind } from './write-workflows';
@@ -75,6 +75,7 @@ import {
 import type { FolderNode } from './scope';
 import { useFolderMenu } from './folder-menu';
 import { itemTile } from './item-tile';
+import { copyActions, copyAndAnnounce } from './item-copy';
 import {
   itemActionProblem,
   StoreAccessNotice,
@@ -103,7 +104,8 @@ interface RowProps {
   /** True when the store is readable but not writable, dimming the row. */
   readOnly: boolean;
   onSelect: () => void;
-  onCopy: (item: Item) => void;
+  /** Copies one field: a Password's password or user name, or a value. */
+  onCopy: (item: Item, field: ItemField) => void;
   onReveal: (item: Item) => void;
   onDownload: (item: Item) => void;
   onCopyPath: (item: Item) => void;
@@ -259,7 +261,12 @@ function Row({
         <span className="acts" aria-hidden="true">
           {item.kind !== 'File' ? (
             <>
-              {action('Copy', 'copy', onCopy)}
+              {action('Copy', 'copy', (target) =>
+                onCopy(
+                  target,
+                  kindOf(target) === 'Password' ? 'password' : 'value',
+                ),
+              )}
               {action('Reveal', 'eye', onReveal)}
             </>
           ) : (
@@ -300,13 +307,16 @@ function Row({
                 >
                   Show Value
                 </MenuItem>
-                <MenuItem
-                  icon="copy"
-                  reason={readProblem}
-                  onClick={choose(() => onCopy(item))}
-                >
-                  {kindOf(item) === 'Password' ? 'Copy Password' : 'Copy Value'}
-                </MenuItem>
+                {copyActions(item).map(({ field, label }) => (
+                  <MenuItem
+                    key={field}
+                    icon="copy"
+                    reason={readProblem}
+                    onClick={choose(() => onCopy(item, field))}
+                  >
+                    {label}
+                  </MenuItem>
+                ))}
               </>
             )}
             <MenuItem
@@ -951,15 +961,15 @@ export function ItemsScreen({
     toasts.show(problem, { tone: 'warning' });
     return false;
   };
-  const copyItem = (item: Item): void => {
+  const copyItem = (item: Item, field: ItemField): void => {
     if (!allowAction(item)) return;
-    void bridge.copyItemValue(request(item)).then(
-      () =>
-        toasts.show(
-          `${kindOf(item) === 'Password' ? 'Password' : 'Value'} copied`,
-        ),
-      (error: unknown) => onCommandError(error, item),
-    );
+    void copyAndAnnounce({
+      bridge,
+      item,
+      field,
+      toasts,
+      onError: onCommandError,
+    });
   };
   const copyPath = (item: Item): void => {
     if (!allowAction(item)) return;

@@ -1,4 +1,11 @@
-import type { Account, NodeKind, StoreRef, TeamCreationPhase } from '../model';
+import type {
+  Account,
+  ItemShape,
+  LoginFieldName,
+  NodeKind,
+  StoreRef,
+  TeamCreationPhase,
+} from '../model';
 import { decodeAccounts, decodeRole, type RoleDto } from './accounts-groups';
 import { decodeCommandError, type CommandError } from './errors';
 import { decodeServerStatus, type ServerStatusSnapshot } from './servers';
@@ -38,6 +45,8 @@ export interface ItemDto {
   version: number;
   read: RoleDto;
   write: RoleDto;
+  /** Whether a small file holds a login; absent for other node types. */
+  shape?: ItemShape;
 }
 
 export interface CatalogInventoryDto {
@@ -85,6 +94,13 @@ export interface ItemRequest {
   version: number;
 }
 
+/** One field of an item for `copy_item_field`; `value` is the whole text. */
+export type ItemField = LoginFieldName | 'value';
+
+export interface CopyFieldRequest extends ItemRequest {
+  field: ItemField;
+}
+
 export interface ReadItemResponse {
   store: StoreRef;
   path: string;
@@ -94,6 +110,16 @@ export interface ReadItemResponse {
 
 export interface CopyResponse {
   ok: true;
+}
+
+/**
+ * The response to an item copy. The host clears the clipboard
+ * `clearAfterSeconds` after the write unless it no longer holds the copied
+ * value.
+ */
+export interface ClipboardCopyResponse {
+  ok: true;
+  clearAfterSeconds: number;
 }
 
 export interface DownloadResponse {
@@ -231,7 +257,15 @@ function decodeItem(value: unknown, at: string): ItemDto {
     version: integer(item.version, `${at}.version`),
     read: decodeRole(item.read, `${at}.read`),
     write: decodeRole(item.write, `${at}.write`),
+    ...decodeShape(item.shape, `${at}.shape`),
   };
+}
+
+function decodeShape(value: unknown, at: string): { shape?: ItemShape } {
+  if (value === undefined) return {};
+  if (value !== 'login' && value !== 'other')
+    throw new Error(`${at} is not login or other`);
+  return { shape: value };
 }
 
 function decodeFailure(value: unknown, at: string): CatalogFailureDto {
@@ -353,6 +387,19 @@ export function decodeCopy(value: unknown): CopyResponse {
   const item = record(value, 'copy response');
   if (item.ok !== true) throw new Error('copy response.ok must be true');
   return { ok: true };
+}
+
+export function decodeClipboardCopy(value: unknown): ClipboardCopyResponse {
+  const item = record(value, 'clipboard copy response');
+  if (item.ok !== true)
+    throw new Error('clipboard copy response.ok must be true');
+  return {
+    ok: true,
+    clearAfterSeconds: integer(
+      item.clearAfterSeconds,
+      'clipboard copy response.clearAfterSeconds',
+    ),
+  };
 }
 
 export function decodeDownload(value: unknown): DownloadResponse {

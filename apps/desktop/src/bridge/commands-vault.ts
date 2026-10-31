@@ -11,6 +11,7 @@ import { decodeCommandAck } from './core';
 import { nullableString } from './validation';
 import {
   decodeCatalog,
+  decodeClipboardCopy,
   decodeCopy,
   decodeDownload,
   decodeMutation,
@@ -24,6 +25,7 @@ export const vaultCommands: Pick<
   | 'listStores'
   | 'readItem'
   | 'copyItemValue'
+  | 'copyItemField'
   | 'copyItemPath'
   | 'downloadFile'
   | 'createTextItem'
@@ -86,7 +88,13 @@ export const vaultCommands: Pick<
   readItem: ({ storeId, path, version }) =>
     checked('read_item', { storeId, path, version }, decodeReadItem),
   copyItemValue: ({ storeId, path, version }) =>
-    checked('copy_item_value', { storeId, path, version }, decodeCopy),
+    checked('copy_item_value', { storeId, path, version }, decodeClipboardCopy),
+  copyItemField: ({ storeId, path, version, field }) =>
+    checked(
+      'copy_item_field',
+      { storeId, path, version, field },
+      decodeClipboardCopy,
+    ),
   copyItemPath: ({ storeId, path, version }) =>
     checked('copy_item_path', { storeId, path, version }, decodeCopy),
   downloadFile: ({ storeId, path, version }) =>

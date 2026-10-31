@@ -17,6 +17,7 @@ import {
   canCreateInStore,
   canChangeItem,
   displayPath,
+  fieldLineText,
   fmtSize,
   formatRole,
   HUES,
@@ -26,6 +27,8 @@ import {
   itemKey,
   kindOf,
   leaseLapsed,
+  loginField,
+  loginLines,
   nameOf,
   parseRole,
   partiesOf,
@@ -38,6 +41,7 @@ import {
   serverDisplayLabel,
   serverDisplayLabelForStore,
   safestRemovalTarget,
+  shapeOf,
   storeReadable,
   storeAvailability,
   storeAttentionState,
@@ -285,21 +289,27 @@ test('partyName falls back from username to team name and identifier', () => {
 
 /* ------------------------------------------------------------------ kinds -- */
 
-test('kindOf classifies Secret items as Password or Resource based on path and content', () => {
-  // Under /logins/ — a Password regardless of how its value is parsed.
+test('kindOf classifies a Secret by its listed shape, then by its folder', () => {
+  // The fixture's logins carry the shape a listing reports.
+  for (const key of [
+    'acct:personal|/logins/github.com',
+    'team:household|/streaming/netflix',
+    'team:household|/wifi/guest-password',
+  ])
+    assert.equal(kindOf(item(FIXTURE, key)), 'Password', key);
+  // A login saved while another folder was selected is still a Password.
   assert.equal(
-    kindOf(item(FIXTURE, 'acct:personal|/logins/github.com')),
+    kindOf({ kind: 'Secret', path: '/work/github.com', shape: 'login' }),
     'Password',
   );
-  // A `password:` line makes a Password anywhere.
+  // A listed shape decides even under /logins/.
   assert.equal(
-    kindOf(item(FIXTURE, 'team:household|/streaming/netflix')),
-    'Password',
+    kindOf({ kind: 'Secret', path: '/logins/raw-token', shape: 'other' }),
+    'Document',
   );
-  assert.equal(
-    kindOf(item(FIXTURE, 'team:household|/wifi/guest-password')),
-    'Password',
-  );
+  // Only an item no listing classified falls back to its folder.
+  assert.equal(kindOf({ kind: 'Secret', path: '/logins/old' }), 'Password');
+  assert.equal(kindOf({ kind: 'Secret', path: '/work/old' }), 'Document');
   // Any other Secret is a Document, wherever it is filed.
   assert.equal(
     kindOf(item(FIXTURE, 'acct:personal|/env/prod/DATABASE_URL')),
@@ -309,20 +319,87 @@ test('kindOf classifies Secret items as Password or Resource based on path and c
     kindOf(item(FIXTURE, 'acct:personal|/agents/anthropic-api-key')),
     'Document',
   );
-  assert.equal(
-    kindOf({
-      kind: 'Secret',
-      path: '/documents/readme.txt',
-      value: 'plain UTF-8 text',
-    }),
-    'Document',
-  );
-  // So is every File node.
+  // So is every File node, whatever its shape field says.
   assert.equal(
     kindOf(item(FIXTURE, 'acct:personal|/documents/passport-scan.pdf')),
     'Document',
   );
+  assert.equal(
+    kindOf({ kind: 'File', path: '/logins/scan.pdf', shape: 'login' }),
+    'Document',
+  );
   assert.equal(kindOf(item(FIXTURE, 'acct:personal|/ssh')), 'Folder');
+});
+
+test('fixture shapes are the shapes the listing computes from their text', () => {
+  for (const candidate of FIXTURE.items.filter(
+    (entry) => entry.kind === 'Secret',
+  )) {
+    const key = `${candidate.store}|${candidate.path}`;
+    assert.equal(candidate.shape, shapeOf(FIXTURE.plaintext[key] ?? ''), key);
+  }
+});
+
+test('login fields follow the host parser: aliases, exact keys, first line wins', () => {
+  const stored = 'user: satoshi\r\npassword: hx7:Qm2\nurl: \nusername: second';
+  assert.equal(loginField(stored, 'username'), 'satoshi');
+  // Only the first colon separates the key.
+  assert.equal(loginField(stored, 'password'), 'hx7:Qm2');
+  // An empty value is absent, as `field-missing` reports it.
+  assert.equal(loginField(stored, 'url'), null);
+  assert.equal(
+    loginField('website: https://a.example', 'url'),
+    'https://a.example',
+  );
+  assert.equal(loginField('password:x', 'password'), 'x');
+  // A key is not trimmed, so an indented or spaced key names no field.
+  assert.equal(loginField('  password: x', 'password'), null);
+  assert.equal(loginField('password : x', 'password'), null);
+  assert.equal(loginField('\ufeffuser: x', 'username'), null);
+  assert.equal(shapeOf(stored), 'login');
+  assert.equal(shapeOf('user: a\npassword: \nurl: '), 'login');
+  assert.equal(shapeOf('ssid: Guest\r\npassword:x\r\n\r\n'), 'login');
+  for (const text of [
+    'postgres://service:o4Kq@db.internal/prod',
+    'passwords: plural is a different key',
+    'Password: keys are matched exactly',
+    '',
+    'ssid: Guest\n  password: x',
+    'password : x',
+    'database:\n  host: db.internal\n  password: s3cret\n',
+    '[db]\npassword: x',
+    'password: x\nrotate this every quarter',
+    // A key has no inner whitespace, and `://` starts a URL.
+    'user: alice\npassword: hunter2\nReset it at https://example.com/reset',
+    'user: alice\npassword: hunter2\nhttps://example.com/reset',
+    'API key: x\npassword: y',
+  ])
+    assert.equal(shapeOf(text), 'other', text);
+  assert.deepEqual(loginLines('ssid: Guest\r\nfree text\npin:4\nhttps://x'), [
+    { key: 'ssid', value: 'Guest', separator: ' ', raw: 'ssid: Guest\r' },
+    { key: null, value: 'free text', separator: '', raw: 'free text' },
+    { key: 'pin', value: '4', separator: '', raw: 'pin:4' },
+    { key: null, value: 'https://x', separator: '', raw: 'https://x' },
+  ]);
+  // Only `//` directly after the `:` marks a URL.
+  assert.equal(loginField('password: //x', 'password'), '//x');
+  assert.equal(loginField('password://x', 'password'), null);
+});
+
+test('a rewritten field line keeps its separator unless the value needs one', () => {
+  assert.equal(fieldLineText('pin', '', '5'), 'pin:5');
+  assert.equal(fieldLineText('user', ' ', 'b'), 'user: b');
+  // Each reads back as the value written.
+  for (const value of [' pad', '//x']) {
+    const line = fieldLineText('password', '', value);
+    assert.equal(loginField(line, 'password'), value, line);
+  }
+});
+
+test('a login value keeps every space but the separator', () => {
+  const padded = 'user: a\npassword:  pad-me \r\nurl: ';
+  assert.equal(loginField(padded, 'password'), ' pad-me ');
+  assert.equal(loginField('password: \ttab\ufeff', 'password'), '\ttab\ufeff');
 });
 
 test('isLogin returns true only for items under /logins/', () => {

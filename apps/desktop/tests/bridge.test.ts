@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import {
   decodeAccounts,
   decodeCatalog,
+  decodeClipboardCopy,
   decodeCopy,
   decodeDownload,
   decodeMutation,
@@ -275,6 +276,63 @@ test('decodeCatalog enforces schema validation and rejects malformed fields', ()
   );
 });
 
+test('decodeCatalog carries a small file shape only as login or other', () => {
+  const withShape = (shape: unknown) =>
+    decodeCatalog({ ...catalog, items: [{ ...catalog.items[0], shape }] });
+  assert.equal(withShape('login').items[0]?.shape, 'login');
+  assert.equal(withShape('other').items[0]?.shape, 'other');
+  // An agent that predates the field omits it; the key stays absent.
+  assert.equal('shape' in withShape(undefined).items[0], false);
+  for (const shape of ['text', 'Login', null, 1])
+    assert.throws(() => withShape(shape), /shape is not login or other/);
+});
+
+test('copyItemField sends the exact version and the field to the host', async () => {
+  const previousWindow = globalThis.window;
+  const calls: [string, unknown][] = [];
+  Object.defineProperty(globalThis, 'window', {
+    value: {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: unknown) => {
+          calls.push([command, args]);
+          return { ok: true, clearAfterSeconds: 15 };
+        },
+      },
+    },
+    configurable: true,
+  });
+  try {
+    assert.deepEqual(
+      await tauriBridge.copyItemField({
+        storeId: 'opaque-store-ref',
+        path: '/work/github.com',
+        version: 4,
+        field: 'password',
+      }),
+      { ok: true, clearAfterSeconds: 15 },
+    );
+    assert.deepEqual(calls, [
+      [
+        'copy_item_field',
+        {
+          storeId: 'opaque-store-ref',
+          path: '/work/github.com',
+          version: 4,
+          field: 'password',
+        },
+      ],
+    ]);
+  } finally {
+    if (previousWindow === undefined)
+      delete (globalThis as { window?: Window }).window;
+    else
+      Object.defineProperty(globalThis, 'window', {
+        value: previousWindow,
+        configurable: true,
+      });
+  }
+});
+
 test('action decoders reject partial or malformed responses', () => {
   assert.deepEqual(
     decodeReadItem({
@@ -296,6 +354,14 @@ test('action decoders reject partial or malformed responses', () => {
   );
   assert.deepEqual(decodeCopy({ ok: true }), { ok: true });
   assert.throws(() => decodeCopy({ ok: false }), /must be true/);
+  assert.deepEqual(decodeClipboardCopy({ ok: true, clearAfterSeconds: 15 }), {
+    ok: true,
+    clearAfterSeconds: 15,
+  });
+  assert.throws(
+    () => decodeClipboardCopy({ ok: true }),
+    /clearAfterSeconds must be a non-negative safe integer/,
+  );
   assert.deepEqual(decodeDownload({ saved: false }), { saved: false });
   assert.deepEqual(decodeMutation({ applied: true }), { applied: true });
   assert.deepEqual(decodeMutation({ applied: false }), { applied: false });
@@ -465,6 +531,10 @@ test('decoders successfully parse the full wire contract golden fixture', async 
   ]);
   assert.equal(decodeReadItem(fixture.readItem).version, 7);
   assert.deepEqual(decodeCopy(fixture.commandAck), { ok: true });
+  assert.deepEqual(decodeClipboardCopy(fixture.clipboardCopy), {
+    ok: true,
+    clearAfterSeconds: 30,
+  });
   assert.deepEqual(decodeDownload(fixture.cancelledDownload), { saved: false });
   assert.deepEqual(decodeMutation(fixture.appliedMutation), { applied: true });
   assert.deepEqual(decodeMutation(fixture.cancelledMutation), {
@@ -1496,7 +1566,7 @@ test('loadSnapshot makes a single catalog call and does not leak fixture data in
     readItem: async () => {
       throw new Error('not used');
     },
-    copyItemValue: async () => ({ ok: true }),
+    copyItemValue: async () => ({ ok: true, clearAfterSeconds: 30 }),
     copyItemPath: async () => ({ ok: true }),
     downloadFile: async () => ({ saved: false }),
   };
@@ -1672,7 +1742,7 @@ test('creates a notification when a server cannot be described instead of omitti
     readItem: async () => {
       throw new Error('not used');
     },
-    copyItemValue: async () => ({ ok: true }),
+    copyItemValue: async () => ({ ok: true, clearAfterSeconds: 30 }),
     copyItemPath: async () => ({ ok: true }),
     downloadFile: async () => ({ saved: false }),
   };
@@ -1737,7 +1807,7 @@ test('loadSnapshot does not fetch team rosters for blocked profiles', async () =
     readItem: async () => {
       throw new Error('not used');
     },
-    copyItemValue: async () => ({ ok: true }),
+    copyItemValue: async () => ({ ok: true, clearAfterSeconds: 30 }),
     copyItemPath: async () => ({ ok: true }),
     downloadFile: async () => ({ saved: false }),
   };
@@ -1830,7 +1900,7 @@ test('loadSnapshot does not fetch members for an inactive team', async () => {
     readItem: async () => {
       throw new Error('not used');
     },
-    copyItemValue: async () => ({ ok: true }),
+    copyItemValue: async () => ({ ok: true, clearAfterSeconds: 30 }),
     copyItemPath: async () => ({ ok: true }),
     downloadFile: async () => ({ saved: false }),
   };
