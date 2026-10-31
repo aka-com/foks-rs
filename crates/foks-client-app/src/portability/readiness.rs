@@ -1,9 +1,10 @@
 //! Native counterpart of the durable per-profile import gate. Ordinary checkpoint
 //! reconciliation cannot remove this record after a forward SQLite modification.
 use crate::{checkpoint::NativeManifestStore, Error, Result};
-use foks_client_db::ImportReadiness;
+use foks_client_db::{HardStateStore, ImportReadiness};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
+use std::path::Path;
 pub(crate) const PREFIX: &str = "import-readiness.";
 #[derive(Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -16,6 +17,16 @@ pub(crate) struct NativeReadiness {
 pub(crate) fn key(profile: &str) -> Result<String> {
     crate::validate_name(profile)?;
     Ok(format!("{PREFIX}{profile}"))
+}
+/// Reads the durable import gate without creating hard state, so it is safe
+/// outside the profile lock. An absent database, for example after a reset,
+/// has no gate; the next exclusive admission decides whether it is pristine.
+pub(crate) fn hard_state_requires_verification(database: &Path) -> Result<bool> {
+    match HardStateStore::open_existing(database) {
+        Ok(store) => Ok(store.requires_import_verification()?),
+        Err(foks_client_db::Error::StateMissing) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
 }
 impl NativeReadiness {
     pub fn from_state(state: &ImportReadiness) -> Result<Self> {
